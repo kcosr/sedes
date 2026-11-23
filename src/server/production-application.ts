@@ -16,8 +16,9 @@ import { ClientControlService } from "./domain/client-control-service.js";
 import type { BackendRuntimeDiagnostic } from "./backends/module.js";
 import { backendLifecycleActions } from "./configuration-admin/configuration-backend-lifecycle.js";
 import { UsageService } from "./usage/usage-service.js";
-import { mergeEnvironmentVariableOverrides } from "../shared/protocol/environment-variables.js";
+import { providerStartupEnvironmentVariables } from "./backends/provider-launch-digest.js";
 import { EnvironmentVariablesService } from "./environment-variables/environment-variables-service.js";
+import { antigravityOwners } from "./configuration-admin/configuration-ownership.js";
 import { fencePriorLifecycleForStop } from "./configuration-admin/configuration-lifecycle-fencing.js";
 import { QuestionRequestService } from "./domain/question-request-service.js";
 import { randomUUID } from "node:crypto";
@@ -920,10 +921,10 @@ export async function startProductionApplication(
     const startupEnvironmentFingerprint = (id: string): string => {
       const document = desiredConfiguration.configuration;
       const backend = document.backends.find(item => item.id === id);
-      if (!backend || backend.kind === "pi" || ((backend.kind === "codex_app_server" || backend.kind === "opencode") && backend.moduleConfiguration.connection.ownership === "external")) return configurationFingerprint({});
+      if (!backend) return configurationFingerprint({});
       const target = document.targets.find(item => item.backendInstanceId === id && item.enabled);
       const host = document.executionEnvironments.find(item => item.id === target?.executionEnvironmentId);
-      return configurationFingerprint(mergeEnvironmentVariableOverrides(host?.environmentVariables?.startup ?? {}, backend.environmentVariables?.startup ?? {}));
+      return configurationFingerprint(providerStartupEnvironmentVariables(backend, host?.environmentVariables?.startup));
     };
     const backendHost = (id: string): string | undefined =>
       desiredConfiguration.configuration.targets.find(target => target.backendInstanceId === id)?.executionEnvironmentId ??
@@ -1095,6 +1096,16 @@ export async function startProductionApplication(
             toolProvenanceKey, agentTools, outputArtifacts, viewedImageCapture,
             agentToolSourceCapabilities: agentToolSources, agentToolCli: cli,
             ...(owner ? {
+              readCurrentLaunchConfiguration: () => {
+                const document = desiredConfiguration.configuration;
+                const backend = document.backends.find(item => item.id === backendId);
+                const host = document.executionEnvironments.find(item => item.id === environmentId);
+                if (!backend?.enabled || backend.kind !== configured.kind || !host ||
+                    !document.targets.some(target => target.enabled && target.backendInstanceId === backendId && target.executionEnvironmentId === environmentId) ||
+                    configurationRepository.runtime(scope, "backend", backendId).preference !== "automatic" ||
+                    configurationRepository.runtime(scope, "environment", environmentId).preference !== "automatic") return undefined;
+                return { backend, startupEnvironmentVariables: providerStartupEnvironmentVariables(backend, host.environmentVariables?.startup) };
+              },
               sidecarRuntime: {
                 async acquireExisting(signal = new AbortController().signal) {
                   const lease = await owner.acquireExisting(scope, environmentId, signal);
@@ -2439,6 +2450,62 @@ export async function startProductionApplication(
       const environmentId = profiles.find(profile => profile.backendInstanceId === id)?.executionEnvironmentId;
       return Boolean(configured && environmentId && inventoryRepository.getEnvironment(scope, environmentId).kind !== "local" && compiledBackendModuleCatalog.requireModule(configured.kind).remoteRuntimeCapabilities?.length);
     };
+    // Migration candidates keep their original host/instance identity even if a saved definition was removed.
+    // Management "absent" and a successful exact retained lookup are evidence. A failed connection is not.
+    const inspectAntigravityOwners = async (environmentId: string, candidates: readonly string[]) => {
+      const probe = compiledBackendModuleCatalog.requireModule("antigravity").inspectRetainedOwner;
+      const owner = environmentRuntimes.get(environmentId)?.sidecarRuntime;
+      if (!owner || !probe) throw new DomainError("runtime_unavailable", "Connect the original execution host to inspect its retained Antigravity runtimes.", true);
+      const signal = managementSignal();
+      let incumbent: string | undefined;
+      try {
+        const service = await owner.inspectService(signal);
+        if (service) {
+          if (service.scope.tenantId !== scope.tenantId || service.scope.principalId !== scope.principalId ||
+              service.scope.executionEnvironmentId !== environmentId) {
+            throw new DomainError("conflict", "The retained execution host scope changed.");
+          }
+          if (service.state !== "ready") throw new DomainError("conflict", "Finish the execution host's outstanding cleanup before resolving Antigravity ownership.");
+          const borrowed = await owner.acquireRecovery(scope, environmentId, signal);
+          try {
+            if (borrowed.serviceStatus.serviceIncarnation !== service.serviceIncarnation) {
+              throw new DomainError("conflict", "The retained sidecar changed during ownership inspection.");
+            }
+            const lease = {
+              channel: borrowed.session.runtimeChannel,
+              closed: borrowed.session.closed,
+              controllerEpoch: borrowed.serviceStatus.controllerEpoch,
+              serviceIncarnation: borrowed.serviceStatus.serviceIncarnation,
+              release: () => borrowed.release(),
+            };
+            for (const id of candidates) {
+              if (!await probe(lease, id, signal)) continue;
+              if (incumbent) throw new DomainError("conflict", "The execution host reported conflicting retained Antigravity owners.");
+              incumbent = id;
+            }
+          } finally {
+            borrowed.release();
+          }
+        }
+        signal.throwIfAborted();
+      } catch (error) {
+        if (error instanceof DomainError) throw error;
+        throw new DomainError("runtime_unavailable", "Could not verify retained Antigravity ownership. Reconnect the original execution host and try again.", true);
+      }
+      if (incumbent) {
+        configurationRepository.confirmNativeOwner(scope, environmentId, "antigravity", incumbent);
+      } else {
+        for (const id of candidates) configurationRepository.confirmNativeOwner(scope, environmentId, "antigravity", null, id);
+      }
+    };
+
+    const confirmHostRetirement = (environmentId: string) => {
+      if (configurationRepository.unresolvedAntigravityCandidates(scope, environmentId).length ||
+          configurationRepository.retainedAntigravityOwner(scope, environmentId)) {
+        configurationRepository.confirmNativeOwner(scope, environmentId, "antigravity", null);
+      }
+    };
+
     const recoverBackendAdministration = async (id: string) => {
       const connections = profiles.filter(profile => profile.backendInstanceId === id);
       const environmentId = connections[0]?.executionEnvironmentId;
@@ -2514,6 +2581,14 @@ export async function startProductionApplication(
       if (!admitted) { retainedAttachments.delete(module); return; }
       void admitted.catch(reportBackgroundError(`Backend ${backendId} retained work attachment`))
         .finally(() => retainedAttachments.delete(module));
+    };
+    const confirmedHostPolicy = (environmentId: string) => {
+      const owner = environmentRuntimes.get(environmentId)?.sidecarRuntime;
+      const observed = owner?.policyStatus();
+      const desired = configurationProjection.hostPolicy(scope, environmentId);
+      if (!owner || !desired || !observed?.installed || observed.installed.revision !== desired.revision ||
+          observed.installed.digest !== desired.digest || owner.conflictsWithDesiredPolicy(observed.incarnation)) return undefined;
+      return { desired, observed };
     };
     const captureAdministrativeResource = async (record: ConfigurationRuntimeState, refresh: boolean, refreshProvider = true) => {
       const current = configurationRepository.get(scope);
@@ -2639,11 +2714,13 @@ export async function startProductionApplication(
           (typeof observedFailure === "object" ? observedFailure : undefined);
         recoveryAction = diagnostic?.recoveryAction;
         const providerHost = remote ? backendHost(id) : undefined;
-        const observedLaunch = providerHost ? environmentRuntimes.get(providerHost)?.sidecarRuntime?.policyStatus()
-          ?.readiness.find(item => item.id === `backend:${id}`)?.observedLaunchDigest : undefined;
-        const appliedLaunchDiffers = typeof observedLaunch === "string" && observedLaunch !== desiredBackendPolicy(id)?.launchDigest;
-        const launchPending = appliedLaunchDiffers || startupEnvironmentPending(id) ||
-          (appliedBackendFingerprints.has(id) && appliedBackendFingerprints.get(id) !== backendRuntimeFingerprint(id));
+        const policy = providerHost ? confirmedHostPolicy(providerHost) : undefined;
+        const grant = policy?.desired.snapshot.backends.find(backend => backend.id === id);
+        const observedLaunch = grant && policy?.observed.readiness.find(item =>
+          item.id === `backend:${id}` && item.generation === grant.generation)?.observedLaunchDigest;
+        // The current host's process evidence supersedes the existing main module's startup snapshot.
+        const launchPending = typeof observedLaunch === "string" ? observedLaunch !== grant?.launchDigest :
+          startupEnvironmentPending(id) || (appliedBackendFingerprints.has(id) && appliedBackendFingerprints.get(id) !== backendRuntimeFingerprint(id));
         const applied = intentionallyAbsent ? !owned && (record.preference !== "stopped" || !remote || backendPresence.get(id) === false) : appliedBackendRevisions.get(id) === record.desiredRevision && Boolean(owned) && !launchPending &&
           !diagnostic && !observationFailures.has(key) && (!owned?.administration || Boolean(backendObservation && backendObservation.state !== "unknown"));
         const starting = backendStartups.has(id);
@@ -2659,11 +2736,27 @@ export async function startProductionApplication(
           supportedActions: backendLifecycleActions(definition, remote),
           lastError: starting ? null : recoveryRequired ? sidecarOwnershipRecoveryMessage(recoveryRequired) : diagnostic?.message ?? (backendPreparationFailures.has(id) ? "This backend could not apply its configuration. Check its settings and execution environment." : observationFailures.has(key) ? "Provider state is unavailable; active work and retained outcomes may still exist." : null),
         };
+        if (definition?.kind === "antigravity" && !definition.enabled && !remote) {
+          const hostId = backendHost(id);
+          if (hostId && current.configuration.executionEnvironments.some(host => host.id === hostId && host.kind === "local") &&
+              configurationRepository.unresolvedAntigravityCandidates(scope, hostId).includes(id)) {
+            const host = inventoryRepository.getEnvironment(scope, hostId);
+            const idle = !owned && !starting && !active.length && !backendObservation && !observedFailure &&
+              !runtimeModules.failures.has(id) && !backendPreparationFailures.has(id);
+            runtime = {
+              ...runtime, connectionState: "unknown", applyState: "pending", effectiveRevision: null,
+              supportedActions: idle ? ["confirm_retirement"] : runtime.supportedActions.filter(action => action === "stop"),
+              lastError: idle ? "Verify this previous local Antigravity runtime is retired, then confirm its retirement."
+                : "Resolve current backend work or uncertain cleanup before confirming local retirement.",
+            };
+            if (idle) interruptions.push(`Confirm that all previous native processes for backend ${definition.label} (${id}) on ${host.label} (${hostId}) have been stopped.`);
+          }
+        }
       }
       return {runtime, service, backendObservation, administration, recoveryAction, interruptions: interruptions.length > 128 ? [...interruptions.slice(0, 127), `${interruptions.length - 127} additional affected resources.`] : interruptions,
         fence: configurationFingerprint({resourceKind: record.resourceKind, id, incarnation: runtime.incarnation, policyConflict: runtime.connectionState === "policy_conflict",
           service: service ? {epoch: service.controllerEpoch, state: service.state, resources: service.resourcesFingerprint, configuration: service.desiredConfiguration} : null,
-          backend: backendObservation?.revision ?? null,
+          backend: backendObservation?.revision ?? null, localRetirement: runtime.supportedActions.includes("confirm_retirement"),
           loaded: record.resourceKind === "backend" ? await backendThreads(id) : null}),
       };
     };
@@ -2751,17 +2844,30 @@ export async function startProductionApplication(
       if (!owner || configurationRepository.runtime(scope, "environment", id).preference !== "automatic") return;
       if (force) await owner.retryPolicy(signal);
       else await owner.synchronizePolicy(signal);
-      const observed = owner.policyStatus();
-      const desired = configurationProjection.hostPolicy(scope, id);
-      if (desired && observed?.installed?.digest === desired.digest && observed.installed.revision === desired.revision &&
-          !owner.conflictsWithDesiredPolicy(observed.incarnation)) {
-        configurationRepository.observeHostPolicy(scope, id, desired,
-          new Map(observed.readiness.map(item => [item.id, item.state])),
-          {incarnation: observed.incarnation, epoch: observed.controllerEpoch,
-            launchDigests: new Map(observed.readiness.flatMap(item =>
-              item.id.startsWith("backend:") && item.observedLaunchDigest !== undefined
-                ? [[item.id.slice("backend:".length), item.observedLaunchDigest] as const] : []))});
+      const policy = confirmedHostPolicy(id);
+      if (!policy) return;
+      const { desired, observed } = policy;
+      const readiness = new Map(observed.readiness.map(item => [item.id, item]));
+      const launches = new Map<string, string | null>();
+      for (const grant of desired.snapshot.backends) {
+        const subject = readiness.get(`backend:${grant.id}`);
+        if (subject?.generation !== grant.generation || subject.observedLaunchDigest === undefined) continue;
+        launches.set(grant.id, subject.observedLaunchDigest);
+        const runtime = moduleRuntimes.get(grant.id);
+        if (!runtime || subject.observedLaunchDigest !== grant.launchDigest) continue;
+        const incarnation = backendSidecarBindings.get(runtime)?.serviceIncarnation;
+        if (incarnation && incarnation !== observed.incarnation) continue;
+        const fingerprint = backendRuntimeFingerprint(grant.id);
+        if (appliedBackendFingerprints.get(grant.id) === fingerprint) continue;
+        // A replacement can use new declarations through the same main module.
+        // Its cached administrative inventory belonged to the previous process.
+        appliedBackendFingerprints.set(grant.id, fingerprint);
+        appliedStartupEnvironmentFingerprints.set(grant.id, startupEnvironmentFingerprint(grant.id));
+        remoteBackendObservations.delete(runtime);
       }
+      configurationRepository.observeHostPolicy(scope, id, desired,
+        new Map(observed.readiness.map(item => [item.id, item.state])),
+        {incarnation: observed.incarnation, epoch: observed.controllerEpoch, launchDigests: launches});
     };
     // A policy-changing save wakes a detached automatic host once. Display-only
     // saves and readiness notifications do not request a fresh attachment.
@@ -3100,7 +3206,15 @@ export async function startProductionApplication(
         const nextHosts = new Set(next.executionEnvironments.map(host => host.id));
         const droppedHosts = previous.configuration.executionEnvironments.filter(host => !nextHosts.has(host.id)).map(host => host.id);
         for (const target of previous.configuration.targets) if (!nextTargets.has(target.id)) droppedHosts.push(target.executionEnvironmentId);
-        return hostQueue.run(droppedHosts, () => commitWithConfigurationRemovalGuard({
+        const previousOwners = antigravityOwners(previous.configuration);
+        const ownershipChecks = new Map<string, string[]>();
+        for (const [hostId, [desired]] of antigravityOwners(next)) {
+          if (!desired || previousOwners.get(hostId)?.includes(desired) || next.executionEnvironments.find(host => host.id === hostId)?.kind === "local") continue;
+          const known = configurationRepository.retainedAntigravityOwner(scope, hostId);
+          const candidates = known ? (known === desired ? [] : [known]) : configurationRepository.unresolvedAntigravityCandidates(scope, hostId);
+          if (candidates.length) ownershipChecks.set(hostId, candidates);
+        }
+        const guardedCommit = () => commitWithConfigurationRemovalGuard({
           previous: previous.configuration, next,
           commit() {
             const snapshot = commit();
@@ -3121,6 +3235,18 @@ export async function startProductionApplication(
               }
               if (moduleRuntimes.has(id) || (await backendThreads(id)).length > 0) throw new DomainError("conflict", "Stop the backend and recover retained outcomes before removing its definition or target.");
               if (backendHasRemoteProvider(id) && await recoverBackendAdministration(id)) throw new DomainError("conflict", "The remote backend still owns resources. Stop it and recover retained outcomes before removal.");
+              const hostId = backendHost(id);
+              const legacyCandidate = hostId && configurationRepository.unresolvedAntigravityCandidates(scope, hostId).includes(id);
+              const losesBinding = !next.targets.some(target => target.backendInstanceId === id && target.executionEnvironmentId === hostId);
+              if (hostId && losesBinding && (legacyCandidate || configurationRepository.retainedAntigravityOwner(scope, hostId) === id)) {
+                if (inventoryRepository.getEnvironment(scope, hostId).kind === "local") {
+                  throw new DomainError("conflict", "Confirm retirement of the prior local Antigravity backend before removing its definition or target.");
+                }
+                await inspectAntigravityOwners(hostId, [id]);
+              }
+              if (hostId && losesBinding && configurationRepository.retainedAntigravityOwner(scope, hostId) === id) {
+                throw new DomainError("conflict", "Stop the retained Antigravity owner before removing its definition or target.");
+              }
               const value = await callback();
               backendStartupBackoff.delete(id);
               return value;
@@ -3160,7 +3286,11 @@ export async function startProductionApplication(
               throw new DomainError("conflict", error instanceof TerminalServiceError ? error.message : "Execution host shutdown could not be confirmed. Keep its definition until retained work is recovered.");
             }
           },
-        }));
+        });
+        return hostQueue.run([...droppedHosts, ...ownershipChecks.keys()], async () => {
+          for (const [hostId, candidates] of ownershipChecks) await inspectAntigravityOwners(hostId, candidates);
+          return guardedCommit();
+        });
       },
       async impact(candidate, _request, record) {
         assertManagementScope(candidate);
@@ -3184,6 +3314,18 @@ export async function startProductionApplication(
           // later save or command has already advanced the live runtime record.
           const admitted = (): ConfigurationRuntimeState => ({...configurationRepository.runtime(scope, request.resourceKind, id),
             desiredRevision: input.runtime.desiredRevision, preference: input.runtime.preference});
+          if (request.action === "confirm_retirement") {
+            if (request.resourceKind !== "backend" || !input.expectedFence || !evidence.runtime.supportedActions.includes(request.action)) return result("rejected");
+            return database!.transaction(() => {
+              configurationRepository.confirmLocalAntigravityRetirement(scope, resourceHost(request), id);
+              const refreshed = configurationRepository.runtime(scope, "backend", id);
+              // The candidate and its action receipt settle together. A crash cannot replay this attestation.
+              return configurationRepository.completeLifecycle(scope, request, result("applied", {
+                ...refreshed, connectionState: "stopped", supportedActions: [], lastError: null,
+                effectiveRevision: refreshed.desiredRevision, applyState: "applied",
+              }));
+            })();
+          }
           // Retry proved-clean startup after host repair, or retry retained
           // cleanup with Stop. Neither path clears a sidecar ownership fence.
           const failedBackend = runtimeModules.failures.get(id);
@@ -3255,6 +3397,7 @@ export async function startProductionApplication(
               const service = evidence.service;
               if (!service) {
                 await stopBackends(environmentBackendIds(id), async () => undefined);
+                confirmHostRetirement(id);
                 if (request.action !== "stop") {
                   await reconcileHost(id);
                   const attached = await attach();
@@ -3301,6 +3444,7 @@ export async function startProductionApplication(
                   throw error;
                 }
                 effectConfirmed = true;
+                confirmHostRetirement(id);
                 if (request.action !== "stop") {
                   // The old service is gone, so a pending saved revision can now
                   // replace the owner before the replacement service attaches.

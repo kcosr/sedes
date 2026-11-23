@@ -15,7 +15,7 @@ export class ClaudePersistentRuntimeRegistry {
   readonly #hosts = new Map<string, { host: ClaudePersistentRuntimeHost; fingerprint: string; retire(force?: boolean, reason?: string): Promise<void> }>();
   observedLaunchDigest(id: string): string | null | undefined {
     const resident = this.#hosts.get(id);
-    if (resident) return observedLaunchDigest(resident.host);
+    if (resident) return resident.host.canReplaceWorker() ? null : observedLaunchDigest(resident.host.workerIdentity);
     return null;
   }
 
@@ -44,19 +44,30 @@ export class ClaudePersistentRuntimeRegistry {
     const existing = this.#hosts.get(configuration.backendInstanceId);
     if (existing) {
       // Existing-only lookup can reattach independently of this launch comparison.
-      if (existing.fingerprint !== fingerprint) throw new SidecarOperationError("claude_persistent_configuration_restart_required");
-      return existing.host;
+      if (existing.fingerprint === fingerprint) return existing.host;
+      if (existing.host.input.configuration.configDirectory !== configuration.configDirectory ||
+          !admission?.matchesGeneration(existing.host.workerIdentity) || !existing.host.canReplaceWorker())
+        throw new SidecarOperationError("claude_persistent_configuration_restart_required");
     }
     this.input.services.assertAdmission(epoch);
     const [major = 0, minor = 0] = process.versions.node.split(".").map(Number);
     if (!this.input.createRuntime && (major < 24 || (major === 24 && minor < 18))) throw new Error("claude_persistent_node_version_unsupported");
     const client = this.input.createRuntime?.(configuration) ?? new ClaudeManagedRuntimeOwner({
-      assertLaunchAdmission: admission && (() => admission.assertInstalled(this.input.services)), scope: configuration, environmentKind: "local", channels: this.input.environmentChannel,
+      assertLaunchAdmission: admission && (() => {
+        if (admission.isGenerationInstalled(this.input.services) && !admission.isInstalled(this.input.services))
+          throw new SidecarOperationError("claude_persistent_configuration_restart_required");
+        admission.assertInstalled(this.input.services);
+      }), scope: configuration, environmentKind: "local", channels: this.input.environmentChannel,
       artifact: this.input.artifact(), workingDirectory: configuration.configDirectory ?? "/",
       executablePath: configuration.executablePath, configDirectory: configuration.configDirectory,
       initializationTimeoutMs: configuration.initializationTimeoutMs,
       startupEnvironmentVariables: configuration.startupEnvironmentVariables,
     });
+    if (existing) {
+      existing.host.replaceWorker(configuration, client);
+      existing.fingerprint = fingerprint;
+      return existing.host;
+    }
     const host = new ClaudePersistentRuntimeHost({ configuration, client, close: () => client.close(), services: this.input.services, ...(this.input.validateQueryEnvironment ? { validateQueryEnvironment: this.input.validateQueryEnvironment } : {}), ...(this.input.validateAgentToolMcp ? { validateAgentToolMcp: this.input.validateAgentToolMcp } : {}),
       ...(this.input.maximumCompactReceiptBytes !== undefined ? { maximumCompactReceiptBytes: this.input.maximumCompactReceiptBytes } : {}),
       ...(this.input.detachedSessionTtlMs !== undefined ? { detachedSessionTtlMs: this.input.detachedSessionTtlMs } : {}),

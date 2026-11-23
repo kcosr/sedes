@@ -12,7 +12,9 @@ User-facing changes are collected here before release. See the
   backend, connection, workspace root or operation applies to the existing
   service while other turns and terminals continue. Settings shows which
   changes are ready, which need the host, and which apply on the provider's
-  next launch. See [execution settings](docs/user/settings.md#saving-and-runtime-state).
+  next launch. If an upgrade disables competing Antigravity backends on a local
+  host, Settings lets you confirm each previous runtime’s retirement after
+  inspecting that host. See [execution settings](docs/user/settings.md#saving-and-runtime-state).
 
 - Native Pi reduces round trips before sending a message on an attached thread.
   Drain retained native Pi work using the currently installed main and sidecar

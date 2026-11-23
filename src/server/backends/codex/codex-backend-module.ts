@@ -235,6 +235,15 @@ class CodexBackendModuleRuntime implements BackendModuleRuntime {
           scope: runtimeScope,
           provider: input.context.sidecarRuntime,
           configuration: { startupEnvironmentVariables: this.#startupEnvironmentVariables, instance: input.context.instance, get connections() { return input.context.connections; }, connection: input.prepared.configuration.connection },
+          readCurrentLaunchConfiguration: input.context.readCurrentLaunchConfiguration && (() => {
+            const desired = input.context.readCurrentLaunchConfiguration!();
+            if (!desired || desired.backend.kind !== "codex_app_server" || desired.backend.id !== input.context.instance.id) {
+              throw new Error("codex_runtime_configuration_unavailable");
+            }
+            const connection = desired.backend.moduleConfiguration.connection;
+            return { instance: input.context.instance, connections: input.context.connections, connection,
+              startupEnvironmentVariables: connection.ownership === "owned" ? desired.startupEnvironmentVariables : {} };
+          }),
           serverRequests: this.#serverRequests,
           receipts: new CodexRuntimeReceiptStore(input.context.database, undefined, (scope, threadId) =>
             this.#fastModeSessions.controller(scope, threadId)?.publicationChanged()),

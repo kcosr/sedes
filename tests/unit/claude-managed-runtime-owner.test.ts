@@ -262,10 +262,12 @@ describe("ClaudeManagedRuntimeOwner", () => {
     const owner = harness.owner({ assertLaunchAdmission: () => { if (!current) throw new Error("backend_policy_denied"); } });
     try {
       await expect(listSessions(owner)).resolves.toEqual([]);
+      expect(owner.emptyAfterCleanup()).toBe(false);
       current = false;
       await expect(listSessions(owner)).resolves.toEqual([]);
       harness.generations[0]!.finish({ reason: "exit", exitCode: CLAUDE_RUNTIME_WORKER_CLEANUP_PROVEN_FAILURE_EXIT_CODE, signal: null });
       await waitUntil(() => harness.backgroundErrors.length === 1);
+      expect(owner.emptyAfterCleanup()).toBe(true);
       await expect(listSessions(owner)).rejects.toThrow("backend_policy_denied");
       expect(harness.open).toHaveBeenCalledOnce();
     } finally { await owner.close(); }
@@ -384,6 +386,8 @@ describe("ClaudeManagedRuntimeOwner", () => {
       signal: null,
     });
     await waitUntil(() => harness.backgroundErrors.length === 1);
+    expect(owner.emptyAfterCleanup()).toBe(false);
+    expect(() => owner.disposeEmpty()).toThrow("claude_persistent_configuration_restart_required");
     await expect(listSessions(owner)).rejects.toThrow(
       "claude_managed_runtime_cleanup_unproven",
     );

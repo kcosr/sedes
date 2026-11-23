@@ -225,6 +225,43 @@ export class ConfigurationRepository {
     })();
   }
 
+  /** Migration candidates remain addressable after their disabled definitions and targets are removed. */
+  unresolvedAntigravityCandidates(scope: RequestScope, environmentId: string): string[] {
+    return (this.database.prepare(`SELECT c.backend_id AS id FROM execution_configuration_ownership_conflicts c
+      WHERE c.tenant_id = ? AND c.owner_principal_id = ? AND c.environment_id = ? AND c.retirement_confirmed = 0
+        AND NOT EXISTS (SELECT 1 FROM execution_configuration_native_owners o WHERE o.tenant_id = c.tenant_id
+          AND o.owner_principal_id = c.owner_principal_id AND o.environment_id = c.environment_id AND o.namespace = 'antigravity')
+      ORDER BY c.backend_id`).all(scope.tenantId, scope.principalId, environmentId) as { id: string }[]).map(row => row.id);
+  }
+
+  retainedAntigravityOwner(scope: RequestScope, environmentId: string): string | undefined {
+    const row = this.database.prepare(`SELECT backend_id AS id FROM execution_configuration_native_owners WHERE tenant_id = ?
+      AND owner_principal_id = ? AND environment_id = ? AND namespace = 'antigravity'`)
+      .get(scope.tenantId, scope.principalId, environmentId) as { id: string | null } | undefined;
+    return row?.id ?? undefined;
+  }
+
+  confirmLocalAntigravityRetirement(scope: RequestScope, environmentId: string, backendId: string): void {
+    // This attestation is available only for an unclaimed, disabled local migration candidate.
+    // A positive retained owner must be stopped using its actual runtime identity.
+    this.database.transaction(() => {
+      const { configuration } = this.get(scope);
+      if (!configuration.executionEnvironments.some(e => e.id === environmentId && e.kind === "local") ||
+          !configuration.backends.some(b => b.id === backendId && b.kind === "antigravity" && !b.enabled) ||
+          !configuration.targets.some(t => t.backendInstanceId === backendId && t.executionEnvironmentId === environmentId) ||
+          !this.unresolvedAntigravityCandidates(scope, environmentId).includes(backendId)) {
+        throw new DomainError("conflict", "This local legacy retirement is no longer awaiting confirmation.");
+      }
+      this.confirmNativeOwner(scope, environmentId, "antigravity", null, backendId);
+      const current = this.runtime(scope, "backend", backendId);
+      const effects = current.effects?.map(effect => effect.component === "ownership" ? {
+        ...effect, state: "applied" as const, effectiveRevision: effect.desiredRevision,
+        detail: "The operator confirmed retirement of this previous local runtime.",
+      } : effect);
+      this.#putRuntime(scope, { ...current, effects });
+    })();
+  }
+
   assertNativeOwner(scope: RequestScope, environmentId: string, namespace: string, backendId: string): void {
     const row = this.database.prepare(`SELECT backend_id AS backendId FROM execution_configuration_native_owners
       WHERE tenant_id = ? AND owner_principal_id = ? AND environment_id = ? AND namespace = ?`)
@@ -299,7 +336,8 @@ export class ConfigurationRepository {
       this.#assertCapacity(scope);
       const runtime = this.runtime(scope, request.resourceKind, request.resourceId);
       if (runtime.incarnation !== request.expectedIncarnation) throw new DomainError("conflict", "The runtime incarnation changed.");
-      const preference = request.action === "disconnect" ? "disconnected" : request.action === "stop" ? "stopped" : "automatic";
+      const preference = request.action === "confirm_retirement" ? runtime.preference
+        : request.action === "disconnect" ? "disconnected" : request.action === "stop" ? "stopped" : "automatic";
       const next: ConfigurationRuntimeState = {
         ...runtime, preference, desiredRevision: snapshot.revision + 1, applyState: "pending", lastError: null,
       };

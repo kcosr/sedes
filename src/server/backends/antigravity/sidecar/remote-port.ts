@@ -115,6 +115,15 @@ export class AntigravityRemotePort implements AntigravityPort {
     await Promise.allSettled([this.#opening?.promise]);
   }
 }
+/** Inspect an exact migrated candidate even when its saved launch definition is gone. */
+export async function inspectRetainedAntigravityOwner(lease: SidecarRuntimeLease, backendInstanceId: string, signal: AbortSignal): Promise<boolean> {
+  lease.channel.assertReady();
+  if (!lease.channel.supportsOperation(antigravityControlOperation)) throw new AntigravityError("antigravity_remote_unsupported");
+  const retained = await call(lease, { action: "lookup_retained", backendInstanceId }, signal);
+  if (retained === null) return false;
+  runtimeSchema.parse(retained);
+  return true;
+}
 async function call(lease: SidecarRuntimeLease, input: AntigravityHostCommandInput, signal?: AbortSignal): Promise<unknown> {
   let crossed = false;
   try {
@@ -127,7 +136,7 @@ async function call(lease: SidecarRuntimeLease, input: AntigravityHostCommandInp
     };
     // Observation cancellation ends the caller wait after the admitted bounded
     // exchange drains; aborting an in-flight write would destroy a shared carrier.
-    const observation = ["observe", "outcome", "acknowledge", "acknowledge_operation", "inspect"].includes(command.action);
+    const observation = ["lookup_retained", "observe", "outcome", "acknowledge", "acknowledge_operation", "inspect"].includes(command.action);
     const response = observation && signal ? await drainObservation(signal, invoke) : await invoke(signal);
     if (response.status === "failed") throw new AntigravityError(response.failure.code, response.failure.delivery);
     return response.value;

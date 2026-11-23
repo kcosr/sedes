@@ -76,6 +76,8 @@ const STOPPED_HISTORY_BYTES = 64 * 1024 * 1024;
 /** Service-owned sessions never depend on an upstream SSH attachment lifetime. */
 export class ClaudePersistentRuntimeHost {
   readonly runtimeId = randomUUID();
+  #workerIdentity: object = {};
+  get workerIdentity(): object { return this.#workerIdentity; }
   readonly #sessions = new Map<string, Session>();
   /** Running one-shot fork launches by child session; they share the session cap. */
   readonly #forkLaunches = new Map<string, Promise<ClaudeRuntimeForkResult>>();
@@ -97,6 +99,7 @@ export class ClaudePersistentRuntimeHost {
   /** An unforced stop ended work that started after its confirmation. */
   #handedOver = false;
   #inflight = 0;
+  #commands = 0;
   /** Shutdown baseline; `messages` is absent for an idle session that did not fit its budget. */
   readonly #stoppedHistory = new Map<string, { info: Awaited<ReturnType<ClaudeRuntimeClient["getSessionInfo"]>>; present: boolean; messages?: Awaited<ReturnType<ClaudeRuntimeClient["getSessionMessages"]>> }>();
   freezeAdmission(): void { this.#frozen = true; }
@@ -122,6 +125,23 @@ export class ClaudePersistentRuntimeHost {
     /** Per-query journal bound for sends, permission responses, and compactions. */
     maximumJournaledOperations?: number;
   }) {}
+
+  canReplaceWorker(): boolean {
+    return !this.#closed && !this.#runtimeStopped && !this.#closing && !this.#cleanupUnproven && !this.#frozen &&
+      !this.#commands && !this.#inflight && !this.#sessions.size && !this.#forkLaunches.size &&
+      this.input.client.emptyAfterCleanup?.() === true && !!this.input.client.disposeEmpty;
+  }
+
+  /** The journal belongs to this backend incarnation. Only its proved-empty native worker changes. */
+  replaceWorker(configuration: ClaudePersistentConfiguration, client: ClaudeOwnedRuntimeClient & { close(): Promise<void> }): void {
+    if (!this.canReplaceWorker()) throw new SidecarOperationError("claude_persistent_configuration_restart_required");
+    this.input.client.disposeEmpty!();
+    this.#workerIdentity = {};
+    this.input.configuration = configuration;
+    this.input.client = client;
+    this.input.close = () => client.close();
+    this.#revision++;
+  }
 
   get #journalLimit(): number {
     return this.input.maximumJournaledOperations ?? MAXIMUM_JOURNALED_OPERATIONS;
@@ -313,6 +333,7 @@ export class ClaudePersistentRuntimeHost {
     const mutation = ["rename", "compact", "interrupt", "set_model", "set_effort", "set_permission_mode"].includes(command.action) && !compactReplay;
     if (mutation) { this.#inflight++; this.#revision++; }
     const started = performance.now();
+    this.#commands++;
     try { return await this.#execute(command, listener, assertPolicy); }
     catch (error) {
       attachmentDiagnostic("claude_sidecar_command_failed", {
@@ -324,7 +345,7 @@ export class ClaudePersistentRuntimeHost {
       }, error);
       throw error;
     }
-    finally { if (mutation) { this.#inflight--; this.#revision++; } }
+    finally { this.#commands--; if (mutation) { this.#inflight--; this.#revision++; } }
   }
 
   async #execute(command: ClaudePersistentCommand, listener: (event: ClaudePersistentEvent) => void, assertPolicy?: () => void): Promise<unknown> {

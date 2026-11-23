@@ -63,6 +63,15 @@ const productionDependencies: ClaudeBackendModuleDependencies = Object.freeze({
         scope: { ...context.scope, backendInstanceId: context.instance.id,
           executionEnvironmentId: context.environmentChannel.executionEnvironmentId },
         sidecarRuntime: context.sidecarRuntime,
+        ...(context.readCurrentLaunchConfiguration && { readLaunchConfiguration: () => {
+          const current = context.readCurrentLaunchConfiguration!();
+          if (!current || current.backend.kind !== "claude_agent_sdk") return undefined;
+          const runtime = current.backend.moduleConfiguration;
+          return { ...context.scope, executionEnvironmentId: context.environmentChannel.executionEnvironmentId,
+            backendInstanceId: context.instance.id, executablePath: runtime.executablePath ?? "claude",
+            configDirectory: runtime.configDirectory, initializationTimeoutMs: runtime.initializationTimeoutMs,
+            startupEnvironmentVariables: current.startupEnvironmentVariables };
+        }}),
         executablePath: prepared.runtime.executablePath ?? "claude",
         configDirectory: prepared.runtime.configDirectory,
         initializationTimeoutMs: prepared.runtime.initializationTimeoutMs,

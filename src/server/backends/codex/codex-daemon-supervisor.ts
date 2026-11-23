@@ -174,6 +174,7 @@ export class CodexDaemonSupervisor {
   readonly #stabilityResetMilliseconds: number;
   readonly #shutdownTimeoutMilliseconds: number;
   readonly #nativeStoreOwnership: CodexNativeStoreOwnershipGate | undefined;
+  readonly #isLaunchCurrent: (() => boolean) | undefined;
   #lifecycleController = new AbortController();
   #parking: Promise<void> | undefined;
   readonly #onError: (error: unknown) => void;
@@ -206,6 +207,7 @@ export class CodexDaemonSupervisor {
     readonly stabilityResetMilliseconds?: number;
     readonly shutdownTimeoutMilliseconds?: number;
     readonly nativeStoreOwnership?: CodexNativeStoreOwnershipGate;
+    readonly isLaunchCurrent?: () => boolean;
     readonly serverRequestRouter?: CodexServerRequestRouter;
     readonly onError?: (error: unknown) => void;
     readonly onRuntimeVersionAssessment?: (
@@ -253,6 +255,7 @@ export class CodexDaemonSupervisor {
       input.shutdownTimeoutMilliseconds ??
       DEFAULT_SHUTDOWN_TIMEOUT_MILLISECONDS;
     this.#nativeStoreOwnership = input.nativeStoreOwnership;
+    this.#isLaunchCurrent = input.isLaunchCurrent;
     this.#onError = input.onError ?? (() => undefined);
     this.#onRuntimeVersionAssessment =
       input.onRuntimeVersionAssessment ?? (() => undefined);
@@ -322,7 +325,10 @@ export class CodexDaemonSupervisor {
 
   wake(): void | Promise<void> {
     if (this.#parking) return this.#parking.then(() => this.wake());
-    if (this.#state === "idle") return this.start();
+    if (this.#state === "idle") {
+      if (this.#isLaunchCurrent?.() === false) throw new CodexSupervisorFailure("codex_runtime_configuration_restart_required", true);
+      return this.start();
+    }
     if (this.#state === "starting") return this.#startPromise;
   }
 
@@ -347,6 +353,7 @@ export class CodexDaemonSupervisor {
       const failure = sanitizedSupervisorFailure(error);
       this.#lastFailure = failure.code;
       if (this.#state !== "closing" && this.#state !== "closed") {
+        if (this.#parkSupersededLaunch()) throw new CodexSupervisorFailure("codex_runtime_configuration_restart_required", true);
         if (failure.permanent) {
           this.#transition("circuit_open");
         } else {
@@ -641,8 +648,17 @@ export class CodexDaemonSupervisor {
       return;
     }
     this.#nativeStoreOwnership?.proveClosed();
+    if (this.#parkSupersededLaunch()) return;
     this.#transition("backoff");
     this.#scheduleRestart();
+  }
+
+  /** A superseded owned process can be replaced by a normal controller only
+   * after its native store is safe. No timer should reopen its old contract. */
+  #parkSupersededLaunch(): boolean {
+    if (this.#isLaunchCurrent?.() !== false || this.#cleanupUncertainty || this.#nativeStoreOwnership?.snapshot().releaseSafety !== "safe") return false;
+    this.#transition("idle");
+    return true;
   }
 
   #scheduleRestart(): void {
@@ -682,12 +698,14 @@ export class CodexDaemonSupervisor {
         continue;
       }
       if (this.#lifecycleController.signal.aborted) return;
+      if (this.#parkSupersededLaunch()) return;
       this.#transition("restarting");
       try {
         await this.#openGeneration();
         return;
       } catch (error) {
         this.#recordCleanupUncertainty(error);
+        if (this.#parkSupersededLaunch()) return;
         this.#lastFailure = errorCode(error);
         this.#reportError(error);
         if (isPermanentFailure(error)) {

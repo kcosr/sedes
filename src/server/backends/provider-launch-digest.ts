@@ -27,15 +27,21 @@ export const runtimeLaunchDigest = {
   },
 };
 
+export function providerStartupEnvironmentVariables(backend: ConfigurationBackend, environmentStartup: EnvironmentVariableOverrides = {}): EnvironmentVariableOverrides {
+  if (backend.kind === "pi" || ((backend.kind === "codex_app_server" || backend.kind === "opencode") &&
+      backend.moduleConfiguration.connection.ownership === "external")) return {};
+  return mergeEnvironmentVariableOverrides(environmentStartup, backend.environmentVariables?.startup ?? {});
+}
+
 export function providerLaunchDigest(backend: ConfigurationBackend, environmentStartup: EnvironmentVariableOverrides = {}): string {
-  const configured = () => mergeEnvironmentVariableOverrides(environmentStartup, backend.environmentVariables?.startup ?? {});
+  const startup = providerStartupEnvironmentVariables(backend, environmentStartup);
   switch (backend.kind) {
-    case "codex_app_server": return runtimeLaunchDigest.codex_app_server(backend.moduleConfiguration, backend.moduleConfiguration.connection.ownership === "owned" ? configured() : {});
-    case "opencode": return runtimeLaunchDigest.opencode(backend.moduleConfiguration, backend.moduleConfiguration.connection.ownership === "owned" ? configured() : {});
-    case "claude_agent_sdk": return runtimeLaunchDigest.claude_agent_sdk(backend.moduleConfiguration, configured());
-    case "pi_native": return runtimeLaunchDigest.pi_native(backend.moduleConfiguration, configured());
-    case "antigravity": return runtimeLaunchDigest.antigravity(backend.moduleConfiguration, configured());
+    case "codex_app_server": return runtimeLaunchDigest.codex_app_server(backend.moduleConfiguration, startup);
+    case "opencode": return runtimeLaunchDigest.opencode(backend.moduleConfiguration, startup);
+    case "claude_agent_sdk": return runtimeLaunchDigest.claude_agent_sdk(backend.moduleConfiguration, startup);
+    case "pi_native": return runtimeLaunchDigest.pi_native(backend.moduleConfiguration, startup);
+    case "antigravity": return runtimeLaunchDigest.antigravity(backend.moduleConfiguration, startup);
     case "pi": return configurationFingerprint(["pi"]);
-    case "grok_build": return configurationFingerprint(["grok_build", backend.moduleConfiguration, configured()]);
+    case "grok_build": return configurationFingerprint(["grok_build", backend.moduleConfiguration, startup]);
   }
 }

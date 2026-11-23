@@ -99,7 +99,7 @@ export class ClaudeManagedRuntimeOwner implements ClaudeOwnedRuntimeClient {
       this.#current = undefined;
       if (current) {
         this.#retiring = this.#retire(current, "claude_last_conversation_evicted");
-        await this.#retiring;
+        try { await this.#retiring; } finally { this.#retiring = undefined; }
       }
       this.#releaseDirectory();
     },
@@ -153,6 +153,18 @@ export class ClaudeManagedRuntimeOwner implements ClaudeOwnedRuntimeClient {
     this.#startupEnvironmentVariables = options.startupEnvironmentVariables ?? {};
     this.#initializationTimeoutMs = options.initializationTimeoutMs;
     this.#onBackgroundError = options.onBackgroundError ?? (() => undefined);
+  }
+
+  emptyAfterCleanup(): boolean {
+    return !this.#closed && !this.#starting && !this.#current && !this.#retiring &&
+      this.#retirementFailure === undefined && !this.#releaseDirectoryReservation && !this.#historyAcquisitions.size;
+  }
+
+  disposeEmpty(): void {
+    if (!this.emptyAfterCleanup()) throw new Error("claude_persistent_configuration_restart_required");
+    this.#closed = true;
+    this.#closeController.abort();
+    void this.#artifact.catch(() => undefined);
   }
 
   async startupEnvironmentState(): Promise<"not_started" | "started" | "unknown"> {
@@ -384,7 +396,7 @@ export class ClaudeManagedRuntimeOwner implements ClaudeOwnedRuntimeClient {
           attachmentDiagnostic("claude_worker_process_closed", { ...this.#scope, pid: process.pid, carrierGeneration, reason: closure.reason, exitCode: closure.exitCode, signal: closure.signal }, closure.cause);
           this.#generationEnded(owned, managedWorkerClosureError(closure));
         },
-        (error) => this.#generationEnded(owned, error),
+        (error) => this.#generationEnded(owned, managedWorkerClosureError({ reason: "closure_failed", cause: error })),
       );
       return owned;
     } catch (error) {

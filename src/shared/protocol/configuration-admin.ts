@@ -165,7 +165,7 @@ export const configurationDocumentSchema = z.strictObject({
 });
 
 export const configurationResourceKindSchema = z.enum(["environment", "backend"]);
-export const configurationLifecycleActionSchema = z.enum(["connect", "disconnect", "start", "stop", "restart", "upgrade"]);
+export const configurationLifecycleActionSchema = z.enum(["connect", "disconnect", "start", "stop", "restart", "upgrade", "confirm_retirement"]);
 export const configurationEffectSchema = z.strictObject({
   component: z.enum(["presentation", "defaults", "host_policy", "provider_launch", "connection_compression", "ownership"]),
   subjectId: z.string().min(1).max(256), subjectLabel: z.string().min(1).max(4096).optional(), desiredRevision: configurationRevisionSchema, effectiveRevision: configurationRevisionSchema.nullable(),

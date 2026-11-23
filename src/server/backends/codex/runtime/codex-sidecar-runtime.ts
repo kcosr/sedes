@@ -126,6 +126,9 @@ export function registerCodexRuntimeHost(input: ProviderPolicyAttachment & {
         runtimeLaunchDigest.codex_app_server(configuration, configuration.startupEnvironmentVariables), configuration.connections);
       const host = await input.hosts.ensure(configuration, input.controllerEpoch, admission);
       admission.bind(host);
+      for (const [runtimeId, authority] of attached) {
+        if (authority.scope.backendInstanceId === configuration.instance.id && runtimeId !== host.runtimeId) forgetAttachment(runtimeId);
+      }
       claimed.add(host);
       return { runtimeId: host.runtimeId };
     } catch (error) {
@@ -184,11 +187,18 @@ export function registerCodexRuntimeHost(input: ProviderPolicyAttachment & {
         }) };
         break;
       }
-      case "wake":
+      case "wake": {
         input.services.assertAdmission(input.controllerEpoch);
         host.cancelIdle();
-        await input.hosts.getRuntime(host.runtimeId).supervisor.wake();
+        const runtime = input.hosts.getRuntime(host.runtimeId);
+        try { await runtime.supervisor.wake(); }
+        catch (error) {
+          if (!(error instanceof Error) || error.message !== "codex_runtime_configuration_restart_required") throw error;
+          throw new SidecarOperationError(input.hosts.canReplaceParkedLaunch(runtime)
+            ? "codex_runtime_relaunch_required" : "codex_runtime_configuration_restart_required");
+        }
         result = { ok: true }; break;
+      }
       case "attach": {
         input.services.assertController(input.controllerEpoch);
         const snapshot = await host.attach(command.authority, event => sendEvent(host.runtimeId, event));

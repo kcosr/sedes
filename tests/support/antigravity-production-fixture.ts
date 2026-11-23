@@ -48,6 +48,7 @@ export class AntigravityProductionFixture {
 
   static async create(options: {
     readonly parentDirectory?: string;
+    readonly emptyLocalEnvironment?: boolean;
     readonly topology?: AntigravityProductionTopology;
     readonly executablePath?: string;
     readonly geminiDirectory?: string;
@@ -87,6 +88,7 @@ export class AntigravityProductionFixture {
           installationId: deriveSidecarInstallationIdentity(await loadOrCreateToolProvenanceKey(path.join(fixture.directory, "main"))) }; }
         finally { database.close(); }
       }
+      if (options.emptyLocalEnvironment && fixture.topology === "local") return fixture;
       const snapshot = configurationSnapshotSchema.parse(await fixture.json("/api/configuration"));
       await fixture.json("/api/configuration", "PUT", { mutationId: randomUUID(), expectedRevision: snapshot.revision,
         configuration: {
@@ -136,6 +138,37 @@ export class AntigravityProductionFixture {
     if (!response.ok) throw new Error(`antigravity_fixture_http:${method}:${route}:${response.status}:${JSON.stringify(result)}`);
     return result;
   }
+  /** Reproduce the disabled local candidates left by the duplicate-owner migration. */
+  async seedLocalRetirementCandidates() {
+    const snapshot = configurationSnapshotSchema.parse(await this.json("/api/configuration"));
+    const configuration = snapshot.configuration;
+    const environmentId = this.environmentId;
+    const environmentLabel = "Migrated Antigravity host";
+    const candidates = ["Legacy Antigravity A", "Legacy Antigravity B"].map(label => ({ id: randomUUID(), label }));
+    configuration.executionEnvironments = [{ id: environmentId, kind: "local", label: environmentLabel, workspaceRoots: [this.workspace],
+      workspaceIsolation: { kind: "bubblewrap", networkProfiles: ["isolated"] } }];
+    configuration.targets = [];
+    configuration.backends = [];
+    configuration.defaultTargetId = null;
+    for (const { id, label } of candidates) {
+      configuration.backends.push({ id, kind: "antigravity", label, enabled: false, modelPolicy: { type: "catalog" },
+        moduleConfiguration: { initializationTimeoutMs: 30_000 } });
+      configuration.targets.push({ id: id + "-target", kind: "antigravity_acp", label, enabled: false, backendInstanceId: id,
+        executionEnvironmentId: environmentId, moduleConfiguration: { defaults: {} } });
+    }
+    await this.json("/api/configuration", "PUT", { mutationId: randomUUID(), expectedRevision: snapshot.revision, configuration });
+    const database = new Database(path.join(this.directory, "main", "overlay.sqlite"));
+    try {
+      const scope = new SingleUserIdentityProvider(database).getScope();
+      const insert = database.prepare(`INSERT INTO execution_configuration_ownership_conflicts
+        (tenant_id, owner_principal_id, environment_id, backend_id, target_ids_json) VALUES (?, ?, ?, ?, ?)`);
+      database.transaction(() => {
+        for (const candidate of candidates) insert.run(scope.tenantId, scope.principalId, environmentId, candidate.id, JSON.stringify([candidate.id + "-target"]));
+      })();
+    } finally { database.close(); }
+    return { environmentId, environmentLabel, candidates };
+  }
+
   async createThread(options: { title?: string; toolPolicySelection?: unknown; toolPresentation?: unknown } = {}) {
     return createThreadResultSchema.parse(await this.json("/api/threads", "POST", {
       workspaceId: this.workspaceId, title: options.title ?? "Antigravity qualification", executionWorkspace: { kind: "direct" },

@@ -105,6 +105,10 @@ export class CodexRuntimeHost implements CodexRuntimeConnection {
 
   cancelIdle(): void { this.#idleRequest = undefined; }
 
+  canReleaseParkedProcess(): boolean {
+    return this.#accepting && this.#reads === 0 && this.unsettledCount() === 0 && this.#sessions?.canIdle() === true;
+  }
+
   async idle(authority: CodexRuntimeAuthority, generation: number, retire: () => Promise<void | boolean>): Promise<boolean> {
     this.#assertAuthority(authority);
     this.#idleRequest = { authority, generation, retire };

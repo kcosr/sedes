@@ -369,6 +369,7 @@ function fixture(
     expectedCodexHome?: string | null;
     expectedRuntimeVersion?: string;
     maximumRestartAttempts?: number | "unbounded";
+    isLaunchCurrent?: () => boolean;
     useDefaultRestartDelays?: boolean;
     restartDelaysMilliseconds?: readonly number[];
     restartJitterRatio?: number;
@@ -418,6 +419,7 @@ function fixture(
     initializationTimeoutMilliseconds: input?.initializationTimeoutMilliseconds,
     shutdownTimeoutMilliseconds: input?.shutdownTimeoutMilliseconds,
     nativeStoreOwnership: ownership,
+    isLaunchCurrent: input?.isLaunchCurrent,
     onError: input?.onError,
     onRuntimeVersionAssessment: input?.onRuntimeVersionAssessment,
     ...(input?.expectedRuntimeVersion
@@ -456,6 +458,27 @@ describe("CodexDaemonSupervisor", () => {
     expect(supervisor.snapshot()).toMatchObject({ state: "ready", generation: 2 });
     await reopened.release(true);
     await supervisor.close();
+  });
+
+  it.each(["before_exit", "during_backoff"])("parks a proved closed superseded launch without retrying it (%s)", async timing => {
+    let current = true;
+    const { supervisor, rpcs, clock, ownership } = fixture([{}], { isLaunchCurrent: () => current });
+    try {
+      await supervisor.start();
+      current = timing === "during_backoff";
+      rpcs[0]!.crash();
+      if (current) {
+        await waitFor(() => supervisor.snapshot().state === "backoff");
+        current = false;
+        clock.advance(1);
+      }
+      await waitFor(() => supervisor.snapshot().state === "idle");
+      expect(ownership.snapshot().state).toBe("proven_closed");
+      await expect(supervisor.client.request(readMethod, undefined, { timeoutMilliseconds: 100 }))
+        .rejects.toThrow("codex_runtime_configuration_restart_required");
+      expect(rpcs).toHaveLength(1);
+      expect(clock.sleeps).toHaveLength(0);
+    } finally { await supervisor.close(); }
   });
 
   it("does not retire on ordinary handle release or wake after final shutdown", async () => {

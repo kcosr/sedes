@@ -136,7 +136,13 @@ export class ConfigurationAdminService {
     await this.options.authorize(scope, "lifecycle");
     const request = configurationLifecycleRequestSchema.parse(value);
     const replayed = this.repository.replayLifecycle(scope, request);
-    if (replayed) return replayed;
+    if (replayed) {
+      const key = JSON.stringify([scope.tenantId, scope.principalId, request.mutationId]);
+      if (request.action === "confirm_retirement" && (replayed.state === "pending" || replayed.state === "unknown") && !this.#lifecycleExecutions.has(key)) {
+        return this.#rejectUncommittedRetirement(scope, request, replayed);
+      }
+      return replayed;
+    }
     const adapter = this.#runtimeAdapter();
     const runtime = this.repository.runtime(scope, request.resourceKind, request.resourceId);
     if (!runtime.supportedActions.includes(request.action)) throw new DomainError("bad_request", "This lifecycle action is unsupported for the selected runtime.");
@@ -145,7 +151,7 @@ export class ConfigurationAdminService {
       this.#lifecycleExecutions.has(JSON.stringify([scope.tenantId, scope.principalId, entry.request.mutationId])))) {
       throw new DomainError("conflict", "The previous lifecycle command is still running. Check its original status before stopping this runtime.");
     }
-    const disruptive = ["stop", "restart", "upgrade"].includes(request.action);
+    const disruptive = ["stop", "restart", "upgrade", "confirm_retirement"].includes(request.action);
     const confirmation = request.impactToken ? this.#impacts.get(request.impactToken) : undefined;
     if (disruptive || request.impactToken !== null) {
       if (!confirmation || confirmation.expiresAt <= this.#now() ||
@@ -196,6 +202,18 @@ export class ConfigurationAdminService {
     return this.repository.completeLifecycle(scope, request, result);
   }
 
+  #rejectUncommittedRetirement(scope: RequestScope, request: ConfigurationLifecycleRequest, result: ConfigurationLifecycleResult): ConfigurationLifecycleResult {
+    // The local proof and its completed receipt commit together. An unsettled receipt
+    // without an execution owner proves this mutation never confirmed retirement.
+    return this.repository.completeLifecycle(scope, request, {
+      ...result, state: "rejected",
+      runtime: {
+        ...result.runtime, applyState: "rejected",
+        lastError: "The local retirement confirmation did not commit. Inspect the current candidate before confirming again.",
+      },
+    });
+  }
+
   async lifecycleReceipt(scope: RequestScope, mutationId: string): Promise<ConfigurationLifecycleResult> {
     await this.options.authorize(scope, "read");
     const result = this.repository.lifecycleReceipt(scope, mutationId);
@@ -203,6 +221,9 @@ export class ConfigurationAdminService {
     if (result.state === "pending" || result.state === "unknown") {
       const pending = this.repository.pendingLifecycle(scope).find(entry => entry.request.mutationId === mutationId);
       if (pending) {
+        if (pending.request.action === "confirm_retirement") {
+          return this.#rejectUncommittedRetirement(scope, pending.request, pending.result);
+        }
         if (pending.result.state === "pending") {
           // Durable admission survived this server's execution owner. The
           // remote command may still be running; expose uncertainty so the

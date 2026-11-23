@@ -1,3 +1,4 @@
+import type { ClaudePersistentConfiguration } from "../../src/server/backends/claude/runtime/claude-persistent-runtime-wire.js";
 import { attachFixturePolicy, installFixturePolicy } from "../helpers/execution-policy-fixture.js";
 import { runtimeLaunchDigest } from "../../src/server/backends/provider-launch-digest.js";
 import { createSidecarFramedCarrier } from "../helpers/persistent-sidecar-framed-fixture.js";
@@ -34,6 +35,8 @@ const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => { vi.restoreAllMocks(); vi.unstubAllEnvs(); for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
 
 async function fixture(options: {
+  readonly emptyWorker?: () => boolean;
+  readonly readLaunchConfiguration?: () => ClaudePersistentConfiguration | undefined;
   readonly validateAgentToolMcp?: (agentToolMcp: NonNullable<ClaudeRuntimeSessionOptions["agentToolMcp"]>) => void;
   readonly detachedSessionTtlMs?: number;
   readonly maximumCompactReceiptBytes?: number;
@@ -45,7 +48,9 @@ async function fixture(options: {
     scope: { tenantId: scope.tenantId, principalId: scope.principalId, executionEnvironmentId: scope.executionEnvironmentId, installationId: "installation" }, buildId: "test", artifactSha256: "a".repeat(64),
     runtimeWireVersion: 1, configuration: serviceConfiguration, recordAbandonment: archive,
   });
-  const createRuntime = vi.fn(() => native.runtime);
+  const disposeEmpty = vi.fn();
+  const createRuntime = vi.fn((_config: ClaudePersistentConfiguration) => options.emptyWorker
+    ? { ...native.runtime, emptyAfterCleanup: options.emptyWorker, disposeEmpty } : native.runtime);
   const hosts = new ClaudePersistentRuntimeRegistry({
     scope, executionEnvironmentId: scope.executionEnvironmentId,
     environmentChannel: {} as ExecutionEnvironmentChannelProvider, environment: {}, services,
@@ -101,7 +106,7 @@ async function fixture(options: {
     return attached;
   }
   function client(startupEnvironmentVariables?: EnvironmentVariableOverrides) {
-    const value = new ClaudePersistentRuntimeClient({ ...configuration, scope, sidecarRuntime, startupEnvironmentVariables });
+    const value = new ClaudePersistentRuntimeClient({ ...configuration, scope, sidecarRuntime, startupEnvironmentVariables, readLaunchConfiguration: options.readLaunchConfiguration });
     clients.push(value);
     return value;
   }
@@ -118,7 +123,7 @@ async function fixture(options: {
     for (const carrier of carriers) await carrier.close();
     await native.runtime.close();
   });
-  return { ...native, services, hosts, attach, client, stop, archive, createRuntime };
+  return { ...native, services, hosts, attach, client, stop, archive, createRuntime, disposeEmpty };
 }
 
 function sessionOptions(sessionId: string, overrides: Partial<ClaudeRuntimeSessionOptions> = {}): ClaudeRuntimeSessionOptions {
@@ -671,6 +676,61 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
       ...request, queryId: denied, sessionId: denied, launch: "new",
     })).rejects.toThrow();
     expect(unvalidated.runtime.createSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("a freshly constructed Claude client adopts its saved contract on an empty owner found by existing-only lookup", async () => {
+    const changed = { MODE:{kind:"literal" as const,value:"new"} };
+    const f = await fixture({ emptyWorker: () => true, readLaunchConfiguration: () => ({...configuration,startupEnvironmentVariables:changed}) });
+    const carrier = await f.attach();
+    const id = await carrier.connection.ensure(configuration);
+    const originalPolicy = f.services.executionPolicy(carrier.lease.controllerEpoch);
+    installFixturePolicy(f.services, carrier.lease.controllerEpoch, serviceConfiguration,
+      {...originalPolicy, backends:originalPolicy.backends.map(backend => ({...backend,launchDigest:runtimeLaunchDigest.claude_agent_sdk(configuration,changed)}))});
+    const next = f.client(changed);
+    await expect(next.listSessions({dir:"/workspace"}, {})).resolves.toEqual([]);
+    expect(f.hosts.get(id).input.configuration.startupEnvironmentVariables).toEqual(changed);
+    expect(f.runtime.listSessions).toHaveBeenCalledOnce();
+    expect(f.disposeEmpty).toHaveBeenCalledOnce();
+  });
+
+  it("wakes an evicted Claude worker with saved launch settings and preserves its settled compact journal", async () => {
+    let desired: ClaudePersistentConfiguration | undefined = configuration;
+    let provedEmpty = false;
+    const f = await fixture({ emptyWorker: () => provedEmpty, readLaunchConfiguration: () => desired });
+    const carrier = await f.attach();
+    const client = f.client();
+    const id = randomUUID();
+    const query = client.createSession(sessionOptions(id));
+    await query.start();
+    const runtimeId = f.services.status().resources[0]!.resourceId;
+    const native = f.sessions[0]!;
+    const operation = { operationId: randomUUID(), instructions:"summarize" };
+    native.compact.mockResolvedValueOnce({ outcome:"compacted" });
+    const compact = await query.compact!(operation);
+    const originalPolicy = f.services.executionPolicy(carrier.lease.controllerEpoch);
+    const update = (config: ClaudePersistentConfiguration) => installFixturePolicy(f.services, carrier.lease.controllerEpoch, serviceConfiguration,
+      {...originalPolicy,backends:originalPolicy.backends.map(backend => ({ ...backend,launchDigest:runtimeLaunchDigest.claude_agent_sdk(config,config.startupEnvironmentVariables) }))});
+    const next = { ...configuration, executablePath:"/new/claude", initializationTimeoutMs:8000, startupEnvironmentVariables:{ MODE:{kind:"literal" as const,value:"updated"} } };
+    desired = next;
+    update(next);
+    await expect(carrier.connection.ensure(next)).rejects.toThrow("claude_persistent_configuration_restart_required");
+    await query.close({ reason:"evicted" });
+    expect(native.closed).toBe(true);
+    await expect(carrier.connection.ensure(next)).rejects.toThrow("claude_persistent_configuration_restart_required");
+    provedEmpty = true;
+    const wrongStore = {...next,configDirectory:"/another/store"};
+    update(wrongStore);
+    await expect(carrier.connection.ensure(wrongStore)).rejects.toThrow("claude_persistent_configuration_restart_required");
+    update(next);
+    await expect(client.listSessions({dir:"/workspace"}, {})).resolves.toEqual([]);
+    expect(f.createRuntime.mock.calls.map(([config]) => config.executablePath)).toEqual([configuration.executablePath,next.executablePath]);
+    expect(f.createRuntime.mock.calls[1]![0]).toEqual(next);
+    expect(f.disposeEmpty).toHaveBeenCalledOnce();
+    await expect(carrier.connection.execute({runtimeId,controllerEpoch:carrier.lease.controllerEpoch,action:"compact",request:{
+      queryId:id,startupProbeUuid:native.startupProbeUuid,...operation,
+    }})).resolves.toMatchObject({response:compact});
+    desired = undefined;
+    await expect(client.listSessions({dir:"/workspace"}, {})).rejects.toThrow();
   });
 
   it("reattaches after main restart with pending startup edits and applies them only after explicit restart", async () => {

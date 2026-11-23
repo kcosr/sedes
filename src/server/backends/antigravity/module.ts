@@ -18,7 +18,7 @@ import { AntigravityError, type AntigravityPort, type AntigravityRuntimeConfigur
 import { ANTIGRAVITY_PROTOCOL_RELEASE } from "./release-profile.js";
 import { antigravityAdministration, recoverAntigravityAdministration } from "./runtime-administration.js";
 import { AntigravitySavedAgentAdapter } from "./saved-agent-adapter.js";
-import { AntigravityRemotePort } from "./sidecar/remote-port.js";
+import { AntigravityRemotePort, inspectRetainedAntigravityOwner } from "./sidecar/remote-port.js";
 import { antigravityRuntimeCapability } from "./sidecar/wire.js";
 import { AntigravityThreadPersistence } from "./thread-persistence.js";
 import { AntigravityThreadPresentation } from "./thread-presentation.js";
@@ -65,6 +65,7 @@ export class AntigravityBackendModule implements BackendModule {
   readonly connectionKinds = ["antigravity_acp"] as const;
   readonly protocolRelease = ANTIGRAVITY_PROTOCOL_RELEASE;
   readonly startupPolicy = "composition_only" as const;
+  readonly inspectRetainedOwner = inspectRetainedAntigravityOwner;
   readonly remoteRuntimeCapabilities = [antigravityRuntimeCapability];
 
   constructor(readonly createHostPort: (input: CreatePortInput) => AntigravityPort = createPort) {}

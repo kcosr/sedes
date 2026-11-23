@@ -731,6 +731,14 @@ Antigravity backend per environment may serve multiple targets. Set an optional
 absolute executable and native profile path in the backend editor. Configure
 target defaults from that runtime's advertised model and reasoning options.
 Remote execution requires the negotiated `antigravity_runtime` capability 4.
+When a migration disables competing Antigravity backends on a local host, open
+each candidate in **Settings → Backends**. **Confirm retirement** is available
+when Sedes knows of no current owner, active work, or pending cleanup for that
+candidate. Check the backend and host identified in the dialog. Independently
+verify that all of that backend's previous native processes have stopped before
+recording its retirement. Stop any surviving processes separately on the host.
+Each confirmation resolves one candidate.
+
 See [Antigravity](backends/antigravity.md) for fields, native mode semantics,
 and runtime ownership.
 

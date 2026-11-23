@@ -12,7 +12,7 @@ import { PersistentSidecarServiceRegistry } from "../../src/server/sidecar/persi
 import { LocalEnvironmentChannelProvider } from "../../src/server/execution/local-environment-channel.js";
 import { AntigravityHost } from "../../src/server/backends/antigravity/host/native-host.js";
 import { AntigravityHostRegistry } from "../../src/server/backends/antigravity/host/host-registry.js";
-import { AntigravityRemotePort } from "../../src/server/backends/antigravity/sidecar/remote-port.js";
+import { AntigravityRemotePort, inspectRetainedAntigravityOwner } from "../../src/server/backends/antigravity/sidecar/remote-port.js";
 import { registerAntigravityHost } from "../../src/server/backends/antigravity/sidecar/register-host.js";
 import { AntigravityAcpConnection } from "../../src/server/backends/antigravity/acp-connection.js";
 import { antigravityHistorySchema, antigravityRuntimeCapability } from "../../src/server/backends/antigravity/sidecar/wire.js";
@@ -71,6 +71,18 @@ function proxy(f: Awaited<ReturnType<typeof fixture>>, getLease: () => SidecarRu
   const port = new AntigravityRemotePort({ configuration: f.configuration, sidecarRuntime: runtime }); cleanup.push(() => port.close()); return { port, runtime };
 }
 describe("Antigravity persistent sidecar", () => {
+  it("inspects a retained owner by its original ID without its saved definition or launch authority", async () => {
+    const f = await fixture(), initial = await attachment(f);
+    await proxy(f, () => initial.lease).port.create({ cwd: f.cwd, operationId: "original" });
+    await initial.disconnect();
+    const recovery = await attachment(f, "recovery");
+    const signal = AbortSignal.timeout(5000);
+    await expect(inspectRetainedAntigravityOwner(recovery.lease, "other", signal)).resolves.toBe(false);
+    await expect(inspectRetainedAntigravityOwner(recovery.lease, f.configuration.backendInstanceId, signal)).resolves.toBe(true);
+    expect(f.launched).toHaveBeenCalledOnce();
+    expect(f.createHost).toHaveBeenCalledOnce();
+  });
+
   it.each([
     { outcome: "selected", concurrent: false }, { outcome: "selected", concurrent: true },
     { outcome: "selected", concurrent: "published" }, { outcome: "cancelled", concurrent: false },

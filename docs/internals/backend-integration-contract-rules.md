@@ -196,6 +196,13 @@ and preserve exact-instance inspection, acknowledgment and recovery for retained
 work. A new named connection can reuse an owned provider. The registered
 driver checks its current target generation when admitting work.
 
+An owned provider that launches a replacement worker reads the current backend
+and host startup declarations at that launch. The sidecar verifies the installed
+instance generation, launch digest and immutable native-store binding. A parked
+or exited worker can be replaced on ordinary demand once cleanup is proved and
+retained sessions, terminals and unsettled outcomes are accounted for. Verify
+both the retired-worker path and the refusal while work is retained.
+
 All sidecar consumers use the current shared wire protocol 18,
 retaining negotiated compression from version 15; OpenCode's private runtime
 capability is major 5. No browser contract

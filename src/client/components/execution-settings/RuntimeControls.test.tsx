@@ -323,6 +323,32 @@ describe("runtime administration controls", () => {
     })));
   });
 
+  it("requires operator confirmation for a migrated candidate even with an empty impact inventory", async () => {
+    const api = controls();
+    const candidate: ConfigurationRuntimeState = { ...runtime, resourceKind: "backend", resourceId: "older-ag", connectionState: "unknown",
+      incarnation: null, activeResources: 0, supportedActions: ["confirm_retirement"], upgradeState: "current" };
+    const preview = { ...impact, action: "confirm_retirement" as const, resourceKind: candidate.resourceKind, resourceId: candidate.resourceId,
+      incarnation: null, activeResources: 0, interruptions: [], expiresAt: new Date(Date.now() + 120_000).toISOString() };
+    api.configurationLifecycleImpact.mockResolvedValue(preview);
+    const props: RuntimeControllerOptions = { controls: api, revision: 7, resourceKind: "backend", resourceId: candidate.resourceId, label: "Legacy Antigravity",
+      enabled: false, disabled: false, onRuntime: vi.fn(), onRefresh: vi.fn(async () => true) };
+    const view = render(<RuntimeControls {...props} runtime={{ ...candidate, supportedActions: [] }} />);
+    expect(screen.queryByRole("button", { name: "Confirm retirement" })).toBeNull();
+    view.rerender(<RuntimeControls {...props} enabled runtime={candidate} />);
+    expect(screen.queryByRole("button", { name: "Confirm retirement" })).toBeNull();
+    view.rerender(<RuntimeControls {...props} runtime={candidate} />);
+    expect(screen.getByLabelText("Header status")).toHaveTextContent("Retirement unverified");
+    await userEvent.click(within(headerActions()).getByRole("button", { name: "Confirm retirement" }));
+    const dialog = await screen.findByRole("dialog", { name: "Confirm retirement of Legacy Antigravity?" });
+    expect(dialog).toHaveTextContent("Independently check the named host");
+    expect(dialog).not.toHaveTextContent("Running work will be interrupted");
+    expect(api.configurationLifecycle).not.toHaveBeenCalled();
+    await userEvent.click(within(dialog).getByRole("button", { name: "I verified the processes have stopped" }));
+    await waitFor(() => expect(api.configurationLifecycle).toHaveBeenCalledWith(expect.objectContaining({
+      action: "confirm_retirement", resourceKind: "backend", resourceId: candidate.resourceId, expectedIncarnation: null, expectedRevision: 7, impactToken: preview.token,
+    })));
+  });
+
   it("shows the host-confirmed provider restart requirement in Activity", () => {
     render(<RuntimeControls controls={controls()} revision={7} resourceKind="backend" resourceId="claude" label="Claude"
       runtime={{ ...runtime, resourceKind: "backend", resourceId: "claude", effects: [

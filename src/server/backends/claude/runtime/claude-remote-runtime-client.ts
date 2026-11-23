@@ -1,3 +1,5 @@
+import { runtimeLaunchDigest } from "../../provider-launch-digest.js";
+import { withRecoveryRequest } from "../../../../internal/sidecar-protocol/recovery-context.js";
 import type { EnvironmentVariableOverrides } from "../../../../shared/protocol/environment-variables.js";
 import { createHash } from "node:crypto";
 import { readClaudeSessionHistory, type ClaudeHistoryPage, type ClaudeHistoryPageOptions } from "../claude-session-history.js";
@@ -16,7 +18,7 @@ import type { ClaudeSdkSessionInitialization } from "../claude-sdk-session.js";
 import { verifyClaudeRuntimeVersion } from "../claude-release-guard.js";
 import { resolveClaudeSafeSkills, type ClaudeSafeSkill } from "../claude-skills.js";
 import * as worker from "../worker/claude-runtime-v4.js";
-import { CLAUDE_PERSISTENT_MAXIMUM_SESSIONS, claudePersistentCompactResponseSchema, claudePersistentCompactDispositionResponseSchema, claudePersistentOpenRequestSchema, claudePersistentRetireResponseSchema, claudePersistentSubmissionDispositionResponseSchema, claudePersistentConfigurationSchema, claudePersistentAttachmentSchema, claudePersistentSendResponseSchema, type ClaudePersistentCommand, type ClaudePersistentEvent } from "./claude-persistent-runtime-wire.js";
+import { CLAUDE_PERSISTENT_MAXIMUM_SESSIONS, claudePersistentCompactResponseSchema, claudePersistentCompactDispositionResponseSchema, claudePersistentOpenRequestSchema, claudePersistentRetireResponseSchema, claudePersistentSubmissionDispositionResponseSchema, claudePersistentConfigurationSchema, claudePersistentAttachmentSchema, claudePersistentSendResponseSchema, type ClaudePersistentConfiguration, type ClaudePersistentCommand, type ClaudePersistentEvent } from "./claude-persistent-runtime-wire.js";
 import { ClaudeSidecarRuntimeConnection, claudePersistentRuntimeOperations } from "./claude-sidecar-runtime.js";
 import { CLAUDE_CONTEXT_USAGE_TIMEOUT_MS } from "../claude-context-usage.js";
 
@@ -35,6 +37,7 @@ export class ClaudePersistentRuntimeClient implements ClaudeRuntimeClient {
   readonly #sessions = new Map<string, PersistentSession>();
   readonly #controller = new AbortController();
   #attachment: Attachment | undefined;
+  #lastConfiguration?: ClaudePersistentConfiguration;
   #connecting: Promise<Attachment> | undefined;
   #retry: ReturnType<typeof setTimeout> | undefined;
   #closed = false;
@@ -46,7 +49,8 @@ export class ClaudePersistentRuntimeClient implements ClaudeRuntimeClient {
     readonly sidecarRuntime: SidecarRuntimeProvider;
     readonly executablePath: string;
     readonly configDirectory?: string;
-  readonly startupEnvironmentVariables?: EnvironmentVariableOverrides;
+    readonly startupEnvironmentVariables?: EnvironmentVariableOverrides;
+    readonly readLaunchConfiguration?: () => ClaudePersistentConfiguration | undefined;
     readonly initializationTimeoutMs: number;
     readonly onBackgroundError?: (error: unknown) => void;
   }) {
@@ -168,7 +172,30 @@ export class ClaudePersistentRuntimeClient implements ClaudeRuntimeClient {
     try {
       const attached = attachment ?? await this.attachment();
       stage = "execute";
-      return await attached.connection.execute({ ...command, runtimeId: attached.runtimeId, controllerEpoch: attached.lease.controllerEpoch } as ClaudePersistentCommand);
+      const request = { ...command, runtimeId: attached.runtimeId, controllerEpoch: attached.lease.controllerEpoch } as ClaudePersistentCommand;
+      // Fresh operations may need to wake a native worker. Preserve existing query recovery
+      // when the backend is disabled, and offer a changed launch contract before any new dispatch.
+      if (this.input.readLaunchConfiguration && ["open", "fork", "probe", "list", "info", "messages", "transcript", "rename"].includes(command.action)) {
+        const desired = this.input.readLaunchConfiguration();
+        if (!desired) return withRecoveryRequest(() => attached.connection.execute(request));
+        const previous = this.#lastConfiguration ?? this.#capturedConfiguration();
+        if (runtimeLaunchDigest.claude_agent_sdk(previous, previous.startupEnvironmentVariables) !==
+            runtimeLaunchDigest.claude_agent_sdk(desired, desired.startupEnvironmentVariables)) {
+          try { await this.#ensureLaunch(attached, desired); }
+          catch (error) {
+            if (!(error instanceof SidecarOperationError) || error.code !== "claude_persistent_configuration_restart_required" ||
+                previous.configDirectory !== desired.configDirectory) throw error;
+            // While the acknowledged old worker is still running it can serve ordinary requests.
+          }
+        }
+      }
+      try { return await attached.connection.execute(request); }
+      catch (error) {
+        if (!(error instanceof SidecarOperationError) || error.code !== "claude_persistent_launch_configuration_expired") throw error;
+        const configuration = this.#desiredConfiguration();
+        await this.#ensureLaunch(attached, configuration);
+        return await attached.connection.execute(request);
+      }
     } catch (error) {
       attachmentDiagnostic("claude_runtime_command_failed", {
         backendInstanceId: this.input.scope.backendInstanceId,
@@ -200,9 +227,14 @@ export class ClaudePersistentRuntimeClient implements ClaudeRuntimeClient {
         throw new Error("claude_remote_runtime_unsupported");
       }
       connection = new ClaudeSidecarRuntimeConnection(lease.channel, this.input.scope.backendInstanceId);
-      const configuration = { ...this.input.scope, executablePath: this.input.executablePath, configDirectory: this.input.configDirectory, startupEnvironmentVariables: this.input.startupEnvironmentVariables, initializationTimeoutMs: this.input.initializationTimeoutMs };
+      const configuration = this.#lastConfiguration ?? this.#capturedConfiguration();
       const existing = await connection.lookup(configuration, lease.controllerEpoch);
-      const runtimeId = existing ?? (existingOnly || this.#retainedIdentity ? null : await connection.ensure(configuration));
+      let runtimeId = existing;
+      if (!runtimeId && !existingOnly && !this.#retainedIdentity) {
+        const desired = this.#desiredConfiguration();
+        runtimeId = await connection.ensure(desired);
+        this.#lastConfiguration = desired;
+      }
       if (!runtimeId || (existingOnly && (runtimeId !== this.#retainedIdentity!.runtimeId || lease.serviceIncarnation !== this.#retainedIdentity!.serviceIncarnation))) {
         throw new Error("claude_persistent_retained_runtime_unavailable");
       }
@@ -245,6 +277,25 @@ export class ClaudePersistentRuntimeClient implements ClaudeRuntimeClient {
       });
     }, 1000);
     this.#retry.unref();
+  }
+  async #ensureLaunch(attached: Attachment, configuration: ClaudePersistentConfiguration): Promise<void> {
+    if (configuration.configDirectory !== this.input.configDirectory)
+      throw new SidecarOperationError("claude_persistent_configuration_restart_required");
+    const runtimeId = await attached.connection.ensure(configuration);
+    if (runtimeId !== attached.runtimeId) throw new Error("claude_persistent_runtime_replaced");
+    this.#lastConfiguration = configuration;
+  }
+  #capturedConfiguration(): ClaudePersistentConfiguration {
+    return { ...this.input.scope, executablePath: this.input.executablePath, configDirectory: this.input.configDirectory,
+      startupEnvironmentVariables: this.input.startupEnvironmentVariables, initializationTimeoutMs: this.input.initializationTimeoutMs };
+  }
+  #desiredConfiguration(): ClaudePersistentConfiguration {
+    if (!this.input.readLaunchConfiguration) return this.#capturedConfiguration();
+    const configuration = this.input.readLaunchConfiguration();
+    if (!configuration) throw new SidecarOperationError("backend_policy_denied");
+    if (configuration.configDirectory !== this.input.configDirectory)
+      throw new SidecarOperationError("claude_persistent_configuration_restart_required");
+    return configuration;
   }
   #assertIdentity(input: { executablePath: string; initializationTimeoutMs?: number; timeoutMs?: number }): void {
     if (input.executablePath !== this.input.executablePath || (input.initializationTimeoutMs ?? input.timeoutMs) !== this.input.initializationTimeoutMs) throw new Error("claude_persistent_runtime_identity_mismatch");

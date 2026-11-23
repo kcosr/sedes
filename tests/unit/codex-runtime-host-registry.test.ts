@@ -31,9 +31,15 @@ vi.mock("../../src/server/backends/codex/codex-daemon-supervisor.js", async () =
         requestWithReceipt: async () => ({ result: { data: [], nextCursor: null } as never, generation: 1, inboundSequence: 1 }) }),
       latestGeneration: () => 1, retireGeneration: async () => {},
     });
-    constructor() { native.launches++; }
+    constructor(readonly input: { isLaunchCurrent?: () => boolean }) { native.launches++; }
     async start() { await native.beforeReady?.(); this.client.updateLifecycle({ state: "ready", generation: 1 }); }
-    snapshot() { return { state: "ready", ...(native.cleanupFailure ? { cleanupUncertainty: {} } : {}) }; }
+    async park() { this.client.updateLifecycle({ state: "idle", generation: 1 }); }
+    async wake() {
+      if (this.client.lifecycleSnapshot().state !== "idle") return;
+      if (this.input.isLaunchCurrent?.() === false) throw new Error("codex_runtime_configuration_restart_required");
+      await this.start();
+    }
+    snapshot() { return { state: this.client.lifecycleSnapshot().state, ...(native.cleanupFailure ? { cleanupUncertainty: {} } : {}) }; }
     async close() { native.closes++; if (native.cleanupFailure) throw new Error("native_cleanup_unproven"); }
   } };
 });
@@ -282,6 +288,84 @@ it("reattaches across pending startup edits while preserving native identity", a
   await f.hosts.stop(host.runtimeId, snapshot.revision, false);
   await expect(f.hosts.lookup(desired, f.epoch)).resolves.toBeUndefined();
   expect(native.launches).toBe(1);
+});
+
+it.each([false, true])("wakes a parked provider under the latest saved launch configuration (retry after failed launch: %s)", async retry => {
+  const directory = await mkdtemp(path.join(tmpdir(), "codex-parked-relaunch-"));
+  const owned = { ...configuration, connection: { ownership: "owned" as const,
+    channel: { type: "process_stdio" as const, executablePath: "/usr/bin/false", workingDirectory: directory, codexHome: directory } },
+    startupEnvironmentVariables: { PATH: { kind: "literal" as const, value: "/original/bin" } } };
+  let desired = owned;
+  const f = fixture(owned);
+  const carrier = await createSidecarFramedCarrier();
+  const detach = registerCodexRuntimeHost({ getExecutionPolicy: () => f.services.executionPolicy(f.epoch), registry: carrier.hostRegistry,
+    channel: carrier.hostChannel, hosts: f.hosts, services: f.services, controllerEpoch: f.epoch, onDetach: () => f.services.detach(f.epoch) });
+  const compact = vi.fn(() => 0);
+  const pending = vi.fn<import("../../src/server/backends/codex/runtime/codex-runtime-receipt-store.js").CodexRuntimeReceiptSink["pending"]>(() => []);
+  const main = new CodexRemoteRuntimeSupervisor({
+    scope: { ...scope, executionEnvironmentId: "remote", backendInstanceId: owned.instance.id },
+    configuration: owned, readCurrentLaunchConfiguration: () => desired, serverRequests: new CodexServerRequestRouter(),
+    provider: { acquireExisting: vi.fn(), acquire: async () => ({ channel: carrier.mainChannel, controllerEpoch: f.epoch,
+      serviceIncarnation: f.services.serviceIncarnation, closed: new Promise<void>(() => {}), release() {} }) },
+    receipts: { reserve: () => { throw new Error("unused"); }, recordOutcome: () => "untracked", pending,
+      reconcileRecordedApplicationState: () => 0, compactRetiredRuntime: compact, releaseRejected: () => false },
+  });
+  try {
+    await carrier.start();
+    const original = await main.attachment();
+    await main.client.residency!.retain().release(true);
+    expect(main.client.lifecycleSnapshot().state).toBe("idle");
+    expect(f.hosts.observedLaunchDigest(owned.instance.id)).toBeNull();
+    desired = { ...owned, startupEnvironmentVariables: { PATH: { kind: "literal", value: "/changed/bin" } } };
+    installFixturePolicy(f.services, f.epoch, serviceConfiguration, codexGrant(desired));
+    const work = main.client.residency!.retain();
+    const request = () => main.client.request(codexRuntimeMethod("model/list"), {}, { timeoutMilliseconds: 1000 });
+    const heldTui = vi.spyOn(f.hosts.managedTui, "activity").mockReturnValue({ state: "active", revision: "terminal", blockers: ["live_terminal"] });
+    expect(f.hosts.observedLaunchDigest(owned.instance.id)).toBe(codexGrant(owned).backends[0]!.launchDigest);
+    await expect(request()).rejects.toMatchObject({ code: "codex_runtime_configuration_restart_required" });
+    expect((await main.attachment()).runtimeId).toBe(original.runtimeId);
+    expect(native.closes).toBe(0);
+    heldTui.mockRestore();
+    pending.mockReturnValueOnce([{ method: "turn/start", operationId: "turn", requestFingerprint: "0".repeat(64), state: "reserved",
+      correlation: { kind: "start", applicationThreadId: "thread", applicationOperationId: "operation" }, outcome: null }]);
+    await expect(request()).rejects.toMatchObject({ code: "codex_runtime_configuration_restart_required" });
+    expect((await main.attachment()).runtimeId).toBe(original.runtimeId);
+
+    const eligible = desired;
+    desired = { ...desired, connection: { ...desired.connection, channel: { ...desired.connection.channel, codexHome: directory + "-other-store" } } };
+    installFixturePolicy(f.services, f.epoch, serviceConfiguration, codexGrant(desired));
+    await expect(request()).rejects.toMatchObject({ code: "codex_runtime_configuration_restart_required" });
+    expect((await main.attachment()).runtimeId).toBe(original.runtimeId);
+    expect(native.closes).toBe(0);
+    desired = eligible;
+    installFixturePolicy(f.services, f.epoch, serviceConfiguration, codexGrant(desired));
+    if (retry) {
+      native.beforeReady = async () => { throw new Error("test_bootstrap_failed"); };
+      await expect(request()).rejects.toMatchObject({ code: "sidecar_operation_failed" });
+      expect(await f.hosts.lookup(eligible, f.epoch)).toBeUndefined();
+      native.beforeReady = undefined;
+      desired = { ...eligible, startupEnvironmentVariables: { PATH: { kind: "literal", value: "/newest/bin" } } };
+      installFixturePolicy(f.services, f.epoch, serviceConfiguration, codexGrant(desired));
+    }
+    const terminalResult = { data: [], nextCursor: null };
+    expect(await Promise.all([request(), request()])).toEqual([terminalResult, terminalResult]);
+    expect((await main.attachment()).runtimeId).not.toBe(original.runtimeId);
+    expect(main.client.lifecycleSnapshot()).toEqual({ state: "ready", generation: 2 });
+    expect(await main.appliedOwnedPath()).toBe(desired.startupEnvironmentVariables.PATH.value);
+    expect(f.hosts.observedLaunchDigest(owned.instance.id)).toBe(codexGrant(desired).backends[0]!.launchDigest);
+    expect(native.launches).toBe(retry ? 3 : 2);
+    expect(native.closes).toBe(retry ? 2 : 1);
+    if (retry) expect(compact).not.toHaveBeenCalled(); // An absent runtime after failed bootstrap carries no retirement receipt.
+    else expect(compact).toHaveBeenCalledWith(expect.objectContaining({ runtimeId: original.runtimeId }),
+      expect.objectContaining({ disposition: "confirmed_retired", runtimeId: original.runtimeId }));
+    expect(f.archive).not.toHaveBeenCalled();
+    await work.release();
+  } finally {
+    await main.close();
+    const host = await f.hosts.lookup(desired, f.epoch);
+    if (host) await f.hosts.stop(host.runtimeId, (await f.hosts.inspect(host.runtimeId)).revision, true);
+    detach(); await carrier.close(); await rm(directory, { recursive: true, force: true });
+  }
 });
 
 it("reads the applied owned PATH across pending startup edits and changes it only after explicit restart", async () => {

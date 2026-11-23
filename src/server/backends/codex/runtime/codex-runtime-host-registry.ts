@@ -39,7 +39,7 @@ export class CodexRuntimeHostRegistry {
   readonly managedTui: CodexRuntimeManagedTuiHosts;
   observedLaunchDigest(id: string): string | null | undefined {
     const resident = this.#runtimes.get(id);
-    if (resident) return observedLaunchDigest(resident.host);
+    if (resident) return this.canReplaceParkedLaunch(resident) ? null : observedLaunchDigest(resident.host);
     return this.#starting.has(id) ? undefined : null;
   }
 
@@ -60,19 +60,37 @@ export class CodexRuntimeHostRegistry {
     const fingerprint = configurationFingerprint([configuration.connection, configuration.startupEnvironmentVariables ?? {}]);
     const key = configuration.instance.id;
     const pending = this.#starting.get(key);
-    const existing = this.#runtimes.get(key) ?? (pending ? await pending : undefined);
+    const existing = pending ? await pending : this.#runtimes.get(key);
     this.input.services.assertController(controllerEpoch);
-    if (existing) {
-      // Existing-only lookup can reattach independently of this launch comparison.
-      if (existing.fingerprint !== fingerprint) throw new SidecarOperationError("codex_runtime_configuration_restart_required");
-      return existing.host;
+    if (existing?.fingerprint === fingerprint) return existing.host;
+    if (existing && (existing.storeFingerprint !== codexStoreFingerprint(configuration.connection) ||
+        !admission?.matchesGeneration(existing.host) || !this.canReplaceParkedLaunch(existing))) {
+      throw new SidecarOperationError("codex_runtime_configuration_restart_required");
     }
     this.input.services.assertAdmission(controllerEpoch);
     admission?.assertCurrent();
-    const starting = this.#start(configuration, fingerprint, controllerEpoch, admission);
+    const starting = (async () => {
+      if (existing) {
+        const unfreezeTui = this.managedTui.freezeAdmission(existing.host.runtimeId);
+        existing.host.freezeAdmission();
+        try { await existing.stop(); }
+        catch (error) { existing.host.restoreAdmission(); unfreezeTui(); throw error; }
+        this.input.services.assertAdmission(controllerEpoch);
+        admission!.assertCurrent();
+      }
+      return await this.#start(configuration, fingerprint, controllerEpoch, admission);
+    })();
     this.#starting.set(key, starting);
     try { return (await starting).host; }
     finally { if (this.#starting.get(key) === starting) this.#starting.delete(key); }
+  }
+
+  canReplaceParkedLaunch(runtime: CodexHostedRuntime): boolean {
+    const snapshot = runtime.supervisor.snapshot();
+    if (runtime.configuration.connection.ownership !== "owned" || snapshot.state !== "idle" || snapshot.cleanupUncertainty ||
+        !runtime.host.canReleaseParkedProcess() || this.managedTui.admissionFrozen(runtime.host.runtimeId)) return false;
+    const tui = this.managedTui.activity(runtime.host.runtimeId);
+    return tui.state === "idle" && !tui.blockers.length;
   }
 
   /** A missing result is authoritative only after any already-admitted
@@ -81,7 +99,8 @@ export class CodexRuntimeHostRegistry {
     this.input.services.assertController(controllerEpoch);
     this.#assertConfigurationScope(configuration);
     const pending = this.#starting.get(configuration.instance.id);
-    const existing = this.#runtimes.get(configuration.instance.id) ?? (pending ? await pending : undefined);
+    if (pending) await pending;
+    const existing = this.#runtimes.get(configuration.instance.id);
     this.input.services.assertController(controllerEpoch);
     if (!existing) return undefined;
     if (existing.storeFingerprint !== codexStoreFingerprint(configuration.connection)) throw new Error("codex_runtime_configuration_restart_required");
@@ -177,6 +196,7 @@ export class CodexRuntimeHostRegistry {
       serverRequestRouter: host.serverRequests,
       onRuntimeVersionAssessment: assessment => host.observeRuntimeVersion(assessment),
       ...(ownership ? {
+        isLaunchCurrent: admission && (() => admission.isInstalled(this.input.services)),
         nativeStoreOwnership: ownership, expectedCodexHome: resolved.codexHome,
         expectedRuntimeVersion: () => resolved.connection.ownership === "owned" ? resolved.connection.channel.executable.version : undefined,
       } : { maximumRestartAttempts: "unbounded" }),
@@ -208,7 +228,7 @@ export class CodexRuntimeHostRegistry {
       await lease?.release();
       host.dispose();
       registered();
-      this.#runtimes.delete(configuration.instance.id);
+      if (this.#runtimes.get(configuration.instance.id) === runtime) this.#runtimes.delete(configuration.instance.id);
       this.managedTui.restoreAdmission(host.runtimeId);
       closed = true;
     } };

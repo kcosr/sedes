@@ -4,7 +4,7 @@ import type { Tone } from "../ui/tone.js";
 export type RuntimeAction = ConfigurationLifecycleRequest["action"];
 
 export const actionLabels: Record<RuntimeAction, string> = {
-  connect: "Connect", disconnect: "Disconnect", start: "Start", stop: "Stop", restart: "Restart", upgrade: "Upgrade and restart",
+  connect: "Connect", disconnect: "Disconnect", start: "Start", stop: "Stop", restart: "Restart", upgrade: "Upgrade and restart", confirm_retirement: "Confirm retirement",
 };
 export const preferenceLabels: Record<ConfigurationRuntimeState["preference"], string> = {
   automatic: "Reconnect automatically", disconnected: "Do not reconnect automatically", stopped: "Do not start automatically",
@@ -199,6 +199,13 @@ export function presentRuntime(runtime: ConfigurationRuntimeState | undefined, o
       secondary = [act("stop", undefined, "destructive"), act("disconnect")];
       break;
     case "unknown":
+      if (!environment && !enabled && runtime.supportedActions.includes("confirm_retirement")) {
+        qualifier = "Retirement unverified";
+        qualifierTone = "warning";
+        detail = "Verify on the host that this backend’s previous Antigravity processes have stopped. You can then record its retirement.";
+        primary = act("confirm_retirement");
+        break;
+      }
       if (runtime.applyState === "pending") pending();
       detail = runtime.lifecycleOperation?.state === "unknown"
         ? `The previous ${actionLabels[runtime.lifecycleOperation.action].toLowerCase()} command has no confirmed outcome. Sedes is checking its original status.${runtime.supportedActions.includes("stop") ? " Stop checks the earlier command before ending this runtime." : ""}`

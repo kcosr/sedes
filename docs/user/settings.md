@@ -223,6 +223,14 @@ whose installed permissions conflict with the saved policy. New work is blocked.
 Choose **Restart sidecar** to review affected work and install the saved policy
 on a replacement. Choose **Stop** to leave the sidecar shut down.
 
+An upgrade can disable older Antigravity backends that shared a local host when
+Sedes cannot identify which one owned its native processes. **Retirement
+unverified** marks a backend you can clear after inspecting that host. Open
+**Confirm retirement**, check the named backend and host, and verify that every
+native process previously owned by that backend has stopped. The action records
+your verification for that backend only. Stop any remaining processes on the
+host before confirming, and inspect each other candidate separately.
+
 **Stop** remains available while a host is unreachable or requires recovery. It
 records that the service must not start automatically; host shutdown and cleanup
 remain unconfirmed until the host is reachable, so this does not advertise

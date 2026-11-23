@@ -37,10 +37,16 @@ export function launchAdmission(attachment: ProviderPolicyAttachment, kind: stri
   };
   const grant = read();
   const assertCurrent = () => { if (read().generation !== grant.generation) throw denied(); };
+  const isInstalled = (services: PersistentSidecarServiceRegistry) => services.hasInstalledBackend(id, kind, grant.generation, digest);
   return {
-    assertCurrent,
+    assertCurrent, isInstalled,
+    isGenerationInstalled: (services: PersistentSidecarServiceRegistry) => services.hasInstalledBackend(id, kind, grant.generation),
+    matchesGeneration(host: object) {
+      const previous = admitted.get(host);
+      return previous?.id === id && previous.kind === kind && previous.generation === grant.generation;
+    },
     assertInstalled(services: PersistentSidecarServiceRegistry) {
-      if (!services.hasInstalledBackend(id, kind, grant.generation, digest)) throw denied();
+      if (!isInstalled(services)) throw denied();
     },
     bind(host: object) {
       assertCurrent();

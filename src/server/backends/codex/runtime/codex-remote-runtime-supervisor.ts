@@ -1,3 +1,4 @@
+import { SidecarOperationError } from "../../../../internal/sidecar-protocol/operation-registry.js";
 import { RetainedRuntimeLifecycle } from "../../retained-runtime-lifecycle.js";
 import { codexManagedTuiOperations } from "./codex-runtime-managed-tui.js";
 import { randomUUID } from "node:crypto";
@@ -26,6 +27,8 @@ export class CodexRemoteRuntimeSupervisor {
   #lease: SidecarRuntimeLease | undefined;
   #generation = 0;
   #runtimeId: string | undefined;
+  #lookupConfiguration: CodexRuntimeConfiguration;
+  #replacingParkedLaunch = false;
   #retainedIdentity: { readonly runtimeId: string; readonly serviceIncarnation: string } | undefined;
   #generationOffset = 0;
   #started = false;
@@ -39,10 +42,12 @@ export class CodexRemoteRuntimeSupervisor {
   constructor(readonly input: {
     scope: ProviderTransportScope; provider: SidecarRuntimeProvider;
     configuration: CodexRuntimeConfiguration;
+    readCurrentLaunchConfiguration?: () => CodexRuntimeConfiguration;
     serverRequests: CodexServerRequestRouter; receipts: CodexRuntimeReceiptSink;
     onRuntimeVersionAssessment?: (assessment: VerifiedCodexRuntimeVersion) => void;
   }) {
     this.#scope = input.scope;
+    this.#lookupConfiguration = input.configuration;
     this.administration = {
       inspect: async () => {
         const attachment = await this.attachment();
@@ -78,12 +83,7 @@ export class CodexRemoteRuntimeSupervisor {
     this.client = new CodexSharedClientFacade({
       residency: new RetainedRuntimeLifecycle({
         wake: () => {
-          if (!this.#idleRequested && this.client.lifecycleSnapshot().state !== "idle") return;
-          return (async () => {
-            const attachment = await this.attachment();
-            await this.#connection!.wake({ scope: this.#scope, runtimeId: attachment.runtimeId, controllerId: String(attachment.controllerEpoch) });
-            this.#idleRequested = false;
-          })();
+          if (this.#idleRequested || this.client.lifecycleSnapshot().state === "idle") return this.#wake();
         },
         retire: async () => {
           const lease = this.#lease;
@@ -112,6 +112,62 @@ export class CodexRemoteRuntimeSupervisor {
       },
     });
   }
+  #desiredLaunchConfiguration(): CodexRuntimeConfiguration {
+    return this.input.readCurrentLaunchConfiguration ? this.input.readCurrentLaunchConfiguration() : this.input.configuration;
+  }
+
+  async #wake(): Promise<void> {
+    const attachment = await this.attachment();
+    const authority = { scope: this.#scope, runtimeId: attachment.runtimeId, controllerId: String(attachment.controllerEpoch) };
+    const connection = this.#connection!;
+    try { await connection.wake(authority); }
+    catch (error) {
+      if (!(error instanceof SidecarOperationError) || error.code !== "codex_runtime_relaunch_required" || this.#connection !== connection) throw error;
+      // The host has proved that the exact owned process is gone, with no
+      // retained work or TUI. Main must finish its own receipt settlement too.
+      this.input.receipts.reconcileRecordedApplicationState(authority);
+      if (this.input.receipts.pending(authority).length) throw new SidecarOperationError("codex_runtime_configuration_restart_required");
+      const desired = this.#desiredLaunchConfiguration();
+      this.#replacingParkedLaunch = true;
+      let runtimeId: string;
+      try { runtimeId = await connection.ensure(desired); }
+      catch (cause) {
+        // A refusal before retirement leaves the old owner attached for
+        // receipt recovery or administration. If cleanup succeeded and the
+        // new bootstrap failed, a fresh normal acquisition may retry it.
+        if (this.#connection === connection) {
+          const stillResident = await connection.lookup(this.#lookupConfiguration).catch(() => undefined);
+          if (stillResident === authority.runtimeId) this.#replacingParkedLaunch = false;
+          else {
+            this.#remote?.disconnected();
+            this.#discardAttachment("parked_launch_interrupted");
+            this.#scheduleRetry();
+          }
+        }
+        throw cause;
+      }
+      if (this.#connection !== connection || this.#closed) throw new Error("codex_remote_runtime_unavailable");
+      this.#replacingParkedLaunch = false;
+      if (runtimeId === authority.runtimeId) {
+        // The desired contract reverted before ensure. The original parked
+        // owner is once again permitted to open its own generation.
+        await connection.wake(authority);
+      } else {
+        this.#lookupConfiguration = desired;
+        this.#retainedIdentity = { runtimeId, serviceIncarnation: this.#lease!.serviceIncarnation };
+        this.#remote?.disconnected();
+        this.#discardAttachment("parked_launch_replaced");
+        try {
+          this.input.receipts.compactRetiredRuntime(authority, { disposition: "confirmed_retired", runtimeId: authority.runtimeId,
+            retirementOperationId: randomUUID(), retiredAt: Date.now() });
+          await this.#connect();
+        }
+        catch (cause) { this.#scheduleRetry(); throw cause; }
+      }
+    }
+    this.#idleRequested = false;
+  }
+
   managedTuiAvailable(): boolean {
     return !this.#closed && this.#lease !== undefined && codexManagedTuiOperations.every(operation => this.#lease!.channel.supportsOperation(operation));
   }
@@ -144,6 +200,7 @@ export class CodexRemoteRuntimeSupervisor {
   }
   async #connect(): Promise<void> {
     if (this.#connecting) return this.#connecting;
+    if (this.#retry) { clearTimeout(this.#retry); this.#retry = undefined; }
     this.#connecting = this.#performConnect().finally(() => { this.#connecting = undefined; });
     return this.#connecting;
   }
@@ -170,8 +227,14 @@ export class CodexRemoteRuntimeSupervisor {
       const connection = new CodexSidecarRuntimeConnection(lease.channel);
       stage = existingOnly ? "runtime_lookup" : "runtime_ensure";
       stageStarted = performance.now();
-      const existing = await connection.lookup(this.input.configuration);
-      const runtimeId = existing ?? (existingOnly || this.#retainedIdentity ? null : await connection.ensure(this.input.configuration));
+      const existing = await connection.lookup(this.#lookupConfiguration);
+      let runtimeId = existing;
+      const retryParkedLaunch = this.#replacingParkedLaunch && this.#retainedIdentity?.serviceIncarnation === lease.serviceIncarnation;
+      if (!runtimeId && !existingOnly && (!this.#retainedIdentity || retryParkedLaunch)) {
+        const desired = this.#desiredLaunchConfiguration();
+        runtimeId = await connection.ensure(desired);
+        this.#lookupConfiguration = desired;
+      }
       this.#diagnostic("stage_complete", { stage, controllerEpoch: lease.controllerEpoch, durationMs: performance.now() - stageStarted });
       if (!runtimeId || (existingOnly && (runtimeId !== this.#retainedIdentity!.runtimeId || lease.serviceIncarnation !== this.#retainedIdentity!.serviceIncarnation))) {
         connection.close();
@@ -203,6 +266,7 @@ export class CodexRemoteRuntimeSupervisor {
       stage = "runtime_start";
       stageStarted = performance.now();
       await remote.start();
+      this.#replacingParkedLaunch = false;
       this.#diagnostic("connect_complete", { stage, durationMs: performance.now() - started });
     } catch (error) {
       this.#diagnostic("connect_failed", { stage, attachmentAttempt: attempt, controllerEpoch: lease?.controllerEpoch,

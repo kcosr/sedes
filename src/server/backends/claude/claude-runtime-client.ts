@@ -247,6 +247,9 @@ export interface ClaudeRuntimeClient {
 
 /** A runtime whose queries' inputs their caller owns: local workers, including the one a persistent owner runs. */
 export interface ClaudeOwnedRuntimeClient extends ClaudeRuntimeClient {
+  /** True only after no native generation, pending operation or history acquisition can survive disposal. */
+  emptyAfterCleanup?(): boolean;
+  disposeEmpty?(): void;
   createSession(options: ClaudeRuntimeSessionOptions): ClaudeOwnedRuntimeSession;
 }
 

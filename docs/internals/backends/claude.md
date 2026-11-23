@@ -52,7 +52,7 @@ session reserved and fences the worker generation. The worker's fixed maximum
 of 32 simultaneous queries is a last-resort execution-environment safety guard,
 not a backend configuration surface.
 
-Each persistent command carries the backend instance ID and addresses a runtime discovered by the current controller. A recovery controller can deny a pending permission or replay an already recorded response. Recording a new approval requires the active instance grant. The host checks the original launch digest and grant generation again before it starts a replacement worker.
+Each persistent command carries the backend instance ID and addresses a runtime discovered by the current controller. A recovery controller can deny a pending permission or replay an already recorded response. Recording a new approval requires the active instance grant. The host checks the installed launch digest and instance generation before starting a worker. After the previous worker’s cleanup is proved and its sessions and commands have settled, the next request can launch a worker with the current executable, timeout and startup variables. The persistent runtime keeps its ID, native configuration directory and settled operation receipts.
 
 The persistent service owns remote queries and their bounded retained events;
 SSH stdio or an outbound connection carries the current main-side attachment. Detach does not interrupt
@@ -242,6 +242,12 @@ generation, rejects pending permission requests, and fails active handles
 closed. A replacement local generation reconstructs from Claude's authoritative
 store rather than replaying uncertain writes. Persistent remote workers retain
 the separate service-owned lifetime and reattachment contract described above.
+
+The remote Claude runtime keeps its settled command journal when the last native
+worker retires. Its next launch can use a saved executable, initialization
+timeout, or startup environment after the host proves cleanup and confirms
+there are no retained queries, provider operations, or paginated history reads.
+Changing the native configuration directory requires a different store identity.
 
 ## Current context telemetry
 

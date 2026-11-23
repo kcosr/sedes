@@ -1,4 +1,4 @@
-import { launchAdmission, currentBackendGrant, type ProviderPolicyAttachment } from "../../provider-policy-admission.js";
+import { launchAdmission, currentBackendGrant, observedLaunchDigest, type ProviderPolicyAttachment } from "../../provider-policy-admission.js";
 import { runtimeLaunchDigest } from "../../provider-launch-digest.js";
 import { z } from "zod";
 import { attachmentDiagnostic } from "../../../diagnostics/attachment-diagnostics.js";
@@ -98,7 +98,7 @@ export function registerClaudePersistentRuntimeHost(input: ProviderPolicyAttachm
     const admission = launchAdmission(input, "claude_agent_sdk", configuration.backendInstanceId,
       runtimeLaunchDigest.claude_agent_sdk(configuration, configuration.startupEnvironmentVariables));
     const host = input.hosts.ensure(configuration, input.controllerEpoch, admission);
-    admission.bind(host);
+    admission.bind(host.workerIdentity);
     claimed.add(host);
     return { runtimeId: host.runtimeId };
   });
@@ -110,6 +110,14 @@ export function registerClaudePersistentRuntimeHost(input: ProviderPolicyAttachm
     const host = input.hosts.get(command.runtimeId);
     if (!claimed.has(host) || host.input.configuration.backendInstanceId !== backendInstanceId)
       throw new SidecarOperationError("claude_persistent_runtime_not_attached");
+    if (["open", "fork", "probe", "list", "info", "messages", "transcript", "rename"].includes(command.action) &&
+        !input.isRecoveryController?.() && host.canReplaceWorker()) {
+      const grant = currentBackendGrant(input, host.workerIdentity);
+      if (grant.launchDigest !== observedLaunchDigest(host.workerIdentity)) {
+        // No native command has been dispatched. Main may ensure the saved configuration and retry once.
+        throw new SidecarOperationError("claude_persistent_launch_configuration_expired");
+      }
+    }
     attached.add(host.runtimeId);
     const result = await host.execute(command, event => {
       if (detached) return;
@@ -133,7 +141,7 @@ export function registerClaudePersistentRuntimeHost(input: ProviderPolicyAttachm
           stage, frameBytes: bytes, queuedEventBytes: eventBytes, queuedEventCount: eventCount, requestedClose: true }, error);
         detach();
       }).finally(() => { eventCount--; eventBytes -= bytes; });
-    }, () => currentBackendGrant(input, host));
+    }, () => currentBackendGrant(input, host.workerIdentity));
     return await input.channel.encodeBody(result);
   });
   return detach;

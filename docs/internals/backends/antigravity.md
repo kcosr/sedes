@@ -57,6 +57,15 @@ preserves the resident configuration. A new host must match the installed
 instance generation and launch digest. Adding a named target to the incumbent
 takes effect on the current connection after the sidecar confirms the policy.
 
+When a saved host had multiple enabled instances before policy migration, each
+disabled candidate retains its original host and backend identity. Remote
+recovery looks up those exact IDs through the authenticated sidecar, including
+after the configuration is deleted. A local administrator can confirm retirement
+of each unclaimed local candidate after checking its previous native processes.
+This action requires a fresh impact token for that candidate and host. Its
+receipt and the retirement proof commit in one transaction. A positively
+identified incumbent retains ownership until its retirement is proved.
+
 Each ACP opener records the tool endpoint used when it launched. The remote
 adapter compares this opaque stamp to the current scoped route before preparing
 tool instructions. After a tool withdrawal and regrant, active ACP sessions

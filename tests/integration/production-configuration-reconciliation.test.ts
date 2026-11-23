@@ -21,6 +21,7 @@ import { SidecarRuntimeOwner, SidecarUnavailableError } from "../../src/server/s
 import { SidecarServiceManagementError, SidecarServiceStagingError } from "../../src/server/sidecar/sidecar-provisioner.js";
 import { SIDECAR_WIRE_VERSION } from "../../src/internal/sidecar-protocol/envelopes.js";
 import type { SidecarServiceStatus } from "../../src/internal/sidecar-protocol/service-management-v1.js";
+import type { InstalledExecutionPolicy } from "../../src/internal/sidecar-protocol/execution-policy.js";
 import { compiledBackendModuleCatalog } from "../../src/server/backends/compiled-module-catalog.js";
 import { BackendRuntimeControlRejectedError } from "../../src/server/backends/runtime-control.js";
 import { configurationFingerprint } from "../../src/server/config/configuration-fingerprint.js";
@@ -139,6 +140,139 @@ function addBackgroundOpenCode(configuration: ConfigurationDocument, environment
 }
 
 describe("production configuration reconciliation", () => {
+  function addAntigravity(document: ConfigurationDocument, environmentId: string, id: string, enabled: boolean) {
+    document.backends.push({
+      id, kind: "antigravity", label: id, enabled, modelPolicy: { type: "catalog" },
+      moduleConfiguration: { initializationTimeoutMs: 30_000 },
+    });
+    document.targets.push({
+      id: id + "-target", kind: "antigravity_acp", label: id, enabled,
+      executionEnvironmentId: environmentId, backendInstanceId: id, moduleConfiguration: { defaults: {} },
+    });
+  }
+
+  function retainMigrationCandidates(service: ConfigurationAdminService, scope: Parameters<typeof service.get>[0], hostId: string) {
+    const insert = service.repository.database.prepare(`INSERT INTO execution_configuration_ownership_conflicts
+      (tenant_id, owner_principal_id, environment_id, backend_id, target_ids_json) VALUES (?, ?, ?, ?, ?)`);
+    for (const id of ["legacy-a", "legacy-b"]) insert.run(scope.tenantId, scope.principalId, hostId, id, JSON.stringify([id + "-target"]));
+  }
+
+  it("requires independent scoped retirement confirmations for two migrated local Antigravity candidates", async () => {
+    const { service, scope, environmentId, snapshot } = await fixture();
+    const configuration = structuredClone(snapshot.configuration);
+    for (const id of ["legacy-a", "legacy-b"]) addAntigravity(configuration, environmentId, id, false);
+    const { revision } = await service.save(scope, { mutationId: randomUUID(), expectedRevision: snapshot.revision, configuration });
+    retainMigrationCandidates(service, scope, environmentId);
+    const current = await service.get(scope);
+    for (const id of ["legacy-a", "legacy-b"]) {
+      expect(current.runtimes.find(r => r.resourceId === id)).toMatchObject({ connectionState: "unknown", supportedActions: ["confirm_retirement"] });
+    }
+    const removed = structuredClone(configuration);
+    removed.backends = removed.backends.filter(b => b.id !== "legacy-a");
+    removed.targets = removed.targets.filter(t => t.backendInstanceId !== "legacy-a");
+    await expect(service.save(scope, { mutationId: randomUUID(), expectedRevision: revision, configuration: removed })).rejects.toThrow(/confirm retirement/i);
+    await expect(service.save(scope, { mutationId: randomUUID(), expectedRevision: revision, configuration: {
+      ...configuration, targets: removed.targets,
+    } })).rejects.toThrow(/confirm retirement/i);
+    const third = structuredClone(configuration);
+    addAntigravity(third, environmentId, "replacement", true);
+    const saveReplacement = () => service.save(scope, { mutationId: randomUUID(), expectedRevision: service.repository.get(scope).revision, configuration: third });
+    await expect(saveReplacement()).rejects.toThrow(/retained Antigravity/);
+
+    const action = (resourceId: string) => ({
+      expectedRevision: service.repository.get(scope).revision, resourceKind: "backend" as const, resourceId, action: "confirm_retirement" as const,
+    });
+    const command = async (id: string) => {
+      const impact = await service.impact(scope, action(id));
+      expect(impact.interruptions.join(" ")).toContain(id);
+      expect(impact.interruptions.join(" ")).toContain(environmentId);
+      return { ...action(id), mutationId: randomUUID(), expectedIncarnation: impact.incarnation, impactToken: impact.token };
+    };
+    const orphan = await command("legacy-a");
+    // Simulate main dying after durable admission and before the atomic confirmation.
+    expect(service.repository.beginLifecycle(scope, orphan).result.state).toBe("pending");
+    expect((await service.lifecycle(scope, orphan)).state).toBe("rejected");
+    expect(service.repository.unresolvedAntigravityCandidates(scope, environmentId)).toEqual(["legacy-a", "legacy-b"]);
+
+    const first = await command("legacy-a");
+    await expect(service.lifecycle(scope, { ...first, impactToken: null })).rejects.toThrow(/confirmation/);
+    await expect(service.lifecycle(scope, { ...first, resourceId: "legacy-b" })).rejects.toThrow(/confirmation/);
+    expect(() => service.repository.confirmLocalAntigravityRetirement(scope, randomUUID(), "legacy-a")).toThrow(/no longer/);
+    const confirmed = await service.lifecycle(scope, first);
+    expect(confirmed).toMatchObject({ state: "applied", runtime: { connectionState: "stopped" } });
+    expect(service.repository.unresolvedAntigravityCandidates(scope, environmentId)).toEqual(["legacy-b"]);
+    await expect(saveReplacement()).rejects.toThrow(/retained Antigravity/);
+    expect(await service.lifecycle(scope, first)).toEqual(confirmed);
+    expect((await service.lifecycleReceipt(scope, orphan.mutationId)).state).toBe("rejected");
+
+    const last = await command("legacy-b");
+    expect((await service.lifecycle(scope, last)).state).toBe("applied");
+    expect(service.repository.unresolvedAntigravityCandidates(scope, environmentId)).toEqual([]);
+    await expect(saveReplacement()).resolves.toMatchObject({ revision: last.expectedRevision + 2 });
+  });
+
+  it("preserves a positively identified local Antigravity incumbent when an earlier retirement impact is confirmed", async () => {
+    const { service, scope, environmentId, snapshot } = await fixture();
+    const configuration = structuredClone(snapshot.configuration);
+    for (const id of ["legacy-a", "legacy-b"]) addAntigravity(configuration, environmentId, id, false);
+    const { revision } = await service.save(scope, { mutationId: randomUUID(), expectedRevision: snapshot.revision, configuration });
+    retainMigrationCandidates(service, scope, environmentId);
+    const action = { expectedRevision: revision, resourceKind: "backend" as const, resourceId: "legacy-a", action: "confirm_retirement" as const };
+    const impact = await service.impact(scope, action);
+    service.repository.confirmNativeOwner(scope, environmentId, "antigravity", "legacy-b");
+    const result = await service.lifecycle(scope, { ...action, mutationId: randomUUID(), expectedIncarnation: impact.incarnation, impactToken: impact.token });
+    expect(result.state).toBe("rejected");
+    expect(service.repository.retainedAntigravityOwner(scope, environmentId)).toBe("legacy-b");
+    expect(() => service.repository.confirmLocalAntigravityRetirement(scope, environmentId, "legacy-b")).toThrow(/no longer/);
+  });
+
+  it("looks up the original remote Antigravity instances after their saved definitions were removed", async () => {
+    const { service, scope, snapshot } = await fixture();
+    const hostId = randomUUID();
+    const configuration = structuredClone(snapshot.configuration);
+    configuration.executionEnvironments.push({ id: hostId, kind: "ssh", hostAlias: "remote-legacy", label: "Legacy SSH",
+      workspaceRoots: ["/workspace"], connectionCompression: true, operations: { kind: "sidecar", enabledCapabilities: ["workspace_context", "workspace_tools"] } });
+    const services = new PersistentSidecarServiceRegistry({
+      scope: { ...scope, installationId: "installation", executionEnvironmentId: hostId },
+      buildId: "legacy-inspection", artifactSha256: "a".repeat(64), runtimeWireVersion: SIDECAR_WIRE_VERSION,
+      configuration: { environmentRevision: 0, operationsRevision: 0 },
+    });
+    services.attach({ environmentRevision: 0, operationsRevision: 0 });
+    const carrier = await createSidecarFramedCarrier();
+    try {
+      const inspect = vi.spyOn(SidecarRuntimeOwner.prototype, "inspectService").mockResolvedValue(services.status());
+      vi.spyOn(SidecarRuntimeOwner.prototype, "synchronizePolicy").mockResolvedValue();
+      const retry = vi.spyOn(SidecarRuntimeOwner.prototype, "retryPolicy").mockResolvedValue();
+      vi.spyOn(SidecarRuntimeOwner.prototype, "connect").mockResolvedValue(services.status());
+      const recover = vi.spyOn(SidecarRuntimeOwner.prototype, "acquireRecovery").mockImplementation(async () => ({
+        session: { runtimeChannel: carrier.mainChannel, closed: carrier.mainTransport.closed, negotiatedCapabilities: [], close: async () => {} },
+        serviceStatus: services.status(), carrierGeneration: 1, release() {},
+      }));
+      const module = compiledBackendModuleCatalog.requireModule("antigravity");
+      const lookup = vi.spyOn(module, "inspectRetainedOwner").mockImplementation(async (_lease, id) => id === "legacy-b");
+      const { revision } = await service.save(scope, { mutationId: randomUUID(), expectedRevision: snapshot.revision, configuration });
+      await vi.waitFor(() => expect(retry).toHaveBeenCalled());
+      retainMigrationCandidates(service, scope, hostId);
+      addAntigravity(configuration, hostId, "replacement", true);
+      const save = () => service.save(scope, { mutationId: randomUUID(), expectedRevision: revision, configuration });
+
+      inspect.mockRejectedValue(new SidecarUnavailableError());
+      await expect(save()).rejects.toThrow();
+      expect(service.repository.unresolvedAntigravityCandidates(scope, hostId)).toEqual(["legacy-a", "legacy-b"]);
+      inspect.mockResolvedValue(services.status());
+      await expect(save()).rejects.toThrow(/retained Antigravity/);
+      expect(service.repository.retainedAntigravityOwner(scope, hostId)).toBe("legacy-b");
+      expect(lookup.mock.calls.map(([,id]) => id)).toEqual(["legacy-a", "legacy-b"]);
+      expect(recover).toHaveBeenCalledWith(scope, hostId, expect.any(AbortSignal));
+      lookup.mockRejectedValueOnce(new Error("Lost retained inspection response"));
+      await expect(save()).rejects.toThrow();
+      expect(service.repository.retainedAntigravityOwner(scope, hostId)).toBe("legacy-b");
+      lookup.mockResolvedValue(false);
+      await expect(save()).resolves.toMatchObject({ revision: revision + 1 });
+      expect(lookup.mock.lastCall?.[1]).toBe("legacy-b");
+    } finally { await carrier.close(); }
+  });
+
   it("publishes the bound ephemeral listener to local backend tool runtimes", async () => {
     vi.spyOn(agentToolCliAvailability, "resolveLocalAgentToolCliAvailability").mockResolvedValue({
       availability: "available", endpoint: "http://127.0.0.1:0", executableDirectory: "/fixture/bin", inheritedPath: "/usr/bin",
@@ -961,6 +1095,108 @@ describe("production configuration reconciliation", () => {
     expect(stop).not.toHaveBeenCalled();
     // Two production boots, persisted settings edits, and retained-runtime
     // recovery need the same bounded budget as the other restart cases.
+  }, 15_000);
+
+  it("applies a natural remote relaunch under the current host and backend settings without replacing its module", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const { service, scope, snapshot } = await fixture();
+    const environmentId = randomUUID(), backendId = "remote-launch-claude";
+    const configuration = structuredClone(snapshot.configuration);
+    const hostStartup = { HOST_STAGE: { kind: "literal" as const, value: "A" }, BUILD_STAGE: { kind: "literal" as const, value: "host" } };
+    const backendStartup = { BUILD_STAGE: { kind: "literal" as const, value: "A" } };
+    const moduleConfiguration = { executablePath: "/bin/claude", configDirectory: "/config/claude", initializationTimeoutMs: 1000,
+      permissionPolicy: { allowedModes: ["default" as const] } };
+    configuration.executionEnvironments.push({ id: environmentId, kind: "ssh", label: "Remote host", hostAlias: "test-target",
+      connectionCompression: true, workspaceRoots: ["/workspace"], operations: { kind: "none" },
+      environmentVariables: { execution: {}, startup: hostStartup } });
+    configuration.backends.push({ id: backendId, kind: "claude_agent_sdk", label: "Claude", enabled: true,
+      modelPolicy: { type: "catalog" }, environmentVariables: { execution: {}, startup: backendStartup }, moduleConfiguration });
+    configuration.targets.push({ id: "remote-launch-target", backendInstanceId: backendId, executionEnvironmentId: environmentId,
+      kind: "claude_agent_sdk", label: "Claude", enabled: true, moduleConfiguration: { defaults: { permissionMode: "default" } } });
+
+    const firstStartup = structuredClone({ ...hostStartup, ...backendStartup });
+    const firstDigest = runtimeLaunchDigest.claude_agent_sdk(moduleConfiguration, firstStartup);
+    let observedDigest: string | null = firstDigest;
+    const contexts: BackendModuleRuntimeContext[] = [];
+    const stop = vi.fn();
+    const prepare = compiledBackendModuleCatalog.prepare.bind(compiledBackendModuleCatalog);
+    vi.spyOn(compiledBackendModuleCatalog, "prepare").mockImplementation(input => prepare(input).map(prepared => {
+      if (prepared.backendInstanceId !== backendId) return prepared;
+      const create = prepared.createRuntime.bind(prepared);
+      prepared.createRuntime = context => {
+        contexts.push(context);
+        const runtime = create(context);
+        vi.spyOn(runtime, "startupEnvironmentState").mockResolvedValue("started");
+        return runtime;
+      };
+      // An observation from an attached provider can remain cached while the
+      // same sidecar reports that a subsequent launch used newer settings.
+      prepared.recoverAdministration = async () => ({ stop, restart: stop,
+        inspect: async () => ({ state: "idle", incarnation: "first-provider", revision: "first-provider", blockers: [],
+          startupEnvironmentFingerprint: configurationFingerprint(firstStartup) }) });
+      return prepared;
+    }));
+    let notifyHost!: () => void;
+    const createEnvironment = environmentRuntime.createExecutionEnvironmentRuntime;
+    vi.spyOn(environmentRuntime, "createExecutionEnvironmentRuntime").mockImplementation(async input => {
+      const runtime = await createEnvironment(input);
+      if (runtime.environmentId !== environmentId) return runtime;
+      const owner = runtime.sidecarRuntime!;
+      const host = new PersistentSidecarServiceRegistry({ scope: { ...scope, installationId: input.installationId, executionEnvironmentId: environmentId },
+        buildId: "remote-launch", artifactSha256: "a".repeat(64), runtimeWireVersion: SIDECAR_WIRE_VERSION,
+        configuration: input.readDesiredPolicy!().configuration });
+      host.attach(input.readDesiredPolicy!().configuration);
+      notifyHost = input.onPolicyChanged!;
+      vi.spyOn(owner, "inspectService").mockImplementation(async () => host.status());
+      let installed: InstalledExecutionPolicy | undefined;
+      const synchronize = async () => { installed = input.readDesiredPolicy!(); };
+      vi.spyOn(owner, "retryPolicy").mockImplementation(synchronize);
+      vi.spyOn(owner, "synchronizePolicy").mockImplementation(synchronize);
+      vi.spyOn(owner, "policyStatus").mockImplementation(() => installed && ({
+        installed: { revision: installed.revision, digest: installed.digest }, configuration: installed.configuration,
+        incarnation: host.serviceIncarnation, controllerEpoch: host.controllerEpoch,
+        readiness: installed.snapshot.backends.map(backend => ({ id: `backend:${backend.id}`, generation: backend.generation,
+          state: "ready" as const, observedLaunchDigest: observedDigest })),
+      }));
+      return runtime;
+    });
+    const settings = async () => (await service.get(scope)).runtimes.find(runtime => runtime.resourceId === backendId)!;
+    const initial = await service.save(scope, { mutationId: randomUUID(), expectedRevision: snapshot.revision, configuration });
+    await vi.waitFor(async () => expect(await settings()).toMatchObject({ applyState: "applied", effectiveRevision: initial.revision }));
+    const readLaunch = contexts[0]!.readCurrentLaunchConfiguration!;
+    expect(readLaunch()?.startupEnvironmentVariables).toEqual(firstStartup);
+
+    hostStartup.HOST_STAGE.value = "B";
+    backendStartup.BUILD_STAGE.value = "B";
+    moduleConfiguration.executablePath = "/opt/claude";
+    const edited = await service.save(scope, { mutationId: randomUUID(), expectedRevision: initial.revision, configuration });
+    const nextStartup = { ...hostStartup, ...backendStartup };
+    const nextDigest = runtimeLaunchDigest.claude_agent_sdk(moduleConfiguration, nextStartup);
+    await vi.waitFor(async () => expect(await settings()).toMatchObject({ applyState: "pending", effectiveRevision: initial.revision,
+      startupEnvironmentPending: true, effects: expect.arrayContaining([expect.objectContaining({ component: "provider_launch",
+        state: "restart_backend", providerLaunch: { owner: "host", desiredDigest: nextDigest, confirmedDigest: firstDigest } })]) }));
+    const launch = readLaunch();
+    expect(launch?.backend).toMatchObject({ id: backendId, moduleConfiguration: { executablePath: "/opt/claude" } });
+    expect(launch?.startupEnvironmentVariables).toEqual(nextStartup);
+
+    // Inventory from the execution host first confirms idle retirement, then
+    // confirms the next process on the same service without a Settings action.
+    observedDigest = null;
+    notifyHost();
+    await vi.waitFor(async () => expect(await settings()).toMatchObject({ startupEnvironmentPending: false,
+      effects: expect.arrayContaining([expect.objectContaining({ component: "provider_launch", state: "next_launch" })]) }));
+    observedDigest = nextDigest;
+    notifyHost();
+    await vi.waitFor(async () => expect(await settings()).toMatchObject({ applyState: "applied", effectiveRevision: edited.revision,
+      startupEnvironmentPending: false, effects: expect.arrayContaining([expect.objectContaining({ component: "provider_launch",
+        state: "applied", providerLaunch: { owner: "host", desiredDigest: nextDigest, confirmedDigest: nextDigest } })]) }));
+    expect(contexts).toHaveLength(1);
+    expect(stop).not.toHaveBeenCalled();
+
+    configuration.backends.find(backend => backend.id === backendId)!.enabled = false;
+    configuration.targets.find(target => target.backendInstanceId === backendId)!.enabled = false;
+    await service.save(scope, { mutationId: randomUUID(), expectedRevision: edited.revision, configuration });
+    expect(readLaunch()).toBeUndefined();
   }, 15_000);
 
   it("keeps owned startup changes pending until an explicit backend restart", async () => {
