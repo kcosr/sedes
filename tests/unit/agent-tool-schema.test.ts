@@ -5,6 +5,7 @@ import { Compile } from "typebox/compile";
 import type { TSchema } from "typebox";
 import { describe, expect, it } from "vitest";
 import {
+  AGENT_TOOL_SCHEMA_LIMITS,
   AGENT_TOOL_JSON_SCHEMA_DIALECT,
   compileCanonicalAgentToolSchema,
   normalizeCanonicalAgentToolSchema,
@@ -87,6 +88,32 @@ const invalidCorpus = [
 ] as const;
 
 describe("canonical agent-tool JSON Schema", () => {
+  it("retains finite depth and node boundaries for the closed provider schemas", () => {
+    const object = (properties: Record<string, unknown>) => ({
+      type: "object", properties, required: [], additionalProperties: false,
+      maxProperties: Object.keys(properties).length,
+    });
+    const nested = (depth: number) => {
+      let schema: Record<string, unknown> = { type: "boolean" };
+      for (let index = 0; index < depth; index++) schema = object({ nested: schema });
+      return { ...schema, $schema: AGENT_TOOL_JSON_SCHEMA_DIALECT };
+    };
+    const nodes = (count: number) => {
+      const groups: Record<string, unknown> = {};
+      for (let remaining = count - 1, index = 0; remaining > 0; index++) {
+        const groupSize = Math.min(remaining, 65);
+        groups[`group${index}`] = object(Object.fromEntries(
+          Array.from({ length: groupSize - 1 }, (_, child) => [`field${child}`, { type: "boolean" }]),
+        ));
+        remaining -= groupSize;
+      }
+      return { ...object(groups), $schema: AGENT_TOOL_JSON_SCHEMA_DIALECT };
+    };
+    expect(() => normalizeCanonicalAgentToolSchema(nested(AGENT_TOOL_SCHEMA_LIMITS.maximumDepth))).not.toThrow();
+    expect(() => normalizeCanonicalAgentToolSchema(nested(AGENT_TOOL_SCHEMA_LIMITS.maximumDepth + 1))).toThrow(/depth_exceeded/);
+    expect(() => normalizeCanonicalAgentToolSchema(nodes(AGENT_TOOL_SCHEMA_LIMITS.maximumNodes))).not.toThrow();
+    expect(() => normalizeCanonicalAgentToolSchema(nodes(AGENT_TOOL_SCHEMA_LIMITS.maximumNodes + 1))).toThrow(/nodes_exceeded/);
+  });
   it("canonicalizes plain JSON without evaluating accessors or accepting cycles", () => {
     expect(deterministicJson({ zebra: 1, alpha: { beta: true } })).toBe(
       '{"alpha":{"beta":true},"zebra":1}',

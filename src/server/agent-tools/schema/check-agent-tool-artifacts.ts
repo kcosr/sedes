@@ -17,6 +17,9 @@ import type { AgentToolApplicationReader } from "../tools/agent-tool-readers.js"
 import type { AgentThreadControlToolServices } from "../tools/thread-control-tools.js";
 import type { WebSearchExecutor } from "../tools/web-search-tool.js";
 import type { AgentThreadWorktreeService } from "../tools/thread-worktree-tools.js";
+import type { ExecutionConfigurationTools } from "../execution/execution-configuration-tools.js";
+import type { RuntimeAgentToolService } from "../tools/runtime-agent-tool-service.js";
+import type { PolicyManagementAgentToolService } from "../tools/policy-management-agent-tool-service.js";
 
 const artifactUrls = Object.freeze(
   Object.fromEntries(
@@ -139,6 +142,9 @@ function definitions(): readonly AgentToolDefinition[] {
     threadControl: artifactThreadControl,
     webSearch: artifactWebSearch,
     threadWorktrees: artifactThreadWorktrees,
+    executionConfiguration: unavailableDomainService<ExecutionConfigurationTools>("execution_configuration_service"),
+    executionRuntime: unavailableDomainService<RuntimeAgentToolService>("execution_runtime_service"),
+    policyManagement: unavailableDomainService<PolicyManagementAgentToolService>("policy_management_service"),
   });
 }
 
@@ -158,19 +164,26 @@ export function assertAgentToolArtifactContractSet(
   }
 }
 
+let generatedArtifacts: Readonly<Record<string, string>> | undefined;
+
 export function generatedAgentToolArtifacts(): Readonly<
   Record<string, string>
 > {
+  // Definitions are code-owned and fixed for this process. Artifact file checks
+  // stay fresh without recompiling every large provider schema for each read.
+  if (generatedArtifacts) return generatedArtifacts;
   const registry = new AgentToolRegistry();
-  for (const definition of definitions()) registry.register(definition);
-  return Object.freeze(
+  const currentDefinitions = definitions();
+  for (const definition of currentDefinitions) registry.register(definition);
+  generatedArtifacts = Object.freeze(
     Object.fromEntries(
-      definitions().map((definition) => [
+      currentDefinitions.map((definition) => [
         `${definition.id}@${definition.schemaVersion}`,
         registry.serializedArtifact(definition.id, definition.schemaVersion),
       ]),
     ),
   );
+  return generatedArtifacts;
 }
 
 export function checkAgentToolArtifacts(

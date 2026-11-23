@@ -707,8 +707,8 @@ describe("CanonicalInlineAgentToolService", () => {
     expect(execute).toHaveBeenCalledTimes(2);
   });
 
-  it("rejects destructive and unsupported mixed effects before execution", async () => {
-    const execute = vi.fn(async () => ({}));
+  it("admits destructive external actions while rejecting unsupported model-usage mixtures", async () => {
+    const execute = vi.fn(async () => mediaOutput);
     const destructive = writeDefinition({ execute });
     const service = new CanonicalInlineAgentToolService({
       application: { readThreadStatus: async () => undefined },
@@ -733,8 +733,16 @@ describe("CanonicalInlineAgentToolService", () => {
         },
         source,
       ),
-    ).rejects.toMatchObject({ code: "permission_denied" });
-    expect(execute).not.toHaveBeenCalled();
+    ).resolves.toMatchObject({ state: "completed", output: mediaOutput });
+    expect(execute).toHaveBeenCalledOnce();
+    const unsupported = new CanonicalInlineAgentToolService({
+      application: { readThreadStatus: async () => undefined },
+      additionalDefinitions: [{ ...destructive, effects: { application: "destructive", modelUsage: "agent_execution", external: "durable_side_effect" } }],
+    });
+    await expect(unsupported.invoke({
+      toolId: "example.write", schemaVersion: 2, requestId: "unsupported-effects", input: {},
+    }, source)).rejects.toMatchObject({ code: "permission_denied" });
+    expect(execute).toHaveBeenCalledOnce();
   });
 
   it("ends only the wait when a write times out and never replays it", async () => {

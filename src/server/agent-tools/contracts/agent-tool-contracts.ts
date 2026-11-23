@@ -47,7 +47,8 @@ export type AgentToolGroupId =
   | "pages"
   | "images"
   | "automations"
-  | "research";
+  | "research"
+  | "execution";
 
 export interface AgentToolCatalogPresentation {
   readonly groupId: AgentToolGroupId;

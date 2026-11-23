@@ -1,4 +1,4 @@
-import type { AgentToolRouteBinding } from "../../internal/sidecar-protocol/agent-tools-v6.js";
+import type { AgentToolRouteBinding } from "../../internal/sidecar-protocol/agent-tools-v7.js";
 import { agentToolsCatalogOperation, agentToolsDescribeOperation, agentToolsInvokeOperation,
   SidecarProtocolDeliveryError } from "../../internal/sidecar-protocol/index.js";
 import type { AgentToolCliRequest, AgentToolCliResult } from "../../internal/agent-tool-cli-protocol/index.js";

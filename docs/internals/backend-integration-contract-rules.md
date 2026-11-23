@@ -4207,7 +4207,7 @@ alternate source claims, and to exactly one presentation, CLI or MCP. Derive
 the calling adapter from the resolved reference, never from a request field,
 so the CLI and `sedes mcp` share routes and relay frames without either
 satisfying the other's surface. The remote relay uses only the
-strict `agent_tools_cli@6` contract advertised for the enabled
+strict `agent_tools_cli@7` contract advertised for the enabled
 `agent_tools_cli` capability; unsupported or stale versions fail closed.
 Discovery may retain a bounded transport deadline, but invocation
 must propagate caller abort without imposing an additional transport execution
@@ -4234,6 +4234,25 @@ catalog against the CLI transport schema and render individual root help from
 it. A group omitted from that schema can reject the entire discovery response,
 including help for unrelated tools. Partial service fixtures do not cover this
 integration boundary.
+
+Execution-management tools call the existing scoped configuration, lifecycle
+and policy services; they do not create a second provider management path.
+Pi SDK, native Pi, Codex, Claude, Grok, OpenCode and Antigravity share these
+definitions through their existing admitted tool presentations. Keep each
+backend's configured topology, startup-variable support, identity restrictions
+and lifecycle action inventory authoritative. Grok Native/remote execution
+and Pi SDK remote CLI remain unsupported. New management grants are exact-ID,
+thread-agent-only and default-off. Scope resolution, source-route protection,
+revision checks and retained receipt authority apply before mutation and replay.
+Policy-set/default administration may author broader future policy under its
+separate grant; assignments to threads, Saved Agents and templates remain capped
+by the caller's applied policy.
+
+Typed configuration edits preserve omitted nested settings and variable/
+connection entries. Authorized environment/backend detail reads expose exact
+configured literal values, while secret references remain unresolved. Lists,
+mutation receipts and diagnostics omit variable values. Never rebuild a full
+document from a partial output or return the private full-configuration receipt.
 
 Agent-tool presentation is an orthogonal `{ surface, mode }` contract. Every
 backend/environment disposition must enumerate supported modes beneath each
@@ -4843,9 +4862,13 @@ Do not add aliases,
 dual-shape parsers, or implicit migration paths unless a compatibility period
 is explicitly requested.
 
-Secrets are never sent to the browser, logged, placed in error details, or
-persisted in ordinary application rows. Persist fingerprints or bounded
-metadata only when recovery needs to prove which authority was used.
+Resolved provider credentials and secret-reference contents are never sent to
+the browser, logged, placed in error details, or persisted in ordinary application
+rows. User-supplied literal environment bindings are configuration values and
+remain readable through the authorized Settings and environment/backend detail
+APIs, even when a user stores a credential as a literal. Do not mask those
+literals by name. Persist fingerprints or bounded metadata only when recovery
+needs to prove which referenced credential authority was used.
 Secret-reference choices must be available at the actual execution boundary.
 The persistent sidecar's sanitized bootstrap environment is not a credential
 transport. Remote OpenCode therefore requires a host-local protected password

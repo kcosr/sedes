@@ -2,8 +2,8 @@ export const AGENT_TOOL_MAXIMUM_RESPONSE_BYTES = 4 * 1_024 * 1_024;
 
 export const AGENT_TOOL_MAXIMUM_DESCRIPTION_IDS = 16;
 export const AGENT_TOOL_MAXIMUM_DESCRIPTION_REQUEST_BYTES = 4 * 1_024;
-/** Bounded discovery budget for the 54-tool catalog, including independent automation controls. */
-export const AGENT_TOOL_MAXIMUM_CATALOG_SUMMARY_BYTES = 24 * 1_024;
+/** The 88-tool catalog measures 36,560 UTF-8 bytes, with finite growth headroom. */
+export const AGENT_TOOL_MAXIMUM_CATALOG_SUMMARY_BYTES = 40 * 1_024;
 
 /**
  * Reserved for invocationId, state, output property names, JSON punctuation,

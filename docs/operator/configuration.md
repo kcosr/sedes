@@ -529,6 +529,72 @@ Sedes-managed authority, and process loader controls are reserved. Definitions
 are limited to 64 names and 32 KiB per layer and effective map. These controls
 never edit the Sedes server's global environment.
 
+### Agent-managed configuration
+
+Thread agents can manage execution settings when their policy explicitly enables
+the relevant **Execution** tools. New management tools are not enabled by an
+upgrade. Grant read, rename, configure, removal and lifecycle operations
+individually; configure/create grants include executable paths, privilege
+settings, variable bindings and approval of credential references. Principal
+Tool clients do not receive these operations.
+
+`environment.get` and `backend.get` read one admitted resource's settings and
+current runtime state. They return exact configured literal variable values,
+including credentials stored as literals. A variable named `API_TOKEN` with the
+literal value `foo` is returned with that value, not a mask. References to an
+execution-host variable or protected file remain references; a configuration
+read never resolves them. Backend/environment lists omit variable settings,
+and mutation results, receipts, status and diagnostics omit their values.
+
+`environment.configure` and `backend.configure` edit only the supplied settings.
+Omitted fields and nested siblings are preserved by the server, so changing one
+variable does not require reading or resubmitting the other variables. Set a
+named variable to its new literal/reference/unset binding, remove its override
+to restore inheritance, or leave it out to preserve it. An unset binding masks
+an inherited variable. Use `null` to clear an optional setting;
+ordinary arrays replace the supplied array, and switching a mutable settings
+variant requires the complete new variant. Immutable identities remain fixed.
+
+`backend.options` supplies compatible configuration and defaults; required
+host-specific paths must be supplied before creation. Creating a backend saves
+it and its first connection together. Backend responses distinguish
+`configurationTargetId`, used to edit connections and choose the execution
+default, from the projected `targetId` used to create threads or preview tool
+policy. Setting a default affects future threads, never existing bindings.
+
+Configuration mutations carry the current `expectedRevision` and a stable
+`mutationId`. Concurrent Settings/agent edits conflict. After a lost response,
+retry the same command with the same mutation ID and unchanged input to recover
+its original bounded result; do not generate new IDs or silently rebase. The
+result reports a saved revision separately from runtime effects. An offline
+host can retain pending saved settings. Read its status again before treating
+it as ready.
+
+Mutation results contain `effectsScope: "current_command"`: their runtime
+effects describe this command's changed settings, not all pending work on the
+resource. The serialized result is limited to 60 KiB; `effectsOmitted` counts
+additional changed effects left out of a large result. Even when that count is
+zero, use `environment.get` or `backend.get` to inspect complete current effects,
+including pending settings from earlier edits. A retry returns the original
+result rather than refreshing those runtime observations.
+
+An agent may rename its own environment and change its calling backend's label
+or supported model/reasoning policy/defaults. It cannot change its source
+environment's access settings, alter its calling backend's permissions or
+launch settings, or interrupt the route carrying its invocation. Other backends
+on the same host can be added or managed when that route remains intact.
+Environment creation and account-wide defaults need other-environment access;
+all operations still enforce principal ownership and resource scope.
+
+Runtime tools use the same supported actions and impact checks as Settings.
+After an uncertain Stop, Restart or Upgrade, use `runtime.operation.get` with
+the original mutation ID; pending or unknown is not proof of shutdown. Removal
+retains existing shutdown requirements and historical associations. These tools
+do not provide a force-recovery path around a stuck command. Provider setup,
+SSH configuration, outbound pairing and operator retirement confirmation retain
+their existing workflows. See [agent management contracts](../internals/agent-tools.md#execution-and-tool-settings-management)
+and [tool policies](../user/tool-policies.md#delegate-management-to-an-agent).
+
 ### Web search provider
 
 Sedes exposes one provider-neutral `research.web_search` agent tool. Its local

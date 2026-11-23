@@ -6,6 +6,7 @@ import type {
 } from "../../server/agent-tools/contracts/agent-tool-contracts.js";
 import type { CanonicalJsonValue } from "../../server/canonical-json.js";
 import {
+  AGENT_TOOL_MAXIMUM_CATALOG_SUMMARY_BYTES,
   AGENT_TOOL_MAXIMUM_DESCRIPTION_IDS,
   AGENT_TOOL_MAXIMUM_RESPONSE_BYTES,
 } from "../../server/agent-tools/contracts/agent-tool-transport-limits.js";
@@ -131,6 +132,7 @@ export const agentToolCatalogSummarySchema: z.ZodType<AgentToolCatalogSummary> =
         "images",
         "automations",
         "research",
+        "execution",
       ]),
       order: z.number().int().nonnegative().max(10_000),
     }),
@@ -180,11 +182,14 @@ export const agentToolDescriptionSchema: z.ZodType<AgentToolDescription> =
     }),
   }) as z.ZodType<AgentToolDescription>;
 
-export const agentToolCatalogResponseSchema = z.strictObject({
-  tools: z
+export const agentToolCatalogSummariesSchema = z
     .array(agentToolCatalogSummarySchema)
     .max(agentToolCliTransportLimits.maximumCatalogTools)
-    .readonly(),
+    .readonly()
+    .refine(tools => Buffer.byteLength(JSON.stringify({ tools }), "utf8") <= AGENT_TOOL_MAXIMUM_CATALOG_SUMMARY_BYTES,
+      "The tool catalog exceeds its discovery budget.");
+export const agentToolCatalogResponseSchema = z.strictObject({
+  tools: agentToolCatalogSummariesSchema,
 });
 export const createAgentToolDescriptionsRequestSchema = z.strictObject({
   toolIds: z

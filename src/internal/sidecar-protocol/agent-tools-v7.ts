@@ -1,9 +1,8 @@
 import { z } from "zod";
 import {
-  agentToolCatalogSummarySchema,
+  agentToolCatalogSummariesSchema,
   agentToolCliErrorSchema,
   agentToolCliToolIdSchema,
-  agentToolCliTransportLimits,
   agentToolDescriptionSchema,
   agentToolInvocationResultSchema,
   createAgentToolInvocationRequestSchema,
@@ -37,7 +36,7 @@ const toolIdsSchema = z
 
 export const agentToolsCatalogOperation = defineSidecarOperation({
   capabilityId: "agent_tools_cli",
-  majorVersion: 6,
+  majorVersion: 7,
   operation: "catalog.list",
   lane: "operation",
   maximumDeadlineMilliseconds: 30_000,
@@ -45,10 +44,7 @@ export const agentToolsCatalogOperation = defineSidecarOperation({
   responseSchema: z.discriminatedUnion("outcome", [
     z.strictObject({
       outcome: z.literal("ok"),
-      tools: z
-        .array(agentToolCatalogSummarySchema)
-        .max(agentToolCliTransportLimits.maximumCatalogTools)
-        .readonly(),
+      tools: agentToolCatalogSummariesSchema,
     }),
     errorResultSchema,
   ]),
@@ -56,7 +52,7 @@ export const agentToolsCatalogOperation = defineSidecarOperation({
 
 export const agentToolsDescribeOperation = defineSidecarOperation({
   capabilityId: "agent_tools_cli",
-  majorVersion: 6,
+  majorVersion: 7,
   operation: "catalog.describe",
   lane: "operation",
   maximumDeadlineMilliseconds: 30_000,
@@ -76,7 +72,7 @@ export const agentToolsDescribeOperation = defineSidecarOperation({
 
 export const agentToolsInvokeOperation = defineSidecarOperation({
   capabilityId: "agent_tools_cli",
-  majorVersion: 6,
+  majorVersion: 7,
   operation: "tool.invoke",
   lane: "operation",
   maximumDeadlineMilliseconds: "caller_abort",
@@ -93,7 +89,7 @@ export const agentToolsInvokeOperation = defineSidecarOperation({
   ]),
 });
 
-export const agentToolsV6Operations = Object.freeze([
+export const agentToolsV7Operations = Object.freeze([
   agentToolsCatalogOperation,
   agentToolsDescribeOperation,
   agentToolsInvokeOperation,

@@ -4,7 +4,7 @@ import {
   type ExecutionPolicySnapshot,
   type ExecutionPolicyRouteSubject,
 } from "../../internal/sidecar-protocol/execution-policy.js";
-import { type AgentToolRouteBinding } from "../../internal/sidecar-protocol/agent-tools-v6.js";
+import { type AgentToolRouteBinding } from "../../internal/sidecar-protocol/agent-tools-v7.js";
 import { sidecarAgentToolCliMetadataSchema } from "../../internal/sidecar-protocol/control-v3.js";
 import { SidecarOperationError } from "../../internal/sidecar-protocol/operation-registry.js";
 import type { AgentToolCliLocalIngress } from "./agent-tool-cli-local-ingress.js";

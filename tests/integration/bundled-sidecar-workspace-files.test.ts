@@ -1029,7 +1029,7 @@ describe("bundled sedes sidecar", () => {
         offeredSedesCapabilities: [
           {
             capabilityId: "agent_tools_cli",
-            majorVersion: 6,
+            majorVersion: 7,
             operations: [
               agentToolsDescribeOperation.operation,
               agentToolsCatalogOperation.operation,
@@ -1052,7 +1052,7 @@ describe("bundled sedes sidecar", () => {
         sedesCapabilities: [
           {
             capabilityId: "agent_tools_cli",
-            majorVersion: 6,
+            majorVersion: 7,
             operations: ["catalog.describe", "catalog.list", "tool.invoke"],
           },
         ],

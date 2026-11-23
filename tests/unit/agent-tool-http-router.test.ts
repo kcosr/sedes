@@ -68,6 +68,13 @@ function fixture(
       get: vi.fn(() => ({ ...policy, revision: 1 })),
     } as unknown as ThreadAgentToolPolicyRepository,
 new AgentToolEnvironmentAuthorityResolver({
+      resolveConfiguredEnvironment: () => undefined,
+      resolveBackend: () => undefined,
+      resolveTarget: () => undefined,
+      resolveConfigurationTarget: () => undefined,
+      resolveThreadTemplate: () => undefined,
+      resolveRuntimeReceipt: () => undefined,
+      resolveConfigurationMutation: () => undefined,
       resolveEnvironment: () => undefined,
       resolveWorkspace: () => undefined,
       resolveAutomation: () => undefined,

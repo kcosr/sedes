@@ -9,7 +9,13 @@ import {
 } from "../../shared/protocol/configuration-admin.js";
 import type { RequestScope } from "../identity/identity-provider.js";
 import { DomainError } from "../domain/errors.js";
-import { ConfigurationRepository } from "./configuration-repository.js";
+import { ConfigurationRepository, type ConfigurationSaveCommand } from "./configuration-repository.js";
+import {
+  configurationCommandIdentitySchema, configurationCommandMetadataSchema,
+  type ConfigurationCommand,
+} from "./configuration-command-receipt.js";
+import { configurationFingerprint } from "../config/configuration-fingerprint.js";
+import { z } from "zod";
 import type { ConfigurationProjection } from "./configuration-projection.js";
 import { validateConfigurationDocument } from "./configuration-validation.js";
 
@@ -52,6 +58,7 @@ type ImpactEntry = {
 export class ConfigurationAdminService {
   readonly #impacts = new Map<string, ImpactEntry>();
   readonly #lifecycleExecutions = new Map<string, Promise<ConfigurationLifecycleResult>>();
+  readonly #commandExecutions = new Map<string, { identity: string; completion: Promise<unknown> }>();
   readonly #now: () => number;
 
   constructor(readonly repository: ConfigurationRepository, readonly options: {
@@ -83,17 +90,77 @@ export class ConfigurationAdminService {
     const request = saveConfigurationRequestSchema.parse(value);
     const replayed = this.repository.replaySave(scope, request);
     if (replayed) return replayed;
+    return this.#save(scope, request);
+  }
+
+  /** Narrow commands retain their original authority and output before any rebuild.
+   * Concurrent identical calls on this service share the same admission; the
+   * repository repeats identity/authority checks for independent contenders. */
+  async saveCommand<T>(scope: RequestScope, command: ConfigurationCommand<T>): Promise<T> {
+    await this.options.authorize(scope, "write");
+    z.string().uuid().parse(command.mutationId);
+    configurationCommandIdentitySchema.parse(command.identity);
+    z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).parse(command.expectedRevision);
+    const replay = () => {
+      const receipt = this.repository.replayCommand<T>(scope, command.mutationId, command.identity, command.expectedRevision);
+      if (receipt) command.authorize(receipt.metadata.scopeFacts);
+      return receipt;
+    };
+    const committedResult = () => {
+      const receipt = replay();
+      if (!receipt) throw new DomainError("conflict", "The configuration command receipt expired. Inspect current state before editing again.");
+      return receipt.result;
+    };
+    const retained = replay();
+    if (retained) return retained.result;
+    const key = JSON.stringify([scope.tenantId, scope.principalId, command.mutationId]);
+    const identity = configurationFingerprint({ ...command.identity, expectedRevision: command.expectedRevision });
+    const existing = this.#commandExecutions.get(key);
+    if (existing) {
+      if (existing.identity !== identity) throw new DomainError("conflict", "The mutation ID was already used with different contents.");
+      await existing.completion;
+      return committedResult();
+    }
+    const completion = (async () => {
+      const snapshot = this.repository.get(scope);
+      if (snapshot.revision !== command.expectedRevision) throw new DomainError("conflict", "Configuration changed. Refresh before editing.");
+      const built = command.build(snapshot);
+      const metadata = configurationCommandMetadataSchema.parse({ identity: command.identity,
+        expectedRevision: command.expectedRevision, scopeFacts: built.scopeFacts });
+      command.authorize(metadata.scopeFacts);
+      const request = saveConfigurationRequestSchema.parse({ mutationId: command.mutationId,
+        expectedRevision: command.expectedRevision, configuration: built.configuration });
+      try {
+        await this.#save(scope, request, { metadata, authorize: command.authorize, present: built.present });
+      } catch (error) {
+        // Another service may have committed this exact command while this one
+        // awaited secret authorization or the runtime admission lock.
+        const committed = replay();
+        if (committed) return committed.result;
+        throw error;
+      }
+      return committedResult();
+    })();
+    this.#commandExecutions.set(key, { identity, completion });
+    try { return await completion; }
+    finally { this.#commandExecutions.delete(key); }
+  }
+
+  async #save<T>(scope: RequestScope, request: SaveConfigurationRequest,
+    command?: ConfigurationSaveCommand<T>): Promise<ConfigurationSnapshot> {
     const configuration = validateConfigurationDocument(request.configuration);
     const references = await this.#authorizeSecrets(scope, configuration);
     const previous = this.repository.get(scope);
+    let committed = false;
     const commit = () => this.repository.save(scope, { ...request, configuration }, document => {
       this.options.projection.project(scope, document);
       for (const reference of references) this.repository.approveSecret(scope, reference.environmentId, reference.reference);
-    });
+      committed = true;
+    }, command);
     const result = this.options.runtime?.commitConfiguration
       ? await this.options.runtime.commitConfiguration(scope, previous, configuration, commit)
       : commit();
-    if (this.options.runtime) {
+    if (committed && this.options.runtime) {
       try { await this.options.runtime.reconcile(scope, result); }
       catch {
         // The save already committed. Do not turn a successful durable mutation
@@ -107,9 +174,10 @@ export class ConfigurationAdminService {
     return result;
   }
 
-  async impact(scope: RequestScope, value: ConfigurationLifecycleImpactRequest): Promise<ConfigurationLifecycleImpact> {
+  async impact(scope: RequestScope, value: ConfigurationLifecycleImpactRequest, authorizeResource?: () => void): Promise<ConfigurationLifecycleImpact> {
     await this.options.authorize(scope, "probe");
     await this.options.authorize(scope, "lifecycle");
+    authorizeResource?.();
     const request = configurationLifecycleImpactRequestSchema.parse(value);
     const snapshot = this.repository.get(scope);
     if (snapshot.revision !== request.expectedRevision) throw new DomainError("conflict", "Configuration changed. Refresh before inspecting lifecycle impact.");
@@ -132,8 +200,9 @@ export class ConfigurationAdminService {
     return impact;
   }
 
-  async lifecycle(scope: RequestScope, value: ConfigurationLifecycleRequest): Promise<ConfigurationLifecycleResult> {
+  async lifecycle(scope: RequestScope, value: ConfigurationLifecycleRequest, authorizeResource?: () => void): Promise<ConfigurationLifecycleResult> {
     await this.options.authorize(scope, "lifecycle");
+    authorizeResource?.();
     const request = configurationLifecycleRequestSchema.parse(value);
     const replayed = this.repository.replayLifecycle(scope, request);
     if (replayed) {
@@ -214,8 +283,9 @@ export class ConfigurationAdminService {
     });
   }
 
-  async lifecycleReceipt(scope: RequestScope, mutationId: string): Promise<ConfigurationLifecycleResult> {
+  async lifecycleReceipt(scope: RequestScope, mutationId: string, authorizeResource?: () => void): Promise<ConfigurationLifecycleResult> {
     await this.options.authorize(scope, "read");
+    authorizeResource?.();
     const result = this.repository.lifecycleReceipt(scope, mutationId);
     if (this.#lifecycleExecutions.has(JSON.stringify([scope.tenantId, scope.principalId, mutationId]))) return result;
     if (result.state === "pending" || result.state === "unknown") {
@@ -243,6 +313,7 @@ export class ConfigurationAdminService {
         }
         if (this.options.runtime?.recoverLifecycle) {
           await this.options.authorize(scope, "probe");
+          authorizeResource?.();
           const recovered = await this.options.runtime.recoverLifecycle(scope, pending);
           if (recovered) return this.repository.completeLifecycle(scope, pending.request, recovered);
         }

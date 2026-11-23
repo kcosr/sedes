@@ -96,6 +96,12 @@ export class ToolPolicyService {
     return { items: this.repository.listSelections(scope) };
   }
 
+  /** A missing selection inherits; a missing target is still an error. */
+  getSelection(scope: RequestScope, target: ToolPolicySelectionTarget): ToolPolicySelectionSetting {
+    this.assertTarget(scope, target);
+    return this.repository.getSelection(scope, target);
+  }
+
   updateSelection(scope: RequestScope, input: {
     target: ToolPolicySelectionTarget;
     selection: ToolPolicySelection;

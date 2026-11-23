@@ -182,6 +182,22 @@ execution account. Pi's SDK and provider connection run on Sedes; a remote Pi
 environment supplies workspace tools. Credential fields refer only to approved
 host-scoped credentials; Settings never displays their values.
 
+### Let an agent manage execution settings
+
+Enable the specific **Execution** tools in the thread's tool policy to delegate
+environment/backend management, default connections or runtime actions. They
+start disabled. Read and rename are separate grants from configure, removal
+and lifecycle control; configure/create also covers variables, credential
+references and privilege settings. Detail-read tools expose configured literal
+variable values, while secret references remain references.
+
+Agent configuration edits preserve omitted fields and use the same revision
+checks, validation and saved-versus-applied state as Settings. Another client or
+agent's edit can therefore conflict with an open editor. An agent cannot stop
+its own calling runtime or change its own thread's tool grant. Tool-policy
+administration and other threads/templates' tool settings have separate grants;
+see [delegating management](tool-policies.md#delegate-management-to-an-agent).
+
 ### Saving and runtime state
 
 Configuration saves follow this Sedes user across clients and restarts. The

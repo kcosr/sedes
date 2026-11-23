@@ -31,8 +31,9 @@ import {
   WORKSPACE_CONTEXT_V1_LIMITS,
   WORKSPACE_SKILLS_V1_LIMITS,
 } from "../../internal/sidecar-protocol/index.js";
-import type {
-  AgentToolCliRequest,
+import {
+  AGENT_TOOL_CLI_PROTOCOL_VERSION,
+  type AgentToolCliRequest,
 } from "../../internal/agent-tool-cli-protocol/index.js";
 import { relayAgentToolCliRequest, relayAgentToolRequest } from "./agent-tool-request-relay.js";
 import { runSedesCli } from "../../cli/sedes-cli.js";
@@ -359,7 +360,7 @@ async function main(): Promise<void> {
           : request.operation === "describe" ? { type: "describe", toolIds: request.toolIds }
           : { type: "invoke", request: request.request };
         try {
-          return (await relayAgentToolRequest(attachment, { protocolVersion: 6, requestId: randomUUID(), sourceCapability, operation }, signal, stamp,policyRoutes.binding(backendInstanceId))).value;
+          return (await relayAgentToolRequest(attachment, { protocolVersion: AGENT_TOOL_CLI_PROTOCOL_VERSION, requestId: randomUUID(), sourceCapability, operation }, signal, stamp,policyRoutes.binding(backendInstanceId))).value;
         } catch (error) {
           if (error instanceof AgentToolCliIngressError) throw new BackendAgentToolRequestError(error.toolError);
           throw error;

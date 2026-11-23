@@ -9,8 +9,10 @@ export const AGENT_TOOL_JSON_SCHEMA_DIALECT =
   "https://json-schema.org/draft/2020-12/schema" as const;
 
 export const AGENT_TOOL_SCHEMA_LIMITS = Object.freeze({
-  maximumDepth: 8,
-  maximumNodes: 256,
+  // Closed configuration schemas span all seven provider variants: the current
+  // deepest contract is 13 levels and the largest has 813 schema nodes.
+  maximumDepth: 16,
+  maximumNodes: 1_024,
   maximumObjectProperties: 64,
   maximumArrayItems: 1_024,
   maximumStringLength: 262_144,

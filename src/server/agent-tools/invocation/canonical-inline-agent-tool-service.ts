@@ -36,6 +36,7 @@ import { workpadInputContentError } from "../../../internal/agent-tool-cli-proto
 import type { TrustedEnvironmentAuthorityGrant } from "../environment/environment-authority.js";
 import { createTrustedCapabilityAccess } from "../contracts/agent-tool-contracts.js";
 import {
+  AGENT_TOOL_MAXIMUM_CATALOG_SUMMARY_BYTES,
   AGENT_TOOL_MAXIMUM_DESCRIPTION_IDS,
   AGENT_TOOL_MAXIMUM_DESCRIPTION_REQUEST_BYTES,
   AGENT_TOOL_MAXIMUM_RESPONSE_BYTES,
@@ -45,6 +46,9 @@ import {
   cliCommandPath,
 } from "../registry/agent-tool-registry.js";
 import { createCanonicalAgentToolDefinitions } from "../registry/canonical-agent-tool-catalog.js";
+import type { ExecutionConfigurationTools } from "../execution/execution-configuration-tools.js";
+import type { RuntimeAgentToolService } from "../tools/runtime-agent-tool-service.js";
+import type { PolicyManagementAgentToolService } from "../tools/policy-management-agent-tool-service.js";
 import type { AgentManagementService } from "../application/agent-management-service.js";
 import type { AgentThreadCreationService } from "../tools/thread-management-tools.js";
 import type { SavedAgentCanonicalToolService } from "../tools/saved-agent-management-tools.js";
@@ -224,7 +228,7 @@ function admittedEffects(definition: AgentToolDefinition): boolean {
       external === "durable_side_effect") ||
     (application === "destructive" &&
       modelUsage === "none" &&
-      external === "none")
+      (external === "none" || external === "durable_side_effect"))
   );
 }
 
@@ -308,6 +312,9 @@ export class CanonicalInlineAgentToolService {
     readonly application: AgentToolApplicationReader;
     readonly clientControls?: ClientControlToolService;
     readonly management?: AgentManagementService;
+    readonly executionConfiguration?: ExecutionConfigurationTools;
+    readonly executionRuntime?: RuntimeAgentToolService;
+    readonly policyManagement?: PolicyManagementAgentToolService;
     readonly workpads?: WorkpadAgentToolService;
     readonly pages?: PageAgentToolService;
     readonly images?: ImageShowAgentToolService;
@@ -355,7 +362,11 @@ export class CanonicalInlineAgentToolService {
     adapter: AgentToolAdapter,
     callerKind: AgentToolCallerKind,
   ): readonly AgentToolCatalogSummary[] {
-    return Object.freeze(this.catalog(adapter, callerKind).map(catalogSummary));
+    const summaries = this.catalog(adapter, callerKind).map(catalogSummary);
+    if (bytes(deterministicJson({ tools: summaries })) > AGENT_TOOL_MAXIMUM_CATALOG_SUMMARY_BYTES) {
+      throw new CanonicalAgentToolRequestError("internal_error", "The tool catalog exceeds its discovery budget.");
+    }
+    return Object.freeze(summaries);
   }
 
   describeMany(

@@ -99,7 +99,7 @@ function fixture(
       { capabilityId: "workspace_files", majorVersion: 8 },
       ...(options.terminal ? [{ capabilityId: "interactive_terminal" as const, majorVersion: 2 as const }] : []),
       ...(options.agentTools
-        ? ([{ capabilityId: "agent_tools_cli", majorVersion: 6 }] as const)
+        ? ([{ capabilityId: "agent_tools_cli", majorVersion: 7 }] as const)
         : []),
     ],
     artifact,
@@ -476,9 +476,9 @@ describe("SidecarRuntimeOwner", () => {
     const ungranted = fixture();
     const missingEndpoint = fixture({ agentTools: true, agentToolCliSupported: false });
     try {
-      expect(ungranted.owner.canAcquireCapability("agent_tools_cli", 6)).toBe(false);
+      expect(ungranted.owner.canAcquireCapability("agent_tools_cli", 7)).toBe(false);
       const lease = await missingEndpoint.owner.acquireOperation(scope, environmentId, new AbortController().signal);
-      expect(missingEndpoint.owner.canAcquireCapability("agent_tools_cli", 6)).toBe(false);
+      expect(missingEndpoint.owner.canAcquireCapability("agent_tools_cli", 7)).toBe(false);
       lease.release();
     } finally { await ungranted.owner.close(); await missingEndpoint.owner.close(); }
   });
@@ -488,12 +488,12 @@ describe("SidecarRuntimeOwner", () => {
     const value = fixture({ agentTools: true, idleMilliseconds: 5000 });
     try {
       const first = await value.owner.acquireOperation(scope, environmentId, new AbortController().signal);
-      expect(value.owner.canAcquireCapability("agent_tools_cli", 6)).toBe(true);
+      expect(value.owner.canAcquireCapability("agent_tools_cli", 7)).toBe(true);
       first.release();
       await vi.advanceTimersByTimeAsync(5000);
       value.startSession.mockResolvedValueOnce(new FakeSession());
       const second = await value.owner.acquireOperation(scope, environmentId, new AbortController().signal);
-      expect(value.owner.canAcquireCapability("agent_tools_cli", 6)).toBe(false);
+      expect(value.owner.canAcquireCapability("agent_tools_cli", 7)).toBe(false);
       second.release();
     } finally { await value.owner.close(); vi.useRealTimers(); }
   });

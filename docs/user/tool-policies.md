@@ -102,6 +102,44 @@ An agent cannot create or configure another Agent/thread with a broader tool
 policy than its own and then use it to bypass this boundary. Existing
 independently configured destination threads keep their own policy.
 
+## Delegate management to an agent
+
+The **Execution** tool group lets a thread agent inspect and manage environments,
+backends, the default connection, runtime lifecycle and tool-policy sets. These
+operations start disabled and are selected individually. Reading or renaming a
+resource does not enable its configuration or removal. Configure/create grants
+include executable paths, variables, credential-reference approval and privilege
+settings. Detailed environment/backend reads show stored literal variable values;
+enable those reads only for an agent that should see that configuration.
+
+`tool_policy.*` can create/edit policy sets, select account/environment/backend
+defaults, and preview the effective selection and supported presentation for a
+target. Creating environments, changing account defaults and administering
+account-wide policy sets require **Allow other environments**. A valid target
+with no saved selection reads as **Inherit**.
+
+Policy administration deliberately permits defining broader tools or access
+for future threads. It does not change the calling thread's already-applied
+policy. The agent still cannot assign more tools or broader scope than its own
+when creating/configuring threads, Saved Agents or templates, including through
+an inherited policy. Enable administrative tools as an explicit delegation,
+separately from ordinary thread creation and Saved Agent authoring.
+
+The **Threads** group also includes `thread.tool_settings.get/update` and
+`thread_template.list/get/update`. An agent can change an admitted other thread's
+applied tools and supported presentation, or an existing template's policy and
+presentation while preserving its other settings. It cannot change its own
+thread's tool settings. Existing Saved Agent tools remain the way to edit an
+Agent. Native/presentation changes still require an idle target and runtime
+retirement; no new presentation defaults are added above Agent/Thread scope.
+
+Updates use revision checks. A thread tool-settings update has no replay receipt:
+after a lost reply, read the current settings before trying another update.
+Policy-set/default/template writes use the same readback approach. These new
+management operations are available to thread agents, not principal Tool clients.
+See [agent-managed configuration](../operator/configuration.md#agent-managed-configuration)
+for partial configuration updates and lifecycle recovery.
+
 ## Presentation across backends
 
 A set stores tools and resource scope, not a provider transport. New threads

@@ -37,7 +37,7 @@ describe("agent-tool model content", () => {
   });
 
   it("requires v6 local transport and rejects the previous v5 frames", () => {
-    const request = { protocolVersion: 6, requestId: "10000000-0000-4000-8000-000000000001", sourceCapability: "a".repeat(48), operation: { type: "list" } };
+    const request = { protocolVersion: 7, requestId: "10000000-0000-4000-8000-000000000001", sourceCapability: "a".repeat(48), operation: { type: "list" } };
     expect(agentToolCliRequestSchema.safeParse(request).success).toBe(true);
     expect(agentToolCliRequestSchema.safeParse({ ...request, protocolVersion: 5 }).success).toBe(false);
   });

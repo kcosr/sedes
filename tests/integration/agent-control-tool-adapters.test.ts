@@ -339,7 +339,14 @@ function fixture() {
     mutationId: () => "019196f7-a0a8-7bc4-a89b-8cf013978430",
   });
   const authorityReader = {
-    resolveEnvironment: (_requestScope: RequestScope, id: string) => ({
+    resolveConfiguredEnvironment: () => undefined,
+      resolveBackend: () => undefined,
+      resolveTarget: () => undefined,
+      resolveConfigurationTarget: () => undefined,
+      resolveThreadTemplate: () => undefined,
+      resolveRuntimeReceipt: () => undefined,
+      resolveConfigurationMutation: () => undefined,
+      resolveEnvironment: (_requestScope: RequestScope, id: string) => ({
       id,
       environmentId: id,
       label: id,

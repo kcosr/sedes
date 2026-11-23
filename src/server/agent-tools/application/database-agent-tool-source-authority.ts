@@ -1,4 +1,6 @@
 import type Database from "better-sqlite3";
+import { ConfigurationRepository } from "../../configuration-admin/configuration-repository.js";
+import { configurationDocumentSchema, type ConfigurationDocument } from "../../../shared/protocol/configuration-admin.js";
 import type { BackendKind } from "../../backends/contracts.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
 import type { TrustedAgentToolSource, BackendAgentToolAccessDecisionAuthority,
@@ -168,6 +170,55 @@ export class DatabaseAgentToolSourceAuthority
     );
   }
 
+  resolveConfiguredEnvironment(scope: RequestScope, id: string): EnvironmentAuthorityResourceFact | undefined {
+    const environment = this.#executionConfiguration(scope)?.executionEnvironments.find(item => item.id === id);
+    return environment ? { id, environmentId: id, label: environment.label } : undefined;
+  }
+
+  resolveBackend(scope: RequestScope, id: string): EnvironmentAuthorityResourceFact | undefined {
+    const configuration = this.#executionConfiguration(scope);
+    const backend = configuration?.backends.find(item => item.id === id);
+    const targets = configuration?.targets.filter(item => item.backendInstanceId === id) ?? [];
+    if (!backend || !targets.length || targets.some(item => item.executionEnvironmentId !== targets[0]!.executionEnvironmentId)) return undefined;
+    return { id, environmentId: targets[0]!.executionEnvironmentId, label: backend.label };
+  }
+
+  resolveConfigurationTarget(scope: RequestScope, id: string): EnvironmentAuthorityResourceFact | undefined {
+    const target = this.#executionConfiguration(scope)?.targets.find(item => item.id === id);
+    return target ? { id, environmentId: target.executionEnvironmentId, backendInstanceId: target.backendInstanceId, label: target.label } : undefined;
+  }
+
+  resolveTarget(scope: RequestScope, id: string): EnvironmentAuthorityResourceFact | undefined {
+    const profile = this.database.prepare(`SELECT template_id AS configurationTargetId FROM agent_connection_profiles
+      WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?`).get(scope.tenantId, scope.principalId, id) as { configurationTargetId: string } | undefined;
+    const target = profile && this.resolveConfigurationTarget(scope, profile.configurationTargetId);
+    return target ? { ...target, id } : undefined;
+  }
+
+  resolveThreadTemplate(scope: RequestScope, id: string): EnvironmentAuthorityResourceFact | undefined {
+    return this.database.prepare(`SELECT template.id, template.revision, template.name AS label,
+      template.workspace_id AS workspaceId, workspace.project_id AS projectId, profile.execution_environment_id AS environmentId
+      FROM thread_templates AS template
+      JOIN workspaces AS workspace ON workspace.tenant_id = template.tenant_id AND workspace.owner_principal_id = template.owner_principal_id AND workspace.id = template.workspace_id
+      JOIN agent_connection_profiles AS profile ON profile.tenant_id = template.tenant_id AND profile.owner_principal_id = template.owner_principal_id AND profile.id = template.target_id
+      WHERE template.tenant_id = ? AND template.owner_principal_id = ? AND template.id = ?
+        AND workspace.environment_id = profile.execution_environment_id`).get(scope.tenantId, scope.principalId, id) as EnvironmentAuthorityResourceFact | undefined;
+  }
+
+  resolveRuntimeReceipt(scope: RequestScope, mutationId: string) {
+    return new ConfigurationRepository(this.database).lifecycleReceiptResource(scope, mutationId);
+  }
+
+  resolveConfigurationMutation(scope: RequestScope, mutationId: string) {
+    return new ConfigurationRepository(this.database).commandReceiptAuthority(scope, mutationId);
+  }
+
+  #executionConfiguration(scope: RequestScope): ConfigurationDocument | undefined {
+    const row = this.database.prepare(`SELECT configuration_json AS configuration FROM principal_execution_configuration
+      WHERE tenant_id = ? AND owner_principal_id = ?`).get(scope.tenantId, scope.principalId) as { configuration: string } | undefined;
+    return row ? configurationDocumentSchema.parse(JSON.parse(row.configuration)) : undefined;
+  }
+
   resolveEnvironment(
     scope: RequestScope,
     id: string,
@@ -207,7 +258,7 @@ export class DatabaseAgentToolSourceAuthority
     return this.database
       .prepare(
         `
-          SELECT id, environment_id AS environmentId,
+          SELECT id, environment_id AS environmentId, backend_instance_id AS backendInstanceId,
             workspace_id AS workspaceId, (SELECT project_id FROM workspaces AS location WHERE location.tenant_id=application_threads.tenant_id AND location.owner_principal_id=application_threads.owner_principal_id AND location.id=application_threads.workspace_id) AS projectId, title AS label
           FROM application_threads
           WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?

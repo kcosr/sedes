@@ -22,6 +22,13 @@ const scope = { tenantId: "tenant", principalId: "principal" };
 const sourceThreadId = randomUUID(), destination = randomUUID(), sameEnvironment = randomUUID(), missing = randomUUID();
 const state = { runtime: { foreground: true, voiceReady: false, interactionActive: false }, settings: null };
 const reader: AgentToolEnvironmentAuthorityReader = {
+  resolveConfiguredEnvironment: () => undefined,
+  resolveBackend: () => undefined,
+  resolveTarget: () => undefined,
+  resolveConfigurationTarget: () => undefined,
+  resolveThreadTemplate: () => undefined,
+  resolveRuntimeReceipt: () => undefined,
+  resolveConfigurationMutation: () => undefined,
   resolveEnvironment: (_scope, id) => ({ id, environmentId: id }), resolveWorkspace: () => undefined,
   resolveWorkspaceProject: () => "project", resolveProject: () => undefined,
   resolveAutomation: () => undefined,

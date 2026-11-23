@@ -7,7 +7,7 @@ import {
 } from "../../internal/sidecar-protocol/operation-registry.js";
 import type { PersistentSidecarServiceRegistry } from "./persistent-sidecar-service-registry.js";
 import type { ExecutionPolicyRoutes } from "./execution-policy-routes.js";
-import { agentToolsCatalogOperation } from "../../internal/sidecar-protocol/agent-tools-v6.js";
+import { agentToolsCatalogOperation } from "../../internal/sidecar-protocol/agent-tools-v7.js";
 import { openCodeToolInvokeOperation } from "../backends/opencode/opencode-tool-relay-wire.js";
 import {
   ExecutionPolicyReadPages,

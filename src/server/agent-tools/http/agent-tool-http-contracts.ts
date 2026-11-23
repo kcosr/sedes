@@ -125,6 +125,7 @@ const agentToolContractArtifactBaseSchema = z.strictObject({
       "images",
       "automations",
       "research",
+      "execution",
     ]),
     label: z.string().min(1).max(120),
     order: z.number().int().nonnegative().max(10_000),

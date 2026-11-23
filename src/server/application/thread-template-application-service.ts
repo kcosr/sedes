@@ -30,10 +30,12 @@ export class ThreadTemplateApplicationService {
   list(
     scope: RequestScope,
     input: { readonly cursor?: string; readonly pageSize?: number } = {},
+    visibility?: { readonly environmentIds: readonly string[]; readonly projectId?: string; readonly continuationKey: string },
   ): ThreadTemplateListPage {
     const page = this.input.repository.listPage(scope, {
       ...(input.cursor ? { cursor: input.cursor } : {}),
       pageSize: input.pageSize ?? 50,
+      ...(visibility ? { visibility } : {}),
     });
     return threadTemplateListPageSchema.parse({
       items: page.items.map((record) => this.#present(record)),
@@ -72,7 +74,9 @@ export class ThreadTemplateApplicationService {
     templateId: string,
     request: UpdateThreadTemplateRequest,
     signal?: AbortSignal,
+    assertAuthority?: () => void,
   ): Promise<ThreadTemplate> {
+    assertAuthority?.();
     const current = this.input.repository.get(scope, templateId);
     const prepared =
       await this.input.savedAgents.prepareThreadTemplateSelection(
@@ -95,7 +99,10 @@ export class ThreadTemplateApplicationService {
         selection: { ...this.#selection(prepared), environmentVariables: request.environmentVariables ?? current.environmentVariables,
           toolPolicySelection: request.toolPolicySelection ?? current.toolPolicySelection ?? {kind: "inherit" as const},
           toolPresentation: request.toolPresentation === null ? undefined : request.toolPresentation ?? current.toolPresentation },
-        assertReferences: prepared.assertDurableFences,
+        assertReferences: () => {
+          prepared.assertDurableFences();
+          assertAuthority?.();
+        },
         now: this.input.now?.() ?? Date.now(),
       }),
     );

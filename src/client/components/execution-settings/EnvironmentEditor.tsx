@@ -1,3 +1,4 @@
+import { createExecutionEnvironment, defaultSidecarCapabilities } from "../../../shared/execution-configuration-defaults.js";
 import type { ReactNode, Ref } from "react";
 import { Cable, Monitor, Server } from "lucide-react";
 import { configurationSidecarCapabilities } from "../../../shared/protocol/configuration-admin.js";
@@ -23,7 +24,7 @@ export const environmentKindNames: Record<EnvironmentDefinition["kind"], string>
 /** The fields the environment editor shows a control for, relative to the environment. */
 export const environmentFields = /^(label|hostAlias|connectionCompression|workspaceRoots(\.\d+)?|operations(\..+)?|workspaceIsolation(\..+)?|environmentVariables(\..+)?)$/u;
 
-const defaultCapabilities: Capability[] = ["directory_browser", "workspace_files"];
+const defaultCapabilities: Capability[] = [...defaultSidecarCapabilities];
 const newTitles: Record<EnvironmentDefinition["kind"], string> = { local: "New local environment", ssh: "New SSH environment", outbound: "New environment" };
 
 /** The operations a person chooses; workspace context always follows workspace tools. */
@@ -62,9 +63,7 @@ export function RemoteOperationsFields({ value, onChange, errors, disabled = fal
 }
 
 export function newEnvironment(kind: "local" | "ssh"): EnvironmentDefinition {
-  return kind === "local"
-    ? { id: crypto.randomUUID(), label: "", kind: "local", workspaceRoots: [], workspaceIsolation: { kind: "bubblewrap", networkProfiles: ["isolated"] } }
-    : { id: crypto.randomUUID(), label: "", kind: "ssh", hostAlias: "", workspaceRoots: [], connectionCompression: true, operations: { kind: "sidecar", enabledCapabilities: defaultCapabilities } };
+  return createExecutionEnvironment(kind, crypto.randomUUID());
 }
 
 /** The first step of adding an environment: what kind of host it is. */

@@ -1,3 +1,4 @@
+import { configurationCommandReceiptsMigration } from "./migrations/169-configuration-command-receipts.js";
 import { workspaceFileRootGrantsMigration } from "./migrations/168-workspace-file-root-grants.js";
 import { liveExecutionPolicyMigration } from "./migrations/166-live-execution-policy.js";
 import { piNativeBackendKindMigration } from "./migrations/159-pi-native-backend-kind.js";
@@ -350,6 +351,7 @@ export const backendNormalizedMigrations = [
   liveExecutionPolicyMigration,
   workspaceRootAuthorityMigration,
   workspaceFileRootGrantsMigration,
+  configurationCommandReceiptsMigration,
 ] as const;
 
 export type DatabaseMigration = {

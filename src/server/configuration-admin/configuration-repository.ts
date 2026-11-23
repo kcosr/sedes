@@ -16,13 +16,24 @@ import { configurationFingerprint } from "../config/configuration-fingerprint.js
 import { DomainError } from "../domain/errors.js";
 import type { RequestScope } from "../identity/identity-provider.js";
 import { configurationIdentities } from "./configuration-identities.js";
+import {
+  configurationCommandMetadataSchema, serializeConfigurationCommandResult,
+  type ConfigurationCommandIdentity, type ConfigurationCommandMetadata,
+  type ConfigurationCommandReceipt, type ConfigurationCommandScopeFacts,
+} from "./configuration-command-receipt.js";
 
 export const EMPTY_EXECUTION_CONFIGURATION: ConfigurationDocument = {
   executionEnvironments: [], backends: [], targets: [], defaultTargetId: null, webSearch: null,
 };
 const MAXIMUM_RECEIPTS = 10_000;
 type ResourceKind = ConfigurationRuntimeState["resourceKind"];
-type Receipt = { operation: "save" | "lifecycle"; fingerprint: string; result: string };
+type Receipt = { operation: "save" | "lifecycle"; fingerprint: string; result: string; commandMetadata: string | null; commandResult: string | null };
+
+export interface ConfigurationSaveCommand<T> {
+  readonly metadata: ConfigurationCommandMetadata;
+  readonly authorize: (facts: ConfigurationCommandScopeFacts) => void;
+  readonly present: (snapshot: ConfigurationSnapshot) => T;
+}
 
 /** All mutable desired state, receipts, and runtime observations share scope. */
 export class ConfigurationRepository {
@@ -75,14 +86,39 @@ export class ConfigurationRepository {
 
   replaySave(scope: RequestScope, request: SaveConfigurationRequest): ConfigurationSnapshot | undefined {
     const receipt = this.#receipt(scope, request.mutationId, "save", request);
+    if (receipt?.commandMetadata) throw new DomainError("conflict", "The mutation ID belongs to a narrow configuration command.");
     return receipt ? configurationSnapshotSchema.parse(JSON.parse(receipt.result)) : undefined;
   }
 
-  save(scope: RequestScope, request: SaveConfigurationRequest,
-    project?: (document: ConfigurationDocument) => void): ConfigurationSnapshot {
+  replayCommand<T>(scope: RequestScope, mutationId: string, identity: ConfigurationCommandIdentity,
+    expectedRevision: number): ConfigurationCommandReceipt<T> | undefined {
+    const receipt = this.#commandReceipt(scope, mutationId, identity, expectedRevision);
+    if (!receipt) return undefined;
+    return { metadata: configurationCommandMetadataSchema.parse(JSON.parse(receipt.commandMetadata!)), result: JSON.parse(receipt.commandResult!) as T };
+  }
+
+  /** Admission uses only retained authority, never the private configuration snapshot. */
+  commandReceiptAuthority(scope: RequestScope, mutationId: string) {
+    this.assertPrincipal(scope);
+    const row = this.database.prepare(`SELECT command_metadata_json AS metadata FROM execution_configuration_receipts
+      WHERE tenant_id = ? AND owner_principal_id = ? AND mutation_id = ? AND operation = 'save'`)
+      .get(scope.tenantId, scope.principalId, mutationId) as { metadata: string | null } | undefined;
+    if (!row?.metadata) return undefined;
+    const metadata = configurationCommandMetadataSchema.parse(JSON.parse(row.metadata));
+    return { ...metadata.identity, scopeFacts: metadata.scopeFacts };
+  }
+
+  save<T = never>(scope: RequestScope, request: SaveConfigurationRequest,
+    project?: (document: ConfigurationDocument) => void, command?: ConfigurationSaveCommand<T>): ConfigurationSnapshot {
     return this.database.transaction(() => {
-      const replayed = this.replaySave(scope, request);
+      const retained = command ? this.#commandReceipt(scope, request.mutationId, command.metadata.identity, request.expectedRevision) : undefined;
+      if (retained) {
+        command!.authorize(configurationCommandMetadataSchema.parse(JSON.parse(retained.commandMetadata!)).scopeFacts);
+        return configurationSnapshotSchema.parse(JSON.parse(retained.result));
+      }
+      const replayed = command ? undefined : this.replaySave(scope, request);
       if (replayed) return replayed;
+      if (command) command.authorize(command.metadata.scopeFacts);
       const previous = this.get(scope);
       this.#assertRevision(previous, request.expectedRevision);
       this.#assertCapacity(scope);
@@ -100,7 +136,8 @@ export class ConfigurationRepository {
       this.#reconcileRuntimeDesires(scope, previous.configuration, document, revision);
       project?.(document);
       const result = this.get(scope);
-      this.#insertReceipt(scope, request.mutationId, "save", request, result);
+      this.#insertReceipt(scope, request.mutationId, "save", request, result,
+        command ? { metadata: command.metadata, result: serializeConfigurationCommandResult(command.present(result)) } : undefined);
       return result;
     })();
   }
@@ -313,6 +350,22 @@ export class ConfigurationRepository {
     return configurationLifecycleResultSchema.parse(JSON.parse(row.result));
   }
 
+  /** Pure lookup before authorizing receipt settlement/recovery. Bindings survive removal. */
+  lifecycleReceiptResource(scope: RequestScope, mutationId: string) {
+    this.assertPrincipal(scope);
+    const row = this.database.prepare(`SELECT request_json AS request FROM execution_configuration_receipts
+      WHERE tenant_id = ? AND owner_principal_id = ? AND mutation_id = ? AND operation = 'lifecycle'`)
+      .get(scope.tenantId, scope.principalId, mutationId) as { request: string } | undefined;
+    if (!row) return undefined;
+    const request = configurationLifecycleRequestSchema.parse(JSON.parse(row.request));
+    const environmentId = request.resourceKind === "environment" ? request.resourceId
+      : (this.database.prepare(`SELECT execution_environment_id AS id FROM agent_connection_profiles
+          WHERE tenant_id = ? AND owner_principal_id = ? AND backend_instance_id = ? LIMIT 1`)
+          .get(scope.tenantId, scope.principalId, request.resourceId) as { id: string } | undefined)?.id;
+    if (!environmentId) return undefined;
+    return { resourceKind: request.resourceKind, resourceId: request.resourceId, environmentId };
+  }
+
   /** Recovery queries status using these identities; it must never replay execute. */
   pendingLifecycle(scope: RequestScope): { request: ConfigurationLifecycleRequest; result: ConfigurationLifecycleResult }[] {
     this.assertPrincipal(scope);
@@ -465,10 +518,26 @@ export class ConfigurationRepository {
 
   #receipt(scope: RequestScope, mutationId: string, operation: Receipt["operation"], request: unknown): Receipt | undefined {
     this.assertPrincipal(scope);
-    const row = this.database.prepare(`SELECT operation, request_fingerprint AS fingerprint, result_json AS result
+    const row = this.database.prepare(`SELECT operation, request_fingerprint AS fingerprint, result_json AS result,
+      command_metadata_json AS commandMetadata, command_result_json AS commandResult
       FROM execution_configuration_receipts WHERE tenant_id = ? AND owner_principal_id = ? AND mutation_id = ?`)
       .get(scope.tenantId, scope.principalId, mutationId) as Receipt | undefined;
     if (row && (row.operation !== operation || row.fingerprint !== configurationFingerprint(request))) throw new DomainError("conflict", "The mutation ID was already used with different contents.");
+    return row;
+  }
+
+  #commandReceipt(scope: RequestScope, mutationId: string, identity: ConfigurationCommandIdentity, expectedRevision: number): Receipt | undefined {
+    this.assertPrincipal(scope);
+    const row = this.database.prepare(`SELECT operation, request_fingerprint AS fingerprint, result_json AS result,
+      command_metadata_json AS commandMetadata, command_result_json AS commandResult
+      FROM execution_configuration_receipts WHERE tenant_id = ? AND owner_principal_id = ? AND mutation_id = ?`)
+      .get(scope.tenantId, scope.principalId, mutationId) as Receipt | undefined;
+    if (!row) return undefined;
+    const metadata = row.commandMetadata ? configurationCommandMetadataSchema.parse(JSON.parse(row.commandMetadata)) : undefined;
+    if (row.operation !== "save" || !metadata || !row.commandResult || metadata.expectedRevision !== expectedRevision ||
+      configurationFingerprint(metadata.identity) !== configurationFingerprint(identity)) {
+      throw new DomainError("conflict", "The mutation ID was already used with different contents.");
+    }
     return row;
   }
 
@@ -491,9 +560,12 @@ export class ConfigurationRepository {
     if (remaining.count >= MAXIMUM_RECEIPTS) throw new DomainError("conflict", "Configuration receipt capacity is exhausted by unsettled outcomes; recover pending lifecycle commands first.");
   }
 
-  #insertReceipt(scope: RequestScope, mutationId: string, operation: Receipt["operation"], request: unknown, result: unknown): void {
+  #insertReceipt(scope: RequestScope, mutationId: string, operation: Receipt["operation"], request: unknown, result: unknown,
+    command?: { metadata: ConfigurationCommandMetadata; result: string }): void {
     this.database.prepare(`INSERT INTO execution_configuration_receipts
-      (tenant_id, owner_principal_id, mutation_id, operation, request_fingerprint, request_json, result_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(scope.tenantId, scope.principalId, mutationId, operation, configurationFingerprint(request), JSON.stringify(request), JSON.stringify(result), this.now());
+      (tenant_id, owner_principal_id, mutation_id, operation, request_fingerprint, request_json, result_json, created_at,
+        command_metadata_json, command_result_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(scope.tenantId, scope.principalId, mutationId, operation, configurationFingerprint(request), JSON.stringify(request), JSON.stringify(result), this.now(),
+        command ? JSON.stringify(configurationCommandMetadataSchema.parse(command.metadata)) : null, command?.result ?? null);
   }
 }

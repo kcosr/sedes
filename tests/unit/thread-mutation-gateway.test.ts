@@ -5813,6 +5813,28 @@ function agentToolPolicyMutationFixture(input: {
 }
 
 describe("ThreadMutationGateway agent-tool policy", () => {
+  it("rechecks delegated authority after provider retirement and before writing the policy", async () => {
+    const subject = agentToolPolicyMutationFixture({});
+    let revoked = false;
+    subject.releaseProviderResidency.mockImplementation(async () => { revoked = true; });
+    const assertPolicyAuthority = vi.fn(() => {
+      if (revoked) throw new DomainError("conflict", "The source policy changed.");
+    });
+    await expect(subject.gateway.mutate(scope, "thread-1", subject.operation, { assertPolicyAuthority })).rejects.toMatchObject({ code: "conflict" });
+    expect(assertPolicyAuthority).toHaveBeenCalledTimes(2);
+    expect(subject.update).not.toHaveBeenCalled();
+    expect(subject.publishThreadSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("rejects delegated authority before retiring a runtime", async () => {
+    const subject = agentToolPolicyMutationFixture({});
+    await expect(subject.gateway.mutate(scope, "thread-1", subject.operation, {
+      assertPolicyAuthority: () => { throw new DomainError("conflict", "The source policy changed."); },
+    })).rejects.toMatchObject({ code: "conflict" });
+    expect(subject.runWithRuntimeRetired).not.toHaveBeenCalled();
+    expect(subject.update).not.toHaveBeenCalled();
+  });
+
   it.each([
     { name: "detach to Custom", policySet: null },
     { name: "apply an equal-content set", policySet: { id: "88888888-8888-4888-8888-888888888888", revision: 3 } },
