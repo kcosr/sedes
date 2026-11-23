@@ -866,8 +866,9 @@ startup defaults. External Codex UDS/TCP, external OpenCode and in-process Pi SD
 use their existing process environment. Saving new startup values leaves running
 processes on their current settings. **Restart backend required** identifies a
 running provider with pending launch settings. Use **Restart backend** and review
-affected threads to apply the change now. A new process
-uses current definitions at its first launch.
+affected threads to apply the change now. A new process uses the current
+settings when it launches. Once the host confirms that launch, Settings keeps
+the revision marked **Applied** when the provider goes idle.
 
 Before removing a backend, its target, or an environment, stop the affected
 runtime. Recover any outcomes you need before confirming Stop. Removal requires confirmed shutdown;

@@ -2506,7 +2506,7 @@ export async function startProductionApplication(
       }
     };
 
-    const recoverBackendAdministration = async (id: string) => {
+    const recoverBackendAdministration = async (id: string, isCurrent = () => true) => {
       const connections = profiles.filter(profile => profile.backendInstanceId === id);
       const environmentId = connections[0]?.executionEnvironmentId;
       if (!environmentId || connections.some(profile => profile.executionEnvironmentId !== environmentId)) throw new DomainError("runtime_unavailable", "The backend execution identity cannot be recovered.", true);
@@ -2516,6 +2516,7 @@ export async function startProductionApplication(
       const owner = environmentRuntime?.sidecarRuntime;
       if (!owner) throw new DomainError("runtime_unavailable", "The execution host is unavailable for backend recovery.", true);
       const service = await owner.inspectService(managementSignal());
+      if (!isCurrent()) return undefined;
       observedServices.set(environmentId, service ?? null);
       if (!service) { backendPresence.set(id, false); observedBackends.delete(id); return undefined; }
       const configured = backendConfigurationFile.backends.find(item => item.id === id);
@@ -2536,6 +2537,7 @@ export async function startProductionApplication(
             serviceIncarnation: lease.serviceStatus.serviceIncarnation, closed: lease.session.closed, release: () => lease.release()};
         }},
       });
+      if (!isCurrent()) return undefined;
       backendPresence.set(id, administration !== undefined);
       if (!administration) observedBackends.delete(id);
       return administration;
@@ -2677,27 +2679,33 @@ export async function startProductionApplication(
           // Module preparation knows desired startup settings, not those of a
           // retained remote process. Recover its applied fingerprint once per
           // module/attachment using existing-only administration, never ensure.
+          if (owned && remote) remoteBackendObservations.set(owned, observation);
+          const isCurrent = () => !owned || !remote ||
+            (moduleRuntimes.get(id) === owned && remoteBackendObservations.get(owned) === observation);
           observation.pending = (async () => {
             try {
-              administration = remote ? await recoverBackendAdministration(id) : owned?.administration;
-              if (administration) { observedBackends.set(id, await administration.inspect()); attachRetainedWork(id); }
+              administration = remote ? await recoverBackendAdministration(id, isCurrent) : owned?.administration;
+              const inventory = await administration?.inspect();
+              if (!isCurrent()) return;
+              if (inventory) { observedBackends.set(id, inventory); attachRetainedWork(id); }
               observationFailures.delete(key);
             } catch (error) {
+              if (!isCurrent()) return;
               observationFailures.set(key, observationFailure(error, id));
-              if (owned && remote && remoteBackendObservations.get(owned) === observation) remoteBackendObservations.delete(owned);
+              if (owned && remote) remoteBackendObservations.delete(owned);
+            } finally {
+              observation.serviceIdentity = serviceIdentity();
             }
-            finally { observation.serviceIdentity = serviceIdentity(); }
           })();
-          if (owned && remote) remoteBackendObservations.set(owned, observation);
           // Snapshot reads serve cached carrier evidence. Explicit impact and
           // lifecycle checks await fresh evidence on their host's queue.
           if (refresh || !remote) await observation.pending;
         }
+        const loaded = await backendThreads(id);
         backendObservation = observedBackends.get(id);
         if (backendObservation?.startupEnvironmentFingerprint) {
           appliedStartupEnvironmentFingerprints.set(id, backendObservation.startupEnvironmentFingerprint);
         }
-        const loaded = await backendThreads(id);
         // Background work outlives a settled turn and still ends with its runtime.
         const active = loaded.filter(item => item.runState !== "idle" || hasOutstandingBackgroundActivity(item.backgroundActivity));
         interruptions.push(...active.map(item => {
@@ -2722,7 +2730,8 @@ export async function startProductionApplication(
         const launchPending = typeof observedLaunch === "string" ? observedLaunch !== grant?.launchDigest :
           startupEnvironmentPending(id) || (appliedBackendFingerprints.has(id) && appliedBackendFingerprints.get(id) !== backendRuntimeFingerprint(id));
         const applied = intentionallyAbsent ? !owned && (record.preference !== "stopped" || !remote || backendPresence.get(id) === false) : appliedBackendRevisions.get(id) === record.desiredRevision && Boolean(owned) && !launchPending &&
-          !diagnostic && !observationFailures.has(key) && (!owned?.administration || Boolean(backendObservation && backendObservation.state !== "unknown"));
+          !diagnostic && !observationFailures.has(key) && (!owned?.administration ||
+            (backendObservation ? backendObservation.state !== "unknown" : observedLaunch !== undefined));
         const starting = backendStartups.has(id);
         runtime = {...record,
           effectiveRevision: applied ? record.desiredRevision : record.effectiveRevision,
@@ -2858,11 +2867,12 @@ export async function startProductionApplication(
         const incarnation = backendSidecarBindings.get(runtime)?.serviceIncarnation;
         if (incarnation && incarnation !== observed.incarnation) continue;
         const fingerprint = backendRuntimeFingerprint(grant.id);
-        if (appliedBackendFingerprints.get(grant.id) === fingerprint) continue;
-        // A replacement can use new declarations through the same main module.
-        // Its cached administrative inventory belonged to the previous process.
+        const startupFingerprint = startupEnvironmentFingerprint(grant.id);
+        if (appliedBackendFingerprints.get(grant.id) === fingerprint && appliedStartupEnvironmentFingerprints.get(grant.id) === startupFingerprint) continue;
+        // Both the cached inventory and any unfinished inspection belong to the previous launch.
         appliedBackendFingerprints.set(grant.id, fingerprint);
-        appliedStartupEnvironmentFingerprints.set(grant.id, startupEnvironmentFingerprint(grant.id));
+        appliedStartupEnvironmentFingerprints.set(grant.id, startupFingerprint);
+        observedBackends.delete(grant.id);
         remoteBackendObservations.delete(runtime);
       }
       configurationRepository.observeHostPolicy(scope, id, desired,

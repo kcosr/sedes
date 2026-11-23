@@ -255,6 +255,59 @@ describe("database-owned configuration", () => {
     expect(confirmation).toEqual({incarnation:replacement, epoch:2, revision:desired.revision, digest:desired.digest});
   });
 
+  it("keeps a confirmed launch applied when its provider parks and requires new evidence after a launch edit", async () => {
+    const { service, repository, scope, projection } = fixture();
+    const document = remoteDocument();
+    const backend = { id: "remote-claude", kind: "claude_agent_sdk" as const, label: "Claude", enabled: true, modelPolicy: { type: "catalog" as const },
+      moduleConfiguration: { initializationTimeoutMs: 1000, permissionPolicy: { allowedModes: ["default" as const] } } };
+    document.backends.push(backend);
+    document.targets.push({ id: "claude-target", backendInstanceId: backend.id, executionEnvironmentId: remoteId, kind: "claude_agent_sdk",
+      label: "Claude", enabled: true, moduleConfiguration: { defaults: { permissionMode: "default" } } });
+    const save = () => service.save(scope, { mutationId: randomUUID(), expectedRevision: repository.get(scope).revision, configuration: document });
+    const read = () => repository.runtime(scope, "backend", backend.id);
+    const policy = () => projection.hostPolicy(scope, remoteId)!;
+    const digest = () => policy().snapshot.backends.find(item => item.id === backend.id)!.launchDigest;
+    let incarnation = randomUUID();
+    const observe = (resident: string | null | undefined) => repository.observeHostPolicy(scope, remoteId, policy(),
+      new Map([[`backend:${backend.id}`, "ready"]]), { incarnation, epoch: 1, launchDigests: new Map(resident === undefined ? [] : [[backend.id, resident]]) });
+    const observeConnectedModule = () => repository.observe(scope, { ...read(), connectionState: "connected", applyState: "applied",
+      effectiveRevision: read().desiredRevision });
+    const launch = () => read().effects!.find(effect => effect.component === "provider_launch");
+
+    const first = await save();
+    observe(digest());
+    observeConnectedModule();
+    for (const resident of [null, undefined, null]) {
+      observe(resident);
+      expect(launch()).toMatchObject({ state: "applied", effectiveRevision: first.revision, providerLaunch: { confirmedDigest: null } });
+      expect(read()).toMatchObject({ applyState: "applied", effectiveRevision: first.revision });
+    }
+    backend.label = "Renamed Claude";
+    const renamed = await save();
+    observe(null);
+    expect(launch()).toMatchObject({ state: "applied", desiredRevision: first.revision, effectiveRevision: first.revision });
+    expect(read()).toMatchObject({ applyState: "applied", effectiveRevision: renamed.revision });
+
+    backend.moduleConfiguration.initializationTimeoutMs = 2000;
+    const edited = await save();
+    for (const resident of [undefined, null]) {
+      observe(resident);
+      observeConnectedModule();
+      expect(launch()).toMatchObject({ state: "next_launch", desiredRevision: edited.revision, effectiveRevision: first.revision,
+        providerLaunch: { desiredDigest: digest(), confirmedDigest: null } });
+      expect(read().applyState).toBe("pending");
+    }
+    observe(digest());
+    observeConnectedModule();
+    expect(read()).toMatchObject({ applyState: "applied", effectiveRevision: edited.revision });
+    incarnation = randomUUID();
+    observe(undefined);
+    expect(launch()).toMatchObject({ state: "unknown", effectiveRevision: null, providerLaunch: { confirmedDigest: null } });
+    observe(null);
+    expect(launch()).toMatchObject({ state: "next_launch", effectiveRevision: null });
+    expect(read().applyState).toBe("pending");
+  });
+
   it.each(["local","remote"] as const)("reports a saved launch revert against the proven %s resident immediately", async location => {
     const current = fixture();
     const hostId = location === "local" ? environmentId : remoteId;

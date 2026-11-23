@@ -87,6 +87,7 @@ function fixture(overrides?: {
     overrides?.validateWorkspace ??
     vi.fn(async () => ({
       canonicalPath: "/srv/projects/sedes",
+      authorityRootId: "projects-root",
       authorityRevision: 11,
       summary: {
         id: "provider-private-workspace-id",
@@ -181,6 +182,7 @@ describe("WorkspaceApplicationService", () => {
   it("validates and records an existing environment path without exposing the native path", async () => {
     const current = fixture();
 
+    const signal = new AbortController().signal;
     await expect(
       current.service.openWorkspace(
         scope,
@@ -189,7 +191,7 @@ describe("WorkspaceApplicationService", () => {
           path: "/srv/projects/sedes",
           project: { kind: "existing", projectId: "project-a" },
         },
-        new AbortController().signal,
+        signal,
       ),
     ).resolves.toEqual({
       workspaceId: "workspace-a",
@@ -203,6 +205,7 @@ describe("WorkspaceApplicationService", () => {
       scope,
       "environment-a",
       "/srv/projects/sedes",
+      { signal },
     );
     expect(current.upsertWorkspace).toHaveBeenCalledWith(scope, {
       project: { kind: "existing", projectId: "project-a" },
@@ -212,6 +215,8 @@ describe("WorkspaceApplicationService", () => {
       displayName: "sedes",
       available: true,
       trustState: "trusted",
+      authorityRootId: "projects-root",
+      rebindAuthority: true,
       environmentConfigurationRevision: 11,
       now: 123,
     });
@@ -595,8 +600,9 @@ describe("WorkspaceApplicationService", () => {
 
   it("restores a known location under its own identity and project", async () => {
     const current = fixture({ removed: { location: true, project: false } });
+    const signal = new AbortController().signal;
     await expect(
-      current.service.restoreLocation(scope, "workspace-a"),
+      current.service.restoreLocation(scope, "workspace-a", { signal }),
     ).resolves.toEqual({
       workspaceId: "workspace-a",
       environmentId: "environment-a",
@@ -608,6 +614,7 @@ describe("WorkspaceApplicationService", () => {
       scope,
       "environment-a",
       "/srv/projects/sedes",
+      { signal },
     );
     expect(current.upsertWorkspace).toHaveBeenCalledWith(scope, {
       id: "workspace-a",
@@ -618,6 +625,8 @@ describe("WorkspaceApplicationService", () => {
       displayName: "sedes",
       available: true,
       trustState: "trusted",
+      authorityRootId: "projects-root",
+      rebindAuthority: true,
       environmentConfigurationRevision: 11,
       now: 123,
     });

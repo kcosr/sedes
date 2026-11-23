@@ -1097,7 +1097,7 @@ describe("production configuration reconciliation", () => {
     // recovery need the same bounded budget as the other restart cases.
   }, 15_000);
 
-  it("applies a natural remote relaunch under the current host and backend settings without replacing its module", async () => {
+  it.each([false, true])("applies a natural remote relaunch without replacing its module (park observed before launch: %s)", async observeInitialPark => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const { service, scope, snapshot } = await fixture();
     const environmentId = randomUUID(), backendId = "remote-launch-claude";
@@ -1117,6 +1117,9 @@ describe("production configuration reconciliation", () => {
     const firstStartup = structuredClone({ ...hostStartup, ...backendStartup });
     const firstDigest = runtimeLaunchDigest.claude_agent_sdk(moduleConfiguration, firstStartup);
     let observedDigest: string | null = firstDigest;
+    const incumbent = { state: "active" as const, incarnation: "first-provider", revision: "first-revision",
+      blockers: ["active_work" as const], startupEnvironmentFingerprint: configurationFingerprint(firstStartup) };
+    const inspect = vi.fn<NonNullable<BackendModuleRuntime["administration"]>["inspect"]>().mockResolvedValue(incumbent);
     const contexts: BackendModuleRuntimeContext[] = [];
     const stop = vi.fn();
     const prepare = compiledBackendModuleCatalog.prepare.bind(compiledBackendModuleCatalog);
@@ -1129,14 +1132,11 @@ describe("production configuration reconciliation", () => {
         vi.spyOn(runtime, "startupEnvironmentState").mockResolvedValue("started");
         return runtime;
       };
-      // An observation from an attached provider can remain cached while the
-      // same sidecar reports that a subsequent launch used newer settings.
-      prepared.recoverAdministration = async () => ({ stop, restart: stop,
-        inspect: async () => ({ state: "idle", incarnation: "first-provider", revision: "first-provider", blockers: [],
-          startupEnvironmentFingerprint: configurationFingerprint(firstStartup) }) });
+      prepared.recoverAdministration = async () => ({ stop, restart: stop, inspect });
       return prepared;
     }));
     let notifyHost!: () => void;
+    let replaceController!: () => void;
     const createEnvironment = environmentRuntime.createExecutionEnvironmentRuntime;
     vi.spyOn(environmentRuntime, "createExecutionEnvironmentRuntime").mockImplementation(async input => {
       const runtime = await createEnvironment(input);
@@ -1145,7 +1145,8 @@ describe("production configuration reconciliation", () => {
       const host = new PersistentSidecarServiceRegistry({ scope: { ...scope, installationId: input.installationId, executionEnvironmentId: environmentId },
         buildId: "remote-launch", artifactSha256: "a".repeat(64), runtimeWireVersion: SIDECAR_WIRE_VERSION,
         configuration: input.readDesiredPolicy!().configuration });
-      host.attach(input.readDesiredPolicy!().configuration);
+      replaceController = () => { host.attach(input.readDesiredPolicy!().configuration); };
+      replaceController();
       notifyHost = input.onPolicyChanged!;
       vi.spyOn(owner, "inspectService").mockImplementation(async () => host.status());
       let installed: InstalledExecutionPolicy | undefined;
@@ -1162,7 +1163,8 @@ describe("production configuration reconciliation", () => {
     });
     const settings = async () => (await service.get(scope)).runtimes.find(runtime => runtime.resourceId === backendId)!;
     const initial = await service.save(scope, { mutationId: randomUUID(), expectedRevision: snapshot.revision, configuration });
-    await vi.waitFor(async () => expect(await settings()).toMatchObject({ applyState: "applied", effectiveRevision: initial.revision }));
+    await vi.waitFor(async () => expect(await settings()).toMatchObject({ applyState: "applied", effectiveRevision: initial.revision,
+      incarnation: incumbent.incarnation, activeResources: 1, startupEnvironmentPending: false }));
     const readLaunch = contexts[0]!.readCurrentLaunchConfiguration!;
     expect(readLaunch()?.startupEnvironmentVariables).toEqual(firstStartup);
 
@@ -1179,17 +1181,60 @@ describe("production configuration reconciliation", () => {
     expect(launch?.backend).toMatchObject({ id: backendId, moduleConfiguration: { executablePath: "/opt/claude" } });
     expect(launch?.startupEnvironmentVariables).toEqual(nextStartup);
 
-    // Inventory from the execution host first confirms idle retirement, then
-    // confirms the next process on the same service without a Settings action.
-    observedDigest = null;
-    notifyHost();
-    await vi.waitFor(async () => expect(await settings()).toMatchObject({ startupEnvironmentPending: false,
-      effects: expect.arrayContaining([expect.objectContaining({ component: "provider_launch", state: "next_launch" })]) }));
+    // Management sees a new controller on the same service. The next ordinary
+    // Settings poll starts an asynchronous inventory read of the original process.
+    replaceController();
+    await service.impact(scope, { resourceKind: "environment", resourceId: environmentId, action: "restart", expectedRevision: edited.revision });
+    const superseded = Promise.withResolvers<Awaited<ReturnType<typeof inspect>>>();
+    const inspectOld = vi.fn(() => superseded.promise);
+    inspect.mockImplementation(inspectOld);
+    await vi.waitFor(async () => {
+      expect(await settings()).toMatchObject({ incarnation: incumbent.incarnation, activeResources: 1 });
+      expect(inspectOld).toHaveBeenCalled();
+    });
+
+    if (observeInitialPark) {
+      observedDigest = null;
+      notifyHost();
+      await vi.waitFor(async () => expect(await settings()).toMatchObject({ applyState: "pending", effectiveRevision: initial.revision,
+        startupEnvironmentPending: false, effects: expect.arrayContaining([expect.objectContaining({ component: "provider_launch",
+          state: "next_launch", providerLaunch: { owner: "host", desiredDigest: nextDigest, confirmedDigest: null } })]) }));
+    }
+
+    // B launches while the old inventory read is in flight. Hold the new read
+    // too, so only the host's launch evidence can establish B's status.
+    const current = Promise.withResolvers<Awaited<ReturnType<typeof inspect>>>();
+    const replacement = { state: "idle" as const, incarnation: "second-provider", revision: "second-revision", blockers: [],
+      startupEnvironmentFingerprint: configurationFingerprint(nextStartup) };
+    const inspectNew = vi.fn(() => current.promise);
+    inspect.mockImplementation(inspectNew);
+    const applied = (resident: string | null) => ({ applyState: "applied", effectiveRevision: edited.revision,
+      startupEnvironmentPending: false, effects: expect.arrayContaining([expect.objectContaining({ component: "provider_launch",
+        state: "applied", effectiveRevision: edited.revision, providerLaunch: { owner: "host", desiredDigest: nextDigest, confirmedDigest: resident } })]) });
     observedDigest = nextDigest;
     notifyHost();
-    await vi.waitFor(async () => expect(await settings()).toMatchObject({ applyState: "applied", effectiveRevision: edited.revision,
-      startupEnvironmentPending: false, effects: expect.arrayContaining([expect.objectContaining({ component: "provider_launch",
-        state: "applied", providerLaunch: { owner: "host", desiredDigest: nextDigest, confirmedDigest: nextDigest } })]) }));
+    try {
+      await vi.waitFor(async () => {
+        expect(await settings()).toMatchObject({ ...applied(nextDigest), incarnation: null, activeResources: 0 });
+        expect(inspectNew).toHaveBeenCalled();
+      });
+      superseded.resolve(incumbent);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(await settings()).toMatchObject({ ...applied(nextDigest), incarnation: null, activeResources: 0 });
+
+      // B parks on the same service before its fresh administrative read completes.
+      observedDigest = null;
+      notifyHost();
+      await vi.waitFor(async () => expect(await settings()).toMatchObject(applied(null)));
+      for (let poll = 0; poll < 2; poll++) {
+        expect(await settings()).toMatchObject({ ...applied(null), incarnation: null, activeResources: 0 });
+      }
+      current.resolve(replacement);
+      await vi.waitFor(async () => expect(await settings()).toMatchObject({ ...applied(null), incarnation: "second-provider", activeResources: 0 }));
+    } finally {
+      superseded.resolve(incumbent);
+      current.resolve(replacement);
+    }
     expect(contexts).toHaveLength(1);
     expect(stop).not.toHaveBeenCalled();
 

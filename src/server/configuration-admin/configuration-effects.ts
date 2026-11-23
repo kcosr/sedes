@@ -136,8 +136,14 @@ export function observeProviderLaunch(runtime: ConfigurationRuntimeState, effect
   const confirmedDigest = reportedDigest === undefined ? (sameService ? before?.providerLaunch?.confirmedDigest ?? null : null) : reportedDigest;
   const confirmedAt = reportedDigest !== undefined ? confirmation : sameService ? before?.lastHostConfirmation : undefined;
   const desiredRevision = before?.desiredRevision ?? runtime.desiredRevision;
-  const state = confirmedDigest ? (confirmedDigest === desiredDigest ? "applied" : "restart_backend")
-    : confirmedAt ? "next_launch" : "unknown";
+  let state: ConfigurationEffect["state"] = confirmedAt ? "next_launch" : "unknown";
+  if (confirmedDigest) {
+    state = confirmedDigest === desiredDigest ? "applied" : "restart_backend";
+  } else if (sameService && before?.state === "applied" && before.effectiveRevision === desiredRevision &&
+      before.providerLaunch?.desiredDigest === desiredDigest) {
+    // Parking clears the resident digest. This service already launched the desired revision.
+    state = "applied";
+  }
   const effect: ConfigurationEffect = { component: "provider_launch", subjectId: runtime.resourceId, state, desiredRevision,
     effectiveRevision: state === "applied" ? desiredRevision : sameService && before?.effectiveRevision !== desiredRevision ? before?.effectiveRevision ?? null : null,
     providerLaunch: {owner:"host", desiredDigest, confirmedDigest}, ...(confirmedAt ? {lastHostConfirmation: confirmedAt} : {}) };
