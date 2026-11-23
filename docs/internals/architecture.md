@@ -386,11 +386,11 @@ The local environment canonicalizes directories beneath configured roots and
 owns local processes, UDS/TCP channels, PTYs, Files, and attachment staging.
 
 An SSH workspace is admitted as a canonical absolute POSIX path beneath an
-operator-configured remote root and tagged with the configuration revision.
+operator-configured remote root and bound to its durable ID and generation.
 Ordinary admission does not run an auxiliary remote `realpath` or filesystem
 probe. Availability is established lazily by the required backend or sidecar
-handshake. Reconfiguration revokes old leases instead of silently retargeting
-them.
+handshake. Root withdrawal fences its leases. A newly allowed nested root can
+serve newly admitted workspaces while existing leases keep their original binding.
 
 The optional managed SSH sidecar grants a closed subset of operations such as
 Files, Compare, Pi workspace tools/context, attachment staging, and agent-tool
@@ -400,7 +400,15 @@ provider handshake does not grant sidecar capabilities, and sidecar success
 does not grant a provider transport. Unsupported remote operations never fall
 back to local paths.
 
-SSH and outbound carriers share runtime wire version 17 and negotiated,
+Each principal saves a single configuration document with optimistic concurrency.
+SQLite projects its host policies and grant generations in that transaction.
+Independent host queues deliver those policies and reconcile provider readiness.
+The active attachment installs a complete snapshot and acknowledges its digest.
+Admission checks the specific workspace root, feature, backend and connection
+that an operation needs. The next launch of an owned provider samples its saved
+launch settings. Existing turns and terminal sessions keep their owners.
+
+SSH and outbound carriers share runtime wire version 18 and negotiated,
 independent zstd frames. Their principal-owned environment setting defaults
 to compression and is sampled at each attachment. Compression-only edits do
 not change execution authority or retire a live runtime. Queue limits, stream

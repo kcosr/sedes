@@ -1,3 +1,4 @@
+import { ownerPolicy, ownerPolicyPeer } from "../helpers/sidecar-owner-policy.js";
 import { SshInteractiveTerminalProvider } from "../../src/server/execution/ssh-interactive-terminal-provider.js";
 import { managedSshAgentToolCliAvailability } from "../../src/server/runtime/agent-tool-cli-availability.js";
 import { describe, expect, it, vi } from "vitest";
@@ -85,8 +86,7 @@ function fixture(
   const owner = new SidecarRuntimeOwner({ connectionCompression: options.connectionCompression ?? (() => true),
     scope,
     executionEnvironmentId: environmentId,
-    environmentConfigurationRevision: environmentRevision,
-    operationsConfigurationRevision: operationsRevision,
+    readDesiredPolicy: () => ownerPolicy(["workspace_files", ...(options.terminal ? ["interactive_terminal"] : []), ...(options.agentTools ? ["agent_tools_cli"] : [])], {environmentRevision, operationsRevision}),
     authorizedRuntimeCapabilities: [],
     isAutomaticConnectionEnabled: () => true,
     isTransportAvailable: options.isTransportAvailable,
@@ -97,8 +97,6 @@ function fixture(
         ? ([{ capabilityId: "agent_tools_cli", majorVersion: 6 }] as const)
         : []),
     ],
-    activeEnvironmentConfigurationRevision: () => environmentRevision,
-    activeOperationsConfigurationRevision: () => operationsRevision,
     artifact,
     provisioner: management,
     sedesOperations: new SidecarOperationRegistry(),
@@ -205,16 +203,10 @@ describe("SidecarRuntimeOwner", () => {
     expect(value.provisioner.attachExisting).not.toHaveBeenCalled();
     expect(value.launch).toHaveBeenCalledOnce();
 
-    // New operations still require current configuration and retire the stale
-    // carrier. Subsequent recovery attaches existing work without a launch.
-    await expect(value.owner.acquireOperation(scope, environmentId, signal))
-      .rejects.toMatchObject({ cause: { message: "sidecar_revision_changed" } });
-    expect(original.session.close).toHaveBeenCalledWith("sidecar_revision_changed");
-    const recovered = await value.owner.acquireExisting(scope, environmentId, signal);
-    expect(recovered.session).not.toBe(original.session);
-    expect(recovered.carrierGeneration).toBeGreaterThan(original.carrierGeneration);
-    expect(value.provisioner.attachExisting).toHaveBeenCalledOnce();
-    expect(value.launch).toHaveBeenCalledOnce();
+    await value.owner.synchronizePolicy(signal);
+    const recovered = await value.owner.acquireOperation(scope, environmentId, signal);
+    expect(recovered.carrierGeneration).toBe(original.carrierGeneration);
+    expect(original.session.close).not.toHaveBeenCalled();
     recovered.release(); retained.release(); original.release(); await value.owner.close();
   });
 
@@ -320,15 +312,15 @@ describe("SidecarRuntimeOwner", () => {
     await value.owner.close();
   });
 
-  it.each([true, false])("retains verified PTY capability through idle and gates explicit disconnect (PTY=%s)", async terminalSupported => {
+  it.each([true, false])("gates PTY authority on the current confirmed attachment (PTY=%s)", async terminalSupported => {
     vi.useFakeTimers();
     let connected = true;
     const value = fixture({ idleMilliseconds: 5000, terminal: true, terminalSupported, isTransportAvailable: () => connected });
     const provider = new SshInteractiveTerminalProvider({ scope, environmentId, enabled: true, configurationRevision: 3, activeConfigurationRevision: () => 3,
       runtime: value.owner as unknown as ConstructorParameters<typeof SshInteractiveTerminalProvider>[0]["runtime"] });
     try {
-      expect(provider.availability(scope, environmentId)).toBe("available");
-      expect(value.owner.canAcquireCapability("interactive_terminal", 2)).toBe(true);
+      expect(provider.availability(scope, environmentId)).toBe("unavailable");
+      expect(value.owner.canAcquireCapability("interactive_terminal", 2)).toBe(false);
       expect(value.owner.canAcquireCapability("interactive_terminal", 99)).toBe(false);
       const first = await value.owner.acquireOperation(scope, environmentId, new AbortController().signal);
       expect(value.owner.canAcquireCapability("interactive_terminal", 2)).toBe(terminalSupported);
@@ -344,8 +336,8 @@ describe("SidecarRuntimeOwner", () => {
       await vi.advanceTimersByTimeAsync(5000);
       expect(value.sessions[0]!.close).toHaveBeenCalledWith("sidecar_idle_expired");
       expect(value.owner.negotiatedCapabilities).toEqual(first.session.negotiatedCapabilities);
-      expect(value.owner.canAcquireCapability("interactive_terminal", 2)).toBe(terminalSupported);
-      expect(provider.availability(scope, environmentId)).toBe(terminalSupported ? "available" : "unavailable");
+      expect(value.owner.canAcquireCapability("interactive_terminal", 2)).toBe(false);
+      expect(provider.availability(scope, environmentId)).toBe("unavailable");
       connected = false;
       expect(provider.availability(scope, environmentId)).toBe("unavailable");
       expect(value.owner.negotiatedCapabilities).toEqual([]);
@@ -363,7 +355,7 @@ describe("SidecarRuntimeOwner", () => {
     vi.useFakeTimers();
     let connected = true;
     const value = fixture({ agentTools: true, idleMilliseconds: 5000, transportKind, isTransportAvailable: () => connected });
-    const cli = managedSshAgentToolCliAvailability({ scope, executionEnvironmentId: environmentId, runtime: value.owner });
+    const cli = managedSshAgentToolCliAvailability({ scope, executionEnvironmentId: environmentId, backendInstanceId:"backend", runtime: value.owner });
     if (cli.availability !== "managed") throw new Error("Expected managed CLI");
     try {
       const first = await value.owner.acquireOperation(scope, environmentId, new AbortController().signal);
@@ -374,7 +366,7 @@ describe("SidecarRuntimeOwner", () => {
       first.release();
       await vi.advanceTimersByTimeAsync(5000);
       expect(first.session.close).toHaveBeenCalledWith("sidecar_idle_expired");
-      expect(cli.provider.inspect?.()).toEqual({ availability: "available" });
+      expect(cli.provider.inspect?.()).toEqual({ availability: "unavailable", reason: "sidecar_unavailable" });
       expect(value.startSession).toHaveBeenCalledOnce();
       connected = false;
       expect(cli.provider.inspect?.()).toEqual({ availability: "unavailable", reason: "sidecar_unavailable" });
@@ -672,7 +664,7 @@ describe("SidecarRuntimeOwner", () => {
       const agentTools = await value.owner.acquireAgentTools(
         scope,
         environmentId,
-        signal,
+        signal, "backend",
       );
       operation.release();
       expect(value.owner.activeOperationLeaseCount).toBe(0);
@@ -709,57 +701,19 @@ describe("SidecarRuntimeOwner", () => {
     await value.owner.close();
   });
 
-  it("fences environment and operations revisions without a fallback", async () => {
+  it("applies environment and operation revisions to the admitted service while a watch is open", async () => {
     const value = fixture();
+    const signal = new AbortController().signal;
+    const watch = await value.owner.acquireWatch(scope, environmentId, signal);
+    value.setEnvironmentRevision(4);
     value.setOperationsRevision(8);
-    await expect(
-      value.owner.acquireOperation(
-        scope,
-        environmentId,
-        new AbortController().signal,
-      ),
-    ).rejects.toBeInstanceOf(SidecarUnavailableError);
-    expect(value.install).not.toHaveBeenCalled();
-
-    const other = fixture();
-    other.setEnvironmentRevision(4);
-    await expect(
-      other.owner.acquireOperation(
-        scope,
-        environmentId,
-        new AbortController().signal,
-      ),
-    ).rejects.toMatchObject({
-      diagnosticCode: "sidecar_unavailable",
-    });
-    expect(other.launch).not.toHaveBeenCalled();
-  });
-
-  it("closes and evicts the admitted generation when its revision becomes stale", async () => {
-    const value = fixture();
-    const watch = await value.owner.acquireWatch(
-      scope,
-      environmentId,
-      new AbortController().signal,
-    );
-    value.setOperationsRevision(8);
-
-    await expect(
-      value.owner.acquireOperation(
-        scope,
-        environmentId,
-        new AbortController().signal,
-      ),
-    ).rejects.toBeInstanceOf(SidecarUnavailableError);
-    expect(value.sessions[0]?.close).toHaveBeenCalledWith(
-      "sidecar_revision_changed",
-    );
-    expect(value.onLifecycleEvidence.mock.calls).toEqual([
-      [{ availability: "available" }],
-    ]);
-
-    watch.release();
-    await value.owner.close();
+    await value.owner.synchronizePolicy(signal);
+    const second = await value.owner.acquireOperation(scope, environmentId, signal);
+    expect(second.session).toBe(watch.session);
+    expect(value.owner.policyStatus()?.configuration).toEqual({environmentRevision:4,operationsRevision:8});
+    expect(value.launch).toHaveBeenCalledOnce();
+    expect(watch.session.close).not.toHaveBeenCalled();
+    watch.release(); second.release(); await value.owner.close();
   });
 
   it("propagates ownership-critical session cleanup failures", async () => {
@@ -822,15 +776,12 @@ describe("SidecarRuntimeOwner", () => {
     const owner = new SidecarRuntimeOwner({ connectionCompression: () => true,
       scope,
       executionEnvironmentId: environmentId,
-      environmentConfigurationRevision: 3,
-      operationsConfigurationRevision: 7,
+      readDesiredPolicy: () => ownerPolicy(),
       authorizedRuntimeCapabilities: [],
       isAutomaticConnectionEnabled: () => true,
       authorizedCapabilities: [
         { capabilityId: "workspace_files", majorVersion: 8 },
       ],
-      activeEnvironmentConfigurationRevision: () => 3,
-      activeOperationsConfigurationRevision: () => 7,
       artifact,
       provisioner: { transportKind: "ssh_stdio",
         ...managementInstaller(),
@@ -874,15 +825,12 @@ describe("SidecarRuntimeOwner", () => {
     const owner = new SidecarRuntimeOwner({ connectionCompression: () => true,
       scope,
       executionEnvironmentId: environmentId,
-      environmentConfigurationRevision: 3,
-      operationsConfigurationRevision: 7,
+      readDesiredPolicy: () => ownerPolicy(),
       authorizedRuntimeCapabilities: [],
       isAutomaticConnectionEnabled: () => true,
       authorizedCapabilities: [
         { capabilityId: "workspace_files", majorVersion: 8 },
       ],
-      activeEnvironmentConfigurationRevision: () => 3,
-      activeOperationsConfigurationRevision: () => 7,
       artifact,
       provisioner: { transportKind: "ssh_stdio", ...managementInstaller(), install, launch: vi.fn() },
       sedesOperations: new SidecarOperationRegistry(),
@@ -976,15 +924,12 @@ describe("SidecarRuntimeOwner", () => {
     const owner = new SidecarRuntimeOwner({ connectionCompression: () => true,
       scope,
       executionEnvironmentId: environmentId,
-      environmentConfigurationRevision: 3,
-      operationsConfigurationRevision: 7,
+      readDesiredPolicy: () => ownerPolicy(),
       authorizedRuntimeCapabilities: [],
       isAutomaticConnectionEnabled: () => true,
       authorizedCapabilities: [
         { capabilityId: "workspace_files", majorVersion: 8 },
       ],
-      activeEnvironmentConfigurationRevision: () => 3,
-      activeOperationsConfigurationRevision: () => 7,
       artifact,
       provisioner: { transportKind: "ssh_stdio", ...managementInstaller(), install, launch: vi.fn() },
       sedesOperations: new SidecarOperationRegistry(),
@@ -1027,7 +972,15 @@ describe("SidecarRuntimeOwner", () => {
 
 class FakeSession implements SidecarRuntimeSession {
   readonly negotiatedCapabilities: SidecarRuntimeSession["negotiatedCapabilities"];
-  readonly agentToolCli: SidecarRuntimeSession["agentToolCli"];
+  readonly agentToolCli: {endpoint:string;executableDirectory:string;inheritedPath:string} | undefined;
+  readonly policy = ownerPolicyPeer(serviceStatus(), id => id === "agent_tools_cli" ? !!this.agentToolCli : this.negotiatedCapabilities.some(capability => capability.capabilityId === id));
+  readPolicy = this.policy.readPolicy;
+  applyPolicy = this.policy.applyPolicy;
+  recoveryView() { return this; }
+  async acquirePolicyRoute() {
+    if (!this.agentToolCli) throw Error("route unavailable");
+    return this.agentToolCli;
+  }
   readonly #closed = deferred<void>();
   readonly #closeError: Error | undefined;
   readonly #closeGate: Promise<void> | undefined;

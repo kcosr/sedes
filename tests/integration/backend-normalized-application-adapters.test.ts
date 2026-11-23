@@ -1,3 +1,6 @@
+import { ConfigurationProjection } from "../../src/server/configuration-admin/configuration-projection.js";
+import { executionPolicyRoots, writeExecutionPolicy } from "../../src/server/configuration-admin/configuration-execution-policy.js";
+import { ConfigurationRepository } from "../../src/server/configuration-admin/configuration-repository.js";
 import { randomUUID } from "node:crypto";
 import { scriptDelivery } from "../support/notification-settings.js";
 import { QuestionRequestRepository } from "../../src/server/db/repositories/question-request-repository.js";
@@ -158,7 +161,12 @@ function fixture(latestMigration = Number.POSITIVE_INFINITY): {
   });
   applyDatabaseMigrations(database, backendNormalizedMigrations.filter(migration => migration.version <= latestMigration));
   const backendConfiguration = new BackendConfigurationRepository(database);
-  importLegacyDatabaseConfigurationFixture(database, { configuration, localWorkspaceRoots: ["/tmp"], sourceLabel: "normalized-application-adapters" }, 400);
+  // Historical snapshots use the configuration projected by their own migrations.
+  if (latestMigration >= 166) {
+    importLegacyDatabaseConfigurationFixture(database, { configuration, localWorkspaceRoots: ["/tmp"], sourceLabel: "normalized-application-adapters" }, 400);
+  } else {
+    database.transaction(() => new ConfigurationProjection(database, {}).adoptLegacyOwnership(scope))();
+  }
   new InventoryRepository(database).updateEnvironmentAvailability(scope, environment.id, { available: true, now: 400 });
   const backend = backendConfiguration.getBackend(scope, "pi-primary");
   const profile = database
@@ -2961,22 +2969,26 @@ describe("backend-normalized application adapters", () => {
           return new InMemoryConformanceDriver({ instance, connection });
         },
       });
-      let revalidatedAuthorityRevision = 0;
+      const root = executionPolicyRoots(current.database, current.scope, current.environmentId)[0]!;
+      current.database.prepare("UPDATE workspaces SET authority_root_id = ?, environment_configuration_revision = ? WHERE id = ?")
+        .run(root.id, root.generation, current.workspaceId);
+      let revalidatedAuthorityRevision = root.generation;
       const revalidateWorkspace = vi.fn(
         async (
           _scope: RequestScope,
           workspace: ValidatedWorkspace,
         ): Promise<ValidatedWorkspace> => ({
           ...workspace,
+          authorityRootId: root.id,
           authorityRevision: revalidatedAuthorityRevision,
           summary: {
             ...workspace.summary,
             displayName:
-              revalidatedAuthorityRevision === 0
+              revalidatedAuthorityRevision === root.generation
                 ? workspace.summary.displayName
                 : "Renewed temporary workspace",
             trustState:
-              revalidatedAuthorityRevision === 0 ? "trusted" : "untrusted",
+              revalidatedAuthorityRevision === root.generation ? "trusted" : "untrusted",
           },
         }),
       );
@@ -3102,27 +3114,20 @@ describe("backend-normalized application adapters", () => {
         current.scope,
         current.workspaceId,
       );
-      current.database
-        .prepare(
-          `
-            UPDATE execution_environments
-            SET configuration_revision = 1
-            WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?
-          `,
-        )
-        .run(
-          current.scope.tenantId,
-          current.scope.principalId,
-          current.environmentId,
-        );
-      revalidatedAuthorityRevision = 1;
+      const saved = new ConfigurationRepository(current.database).get(current.scope).configuration;
+      revalidatedAuthorityRevision = current.database.transaction(() => {
+        writeExecutionPolicy(current.database, current.scope, current.environmentId, { ...saved,
+          executionEnvironments: saved.executionEnvironments.map(host => host.id === current.environmentId ? { ...host, workspaceRoots: ["/another-root"] } : host),
+        });
+        return writeExecutionPolicy(current.database, current.scope, current.environmentId, saved).roots[0]!.generation;
+      })();
       const renewed = await lifecycle.resolve(current.scope, current.threadId);
       expect(handoffAuthoritativeReplacement).toHaveBeenCalledOnce();
       expect(handoffAuthoritativeReplacement).toHaveBeenCalledWith(
         current.scope,
       );
       expect(renewed.workspace).toMatchObject({
-        authorityRevision: 1,
+        authorityRevision: revalidatedAuthorityRevision,
         summary: {
           displayName: "Renewed temporary workspace",
           trustState: "untrusted",
@@ -3135,7 +3140,7 @@ describe("backend-normalized application adapters", () => {
         canonicalPath: "/tmp",
         displayName: "Renewed temporary workspace",
         trustState: "untrusted",
-        environmentConfigurationRevision: 1,
+        environmentConfigurationRevision: revalidatedAuthorityRevision,
         revision: workspaceBeforeRenewal.revision + 1,
       });
       await expect(
@@ -3143,7 +3148,7 @@ describe("backend-normalized application adapters", () => {
       ).resolves.toMatchObject({
         workspace: {
           canonicalPath: "/tmp",
-          authorityRevision: 1,
+          authorityRevision: revalidatedAuthorityRevision,
           summary: {
             displayName: "Renewed temporary workspace",
             trustState: "untrusted",

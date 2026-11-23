@@ -74,7 +74,7 @@ describe("ImageShowService", () => {
     const result = await f.show("windows-image", { path: nativePath });
 
     expect(read).toHaveBeenCalledExactlyOnceWith(f.scope, f.thread.id, nativePath,
-      16_777_216, expect.any(AbortSignal));
+      16_777_216, expect.any(AbortSignal), expect.any(Function));
     expect(result.image).toMatchObject({ representation: "artifact", mimeType: "image/png",
       fileName: { text: "chart.png" } });
     expect(JSON.stringify(result)).not.toContain(nativePath);
@@ -215,7 +215,8 @@ describe("ImageShowService", () => {
   it("fences changed environment authority after asynchronous source reads", async () => {
     const f = await fixture();
     vi.spyOn(f.files, "readAbsoluteFile").mockImplementation(async () => {
-      vi.spyOn(f.inventory, "getEnvironment").mockReturnValue({ ...f.environment, configurationRevision: f.environment.configurationRevision + 1 });
+      const workspace = f.inventory.getWorkspace(f.scope, f.inventory.getThread(f.scope, f.thread.id).thread.workspaceId);
+      vi.spyOn(f.inventory, "getWorkspace").mockReturnValue({ ...workspace, environmentConfigurationRevision: workspace.environmentConfigurationRevision + 1 });
       return png();
     });
     await expect(f.show()).rejects.toMatchObject({ reason: "changed" });

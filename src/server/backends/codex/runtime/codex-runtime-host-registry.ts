@@ -1,3 +1,4 @@
+import { observedLaunchDigest } from "../../provider-policy-admission.js";
 import { configurationFingerprint } from "../../../config/configuration-fingerprint.js";
 import type { EnvironmentVariableOverrides } from "../../../../shared/protocol/environment-variables.js";
 import type { SidecarUpgradeBlocker } from "../../../../internal/sidecar-protocol/service-management-v1.js";
@@ -26,7 +27,7 @@ export type CodexRuntimeConfiguration = Readonly<{
   connections: readonly AgentConnectionProfile[];
   connection: CodexBackendModuleConfiguration["connection"];
 }>;
-export type CodexHostedRuntime = { configuration: ResolvedCodexRuntimeConfiguration; environmentChannel: ExecutionEnvironmentChannelProvider; environment: Readonly<Record<string, string | undefined>>; host: CodexRuntimeHost; fingerprint: string; startupEnvironmentFingerprint: string; supervisor: CodexDaemonSupervisor; stop(reason?: string, force?: boolean): Promise<void> };
+export type CodexHostedRuntime = { configuration: ResolvedCodexRuntimeConfiguration; environmentChannel: ExecutionEnvironmentChannelProvider; environment: Readonly<Record<string, string | undefined>>; host: CodexRuntimeHost; fingerprint: string; storeFingerprint: string; startupEnvironmentFingerprint: string; supervisor: CodexDaemonSupervisor; stop(reason?: string, force?: boolean): Promise<void> };
 
 /** One execution-host registry, retained across attachment replacement. Raw
  * definitions resolve here using this host's environment, credentials and
@@ -35,6 +36,10 @@ export class CodexRuntimeHostRegistry {
   readonly #runtimes = new Map<string, CodexHostedRuntime>();
   readonly #starting = new Map<string, Promise<CodexHostedRuntime>>();
   readonly managedTui: CodexRuntimeManagedTuiHosts;
+  observedLaunchDigest(id: string): string | undefined {
+    return observedLaunchDigest(this.#runtimes.get(id)?.host);
+  }
+
   constructor(readonly input: {
     scope: RequestScope; executionEnvironmentId: string;
     environmentChannel: ExecutionEnvironmentChannelProvider;
@@ -45,7 +50,7 @@ export class CodexRuntimeHostRegistry {
     this.managedTui = new CodexRuntimeManagedTuiHosts({ getRuntime: runtimeId => this.getRuntime(runtimeId), services: input.services });
   }
 
-  async ensure(configuration: CodexRuntimeConfiguration, controllerEpoch: number): Promise<CodexRuntimeHost> {
+  async ensure(configuration: CodexRuntimeConfiguration, controllerEpoch: number, assertLaunch?: () => void): Promise<CodexRuntimeHost> {
     this.input.services.assertController(controllerEpoch);
     this.#assertConfigurationScope(configuration);
     if (!configuration.instance.enabled) throw new Error("codex_runtime_configuration_disabled");
@@ -61,7 +66,8 @@ export class CodexRuntimeHostRegistry {
       return existing.host;
     }
     this.input.services.assertAdmission(controllerEpoch);
-    const starting = this.#start(configuration, fingerprint, controllerEpoch);
+    assertLaunch?.();
+    const starting = this.#start(configuration, fingerprint, controllerEpoch, assertLaunch);
     this.#starting.set(key, starting);
     try { return (await starting).host; }
     finally { if (this.#starting.get(key) === starting) this.#starting.delete(key); }
@@ -76,8 +82,7 @@ export class CodexRuntimeHostRegistry {
     const existing = this.#runtimes.get(configuration.instance.id) ?? (pending ? await pending : undefined);
     this.input.services.assertController(controllerEpoch);
     if (!existing) return undefined;
-    const fingerprint = configurationFingerprint(configuration.connection);
-    if (existing.fingerprint !== fingerprint) throw new Error("codex_runtime_configuration_restart_required");
+    if (existing.storeFingerprint !== codexStoreFingerprint(configuration.connection)) throw new Error("codex_runtime_configuration_restart_required");
     return existing.host;
   }
 
@@ -141,7 +146,7 @@ export class CodexRuntimeHostRegistry {
     return { state, incarnation: runtime.host.runtimeId, revision, blockers, startupEnvironmentFingerprint: runtime.startupEnvironmentFingerprint };
   }
 
-  async #start(configuration: CodexRuntimeConfiguration, fingerprint: string, controllerEpoch: number): Promise<CodexHostedRuntime> {
+  async #start(configuration: CodexRuntimeConfiguration, fingerprint: string, controllerEpoch: number, assertLaunch?: () => void): Promise<CodexHostedRuntime> {
     const ownership = configuration.connection.ownership === "owned" ? new CodexNativeStoreOwnershipGate() : undefined;
     const configuredHome = configuration.connection.ownership === "owned" ? configuration.connection.channel.codexHome : undefined;
     const nativeHome = ownership
@@ -157,6 +162,7 @@ export class CodexRuntimeHostRegistry {
     try {
       resolved = await resolveCodexRuntimeConfiguration({ ...configuration, scope: this.input.scope, environmentChannel: this.input.environmentChannel, environment: this.input.environment });
       this.input.services.assertAdmission(controllerEpoch);
+      assertLaunch?.();
     } catch (error) {
       await lease?.release();
       throw error;
@@ -181,7 +187,7 @@ export class CodexRuntimeHostRegistry {
       const { state, blockers } = this.#snapshot(runtime);
       return { phase, ownership: resolved.connection.ownership, state, blockers, ...host.abandonmentEvidence() };
     };
-    const runtime: CodexHostedRuntime = { configuration: resolved, environmentChannel: this.input.environmentChannel, environment: this.input.environment, host, fingerprint, startupEnvironmentFingerprint: configurationFingerprint(configuration.startupEnvironmentVariables ?? {}), supervisor, stop: async (reason = "runtime_cleanup", force = false) => {
+    const runtime: CodexHostedRuntime = { configuration: resolved, environmentChannel: this.input.environmentChannel, environment: this.input.environment, host, fingerprint, storeFingerprint: codexStoreFingerprint(configuration.connection), startupEnvironmentFingerprint: configurationFingerprint(configuration.startupEnvironmentVariables ?? {}), supervisor, stop: async (reason = "runtime_cleanup", force = false) => {
       if (closed) return;
       if (force) {
         host.freezeAdmission();
@@ -206,6 +212,7 @@ export class CodexRuntimeHostRegistry {
     } };
     try {
       this.input.services.assertAdmission(controllerEpoch);
+      assertLaunch?.();
       registered = this.input.services.register({
         resourceId: host.runtimeId, kind: "provider",
         snapshot: () => {
@@ -226,4 +233,10 @@ export class CodexRuntimeHostRegistry {
       throw error;
     }
   }
+}
+
+function codexStoreFingerprint(connection: CodexRuntimeConfiguration["connection"]): string {
+  const channel = connection.channel;
+  return configurationFingerprint([channel.type, channel.type === "process_stdio" ? channel.codexHome ?? null :
+    channel.type === "unix_websocket" ? channel.socketPath : channel.url]);
 }

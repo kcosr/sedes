@@ -28,6 +28,7 @@ export class OutboundCodexFixture {
   readonly #loaded = new Set<string>();
   readonly #codexHome: string;
   readonly #workspacePath: string;
+  #active: { socket: WebSocket; thread: CodexThread; turn: CodexThread["turns"][number] } | undefined;
   #closePromise: Promise<void> | undefined;
 
   private constructor(
@@ -66,8 +67,13 @@ export class OutboundCodexFixture {
           }
           if (request.id === undefined) throw new Error("outbound_codex_fixture_unknown_notification");
           if (request.method !== "initialize" && !initialized) throw new Error("outbound_codex_fixture_uninitialized");
-          const result = this.#respond(request);
+          const result = this.#respond(request, socket);
           socket.send(JSON.stringify({ id: request.id, result }));
+          if (request.method === "turn/start" && this.#active) {
+            const { thread, turn } = this.#active;
+            this.#notify("turn/started", { threadId: thread.id, turn });
+            for (const item of turn.items) this.#notify("item/completed", { threadId: thread.id, turnId: turn.id, item, completedAtMs: Date.now() });
+          }
         } catch (error) {
           this.errors.push(error);
           if (request?.id !== undefined && socket.readyState === WebSocket.OPEN) {
@@ -107,7 +113,40 @@ export class OutboundCodexFixture {
     return this.#closePromise;
   }
 
-  #respond(request: OutboundCodexFixtureRequest): unknown {
+  /** Drive the same native turn on either side of a Settings save. */
+  appendOutput(text: string): void {
+    if (!this.#active) throw new Error("outbound_codex_fixture_turn_missing");
+    const { thread, turn } = this.#active;
+    const item: CodexThread["turns"][number]["items"][number] = {
+      type: "agentMessage", id: `${turn.id}-item-${turn.items.length}`, text,
+      moderation: null, phase: "commentary", memoryCitation: null, delivery: null, questions: null,
+    };
+    turn.items.push(item);
+    const scope = { threadId: thread.id, turnId: turn.id };
+    this.#notify("item/started", { ...scope, item: { ...item, text: "" }, startedAtMs: Date.now() });
+    this.#notify("item/agentMessage/delta", { ...scope, itemId: item.id, delta: text });
+    this.#notify("item/completed", { ...scope, item, completedAtMs: Date.now() });
+  }
+
+  completeTurn(): void {
+    if (!this.#active) throw new Error("outbound_codex_fixture_turn_missing");
+    const { thread, turn } = this.#active;
+    turn.status = "completed";
+    turn.completedAt = Math.floor(Date.now() / 1000);
+    turn.durationMs = (turn.completedAt - turn.startedAt!) * 1000;
+    thread.status = { type: "idle" };
+    this.#notify("turn/completed", { threadId: thread.id, turn });
+    this.#notify("thread/status/changed", { threadId: thread.id, status: thread.status });
+    this.#active = undefined;
+  }
+
+  #notify(method: string, params: object): void {
+    const socket = this.#active?.socket;
+    if (!socket || socket.readyState !== WebSocket.OPEN) throw new Error("outbound_codex_fixture_turn_disconnected");
+    socket.send(JSON.stringify({ method, params }));
+  }
+
+  #respond(request: OutboundCodexFixtureRequest, socket: WebSocket): unknown {
     const params = request.params ?? {};
     switch (request.method) {
       case "initialize": return {
@@ -147,23 +186,62 @@ export class OutboundCodexFixture {
         const thread = codexThreadReadMethod.decodeResult({ thread: {
           id, extra: {}, sessionId: `${id}-session`, forkedFromId: null,
           parentThreadId: null, preview: "", ephemeral: false, section: null,
-          sectionEnteredAt: null, projectId: null, historyMode: "legacy",
+          sectionEnteredAt: null, projectId: null, historyMode: params.historyMode === "paginated" ? "paginated" : "legacy",
           modelProvider: "openai", model: this.model, reasoningEffort: "low",
           createdAt: 1_700_000_000, updatedAt: 1_700_000_000, recencyAt: 1_700_000_000,
           status: { type: "idle" }, path: path.join(this.#codexHome, "sessions", `${id}.jsonl`),
           cwd, cliVersion: "0.169.0", source: "appServer", canAcceptDirectInput: true,
-          threadSource: null, agentNickname: null, agentRole: null, gitInfo: null,
+          threadSource: typeof params.threadSource === "string" ? params.threadSource : null, agentNickname: null, agentRole: null, gitInfo: null,
           name: null, turns: [],
         } }).thread;
         this.#threads.set(id, thread);
         this.#loaded.add(id);
         return this.#startResult(thread);
       }
-      case "thread/read": return { thread: this.#thread(params.threadId) };
+      case "turn/start": {
+        if (this.#active) throw new Error("outbound_codex_fixture_duplicate_turn");
+        const thread = this.#thread(params.threadId);
+        const turn: CodexThread["turns"][number] = {
+          id: `${thread.id}-turn-${thread.turns.length + 1}`, rootTurnId: null, itemsView: "full", items: [],
+          status: "inProgress", error: null, startedAt: Math.floor(Date.now() / 1000), completedAt: null, durationMs: null,
+        };
+        const input = Array.isArray(params.input) ? params.input.find(entry => entry.type === "text") : undefined;
+        turn.items.push({ type: "userMessage", id: `${turn.id}-input`, clientId: typeof params.clientUserMessageId === "string" ? params.clientUserMessageId : null,
+          content: [{ type: "text", text: String(input?.text ?? ""), text_elements: [] }] });
+        thread.status = { type: "active", activeFlags: [] };
+        thread.turns.push(turn);
+        this.#active = { thread, turn, socket };
+        return { turn };
+      }
+      case "thread/read": {
+        const thread = this.#thread(params.threadId);
+        return { thread: thread.historyMode === "paginated" || params.includeTurns === false ? { ...thread, turns: [] } : thread };
+      }
+      case "thread/settings/update": {
+        const thread = this.#thread(params.threadId);
+        socket.send(JSON.stringify({ method: "thread/settings/updated", params: { threadId: thread.id, threadSettings: {
+          cwd: thread.cwd, approvalPolicy: "never", approvalsReviewer: "user", sandboxPolicy: { type: "readOnly", networkAccess: false },
+          activePermissionProfile: { id: ":read-only", extends: null }, model: this.model, modelProvider: "openai", serviceTier: null,
+          effort: "low", summary: null, collaborationMode: { mode: "default", settings: { model: this.model, reasoning_effort: "low", developer_instructions: null } },
+          multiAgentMode: "explicitRequestOnly", personality: null,
+        } } }));
+        return {};
+      }
+      case "thread/goal/get": return { goal: null };
+      case "thread/name/set": return {};
+      case "thread/turns/list": return this.#turnPage(this.#thread(params.threadId), params.sortDirection);
+      case "thread/items/list": {
+        const thread = this.#thread(params.threadId);
+        const data = thread.turns.filter(turn => !params.turnId || turn.id === params.turnId)
+          .flatMap(turn => turn.items.map(item => ({ turnId: turn.id, item })));
+        return { data: params.sortDirection === "desc" ? data.reverse() : data, nextCursor: null, backwardsCursor: data.length ? "fixture-items-head" : null };
+      }
       case "thread/resume": {
         const thread = this.#thread(params.threadId);
         this.#loaded.add(thread.id);
-        return { ...this.#startResult(thread), initialTurnsPage: null, turnsBackwardsCursor: null, itemsBackwardsCursor: null };
+        const page = params.initialTurnsPage as { sortDirection?: string } | undefined;
+        return { ...this.#startResult({ ...thread, turns: [] }), initialTurnsPage: page ? this.#turnPage(thread, page.sortDirection) : null,
+          turnsBackwardsCursor: page && thread.turns.length ? "fixture-turns-head" : null, itemsBackwardsCursor: thread.turns.some(turn => turn.items.length) ? "fixture-items-head" : null };
       }
       case "thread/unsubscribe": {
         this.#loaded.delete(this.#thread(params.threadId).id);
@@ -171,6 +249,11 @@ export class OutboundCodexFixture {
       }
       default: throw new Error(`outbound_codex_fixture_unexpected_method:${request.method}`);
     }
+  }
+
+  #turnPage(thread: CodexThread, direction: unknown) {
+    const data = thread.turns.map(turn => ({ ...turn, items: [], itemsView: "notLoaded" }));
+    return { data: direction === "desc" ? data.reverse() : data, nextCursor: null, backwardsCursor: data.length ? "fixture-turns-head" : null };
   }
 
   #thread(id: unknown): CodexThread {

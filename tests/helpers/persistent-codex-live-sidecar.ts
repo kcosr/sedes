@@ -1,3 +1,6 @@
+import { runtimeLaunchDigest } from "../../src/server/backends/provider-launch-digest.js";
+import { executionPolicyDigest } from "../../src/internal/sidecar-protocol/execution-policy.js";
+import type { CodexRuntimeConfiguration } from "../../src/server/backends/codex/runtime/codex-runtime-host-registry.js";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { chmod, copyFile, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
@@ -86,7 +89,14 @@ export async function createPersistentCodexLiveSidecar(fixtureScope?: {
         if (response.outcome !== "ok") throw new Error(JSON.stringify(response));
         return response.status;
       };
-      const attach = async (mode: "normal" | "recovery" = "normal") => {
+      let previousBackend: CodexRuntimeConfiguration | undefined;
+      const attach = async (backend = previousBackend, mode: "normal" | "recovery" = "normal") => {
+        if (!backend) throw new Error("codex_fixture_backend_required");
+        previousBackend = backend;
+        const snapshot = { roots: [], capabilities: [], backends: [{ id: backend.instance.id, kind: "codex_app_server", generation: 1,
+          launchDigest: runtimeLaunchDigest.codex_app_server(backend, backend.startupEnvironmentVariables),
+          targets: backend.connections.filter(profile => profile.enabled).map(profile => ({ id: profile.templateId, generation: 1 })) }] };
+        const policy = { snapshot, configuration, revision: 1, digest: executionPolicyDigest(snapshot) };
         const socket = connect(paths.endpointPath);
         await new Promise<void>((resolve, reject) => { socket.once("connect", resolve); socket.once("error", reject); });
         const stream = sidecarSocketByteStream(socket);
@@ -97,11 +107,12 @@ export async function createPersistentCodexLiveSidecar(fixtureScope?: {
           sessionNonce, carrierGeneration: 1, configuration, mode });
         const response = await readSidecarManagementRecord(stream, sidecarManagementResponseSchema, signal);
         if (response.value.outcome !== "ok") throw new Error(JSON.stringify(response.value));
-        const session = await SidecarClientSession.start({ connectionCompression: true, transportKind: "ssh_stdio", stream: response.stream, sessionNonce, carrierGeneration: 1, artifact,
+        const session = await SidecarClientSession.start({ readDesiredPolicy: () => policy, policyAttachment: mode, connectionCompression: true, transportKind: "ssh_stdio", stream: response.stream, sessionNonce, carrierGeneration: 1, artifact,
           installation: { accountHome: home, stateRoot: paths.stateRoot, nodeExecutable: process.execPath,
             environment: { HOME: home }, executableDirectory: home, executablePath: executable },
           authorizedCapabilities: [], authorizedRuntimeCapabilities: [{ capabilityId: "codex_runtime", majorVersion: 1, operations: ["runtime.ensure", "runtime.lookup", "runtime.execute"] }],
           sedesOperations: new SidecarOperationRegistry(), signal });
+        if (mode === "normal") await session.applyPolicy(policy, signal);
         return { session, status: response.value.status };
       };
       return { home, scope, paths, request, status, stop, launch, attach };

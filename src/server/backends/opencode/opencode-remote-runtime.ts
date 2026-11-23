@@ -316,8 +316,11 @@ export class OpenCodeRemoteRuntime {
     if (this.#recovery) throw unavailable();
     const { attachment, info } = this.#ready();
     attachment.channel.assertReady();
-    if (!attachment.channel.supportsIncomingOperation(openCodeToolInvokeOperation)) throw new OpenCodeRuntimeError("opencode_tools_capability_unavailable");
-    return openCodeHostToolAdmissionResultSchema.parse(await call(attachment, { action: "tools_admit",
+    if (!attachment.acquireOpenCodeRoute || !attachment.channel.supportsIncomingOperation(openCodeToolInvokeOperation)) {
+      throw new OpenCodeRuntimeError("opencode_tools_capability_unavailable");
+    }
+    const routeGeneration = await attachment.acquireOpenCodeRoute(this.input.configuration.instance.id, signal);
+    return openCodeHostToolAdmissionResultSchema.parse(await call(attachment, { action: "tools_admit", routeGeneration,
       runtimeId: info.runtimeId, nativeGeneration: info.snapshot.generation!,
       target: openCodeHostToolTargetSchema.parse(target), admission: openCodeHostToolAdmissionSchema.parse(admission) }, signal));
   }

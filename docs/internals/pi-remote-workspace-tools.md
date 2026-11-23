@@ -4,6 +4,12 @@ Sedes can keep the Pi SDK and model loop on the main host while executing
 Pi's seven workspace-effecting built-ins on the selected SSH environment:
 `read`, `write`, `edit`, `ls`, `find`, `grep`, and `bash`.
 
+An executor records the workspace root and the workspace-tools grant when it
+opens. Each new effect checks that those grants are still current. The context
+and skill readers capture their own feature generations. A host configuration
+save can therefore grant another backend or add a root while the current Pi
+thread continues to use its existing workspace.
+
 These seven names derive from the release-pinned Pi built-in disposition, not
 from whatever tools the installed SDK happens to register. Pi 0.86.0's
 `powershell` built-in is intentionally unsupported and excluded before session
@@ -152,7 +158,8 @@ SSH account's ordinary authority.
 One persistent environment-scoped sidecar multiplexes enabled Files, tools,
 context, skills, attachment, and CLI capability families. The installation,
 tenant, principal, environment, controller epoch, and service incarnation fence
-ownership; configuration and operations revisions fence every lease.
+ownership. Each held workspace lease retains its original root grant, and each
+new effect checks that its operation is currently granted.
 A Pi-only SSH environment internally remains
 `ssh_environment_not_validated` until its first sidecar-backed operation
 completes the versioned hello handshake, but that initial state is admitted and

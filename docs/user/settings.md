@@ -200,6 +200,23 @@ that needs the most attention; the item's **Overview** explains it. The **⋯**
 menu stays in the same place and order, offering only the actions supported in
 the current state.
 
+On a connected SSH or paired host, you can add a supported backend or a named
+connection while another thread is running. For example, after adding Claude
+to a host running Codex, wait for its connection to become available, then
+start a Claude thread. The Codex turn and any open terminals continue on the
+same sidecar. You can also change workspace roots and allowed features this way.
+
+**Overview** lists the result for each changed setting. Expand a setting to
+see its saved and applied revisions. Settings confirmed by a sidecar also
+show the last reported policy revision, digest, service incarnation and
+controller epoch. **Awaiting host confirmation** means Sedes has saved the
+change and is waiting for the host.
+**Retry apply** requests another attempt. **Unsupported on this host** applies
+to the named feature. A missing executable can also prevent its backend from
+starting. Check the reported reason before retrying. Labels are visible
+immediately. New thread defaults take effect on new threads, and connection
+compression takes effect on the next attachment.
+
 **Stop** remains available while a host is unreachable or requires recovery. It
 records that the service must not start automatically; host shutdown and cleanup
 remain unconfirmed until the host is reachable, so this does not advertise
@@ -208,7 +225,7 @@ and their original outcome checks.
 
 Environment **Disconnect** leaves admitted remote work running and prevents
 automatic reconnection until you choose **Connect**. **Stop** persists an intent
-to stop the managed service. **Restart** and **Upgrade and restart** show the
+to stop the managed service. **Restart sidecar** and **Upgrade and restart** show the
 current interruption impact before acting. A live terminal, active turn,
 unsettled result, or unknown state defers an automatic replacement; a shell at
 its prompt is live. Until then the outdated sidecar keeps serving, the status
@@ -218,7 +235,7 @@ is still running, Sedes checks its outcome automatically and keeps other
 actions paused; **Refresh status** checks immediately. An unavailable or
 unknown response does not mean the service stopped. Backend **Disconnect** is
 available only for a remote provider runtime. Local runtimes use the
-impact-confirmed **Stop** or **Restart** controls.
+impact-confirmed **Stop** or **Restart backend** controls.
 
 These controls do not provide tenant or user administration. All requests use
 the current server-derived account. Claude supports local and persistent remote
@@ -236,8 +253,10 @@ Environment and backend editors include **Environment variables** with two uses:
   also apply to new ordinary terminals; backend, Agent, and thread overrides do
   not change ordinary terminals.
 - **Backend startup** supplies values when Sedes launches an owned backend
-  process. The editor stays enabled while it runs. Saving does not restart the
-  process; changes remain pending until restart. The tab is disabled for external
+  process. The editor stays enabled while it runs. **Restart backend required**
+  identifies the affected provider when its running process still uses earlier
+  settings. Review the impact and choose **Restart backend** to use the change
+  now, or let its next ordinary launch pick it up. The tab is disabled for external
   Codex processes and Pi's in-process SDK; inherited startup settings are not
   applied to those runtimes.
 

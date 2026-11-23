@@ -71,6 +71,32 @@ async function availableMenuItems(): Promise<string[]> {
 }
 
 describe("runtime administration controls", () => {
+  it("shows each saved setting and offers retry without restarting the host", async () => {
+    const api = controls();
+    const observed = { ...runtime, upgradeState: "current" as const, applyState: "pending" as const,
+      effects: [
+        { component: "presentation", subjectId: "label", desiredRevision: 7, effectiveRevision: 7, state: "applied" },
+        { component: "host_policy", subjectId: "claude-build", desiredRevision: 7, effectiveRevision: 6, state: "awaiting_host",
+          lastHostConfirmation: { revision: 5, digest: "a".repeat(64), incarnation: "previous-incarnation", epoch: 2 } },
+        { component: "host_policy", subjectId: "capability:interactive_terminal", desiredRevision: 7, effectiveRevision: null, state: "unsupported", detail: "Missing PTY helper" },
+      ] satisfies NonNullable<ConfigurationRuntimeState["effects"]>,
+    };
+    render(<RuntimeControls controls={api} revision={7} resourceKind="environment" resourceId={runtime.resourceId} label="Build host"
+      runtime={observed} showSidecar disabled={false} onRuntime={vi.fn()} onRefresh={vi.fn(async () => true)} />);
+    const effects = within(screen.getByRole("list", { name: "Saved settings" })).getAllByRole("listitem");
+    expect(effects.map(row => row.querySelector("summary")?.textContent)).toEqual([
+      "Display settings · label · Applied", "Host access · claude-build · Awaiting host confirmation",
+      "Host access · Interactive terminals · Unsupported on this host · Missing PTY helper",
+    ]);
+    await userEvent.click(effects[1]!.querySelector("summary")!);
+    expect(within(effects[1]!).getByText("previous-incarnation")).toBeVisible();
+    expect(within(effects[1]!).getByText("6")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Restart sidecar" })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Retry apply" }));
+    expect(api.configurationLifecycle).toHaveBeenCalledWith(expect.objectContaining({ action: "connect" }));
+    expect(api.configurationLifecycleImpact).not.toHaveBeenCalled();
+  });
+
   it("connects an external server after its Sedes attachment was retired", async () => {
     const api = controls();
     render(<RuntimeControls controls={api} revision={7} resourceKind="backend" resourceId={runtime.resourceId} label="Build host"
@@ -169,7 +195,7 @@ describe("runtime administration controls", () => {
     render(<RuntimeControls controls={api} revision={7} resourceKind="environment" resourceId={runtime.resourceId} label="Build host"
       runtime={{ ...runtime, upgradeState: "current", applyState: "applied" }} disabled={false} onRuntime={vi.fn()} onRefresh={vi.fn(async () => true)} />);
     await user.click(moreActions());
-    await user.click(await screen.findByRole("menuitem", { name: "Restart" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Restart sidecar" }));
     await user.click(await screen.findByRole("button", { name: "Cancel" }));
     expect(moreActions()).toHaveFocus();
   });

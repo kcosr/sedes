@@ -1,15 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type Database from "better-sqlite3";
+import Database from "better-sqlite3";
 import { openOverlayDatabase } from "../../src/server/db/database.js";
 import { applyBackendNormalizationMigration, applyDatabaseMigrations, backendNormalizedMigrations } from "../../src/server/db/migrate.js";
-import { databaseOwnedConfigurationMigration } from "../../src/server/db/migrations/093-database-owned-configuration.js";
 import { SingleUserIdentityProvider } from "../../src/server/identity/identity-provider.js";
 import { BackendConfigurationRepository } from "../../src/server/db/repositories/backend-configuration-repository.js";
 import { ConfigurationRepository } from "../../src/server/configuration-admin/configuration-repository.js";
 import { ConfigurationProjection } from "../../src/server/configuration-admin/configuration-projection.js";
 import { ConfigurationAdminService, type ConfigurationRuntimeAdapter } from "../../src/server/configuration-admin/configuration-admin-service.js";
-import { configurationDocumentSchema, configurationEnvironmentSchema, type ConfigurationDocument, type ConfigurationLifecycleRequest, type ConfigurationRuntimeState } from "../../src/shared/protocol/configuration-admin.js";
+import { configurationDocumentSchema, configurationEnvironmentSchema, configurationSnapshotSchema, type ConfigurationDocument, type ConfigurationLifecycleRequest, type ConfigurationRuntimeState } from "../../src/shared/protocol/configuration-admin.js";
 import { configurationFingerprint } from "../../src/server/config/configuration-fingerprint.js";
 import { validateConfigurationDocument } from "../../src/server/configuration-admin/configuration-validation.js";
 import { parseResolvedBackendConfiguration } from "../support/resolved-backend-configuration.js";
@@ -37,12 +36,21 @@ function codexTarget(backendInstanceId: string): ConfigurationDocument["targets"
     moduleConfiguration: { defaults: { sandboxMode: "read-only", networkAccess: "disabled", approvalPolicy: "on-request", approvalReviewer: "user", model: { type: "catalogDefault" } } } };
 }
 afterEach(() => { for (const database of databases.splice(0)) database.close(); });
-function fixture(imported = true) {
-  const database = openOverlayDatabase(":memory:");
+const databaseSeeds = new Map<number, Buffer>();
+function fixture(imported = true, through = backendNormalizedMigrations.at(-1)!.version) {
+  let seed = databaseSeeds.get(through);
+  if (!seed) {
+    const base = openOverlayDatabase(":memory:");
+    applyBackendNormalizationMigration(base, { configuration: legacy, quiescentCutoverConfirmed: true, appliedAt: 100 });
+    applyDatabaseMigrations(base, backendNormalizedMigrations.filter(migration => migration.version <= through));
+    seed = base.serialize();
+    base.close();
+    databaseSeeds.set(through, seed);
+  }
+  const database = new Database(seed);
+  database.pragma("foreign_keys = ON");
   databases.push(database);
   const scope = new SingleUserIdentityProvider(database).getScope();
-  applyBackendNormalizationMigration(database, { configuration: legacy, quiescentCutoverConfirmed: true, appliedAt: 100 });
-  applyDatabaseMigrations(database, [...backendNormalizedMigrations.filter(migration => migration.version <= 92), databaseOwnedConfigurationMigration]);
   const repository = new ConfigurationRepository(database, () => 1000);
   const projection = new ConfigurationProjection(database, { pi: "0.86.0", codex_app_server: "test", claude_agent_sdk: "test", grok_build: "test" }, () => 1000);
   const document = initialDocument();
@@ -77,6 +85,189 @@ describe("database-owned configuration", () => {
     expect(current.repository.get(current.scope).configuration.webSearch).toBeNull();
   });
 
+  it("keeps stable scoped grants across additions, renames and reorder, and permanently retires withdrawn tokens", async () => {
+    const current = fixture();
+    const document = remoteDocument();
+    const host = document.executionEnvironments[1]!;
+    if (host.kind !== "ssh" || host.operations.kind !== "sidecar") throw new Error("remote fixture");
+    const read = () => current.projection.hostPolicy(current.scope, host.id)!;
+    const save = () => current.service.save(current.scope, {
+      mutationId: randomUUID(), expectedRevision: current.repository.get(current.scope).revision, configuration: document,
+    });
+    await save();
+    const first = read();
+    current.database.prepare("UPDATE execution_environments SET availability = 'available', diagnostic_code = NULL WHERE id = ?").run(host.id);
+    host.workspaceRoots.push("/another");
+    host.operations.enabledCapabilities.push("interactive_terminal");
+    document.backends.push({ id: "remote-pi", kind: "pi", enabled: true, label: "Remote", modelPolicy: { type: "catalog" } });
+    document.targets.push({ id: "remote-target", kind: "pi_sdk", backendInstanceId: "remote-pi", executionEnvironmentId: host.id, label: "Target", enabled: true });
+    await save();
+    const second = read();
+    expect(second.revision).toBe(first.revision + 1);
+    expect(second.snapshot.roots).toContainEqual(first.snapshot.roots[0]);
+    expect(new Set(second.snapshot.roots.map(root => root.generation)).size).toBe(2);
+    expect(current.database.prepare("SELECT availability, diagnostic_code FROM execution_environments WHERE id = ?").get(host.id))
+      .toEqual({ availability: "available", diagnostic_code: null });
+    host.workspaceRoots.reverse();
+    host.operations.enabledCapabilities.reverse();
+    document.backends.reverse(); document.targets.reverse();
+    host.label = "New display name";
+    document.backends[0]!.label = "Renamed backend";
+    document.targets[0]!.label = "Renamed target";
+    await save();
+    expect(read()).toEqual(second);
+    const ids = () => current.database.prepare("SELECT configuration_revision AS revision FROM agent_backend_instances WHERE id='remote-pi'").get();
+    expect(ids()).toEqual({revision: 0});
+    host.workspaceRoots.splice(host.workspaceRoots.indexOf("/work"), 1);
+    host.operations.enabledCapabilities = host.operations.enabledCapabilities.filter(c => c !== "interactive_terminal");
+    document.backends[0]!.enabled = false;
+    document.targets[0]!.enabled = false;
+    await save();
+    const withdrawal = read();
+    host.workspaceRoots.push("/work");
+    host.operations.enabledCapabilities.push("interactive_terminal");
+    document.backends[0]!.enabled = true;
+    document.targets[0]!.enabled = true;
+    await save();
+    const regrant = read();
+    expect(regrant.revision).toBe(withdrawal.revision + 1);
+    expect(regrant.snapshot.roots.find(root => root.path === "/work")).toMatchObject({id: first.snapshot.roots[0]!.id});
+    expect(regrant.snapshot.roots.find(root => root.path === "/work")!.generation).toBeGreaterThan(first.snapshot.roots[0]!.generation);
+    expect(regrant.snapshot.backends[0]!.generation).toBeGreaterThan(second.snapshot.backends[0]!.generation);
+    expect(regrant.snapshot.backends[0]!.targets[0]!.generation).toBeGreaterThan(second.snapshot.backends[0]!.targets[0]!.generation);
+    const readiness = new Map<string, "ready">([[ "backend:remote-pi", "ready" ]]);
+    current.repository.observeHostPolicy(current.scope, host.id, second, readiness);
+    const backendEffect = () => current.repository.runtime(current.scope, "backend", "remote-pi").effects?.find(effect => effect.subjectId === "backend:remote-pi");
+    expect(backendEffect()?.state).toBe("awaiting_host");
+    current.repository.observeHostPolicy(current.scope, host.id, regrant, readiness, {incarnation: randomUUID(), epoch: 2});
+    expect(backendEffect()).toMatchObject({state: "applied", lastHostConfirmation: {digest: regrant.digest, epoch: 2}});
+    expect(ids()).toEqual({revision: 2});
+  });
+
+  it("keeps an installed-policy conflict fenced through later saves and main restart until service replacement", async () => {
+    const current = fixture();
+    const document = remoteDocument();
+    await current.service.save(current.scope, {mutationId: randomUUID(), expectedRevision:0, configuration:document});
+    const first = current.projection.hostPolicy(current.scope, remoteId)!;
+    const incarnation = randomUUID();
+    const ahead = {revision:first.revision + 1, digest:"a".repeat(64)};
+    const recovery = current.projection.policyRecovery(current.scope,remoteId);
+    recovery.requireRecovery(incarnation,first,ahead);
+    document.executionEnvironments[1]!.workspaceRoots.push("/later");
+    await current.service.save(current.scope, {mutationId: randomUUID(), expectedRevision:1, configuration:document});
+    const next = current.projection.hostPolicy(current.scope,remoteId)!;
+    expect(next.revision).toBe(ahead.revision);
+    const reloaded = new ConfigurationProjection(current.database, current.projection.protocolReleases).policyRecovery(current.scope,remoteId);
+    expect(reloaded.blocked(incarnation)).toBe(true);
+    reloaded.requireRecovery(incarnation,next,{revision:next.revision,digest:"b".repeat(64)});
+    expect(current.database.prepare("SELECT desired_revision, installed_digest FROM execution_policy_recovery_fences").get())
+      .toEqual({desired_revision:first.revision,installed_digest:ahead.digest});
+    expect(reloaded.blocked(randomUUID())).toBe(false);
+    expect(current.projection.policyRecovery(current.scope,environmentId).blocked(incarnation)).toBe(false);
+  });
+
+  it("requires the retained provider's actual launch digest after main restarts with a launch-only edit", async () => {
+    const current = fixture();
+    const document = remoteDocument();
+    const backend = {id:"remote-claude",kind:"claude_agent_sdk" as const,label:"Claude",enabled:true,modelPolicy:{type:"catalog" as const},
+      moduleConfiguration:{executablePath:"/old/claude",initializationTimeoutMs:1_000,permissionPolicy:{allowedModes:["default" as const]}}};
+    document.backends.push(backend);
+    document.targets.push({id:"claude-target",backendInstanceId:backend.id,executionEnvironmentId:remoteId,kind:"claude_agent_sdk", label:"Claude target",
+      enabled:true,moduleConfiguration:{defaults:{permissionMode:"default"}}});
+    const save = () => current.service.save(current.scope,{mutationId:randomUUID(),expectedRevision:current.repository.get(current.scope).revision,configuration:document});
+    await save();
+    const policy = () => current.projection.hostPolicy(current.scope,remoteId)!;
+    const initial = policy();
+    const oldDigest = initial.snapshot.backends[0]!.launchDigest;
+    const service = randomUUID();
+    const ready = new Map<string, "ready">([[ "backend:" + backend.id, "ready" ]]);
+    current.repository.observeHostPolicy(current.scope,remoteId,initial,ready,{incarnation:service,epoch:1,launchDigests:new Map([[backend.id,oldDigest]])});
+    backend.moduleConfiguration.executablePath = "/new/claude";
+    const edited = await save();
+    const desired = policy();
+    expect(desired.snapshot.backends[0]!.generation).toBe(initial.snapshot.backends[0]!.generation);
+    const reloaded = new ConfigurationRepository(current.database);
+    const read = () => reloaded.runtime(current.scope,"backend",backend.id);
+    const effect = () => read().effects!.find(e => e.component === "provider_launch");
+    const observed = (incarnation: string, digest?:string) => reloaded.observeHostPolicy(current.scope,remoteId,desired,ready,{
+      incarnation,epoch:2,launchDigests:new Map(digest ? [[backend.id,digest]] : []),
+    });
+    const genericObservation = () => reloaded.observe(current.scope,{...read(),connectionState:"connected",startupEnvironmentPending:false,
+      effectiveRevision:edited.revision,applyState:"applied"});
+    observed(service,oldDigest);
+    genericObservation();
+    expect(effect()).toMatchObject({state:"restart_backend",providerLaunch:{confirmedDigest:oldDigest,desiredDigest:desired.snapshot.backends[0]!.launchDigest}});
+    expect(read().applyState).toBe("pending");
+    observed(service);
+    expect(effect()?.state).toBe("restart_backend");
+    const replacement = randomUUID();
+    observed(replacement);
+    genericObservation();
+    expect(effect()).toMatchObject({state:"next_launch",providerLaunch:{confirmedDigest:null}});
+    const newDigest = desired.snapshot.backends[0]!.launchDigest;
+    observed(replacement,newDigest);
+    genericObservation();
+    expect(effect()).toMatchObject({state:"applied",effectiveRevision:edited.revision,providerLaunch:{confirmedDigest:newDigest}});
+    expect(read().applyState).toBe("applied");
+    const response = configurationSnapshotSchema.parse(await current.service.get(current.scope));
+    const confirmation = response.runtimes.find(r => r.resourceId === backend.id)!.effects!.find(e => e.component === "provider_launch")!.lastHostConfirmation;
+    expect(confirmation).toEqual({incarnation:replacement, epoch:2, revision:desired.revision, digest:desired.digest});
+  });
+
+  it("migrates ambiguous Antigravity owners without choosing a winner, preserving receipts and original target intent", async () => {
+    const current = fixture(false, 165);
+    const document = remoteDocument();
+    for (const id of ["a", "b"]) {
+      document.backends.push({ id, kind: "antigravity", label: id, enabled: true, modelPolicy: {type: "catalog"}, moduleConfiguration: { initializationTimeoutMs: 30_000 } });
+      document.targets.push({ id: id + "-enabled", kind: "antigravity_acp", label: id, enabled: true, executionEnvironmentId: remoteId, backendInstanceId: id, moduleConfiguration: {defaults: {}} },
+        { id: id + "-disabled", kind: "antigravity_acp", label: id, enabled: false, executionEnvironmentId: remoteId, backendInstanceId: id, moduleConfiguration: {defaults: {}} });
+    }
+    document.defaultTargetId = "a-enabled";
+    const {tenantId, principalId} = current.scope;
+    current.database.prepare("INSERT INTO principal_execution_configuration VALUES (?,?,?,?,0)").run(tenantId,principalId,3, JSON.stringify(document));
+    const runtime: ConfigurationRuntimeState = { resourceKind: "backend", resourceId: "a", desiredRevision: 3, effectiveRevision: 3, applyState: "applied",
+      preference: "automatic", connectionState: "connected", incarnation: randomUUID(), softwareVersion: "1", upgradeState: "current",
+      activeResources: 2, supportedActions: [], lastError: null };
+    current.database.prepare("INSERT INTO execution_configuration_runtime_state VALUES (?,?,?,?,?)").run(tenantId,principalId,"backend","a",JSON.stringify(runtime));
+    current.database.prepare("INSERT INTO execution_configuration_runtime_state VALUES (?,?,?,?,?)")
+      .run(tenantId,principalId,"environment",remoteId,JSON.stringify({...runtime,resourceKind:"environment",resourceId:remoteId}));
+    const saveRequest = { mutationId: randomUUID(), expectedRevision: 2, configuration: document };
+    const snapshot = {revision: 3, configuration: document, runtimes:[runtime]};
+    const insert = current.database.prepare("INSERT INTO execution_configuration_receipts VALUES (?,?,?,?,?,?,?,0)");
+    insert.run(tenantId,principalId,saveRequest.mutationId,"save",configurationFingerprint(saveRequest),JSON.stringify(saveRequest),JSON.stringify(snapshot));
+    const pairingMutation = randomUUID();
+    current.database.prepare("INSERT INTO host_pairing_receipts VALUES (?,?,?,'reapprove',?,?,0)")
+      .run(tenantId, principalId, pairingMutation, "c".repeat(64), JSON.stringify({configuration:snapshot, pairing:{id:"retained"}}));
+    const stop = { mutationId: randomUUID(), expectedRevision: 3, resourceKind: "backend" as const, resourceId: "a", action: "stop" as const, expectedIncarnation: runtime.incarnation, impactToken: null };
+    insert.run(tenantId,principalId,stop.mutationId,"lifecycle",configurationFingerprint(stop),JSON.stringify(stop),JSON.stringify({mutationId: stop.mutationId,state: "rejected",runtime}));
+    applyDatabaseMigrations(current.database, backendNormalizedMigrations);
+    const repaired = current.repository.get(current.scope);
+    expect(repaired.revision).toBe(4);
+    expect(repaired.configuration.backends.filter(b => b.kind === "antigravity").map(b => b.enabled)).toEqual([false,false]);
+    expect(repaired.configuration.targets.filter(t => t.kind === "antigravity_acp").every(t => !t.enabled)).toBe(true);
+    expect(repaired.configuration.defaultTargetId).toBeNull();
+    expect(repaired.runtimes[0]).toMatchObject({activeResources: 2, effects: [{component:"ownership",state:"failed"}]});
+    expect(repaired.runtimes.find(r => r.resourceId === remoteId)).toMatchObject({applyState:"pending", effectiveRevision:null,
+      effects:expect.arrayContaining([expect.objectContaining({component:"host_policy", state:"awaiting_host"})])});
+    expect(current.repository.replaySave(current.scope, saveRequest)).toEqual({...snapshot, runtimes:[{...runtime,effects:[]}]});
+    const pairingReceipt = current.database.prepare("SELECT request_fingerprint AS fingerprint, result_json AS result FROM host_pairing_receipts WHERE mutation_id = ?")
+      .get(pairingMutation) as {fingerprint:string; result:string};
+    expect(pairingReceipt.fingerprint).toBe("c".repeat(64));
+    expect(JSON.parse(pairingReceipt.result)).toEqual({configuration:{...snapshot, runtimes:[{...runtime,effects:[]}]},pairing:{id:"retained"}});
+    expect(current.repository.replayLifecycle(current.scope, stop)?.runtime).toEqual({...runtime,effects:[]});
+    expect(() => validateConfigurationDocument({...document, targets: document.targets.map(t => t.kind === "antigravity_acp" ? {...t,enabled:false} : t), defaultTargetId:null})).toThrow(/Only one Antigravity/);
+    repaired.configuration.backends.find(b => b.id === "a")!.enabled = true;
+    const reenable = {mutationId:randomUUID(), expectedRevision:4, configuration:repaired.configuration};
+    expect(() => current.repository.save(current.scope,reenable)).toThrow(/retained Antigravity/);
+    current.repository.confirmNativeOwner(current.scope,remoteId,"antigravity","b");
+    expect(() => current.repository.confirmNativeOwner(current.scope,remoteId,"antigravity",null,"a")).toThrow(/incumbent/);
+    expect(() => current.repository.save(current.scope,reenable)).toThrow(/retained Antigravity/);
+    current.repository.confirmNativeOwner(current.scope,remoteId,"antigravity",null,"b");
+    const restored = current.repository.save(current.scope,reenable);
+    expect(restored.configuration.targets.filter(t => t.backendInstanceId === "a").map(t => t.enabled)).toEqual([true,false]);
+    expect(restored.runtimes.find(r=>r.resourceId === "a")?.effects?.find(e=>e.component === "ownership")).toBeUndefined();
+  });
+
   it("requires a boolean compression policy only on remote environments", () => {
     const remote = remoteDocument().executionEnvironments[1]!;
     const { connectionCompression: _compression, ...missing } = remote as Extract<typeof remote, { kind: "ssh" }>;
@@ -107,7 +298,10 @@ describe("database-owned configuration", () => {
       remote.connectionCompression = connectionCompression;
       saved = current.repository.save(current.scope, { mutationId: randomUUID(), expectedRevision: saved.revision, configuration: document },
         value => current.projection.project(current.scope, value));
-      expect(saved.runtimes).toEqual(original.runtimes);
+      expect(saved.runtimes.filter(item => item.resourceId !== remoteId)).toEqual(original.runtimes.filter(item => item.resourceId !== remoteId));
+      expect(saved.runtimes.find(item => item.resourceId === remoteId)?.effects).toContainEqual(expect.objectContaining({
+        component: "connection_compression", state: "next_attachment", desiredRevision: saved.revision,
+      }));
       expect(authority()).toEqual(originalAuthority);
       expect(new ConfigurationRepository(current.database).get(current.scope).configuration.executionEnvironments[1])
         .toMatchObject({ connectionCompression });
@@ -115,9 +309,8 @@ describe("database-owned configuration", () => {
     document.executionEnvironments[1]!.workspaceRoots.push("/another-root");
     const changed = current.repository.save(current.scope, { mutationId: randomUUID(), expectedRevision: saved.revision, configuration: document },
       value => current.projection.project(current.scope, value));
-    expect(changed.runtimes.filter(runtime => [remoteId, "remote-pi"].includes(runtime.resourceId)))
-      .toEqual(expect.arrayContaining([expect.objectContaining({ resourceId: remoteId, applyState: "pending", desiredRevision: changed.revision }),
-        expect.objectContaining({ resourceId: "remote-pi", applyState: "pending", desiredRevision: changed.revision })]));
+    expect(changed.runtimes.find(item => item.resourceId === remoteId)).toMatchObject({ applyState: "pending", desiredRevision: changed.revision });
+    expect(changed.runtimes.find(item => item.resourceId === "remote-pi")).toEqual(original.runtimes.find(item => item.resourceId === "remote-pi"));
     expect(authority()).not.toEqual(originalAuthority);
   });
 
@@ -206,18 +399,18 @@ describe("database-owned configuration", () => {
   });
 
   it("migrates proven Codex store identities once and allows binary maintenance without retargeting history", () => {
-    const current = fixture();
+    const current = fixture(false, 93);
     const document = structuredClone(current.document);
     document.backends.push({ id: "owned-codex", kind: "codex_app_server", label: "Codex", enabled: false, modelPolicy: { type: "catalog" }, moduleConfiguration: {
       connection: { ownership: "owned", channel: { type: "process_stdio", workingDirectory: "/tmp", executablePath: "/bin/codex", codexHome: "/home/account/.codex" } },
       policy: { allowedSandboxModes: ["read-only"], allowedNetworkAccess: ["disabled"], allowedApprovalPolicies: ["on-request"], allowedApprovalReviewers: ["user"] },
     } });
     document.targets.push(codexTarget("owned-codex"));
-    current.repository.save(current.scope, { mutationId: randomUUID(), expectedRevision: 0, configuration: document });
+    current.database.prepare("INSERT INTO principal_execution_configuration VALUES (?,?,?,?,0)").run(current.scope.tenantId, current.scope.principalId, 1, JSON.stringify(document));
     const backend = document.backends.at(-1)!;
     if (backend.kind !== "codex_app_server") throw new Error("fixture");
     const previous = configurationFingerprint({ kind: backend.kind, environmentId, nativeIdentity: backend.moduleConfiguration.connection });
-    current.database.prepare("UPDATE execution_configuration_identities SET identity_fingerprint = ? WHERE resource_id = 'owned-codex'").run("0".repeat(64));
+    current.database.prepare("INSERT INTO execution_configuration_identities VALUES (?,?,'backend','owned-codex',?)").run(current.scope.tenantId, current.scope.principalId, "0".repeat(64));
     expect(() => applyDatabaseMigrations(current.database, backendNormalizedMigrations)).toThrow("identity_migration_conflict");
     expect(current.database.prepare("SELECT version FROM schema_migrations WHERE version = 96").get()).toBeUndefined();
     current.database.prepare("UPDATE execution_configuration_identities SET identity_fingerprint = ? WHERE resource_id = 'owned-codex'").run(previous);

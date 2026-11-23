@@ -1,11 +1,13 @@
 #!/usr/bin/env node
+import { registerPersistentExecutionPolicy } from "./register-persistent-execution-policy.js";
+import { ExecutionPolicyRoutes } from "./execution-policy-routes.js";
+import { createWorkspacePolicyGuard } from "./workspace-policy-guard.js";
 import { AGENT_TOOL_CLI_CAPABILITY } from "../../internal/agent-tool-cli-protocol/capability.js";
-import { environmentVariablesResolveOperation } from "../../internal/sidecar-protocol/environment-variables-v1.js";
-import { resolveEnvironmentVariables } from "../environment-variables/runtime-environment.js";
 import { createHash, randomUUID } from "node:crypto";
 import { windowsSidecarIpc } from "./sidecar-windows-ipc.js";
 import { connect } from "node:net";
-import { readFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { access,readFile } from "node:fs/promises";
 import path from "node:path";
 import {
   agentToolsCatalogOperation,
@@ -14,7 +16,7 @@ import {
   registerDirectoryBrowserV1Operations,
   INTERACTIVE_TERMINAL_V2_EVIDENCE,
   registerComposerAttachmentsV1Operations,
-  registerControlV2Operations,
+  registerControlV3Operations,
   registerWorkspaceFilesV8Operations,
   registerWorkspaceToolsV2Operations,
   registerWorkspaceToolsShellV2Operations,
@@ -171,31 +173,70 @@ async function main(): Promise<void> {
     receipts: new PersistentSidecarManagementReceipts(path.join(paths.serviceDirectory, "management-receipts")),
     onStopped: async () => {
       workspaceContext.close(); workspaceSkills.close(); directoryBrowser.close();
-      await agentToolIngress?.close();
+      await policyRoutes.close();
       await environmentChannel.close();
       await recordPersistentSidecar(input.scope, serviceRegistry.serviceIncarnation, "stopped");
     },
     onRuntimeAttachment: ({ registry, peer, controllerEpoch, assertAdmission, assertController }) => {
+      // Retire endpoint namespaces from the detached controller before this one can publish a route.
+      void policyRoutes.close().catch(()=>{});
       const runtimeChannel = new SidecarRuntimeChannel(peer, registry);
-      registry.register(environmentVariablesResolveOperation, async ({ overrides }) => {
-        assertAdmission();
-        const values = await resolveEnvironmentVariables(overrides);
-        assertAdmission();
-        return { values };
+      const getExecutionPolicy = () => serviceRegistry.executionPolicy(controllerEpoch);
+      const validateAgentToolRoute = (
+        id: string,
+        endpoint: string,
+        directory?: string,
+        inheritedPath?: string,
+        mergedPath?: string,
+      ) => {
+        const dir = path.dirname(executablePath),
+          inherited = process.env.PATH ?? "";
+        if (
+          endpoint !== policyRoutes.endpoint(id) ||
+          (directory !== undefined && directory !== dir) ||
+          (inheritedPath !== undefined && inheritedPath !== inherited) ||
+          (mergedPath !== undefined &&
+            mergedPath !== dir + (inherited ? path.delimiter + inherited : ""))
+        )
+          throw new Error("sidecar_policy_route_denied");
+      };
+      const providerPolicy = {
+        validateAgentToolRoute,
+        getExecutionPolicy,
+        controllerScope: serviceRegistry.scope,
+        isRecoveryController: () => serviceRegistry.recoveryController,
+      };
+      registerPersistentExecutionPolicy({
+        registry,
+        peer,
+        serviceRegistry,
+        controllerEpoch,
+        policyRoutes,
+        observeBackend:(id,kind)=>{
+          switch(kind){
+            case "codex_app_server":return codexHosts.observedLaunchDigest(id);
+            case "claude_agent_sdk":return claudeHosts.observedLaunchDigest(id);
+            case "pi_native":return piHosts.observedLaunchDigest(id);
+            case "opencode":return openCodeHosts.observedLaunchDigest(id);
+            case "antigravity":return antigravityHosts.observedLaunchDigest(id);
+            default:return undefined;
+          }
+        },
       });
-      const detachCodex = registerCodexRuntimeHost({ registry, channel: runtimeChannel, hosts: codexHosts, services: serviceRegistry, controllerEpoch,
+
+      const detachCodex = registerCodexRuntimeHost({ ...providerPolicy, registry, channel: runtimeChannel, hosts: codexHosts, services: serviceRegistry, controllerEpoch,
         onDetach: () => attachment.detach(controllerEpoch) });
-      const detachClaude = claudeRuntimeAvailable ? registerClaudePersistentRuntimeHost({ registry, channel: runtimeChannel, hosts: claudeHosts, controllerEpoch,
+      const detachClaude = claudeRuntimeAvailable ? registerClaudePersistentRuntimeHost({ ...providerPolicy, registry, channel: runtimeChannel, hosts: claudeHosts, controllerEpoch,
         onDetach: () => attachment.detach(controllerEpoch) }) : () => undefined;
-      const detachOpenCode = process.platform === "linux" ? registerOpenCodeRuntimeHost({ registry, channel: runtimeChannel,
+      const detachOpenCode = process.platform === "linux" ? registerOpenCodeRuntimeHost({ ...providerPolicy, registry, channel: runtimeChannel,
         hosts: openCodeHosts, services: serviceRegistry, controllerEpoch }) : () => undefined;
-      const detachPi = process.platform !== "win32" ? registerPiNativeHost({ registry, channel: runtimeChannel,
+      const detachPi = process.platform !== "win32" ? registerPiNativeHost({ ...providerPolicy, registry, channel: runtimeChannel,
         hosts: piHosts, services: serviceRegistry, controllerEpoch }) : () => undefined;
-      const detachAntigravity = process.platform !== "win32" ? registerAntigravityHost({ registry, channel: runtimeChannel,
+      const detachAntigravity = process.platform !== "win32" ? registerAntigravityHost({ ...providerPolicy, registry, channel: runtimeChannel,
         hosts: antigravityHosts, services: serviceRegistry, controllerEpoch }) : () => undefined;
-      const detachTui = nativePtyAvailable ? registerCodexManagedTuiHost({ registry, channel: runtimeChannel, hosts: codexHosts.managedTui, services: serviceRegistry, controllerEpoch }) : () => undefined;
+      const detachTui = nativePtyAvailable ? registerCodexManagedTuiHost({ ...providerPolicy, registry, channel: runtimeChannel, hosts: codexHosts.managedTui, services: serviceRegistry, controllerEpoch }) : () => undefined;
       const unsubscribe = attachment.subscribe((event) => {
-        if (event === "detached" && attachment.controllerEpoch === controllerEpoch) { detachTui(); detachCodex(); detachClaude(); detachOpenCode(); detachPi(); detachAntigravity(); runtimeChannel.close(); unsubscribe(); }
+        if (event === "detached" && attachment.controllerEpoch === controllerEpoch) { void policyRoutes.close().catch(()=>{});detachTui(); detachCodex(); detachClaude(); detachOpenCode(); detachPi(); detachAntigravity(); runtimeChannel.close(); unsubscribe(); }
       });
   registerWorkspaceFilesV8Operations(registry, workspaceFiles.handlers);
   registerWorkspaceToolsV2Operations(registry, workspaceTools.handlers);
@@ -211,7 +252,7 @@ async function main(): Promise<void> {
     composerAttachments.handlers,
   );
   if (nativePtyAvailable) terminals.registerOperations(registry, { assertAdmission, assertController });
-  registerControlV2Operations(registry, {
+  registerControlV3Operations(registry, {
     buildId: input.expectedBuild,
     artifactSha256,
     enabledSidecarCapabilities,
@@ -240,20 +281,6 @@ async function main(): Promise<void> {
         ...INTERACTIVE_TERMINAL_V2_EVIDENCE,
       })] : []),
     ]),
-    prepareSedesCapabilities: async () => {
-      agentToolIngress ??= await AgentToolCliLocalIngress.start({
-        endpointKey: input.agentToolEndpointKey,
-        relay: {
-          handle: (request, options) => relayAgentToolCliRequest(attachment, request, options.signal,
-            sourceCapability => openCodeHosts.captureCliInvocation(sourceCapability)),
-        },
-      });
-      return {
-        endpoint: agentToolIngress.endpointUrl,
-        executableDirectory: path.dirname(executablePath),
-        inheritedPath: process.env.PATH ?? "",
-      };
-    },
     onGoAway: (reason) => {
       const timer = setTimeout(() => {
         serviceRegistry.detach(controllerEpoch);
@@ -270,6 +297,10 @@ async function main(): Promise<void> {
     const peer = attachment.currentPeer;
     if (!peer) throw new SidecarUpstreamUnavailableError();
     return peer;
+  };
+  const captureCleanup = () => {
+    const epoch = serviceRegistry.controllerEpoch;
+    return () => serviceRegistry.assertController(epoch);
   };
   const captureAdmission = () => {
     const epoch = serviceRegistry.controllerEpoch;
@@ -289,19 +320,49 @@ async function main(): Promise<void> {
     serviceDirectory: paths.serviceDirectory, services: serviceRegistry });
   const antigravityHosts = new AntigravityHostRegistry({ scope: { tenantId: input.scope.tenantId, principalId: input.scope.principalId },
     executionEnvironmentId: input.scope.executionEnvironmentId, environment: process.env, channels: environmentChannel, services: serviceRegistry });
+  const policyGuard = createWorkspacePolicyGuard(() =>
+    serviceRegistry.executionPolicy(serviceRegistry.controllerEpoch),
+  );
+  const policyRoutes: ExecutionPolicyRoutes = new ExecutionPolicyRoutes({
+    readPolicy: () => serviceRegistry.executionPolicy(serviceRegistry.controllerEpoch),
+    executableAvailable: () =>
+      access(executablePath, constants.X_OK).then(
+        () => true,
+        () => false,
+      ),
+    endpointKey: input.agentToolEndpointKey,
+    executableDirectory: path.dirname(executablePath),
+    inheritedPath: process.env.PATH ?? "",
+    start: (endpointKey, binding) =>
+      AgentToolCliLocalIngress.start({
+        endpointKey,
+        relay: {
+          handle: (request, options) => {
+            policyRoutes.assertBinding(binding);
+            return relayAgentToolCliRequest(
+              attachment,
+              request,
+              options.signal,
+              (source) => openCodeHosts.captureCliInvocation(source),
+              binding,
+            );
+          },
+        },
+      }),
+  });
+
   const openCodeHosts = new OpenCodeRuntimeHostRegistry({
     ...(launchLedger ? { beforeOwnedLaunch: () => launchLedger.markUnsupported("opencode_owned_process") } : {}),
     scope: { tenantId: input.scope.tenantId, principalId: input.scope.principalId },
     executionEnvironmentId: input.scope.executionEnvironmentId, environment: process.env, environmentChannel, services: serviceRegistry,
     agentTools: {
-      cli: () => agentToolIngress && attachment.currentPeer?.supportsOperation(openCodeToolInvokeOperation)
-        ? { endpoint: agentToolIngress.endpointUrl, executableDirectory: path.dirname(executablePath) } : undefined,
-      invoke: async (sourceCapability, request, signal, stamp) => {
+      cli: (backendInstanceId:string) => { const endpoint=policyRoutes.endpoint(backendInstanceId); return endpoint && attachment.currentPeer?.supportsOperation(openCodeToolInvokeOperation) ? {endpoint,executableDirectory:path.dirname(executablePath)} : undefined; },
+      invoke: async (sourceCapability, request, signal, stamp,backendInstanceId:string) => {
         const operation: AgentToolCliRequest["operation"] = request.operation === "list" ? { type: "list" }
           : request.operation === "describe" ? { type: "describe", toolIds: request.toolIds }
           : { type: "invoke", request: request.request };
         try {
-          return (await relayAgentToolRequest(attachment, { protocolVersion: 6, requestId: randomUUID(), sourceCapability, operation }, signal, stamp)).value;
+          return (await relayAgentToolRequest(attachment, { protocolVersion: 6, requestId: randomUUID(), sourceCapability, operation }, signal, stamp,policyRoutes.binding(backendInstanceId))).value;
         } catch (error) {
           if (error instanceof AgentToolCliIngressError) throw new BackendAgentToolRequestError(error.toolError);
           throw error;
@@ -312,22 +373,22 @@ async function main(): Promise<void> {
     scope: { tenantId: input.scope.tenantId, principalId: input.scope.principalId },
     executionEnvironmentId: input.scope.executionEnvironmentId, environment: process.env, environmentChannel, services: serviceRegistry,
     artifact: () => installEmbeddedClaudeWorker(paths.serviceDirectory),
-    validateQueryEnvironment: (environment) => {
+    validateQueryEnvironment: (environment,backendInstanceId:string) => {
       if (Object.keys(environment).length === 0) return;
       const inheritedPath = process.env.PATH ?? "";
       const expectedPath = path.dirname(executablePath) + (inheritedPath ? `${path.delimiter}${inheritedPath}` : "");
-      if (!agentToolIngress || environment.SEDES_AGENT_TOOL_ENDPOINT !== agentToolIngress.endpointUrl ||
+      if (!environment.SEDES_AGENT_TOOL_ENDPOINT || environment.SEDES_AGENT_TOOL_ENDPOINT !== policyRoutes.endpoint(backendInstanceId) ||
           environment.PATH !== expectedPath) throw new Error("claude_persistent_query_environment_denied");
     },
     // Native tools run this binary as `sedes mcp` against the same ingress.
-    validateAgentToolMcp: (agentToolMcp) => {
-      if (!agentToolIngress || agentToolMcp.endpoint !== agentToolIngress.endpointUrl ||
+    validateAgentToolMcp: (agentToolMcp,backendInstanceId:string) => {
+      if (!agentToolMcp.endpoint || agentToolMcp.endpoint !== policyRoutes.endpoint(backendInstanceId) ||
           agentToolMcp.command !== path.join(path.dirname(executablePath), "sedes")) {
         throw new Error("claude_persistent_agent_tool_mcp_denied");
       }
     },
   });
-  const terminals = new PersistentTerminalHost({
+  const terminals = new PersistentTerminalHost({policyGuard,isRecovery:()=>serviceRegistry.recoveryController,
     ...(launchLedger ? { beforeLaunch: () => launchLedger.markUnsupported("interactive_terminal") } : {}),
     scope: { tenantId: input.scope.tenantId, principalId: input.scope.principalId },
     environmentId: input.scope.executionEnvironmentId,
@@ -335,17 +396,16 @@ async function main(): Promise<void> {
     registerResource: (resource) => serviceRegistry.register(resource),
     recordAbandonment: (record) => serviceRegistry.recordAbandonment(record),
   });
-  let agentToolIngress: AgentToolCliLocalIngress | undefined;
-  const composerAttachments = new ComposerAttachmentsSidecarHost({
+  const composerAttachments = new ComposerAttachmentsSidecarHost({policyGuard,captureCleanup,
     baseDirectory: path.join(paths.serviceDirectory, "composer-attachments"),
     sessionNonce: serviceRegistry.serviceIncarnation,
     captureAdmission,
   });
-  const directoryBrowser = new DirectoryBrowserSidecarHost({
+  const directoryBrowser = new DirectoryBrowserSidecarHost({policyGuard,
     sessionNonce: serviceRegistry.serviceIncarnation,
   });
   const mutations = new CanonicalMutationSerializer();
-  const workspaceFiles = new WorkspaceFilesSidecarHost({
+  const workspaceFiles = new WorkspaceFilesSidecarHost({policyGuard,captureCleanup,
     sessionNonce: serviceRegistry.serviceIncarnation,
     captureAdmission,
     engine: new WorkspaceFilesEngine({ mutations }),
@@ -387,14 +447,14 @@ async function main(): Promise<void> {
         .catch(() => undefined);
     },
   });
-  const workspaceTools = new WorkspaceToolsSidecarHost({
+  const workspaceTools = new WorkspaceToolsSidecarHost({policyGuard,captureCleanup,
     sessionNonce: serviceRegistry.serviceIncarnation,
     captureAdmission,
     mutations,
   });
-  const workspaceContext = new WorkspaceContextSidecarHost();
-  const workspaceSkills = new WorkspaceSkillsSidecarHost();
-  const workspaceToolsShell = new WorkspaceToolsShellHost({
+  const workspaceContext = new WorkspaceContextSidecarHost({policyGuard});
+  const workspaceSkills = new WorkspaceSkillsSidecarHost({policyGuard});
+  const workspaceToolsShell = new WorkspaceToolsShellHost({policyGuard,
     ...(launchLedger ? { beforeLaunch: () => launchLedger.markUnsupported("workspace_shell") } : {}),
     captureAdmission,
     acknowledgeOperation: (operationId) => { workspaceTools.handlers.mutationAcknowledge({ operationId }, { requestId: operationId, signal: new AbortController().signal }); },

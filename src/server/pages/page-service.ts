@@ -27,15 +27,20 @@ export class PageService {
 
   async prepare(scope: RequestScope, threadId: string, source: PageSource, signal?: AbortSignal) {
     const assertCurrent = this.#captureAuthority(scope, threadId);
-    return this.#prepare(scope, threadId, pageSourceSchema.parse(source), assertCurrent, signal);
+    return this.#prepare(scope, threadId, pageSourceSchema.parse(source), assertCurrent, new Set(), signal);
   }
 
   async publish(scope: RequestScope, threadId: string, input: PublishPageRequest, authority: PagePublicationAuthority, signal?: AbortSignal) {
     input = publishPageRequestSchema.parse(input);
     const assertFilesCurrent = this.#captureAuthority(scope, threadId);
-    const assertCurrent = () => { assertFilesCurrent(); authority.assertCurrent?.(); };
+    const capturedGrants = new Set<() => void>();
+    const assertCurrent = () => {
+      assertFilesCurrent();
+      for (const check of capturedGrants) check();
+      authority.assertCurrent?.();
+    };
     assertCurrent();
-    const prepared = await this.#prepare(scope, threadId, input, assertCurrent, signal);
+    const prepared = await this.#prepare(scope, threadId, input, assertCurrent, capturedGrants, signal);
     assertCurrent();
     const result = this.repository.publish(scope, threadId, { ...input, viewport: input.viewport ?? {}, prepared, ...authority, assertCurrent });
     if (result.changed) {
@@ -46,7 +51,7 @@ export class PageService {
     return result;
   }
 
-  async #prepare(scope: RequestScope, threadId: string, source: PageSource, assertCurrent: () => void, signal?: AbortSignal) {
+  async #prepare(scope: RequestScope, threadId: string, source: PageSource, assertCurrent: () => void, capturedGrants: Set<() => void>, signal?: AbortSignal) {
     if (this.#activeImports >= 4) throw new DomainError("runtime_unavailable", "Page import is busy. Retry after the current imports finish.", true);
     this.#activeImports += 1;
     const deadline = AbortSignal.timeout(15_000);
@@ -56,9 +61,10 @@ export class PageService {
       return await importHtmlPage({ read: async (path, maximumBytes) => {
         operationSignal.throwIfAborted();
         assertCurrent();
-        const bytes = await this.dependencies.files.readAbsoluteFile(scope, threadId, path, maximumBytes, operationSignal);
+        const bytes = await this.dependencies.files.readAbsoluteFile(scope, threadId, path, maximumBytes, operationSignal, check => capturedGrants.add(check));
         operationSignal.throwIfAborted();
         assertCurrent();
+        for (const check of capturedGrants) check();
         return bytes;
       } }, source.path!, operationSignal);
     } catch (error) {
@@ -75,14 +81,13 @@ export class PageService {
     const initialThread = this.dependencies.inventory.getThread(scope, threadId);
     const workspaceId = initialThread.thread.workspaceId;
     const workspace = this.dependencies.inventory.getWorkspace(scope, workspaceId);
-    const environment = this.dependencies.inventory.getEnvironment(scope, workspace.environmentId);
     const assertCurrent = () => {
       const currentThread = this.dependencies.inventory.getThread(scope, threadId);
       const currentWorkspace = this.dependencies.inventory.getWorkspace(scope, workspaceId);
       const currentEnvironment = this.dependencies.inventory.getEnvironment(scope, workspace.environmentId);
       if (currentThread.thread.workspaceId !== workspaceId || currentWorkspace.canonicalPath !== workspace.canonicalPath ||
         currentWorkspace.environmentId !== workspace.environmentId || currentWorkspace.availability !== "available" || currentEnvironment.availability !== "available" ||
-        currentEnvironment.configurationRevision !== environment.configurationRevision || currentEnvironment.operationsConfigurationRevision !== environment.operationsConfigurationRevision) {
+        currentWorkspace.authorityRootId !== workspace.authorityRootId || currentWorkspace.environmentConfigurationRevision !== workspace.environmentConfigurationRevision) {
         throw new DomainError("conflict", "The page source environment changed. Retry against the current thread environment.");
       }
     };

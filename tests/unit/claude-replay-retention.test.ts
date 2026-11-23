@@ -1,3 +1,4 @@
+import {attachFixturePolicy} from "../helpers/execution-policy-fixture.js";
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
@@ -34,7 +35,7 @@ async function fixture(highWaterEntries = 8, highWaterBytes?: number) {
   const configuration = { tenantId: "t", principalId: "p", executionEnvironmentId: "e", backendInstanceId: "b", executablePath: "/claude", initializationTimeoutMs: 5000 };
   const serviceConfiguration = { environmentRevision: 1, operationsRevision: 1 };
   const services = new PersistentSidecarServiceRegistry({ scope: { tenantId: "t", principalId: "p", executionEnvironmentId: "e", installationId: "i" }, buildId: "test", artifactSha256: "a".repeat(64), runtimeWireVersion: SIDECAR_WIRE_VERSION, configuration: serviceConfiguration });
-  const controllerEpoch = services.attach(serviceConfiguration);
+  const controllerEpoch = attachFixturePolicy(services, serviceConfiguration);
   const host = new ClaudePersistentRuntimeHost({ configuration, client: native.runtime, close: native.runtime.close, services,
     replayRetention: { highWaterEntries, highWaterBytes, minimumHistoryIntervalMs: 100 } });
   const authority = { runtimeId: host.runtimeId, controllerEpoch };
@@ -261,7 +262,7 @@ describe("Claude acknowledged replay retention", () => {
       .mockResolvedValueOnce({ messages: [second] as never, nextCursor: null });
     await f.emit(first); await f.emit(second);
     await vi.advanceTimersByTimeAsync(1);
-    const controllerEpoch = f.services.attach({ environmentRevision: 1, operationsRevision: 1 });
+    const controllerEpoch = attachFixturePolicy(f.services, { environmentRevision: 1, operationsRevision: 1 });
     const authority = { runtimeId: f.host.runtimeId, controllerEpoch };
     const replacement = vi.fn();
     const snapshot = () => f.host.execute({ ...authority, action: "attach", replay: "full", request: { sessionId } }, replacement);

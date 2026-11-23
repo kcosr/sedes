@@ -13,8 +13,9 @@ const AGENT_TOOL_CLI_EXECUTABLE = "sedes";
 const MAXIMUM_UNIX_SOCKET_PATH_BYTES = 107;
 const MAXIMUM_ENVIRONMENT_VALUE_BYTES = 16_384;
 
-type ManagedAgentToolCliSidecarSession = Readonly<{
+type ManagedAgentToolCliLease = Readonly<{
   closed: Promise<unknown>;
+  routeGeneration?: number;
   agentToolCli?: Readonly<{
     endpoint: string;
     executableDirectory: string;
@@ -24,15 +25,14 @@ type ManagedAgentToolCliSidecarSession = Readonly<{
 
 type ManagedAgentToolCliSidecarRuntime = Readonly<{
   canAcquireCapability(capabilityId: string, majorVersion: number): boolean;
+  policyRouteGeneration?(backendInstanceId: string): number | undefined;
   acquireAgentTools(
     scope: RequestScope,
     executionEnvironmentId: string,
     signal: AbortSignal,
+    backendInstanceId?: string,
   ): Promise<
-    Readonly<{
-      session: ManagedAgentToolCliSidecarSession;
-      release(): void;
-    }>
+    ManagedAgentToolCliLease & Readonly<{ release(): void }>
   >;
 }>;
 
@@ -88,6 +88,7 @@ export function managedSshAgentToolCliAvailability(input: {
   readonly scope: RequestScope;
   readonly executionEnvironmentId: string;
   readonly runtime: ManagedAgentToolCliSidecarRuntime;
+  readonly backendInstanceId?: string;
 }): AgentToolCliAvailability {
   if (
     !input.scope.tenantId ||
@@ -100,7 +101,8 @@ export function managedSshAgentToolCliAvailability(input: {
   return Object.freeze({
     availability: "managed" as const,
     provider: Object.freeze({
-      inspect: () => input.runtime.canAcquireCapability(AGENT_TOOL_CLI_CAPABILITY.capabilityId, AGENT_TOOL_CLI_CAPABILITY.majorVersion)
+      inspect: () => input.runtime.canAcquireCapability(AGENT_TOOL_CLI_CAPABILITY.capabilityId, AGENT_TOOL_CLI_CAPABILITY.majorVersion) &&
+        (!input.backendInstanceId || input.runtime.policyRouteGeneration?.(input.backendInstanceId) !== undefined)
         ? { availability: "available" as const }
         : { availability: "unavailable" as const, reason: "sidecar_unavailable" as const },
       acquire: async (options?: {
@@ -111,6 +113,7 @@ export function managedSshAgentToolCliAvailability(input: {
           scope,
           input.executionEnvironmentId,
           signal,
+          input.backendInstanceId,
         );
         let released = false;
         const release = () => {
@@ -118,7 +121,7 @@ export function managedSshAgentToolCliAvailability(input: {
           released = true;
           lease.release();
         };
-        const metadata = lease.session.agentToolCli;
+        const metadata = lease.agentToolCli;
         if (!metadata || !validManagedMetadata(metadata)) {
           release();
           return Object.freeze({
@@ -131,7 +134,8 @@ export function managedSshAgentToolCliAvailability(input: {
           endpoint: metadata.endpoint,
           executableDirectory: metadata.executableDirectory,
           inheritedPath: metadata.inheritedPath,
-          closed: lease.session.closed,
+          closed: lease.closed,
+          ...(lease.routeGeneration ? {routeGeneration: lease.routeGeneration} : {}),
           release,
         });
       },
@@ -147,7 +151,7 @@ function cliUnavailable(): AgentToolCliAvailability {
 }
 
 function validManagedMetadata(
-  value: ManagedAgentToolCliSidecarSession["agentToolCli"] & {},
+  value: ManagedAgentToolCliLease["agentToolCli"] & {},
 ): boolean {
   let endpoint: URL;
   try {
@@ -189,7 +193,7 @@ function canonicalRemoteDirectory(value: string): boolean {
 
 function boundedEnvironmentValue(value: string): boolean {
   return (
-    Buffer.byteLength(value, "utf8") <= MAXIMUM_ENVIRONMENT_VALUE_BYTES &&
-    !/[\u0000\r\n]/u.test(value)
+    value.length > 0 && Buffer.byteLength(value, "utf8") <= MAXIMUM_ENVIRONMENT_VALUE_BYTES &&
+    !/[\u0000-\u001f\u007f]/u.test(value)
   );
 }

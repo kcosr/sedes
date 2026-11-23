@@ -121,7 +121,7 @@ export class PiBackendDriverFactory implements BackendDriverFactory {
       throw new Error("pi_driver_factory_connection_mismatch");
     }
     let driver = this.#drivers.get(connection.id);
-    if (!driver) {
+    if (driver?.connection.configurationRevision !== connection.configurationRevision) {
       driver = new PiConversationBackendDriver({
         claimNativeSession: this.#claimNativeSession,
         usage: this.#usage,
@@ -149,11 +149,6 @@ export class PiBackendDriverFactory implements BackendDriverFactory {
         ...(this.now ? { now: this.now } : {}),
       });
       this.#drivers.set(connection.id, driver);
-    } else if (
-      driver.connection.configurationRevision !==
-      connection.configurationRevision
-    ) {
-      throw new Error("pi_driver_factory_configuration_changed");
     }
     return driver;
   }

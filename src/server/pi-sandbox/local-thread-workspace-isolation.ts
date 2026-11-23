@@ -1,3 +1,4 @@
+import { type WorkspaceRootGrant, workspaceRootGrant } from "../execution/workspace-root-grant.js";
 import { realpath, stat } from "node:fs/promises";
 import { DomainError } from "../domain/errors.js";
 import type { ThreadWorkspaceIsolationResolver } from "../execution/thread-workspace-isolation.js";
@@ -23,7 +24,9 @@ function assertAllocationAuthority(
     allocation.sourceWorkspaceId !== sourceWorkspace.summary.id ||
     allocation.executionEnvironmentId !==
       sourceWorkspace.summary.environmentId ||
-    allocation.sourceCanonicalPath !== sourceWorkspace.canonicalPath
+    allocation.sourceCanonicalPath !== sourceWorkspace.canonicalPath ||
+    ((allocation.sourceAuthorityRootId || sourceWorkspace.authorityRootId) &&
+      (allocation.sourceAuthorityRootId !== sourceWorkspace.authorityRootId || allocation.sourceAuthorityGeneration !== sourceWorkspace.authorityRevision))
   ) {
     throw new DomainError(
       "conflict",
@@ -76,6 +79,7 @@ export class LocalThreadWorkspaceIsolationResolver implements ThreadWorkspaceIso
       readonly materializer: Pick<PiSandboxMaterializer, "materialize">;
       readonly runtime: Pick<LocalPiSandboxRuntime, "acquire">;
       readonly backendInstanceId: string;
+      readonly readWorkspaceRoots?: () => readonly WorkspaceRootGrant[];
       readonly admittedNetworkProfiles: ReadonlySet<
         "isolated" | "execution_host"
       >;
@@ -123,6 +127,7 @@ export class LocalThreadWorkspaceIsolationResolver implements ThreadWorkspaceIso
     this.#assertAuthority(input.scope, input.sourceWorkspace, allocation);
     if (input.access === "passive") {
       const canonicalPath = await validatedPassivePath(allocation);
+      this.#assertAuthority(input.scope, input.sourceWorkspace, allocation);
       return {
         access: "passive",
         workspaceAccess:
@@ -137,8 +142,11 @@ export class LocalThreadWorkspaceIsolationResolver implements ThreadWorkspaceIso
       };
     }
     const ready = await this.#ready(input.scope, allocation);
+    const assertCurrent = () => this.#assertAuthority(input.scope, input.sourceWorkspace, ready);
+    assertCurrent();
     if (input.access === "prepare") {
       const canonicalPath = await validatedPassivePath(ready);
+      assertCurrent();
       return {
         access: "prepare",
         workspaceAccess:
@@ -165,6 +173,16 @@ export class LocalThreadWorkspaceIsolationResolver implements ThreadWorkspaceIso
       networkMode: ready.networkProfile,
       workspaceAccess: ready.workspaceAccess,
     });
+    try { assertCurrent(); } catch (error) {
+      await lease.release();
+      throw error;
+    }
+    const read = async <T>(action: () => Promise<T>): Promise<T> => {
+      assertCurrent();
+      const result = await action();
+      assertCurrent();
+      return result;
+    };
     return {
       access: "active",
       workspaceAccess:
@@ -175,8 +193,16 @@ export class LocalThreadWorkspaceIsolationResolver implements ThreadWorkspaceIso
       },
       semanticCwd: lease.semanticCwd,
       serviceCwd: lease.serviceCwd,
-      executor: lease.executor,
-      contextReader: lease.contextReader,
+      executor: {
+        read: request => read(() => lease.executor.read(request)),
+        list: request => read(() => lease.executor.list(request)),
+        find: request => read(() => lease.executor.find(request)),
+        grep: request => read(() => lease.executor.grep(request)),
+        write: request => { assertCurrent(); return lease.executor.write(request); },
+        edit: request => { assertCurrent(); return lease.executor.edit(request); },
+        startShell: request => { assertCurrent(); return lease.executor.startShell(request); },
+      },
+      contextReader: { read: signal => read(() => lease.contextReader.read(signal)) },
       environmentLabel: lease.environmentLabel,
       release: () => lease.release(),
     };
@@ -244,6 +270,9 @@ export class LocalThreadWorkspaceIsolationResolver implements ThreadWorkspaceIso
     allocation: PiSandboxAllocationRecord,
   ): void {
     assertAllocationAuthority(scope, sourceWorkspace, allocation);
+    if (this.input.readWorkspaceRoots && !workspaceRootGrant(this.input.readWorkspaceRoots(), sourceWorkspace.canonicalPath, sourceWorkspace)) {
+      throw new DomainError("conflict", "The isolated workspace root is no longer authorized.");
+    }
     if (!this.input.admittedNetworkProfiles.has(allocation.networkProfile)) {
       throw new DomainError(
         "runtime_unavailable",
@@ -301,6 +330,7 @@ export class UnavailableThreadWorkspaceIsolationResolver implements ThreadWorksp
     assertAllocationAuthority(input.scope, input.sourceWorkspace, allocation);
     if (input.access === "passive") {
       const canonicalPath = await validatedPassivePath(allocation);
+      assertAllocationAuthority(input.scope, input.sourceWorkspace, allocation);
       return {
         access: "passive",
         workspaceAccess:

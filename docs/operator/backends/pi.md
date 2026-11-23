@@ -15,6 +15,10 @@ For implementation ownership, projection, isolation, persistence, recovery,
 and contributor invariants, see the [Pi internal contract](../../internals/backends/pi.md).
 For a comparison with other providers, see the [backend support matrix](index.md).
 
+On SSH and paired hosts, enabling Pi workspace tools applies to the running
+sidecar. The Pi SDK model loop stays on the server. Settings shows when the
+host has confirmed the requested workspace operations.
+
 ## On this page
 
 - [Prerequisites and authentication](#prerequisites-and-authentication)

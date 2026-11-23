@@ -1,6 +1,6 @@
 export * from "./contracts.js";
 export * from "./agent-tools-v6.js";
-export * from "./control-v2.js";
+export * from "./control-v3.js";
 export * from "./composer-attachments-v1.js";
 export * from "./directory-browser-v1.js";
 export * from "./envelopes.js";
@@ -15,3 +15,5 @@ export * from "./workspace-tools-shell-v2.js";
 export * from "./workspace-tools-v2.js";
 export * from "./workspace-context-v1.js";
 export * from "./workspace-skills-v1.js";
+
+export * from "./execution-policy.js";

@@ -201,9 +201,8 @@ export class ClaudePersistentRuntimeClient implements ClaudeRuntimeClient {
       }
       connection = new ClaudeSidecarRuntimeConnection(lease.channel);
       const configuration = { ...this.input.scope, executablePath: this.input.executablePath, configDirectory: this.input.configDirectory, startupEnvironmentVariables: this.input.startupEnvironmentVariables, initializationTimeoutMs: this.input.initializationTimeoutMs };
-      const runtimeId = existingOnly
-        ? await connection.lookup(configuration, lease.controllerEpoch)
-        : await connection.ensure(configuration);
+      const existing = await connection.lookup(configuration, lease.controllerEpoch);
+      const runtimeId = existing ?? (existingOnly || this.#retainedIdentity ? null : await connection.ensure(configuration));
       if (!runtimeId || (existingOnly && (runtimeId !== this.#retainedIdentity!.runtimeId || lease.serviceIncarnation !== this.#retainedIdentity!.serviceIncarnation))) {
         throw new Error("claude_persistent_retained_runtime_unavailable");
       }
@@ -343,7 +342,7 @@ class PersistentSession implements ClaudeRuntimeSession {
           ...(options.executionEnvironment ? { executionEnvironment: options.executionEnvironment } : {}),
     });
     let opened: unknown;
-    try { opened = await this.client.execute({ action: "open", request, replay: this.#initialization ? "unacknowledged" : "full" }, attachment); }
+    try { opened = await this.client.execute({ action: "open", request, applicationThreadId: options.applicationThreadId, replay: this.#initialization ? "unacknowledged" : "full" }, attachment); }
     catch (error) {
       if (!(error instanceof SidecarOperationError) || error.code !== "claude_persistent_session_capacity_exceeded") throw error;
       throw new BackendError({

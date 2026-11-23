@@ -1,6 +1,8 @@
+import { launchAdmission } from "../../src/server/backends/provider-policy-admission.js";
+import {attachFixturePolicy} from "../helpers/execution-policy-fixture.js";
 import { describe, expect, it, vi } from "vitest";
 import { SIDECAR_WIRE_VERSION } from "../../src/internal/sidecar-protocol/envelopes.js";
-import { SidecarFrameWriteError, SidecarOperationRegistry, SidecarProtocolPeer, controlHelloOperation, registerControlV2Operations, type SidecarFrame, type SidecarFrameSendOptions, type SidecarFrameTransport, type SidecarTransportClosure } from "../../src/internal/sidecar-protocol/index.js";
+import { SidecarFrameWriteError, SidecarOperationRegistry, SidecarProtocolPeer, controlHelloOperation, registerControlV3Operations, type SidecarFrame, type SidecarFrameSendOptions, type SidecarFrameTransport, type SidecarTransportClosure } from "../../src/internal/sidecar-protocol/index.js";
 import { SidecarRuntimeChannel } from "../../src/server/sidecar/runtime-channel.js";
 import { PersistentSidecarServiceRegistry } from "../../src/server/sidecar/persistent-sidecar-service-registry.js";
 import { CodexRuntimeHost } from "../../src/server/backends/codex/runtime/codex-runtime-host.js";
@@ -699,18 +701,23 @@ async function diagnosticAttachment() {
 
 async function attachment(host: CodexRuntimeHost, services: PersistentSidecarServiceRegistry, overrides: Partial<CodexRuntimeHostRegistry> = {}, mode: "normal" | "recovery" = "normal") {
   const pair = transportPair();
-  const epoch = services.attach(configuration, mode);
+  const digest = "a".repeat(64);
+  const epoch = attachFixturePolicy(services, configuration, mode, { roots: [], capabilities: [], backends: [
+    { id: scope.backendInstanceId, kind: "codex_app_server", generation: 1, launchDigest: digest, targets: [{ id: "template", generation: 1 }] },
+  ] });
+  const getExecutionPolicy = () => services.executionPolicy(epoch);
+  if (mode === "normal") launchAdmission({ getExecutionPolicy }, "codex_app_server", scope.backendInstanceId, digest).bind(host);
   const leftRegistry = new SidecarOperationRegistry();
   const rightRegistry = new SidecarOperationRegistry();
   const sedes = new SidecarProtocolPeer({ role: "sedes", transport: pair.left, sessionNonce: "n".repeat(48), registry: leftRegistry });
   const sidecar = new SidecarProtocolPeer({ role: "sidecar", transport: pair.right, sessionNonce: "n".repeat(48), registry: rightRegistry });
   const left = new SidecarRuntimeChannel(sedes, leftRegistry);
   const right = new SidecarRuntimeChannel(sidecar, rightRegistry);
-  const detach = registerCodexRuntimeHost({ registry: rightRegistry, channel: right, hosts: { get: (id: string) => { if (id !== host.runtimeId) throw new Error("unknown"); return host; }, ...overrides } as CodexRuntimeHostRegistry, services, controllerEpoch: epoch, onDetach: () => {} });
+  const detach = registerCodexRuntimeHost({ getExecutionPolicy, registry: rightRegistry, channel: right, hosts: { get: (id: string) => { if (id !== host.runtimeId) throw new Error("unknown"); return host; }, ...overrides } as CodexRuntimeHostRegistry, services, controllerEpoch: epoch, onDetach: () => {} });
   const capabilities = rightRegistry.capabilities().map(({ capabilityId, majorVersion }) => ({ capabilityId, majorVersion }));
-  registerControlV2Operations(rightRegistry, { buildId: "test", artifactSha256: "a".repeat(64), enabledSidecarCapabilities: capabilities, enabledSedesCapabilities: leftRegistry.capabilities() });
+  registerControlV3Operations(rightRegistry, { buildId: "test", artifactSha256: "a".repeat(64), enabledSidecarCapabilities: capabilities, enabledSedesCapabilities: leftRegistry.capabilities() });
   sedes.start(); sidecar.start();
-  await sedes.call(controlHelloOperation, { compression: "none", expectedBuildId: "test", expectedArtifactSha256: "a".repeat(64), authorizedSidecarCapabilities: capabilities, offeredSedesCapabilities: leftRegistry.capabilities() });
+  await sedes.call(controlHelloOperation, { compression: "none", expectedBuildId: "test", expectedArtifactSha256: "a".repeat(64), supportedSidecarCapabilities: capabilities, offeredSedesCapabilities: leftRegistry.capabilities() });
   return { detach, epoch, hostChannel: right, channel: left, closed: pair.left.closed, connection: new CodexSidecarRuntimeConnection(left), close: async () => { detach(); services.detach(epoch); left.close(); right.close(); await sedes.close("test_complete"); } };
 }
 

@@ -84,10 +84,7 @@ export class CodexThreadActionPersistence implements ThreadActionPersistenceProv
   readonly #featureMutations: ProviderFeatureMutationRepository;
   readonly #executionPolicy: CodexExecutionPolicyAllowlist;
   readonly #modelPolicy: CompiledBackendModelPolicy;
-  readonly #defaultExecutionPolicyByConnectionId: ReadonlyMap<
-    string,
-    CodexExecutionPolicySelection
-  >;
+  readonly #defaultExecutionPolicyByConnectionId: Pick<ReadonlyMap<string, CodexExecutionPolicySelection>, "get">;
   readonly #goalSessions: CodexGoalSessionRegistry | undefined;
   readonly #managedTui: CodexManagedTuiController | undefined;
   readonly #fastModeRuntime: Pick<CodexFastModeSessionRegistry, "syncServiceTier" | "controller"> | undefined;
@@ -118,10 +115,7 @@ export class CodexThreadActionPersistence implements ThreadActionPersistenceProv
     readonly featureMutations: ProviderFeatureMutationRepository;
     readonly executionPolicy: CodexExecutionPolicyAllowlist;
     readonly modelPolicy: CompiledBackendModelPolicy;
-    readonly defaultExecutionPolicyByConnectionId: ReadonlyMap<
-      string,
-      CodexExecutionPolicySelection
-    >;
+    readonly defaultExecutionPolicyByConnectionId: Pick<ReadonlyMap<string, CodexExecutionPolicySelection>, "get">;
     readonly goalSessions?: CodexGoalSessionRegistry;
     readonly managedTui?: CodexManagedTuiController;
     readonly fastModeRuntime?: Pick<CodexFastModeSessionRegistry, "syncServiceTier" | "controller">;

@@ -224,7 +224,7 @@ remote query, and the archive is refused while that query still has running
 work. The sidecar holds at most 32 Claude sessions, fork launches included.
 Beyond that, opening a thread or forking fails with a message naming the limit
 and asking you to archive or close idle Claude threads in that environment.
-These rules require sidecar runtime protocol 17.
+These rules require sidecar runtime protocol 18.
 
 A long-lived query keeps answering permission requests and accepting input
 indefinitely. It retains exact replay receipts for its newest 16,384 inputs and

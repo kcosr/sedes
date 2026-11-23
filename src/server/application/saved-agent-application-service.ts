@@ -1545,6 +1545,7 @@ export class SavedAgentApplicationService {
       backend.configurationRevision !== resolved.backendRevision ||
       backend.configurationFingerprint !== resolved.backendFingerprint ||
       workspace.environmentId !== resolved.executionEnvironmentId ||
+      !this.input.inventory.workspaceAuthorityIsCurrent(scope, workspace) ||
       workspace.revision !== resolved.workspaceRevision ||
       workspace.environmentConfigurationRevision !==
         resolved.workspaceAuthorityRevision

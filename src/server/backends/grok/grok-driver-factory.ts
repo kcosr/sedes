@@ -26,7 +26,7 @@ export class GrokBackendDriverFactory implements BackendDriverFactory {
   readonly #startupEnvironmentVariables: EnvironmentVariableOverrides;
   readonly #resolveThreadEnvironment: ThreadEnvironmentResolver;
   readonly #configuration: GrokBackendConfigurationInput;
-  readonly #connections: ReadonlyMap<string, AgentConnectionProfile>;
+  readonly #connection: (id: string) => AgentConnectionProfile | undefined;
   readonly #environmentChannel: ExecutionEnvironmentChannelProvider;
   readonly #environment: Readonly<Record<string, string | undefined>>;
   readonly #submissionCorrelationKey: Uint8Array;
@@ -73,17 +73,12 @@ export class GrokBackendDriverFactory implements BackendDriverFactory {
     this.#outputArtifacts = input.outputArtifacts;
     this.#beginRuntimeAssessmentObservation =
       input.beginRuntimeAssessmentObservation;
-    this.#connections = new Map(
-      input.connections.map((connection) => [
-        connection.id,
-        Object.freeze({ ...connection }),
-      ]),
-    );
+    this.#connection = id => input.connections.find(profile => profile.id === id);
     if (
       this.instance.kind !== "grok_build" ||
       this.instance.tenantId !== this.scope.tenantId ||
       this.#submissionCorrelationKey.byteLength !== 32 ||
-      this.#connections.size !== input.connections.length
+      new Set(input.connections.map(profile => profile.id)).size !== input.connections.length
     ) {
       throw new Error("grok_driver_factory_configuration_invalid");
     }
@@ -91,12 +86,12 @@ export class GrokBackendDriverFactory implements BackendDriverFactory {
 
   create(connection: AgentConnectionProfile): GrokConversationBackendDriver {
     if (this.#closed) throw new Error("grok_driver_factory_closed");
-    const admitted = this.#connections.get(connection.id);
+    const admitted = this.#connection(connection.id);
     if (!admitted || !sameConnection(admitted, connection)) {
       throw new Error("grok_driver_factory_connection_invalid");
     }
     const existing = this.#drivers.get(connection.id);
-    if (existing) return existing;
+    if (existing?.connection.configurationRevision === connection.configurationRevision) return existing;
     const driver = new GrokConversationBackendDriver({
         resolveThreadEnvironment: this.#resolveThreadEnvironment,
         startupEnvironmentVariables: this.#startupEnvironmentVariables,

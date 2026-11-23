@@ -234,7 +234,7 @@ class CodexBackendModuleRuntime implements BackendModuleRuntime {
       ? new CodexRemoteRuntimeSupervisor({
           scope: runtimeScope,
           provider: input.context.sidecarRuntime,
-          configuration: { startupEnvironmentVariables: this.#startupEnvironmentVariables, instance: input.context.instance, connections: input.context.connections, connection: input.prepared.configuration.connection },
+          configuration: { startupEnvironmentVariables: this.#startupEnvironmentVariables, instance: input.context.instance, get connections() { return input.context.connections; }, connection: input.prepared.configuration.connection },
           serverRequests: this.#serverRequests,
           receipts: new CodexRuntimeReceiptStore(input.context.database, undefined, (scope, threadId) =>
             this.#fastModeSessions.controller(scope, threadId)?.publicationChanged()),
@@ -267,21 +267,6 @@ class CodexBackendModuleRuntime implements BackendModuleRuntime {
       input.prepared.modelPolicy,
     );
     const executionPolicy = input.prepared.configuration.policy;
-    const configuredDefaultsByTemplateId = new Map(
-      input.prepared.connections.map((connection) => [
-        connection.id,
-        executionPolicySelection(connection.configuration.defaults),
-      ]),
-    );
-    const defaultExecutionPolicyByConnectionId = new Map(
-      input.context.connections.map((connection) => {
-        const policy = configuredDefaultsByTemplateId.get(
-          connection.templateId,
-        );
-        if (!policy) throw new Error("codex_connection_default_policy_missing");
-        return [connection.id, policy] as const;
-      }),
-    );
     const executionSettings = new CodexExecutionSettingsRepositoryAdapter(
       settingsRepository,
       executionPolicy,
@@ -378,11 +363,14 @@ class CodexBackendModuleRuntime implements BackendModuleRuntime {
       fastModeSessions: this.#fastModeSessions,
       managedTui: this.#managedTui,
       connections: input.prepared.connections,
-      materializedConnections: input.context.connections,
+      targetDefinition: input.context.targetDefinition,
+      get materializedConnections() { return input.context.connections; },
     });
-    const resolveConnectionDefaults = (connection: AgentConnectionProfile) =>
-      input.prepared.connections.find(({ id }) => id === connection.templateId)
-        ?.configuration.defaults;
+    const resolveConnectionDefaults = (connection: AgentConnectionProfile) => {
+      const current = input.context.targetDefinition?.(connection.templateId);
+      if (current?.kind === "codex_app_server") return current.moduleConfiguration.defaults;
+      return input.prepared.connections.find(({ id }) => id === connection.templateId)?.configuration.defaults;
+    };
     const persistence = new CodexBackendThreadPersistenceAdapter({
       database: input.context.database,
       scope: input.context.scope,
@@ -422,7 +410,13 @@ class CodexBackendModuleRuntime implements BackendModuleRuntime {
       ),
       executionPolicy,
       modelPolicy: input.prepared.modelPolicy,
-      defaultExecutionPolicyByConnectionId,
+      defaultExecutionPolicyByConnectionId: {
+        get: id => {
+          const connection = input.context.connections.find(profile => profile.id === id && profile.enabled);
+          const defaults = connection && resolveConnectionDefaults(connection);
+          return defaults && executionPolicySelection(defaults);
+        },
+      },
       goalSessions: this.#goalSessions,
       fastModeRuntime: this.#fastModeSessions,
       managedTui: this.#managedTui,
@@ -764,7 +758,7 @@ class CodexBackendModuleRuntime implements BackendModuleRuntime {
     const materialized = this.#context.connections.find(
       ({ id }) => id === connection.id,
     );
-    const configured = this.#prepared.connections.find(
+    const configured = this.#context.targetDefinition?.(connection.templateId) ?? this.#prepared.connections.find(
       ({ id }) => id === connection.templateId,
     );
     if (

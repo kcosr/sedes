@@ -1,3 +1,4 @@
+import type { InstalledExecutionPolicy } from "../../internal/sidecar-protocol/execution-policy.js";
 import { execFile as execFileCallback } from "node:child_process";
 import { AGENT_TOOL_CLI_CAPABILITY } from "../../internal/agent-tool-cli-protocol/capability.js";
 import { constants as fsConstants } from "node:fs";
@@ -30,7 +31,7 @@ import { LocalEnvironmentChannelProvider } from "../execution/local-environment-
 import { LocalInteractiveTerminalProvider } from "../execution/local-interactive-terminal-provider.js";
 import type { InteractiveTerminalEnvironmentProvider } from "../execution/interactive-terminal.js";
 import { RemoteExecutionEnvironment } from "../execution/remote-execution-environment.js";
-import { isWithinRemoteRoot } from "../execution/remote-path.js";
+import { workspaceRootGrant } from "../execution/workspace-root-grant.js";
 import { SshEnvironmentAvailabilityAggregator } from "../execution/ssh-environment-availability.js";
 import { SshInteractiveTerminalProvider } from "../execution/ssh-interactive-terminal-provider.js";
 import { SshEnvironmentError } from "../execution/ssh-open-ssh.js";
@@ -39,13 +40,11 @@ import type { ThreadWorkspaceIsolationResolver } from "../execution/thread-works
 import { LocalExecutionAttachmentStager } from "../composer-attachments/local-execution-attachment-stager.js";
 import { SidecarExecutionAttachmentStager } from "../composer-attachments/sidecar-execution-attachment-stager.js";
 import {
-  UnsupportedExecutionAttachmentStager,
   type ExecutionAttachmentStager,
 } from "../composer-attachments/execution-attachment-stager.js";
 import { LocalWorkspaceFileProvider } from "../workspace-files/local-workspace-file-provider.js";
 import { SidecarWorkspaceFileProvider } from "../workspace-files/sidecar-workspace-file-provider.js";
 import {
-  UnsupportedWorkspaceFileProvider,
   type WorkspaceFileProvider,
 } from "../workspace-files/contracts.js";
 import { SidecarWorkspaceToolExecutor } from "../workspace-tools/sidecar-workspace-tool-executor.js";
@@ -84,6 +83,7 @@ export interface ExecutionEnvironmentRuntime {
   readonly sidecarRuntime?: SidecarRuntime;
   /** Present only when the environment grants the agent-tools CLI capability. */
   readonly agentToolCliRuntime?: SidecarRuntime;
+  readonly ensureLocalPiBackend?: (backendInstanceId: string) => Promise<void>;
   readonly workspaceIsolations: ReadonlyMap<
     string,
     ThreadWorkspaceIsolationResolver
@@ -98,11 +98,17 @@ export interface ExecutionEnvironmentRuntime {
 }
 
 export interface ExecutionEnvironmentRuntimeInput {
+  readonly readDesiredPolicy?: () => InstalledExecutionPolicy;
+  readonly onPolicyChanged?: () => void;
+  readonly policyRecovery?: SidecarRuntimeOwnerOptions<SidecarClientSession>["policyRecovery"];
+  readonly readWorkspaceBinding?: (workspaceId: string) => {authorityRootId?: string; authorityRevision: number};
+  readonly readWorkspaceRoots: () => InstalledExecutionPolicy["snapshot"]["roots"];
   readonly outboundConnection?: {
     createProvisioner(input: {
       readonly artifact: SidecarArtifactRegistration;
       readonly serviceScope: SidecarServiceScope;
       readonly configuration: SidecarServiceConfiguration;
+      readonly requiresPolicyRecovery?: (incarnation: string) => boolean;
       readonly agentToolEndpointKey: string;
     }): SidecarProvisioner;
     isConnected(): boolean;
@@ -155,8 +161,9 @@ export async function createExecutionEnvironmentRuntime(
     assertRecord(scope, configured, current);
     return current;
   };
-  const activeConfigurationRevision = () =>
-    activeRecord().configurationRevision;
+  // A replaced transport invalidates the owner through close(). Durable policy
+  // revisions advance on live edits and cannot identify the transport.
+  const activeConfigurationRevision = () => { activeRecord(); return record.configurationRevision; };
   const resources = new StartupResourceStack();
   const workspaceIsolations = new Map<
     string,
@@ -173,6 +180,7 @@ export async function createExecutionEnvironmentRuntime(
         environmentId: record.id,
         scope,
         allowedRoots: configured.workspaceRoots,
+        readWorkspaceRoots: input.readWorkspaceRoots,
         label: configured.label,
         environment: input.environment,
         configurationRevision: record.configurationRevision,
@@ -192,6 +200,8 @@ export async function createExecutionEnvironmentRuntime(
       const workspaceFiles = new LocalWorkspaceFileProvider({
         scope,
         environmentId: record.id,
+        readWorkspaceRoots: input.readWorkspaceRoots,
+        readWorkspaceBinding: input.readWorkspaceBinding,
       });
       resources.defer("local workspace files", () => workspaceFiles.close(), {
         mode: "ownership_critical",
@@ -210,58 +220,40 @@ export async function createExecutionEnvironmentRuntime(
         environmentId: record.id,
         environment: input.environment,
       });
-      const localPiIds = [...new Set(input.localPiBackendInstanceIds)];
-      if (localPiIds.length > 0) {
-        const sandboxAvailable = await (
-          input.sandboxProbe ?? bubblewrapRuntimeAvailable
-        )("/usr/bin/bwrap");
-        if (sandboxAvailable) {
-          const artifact = await (
-            input.sandboxWorkerArtifact ??
-            (() =>
-              loadPiSandboxWorkerArtifact(
-                path.resolve(
-                  path.dirname(fileURLToPath(import.meta.url)),
-                  "../../../dist/pi-sandbox-worker/manifest.json",
-                ),
-              ))
-          )();
-          const runtime = new LocalPiSandboxRuntime({
-            environmentLabel: configured.label,
-            channels,
-            bubblewrapExecutablePath: "/usr/bin/bwrap",
-            workerNodePath: process.execPath,
-            workerArtifact: artifact,
-          });
-          resources.defer("local Pi sandbox runtime", () => runtime.close(), {
-            mode: "ownership_critical",
-          });
-          for (const backendInstanceId of localPiIds) {
-            const profiles = Object.freeze([
-              ...configured.workspaceIsolation.networkProfiles,
-            ]);
-            networkProfiles.set(backendInstanceId, profiles);
-            workspaceIsolations.set(
-              backendInstanceId,
-              new LocalThreadWorkspaceIsolationResolver({
-                allocations: input.piSandbox.allocations,
-                materializer: input.piSandbox.materializer,
-                runtime,
-                backendInstanceId,
-                admittedNetworkProfiles: new Set(profiles),
-              }),
-            );
-          }
+      let sandboxRuntime: Promise<LocalPiSandboxRuntime | undefined> | undefined;
+      let sandboxClosed = false;
+      const prepareSandbox = async () => {
+        if (!(await (input.sandboxProbe ?? bubblewrapRuntimeAvailable)("/usr/bin/bwrap"))) return undefined;
+        const artifact = await (input.sandboxWorkerArtifact ?? (() => loadPiSandboxWorkerArtifact(
+          path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../dist/pi-sandbox-worker/manifest.json"),
+        )))();
+        return new LocalPiSandboxRuntime({
+          environmentLabel: configured.label, channels, bubblewrapExecutablePath: "/usr/bin/bwrap",
+          workerNodePath: process.execPath, workerArtifact: artifact,
+        });
+      };
+      resources.defer("local Pi sandbox runtime", async () => {
+        sandboxClosed = true;
+        await (await sandboxRuntime)?.close();
+      }, {mode: "ownership_critical"});
+      const ensureLocalPiBackend = async (backendInstanceId: string) => {
+        if (sandboxClosed) throw new Error("environment_runtime_retired");
+        if (workspaceIsolations.has(backendInstanceId)) return;
+        sandboxRuntime ??= prepareSandbox().catch(error => { sandboxRuntime = undefined; throw error; });
+        const runtime = await sandboxRuntime;
+        if (sandboxClosed) throw new Error("environment_runtime_retired");
+        if (runtime) {
+          const profiles = Object.freeze([...configured.workspaceIsolation.networkProfiles]);
+          networkProfiles.set(backendInstanceId, profiles);
+          workspaceIsolations.set(backendInstanceId, new LocalThreadWorkspaceIsolationResolver({
+            allocations: input.piSandbox.allocations, materializer: input.piSandbox.materializer, runtime,
+            readWorkspaceRoots: input.readWorkspaceRoots, backendInstanceId, admittedNetworkProfiles: new Set(profiles),
+          }));
         } else {
-          for (const backendInstanceId of localPiIds)
-            workspaceIsolations.set(
-              backendInstanceId,
-              new UnavailableThreadWorkspaceIsolationResolver(
-                input.piSandbox.allocations,
-              ),
-            );
+          workspaceIsolations.set(backendInstanceId, new UnavailableThreadWorkspaceIsolationResolver(input.piSandbox.allocations));
         }
-      }
+      };
+      for (const backendId of input.localPiBackendInstanceIds) await ensureLocalPiBackend(backendId);
       return {
         environmentId: record.id,
         provider,
@@ -274,6 +266,7 @@ export async function createExecutionEnvironmentRuntime(
           environmentKind: "local",
           environmentLabel: configured.label,
         }),
+        ensureLocalPiBackend,
         workspaceIsolations,
         networkProfiles,
         close,
@@ -283,6 +276,10 @@ export async function createExecutionEnvironmentRuntime(
     const outbound = configured.kind === "outbound" ? input.outboundConnection : undefined;
     if (configured.kind === "outbound" && !outbound) throw new Error("outbound_connection_registry_unavailable");
     const platform = configured.kind === "outbound" ? configured.platform : "linux";
+    const readDesiredPolicy = input.readDesiredPolicy;
+    if (!readDesiredPolicy) throw new Error("remote_execution_policy_missing");
+    const readWorkspaceRoots = () => runtime.policyWorkspaceRoots();
+    const readRootPaths = () => readWorkspaceRoots().map(root => root.path);
     let directoryBrowser: SidecarDirectoryBrowserProvider | undefined;
     const provider = new RemoteExecutionEnvironment({
       ...(configured.kind === "outbound"
@@ -292,6 +289,7 @@ export async function createExecutionEnvironmentRuntime(
       environmentId: record.id,
       scope,
       allowedRoots: configured.workspaceRoots,
+      readWorkspaceRoots,
       label: configured.label,
       availability: outbound ? "unavailable" : record.availability,
       diagnosticCode: outbound ? "outbound_environment_connecting" : record.diagnosticCode,
@@ -299,7 +297,7 @@ export async function createExecutionEnvironmentRuntime(
       configurationRevision: record.configurationRevision,
       activeConfigurationRevision,
       reportAvailability: input.reportAvailability,
-      directoryBrowser: () => directoryBrowser,
+      directoryBrowser: () => readDesiredPolicy().snapshot.capabilities.some(grant => grant.id === "directory_browser") ? directoryBrowser : undefined,
     });
     resources.defer("remote execution provider", () => provider.close(), {
       mode: "ownership_critical",
@@ -359,6 +357,7 @@ export async function createExecutionEnvironmentRuntime(
     const artifact = await input.sidecarArtifact();
     const installerOptions = {
       artifact,
+      requiresPolicyRecovery: (id: string) => input.policyRecovery?.blocked(id) === true,
       serviceScope: sidecarServiceScopeSchema.parse({
         installationId: input.installationId,
         ...scope,
@@ -381,33 +380,29 @@ export async function createExecutionEnvironmentRuntime(
       ? new SshSidecarArtifactInstaller({...installerOptions, host: configured.hostAlias})
       : outbound!.createProvisioner(installerOptions);
     const sedesOperations = new SidecarOperationRegistry();
-    const capabilities =
-      configured.operations.kind === "sidecar"
-        ? configured.operations.enabledCapabilities
-        : [];
-    const agentToolCliEnabled = capabilities.includes("agent_tools_cli");
-    if (agentToolCliEnabled)
-      registerSidecarAgentToolRelayOperations(sedesOperations, {
-        authority: { scope, executionEnvironmentId: record.id },
-        sources: input.agentToolSources,
-        tools: input.agentTools,
-        openCodeTools: input.authorizedRuntimeCapabilities.some(capability => capability.capabilityId === "opencode_runtime" && capability.majorVersion === 5),
-      });
+    registerSidecarAgentToolRelayOperations(sedesOperations, {
+      authority: { scope, executionEnvironmentId: record.id },
+      sources: input.agentToolSources,
+      tools: input.agentTools,
+      retainRoute: binding => runtime.retainToolRoute(binding.backendInstanceId, binding.backendGeneration, binding.capabilityGeneration),
+      authorizeSource: (backendId, binding) => runtime.policyRouteGeneration(backendId) === binding.capabilityGeneration &&
+        runtime.policyBackendGeneration(backendId) === binding.backendGeneration,
+      openCodeTools: true,
+    });
     const runtimeOptions = {
+      readDesiredPolicy,
+      onPolicyChanged: input.onPolicyChanged,
+      policyRecovery: input.policyRecovery,
       scope,
       executionEnvironmentId: record.id,
-      environmentConfigurationRevision: record.configurationRevision,
-      operationsConfigurationRevision: record.operationsConfigurationRevision,
-      activeEnvironmentConfigurationRevision: activeConfigurationRevision,
-      activeOperationsConfigurationRevision: () =>
-        activeRecord().operationsConfigurationRevision,
       isAutomaticConnectionEnabled: input.automaticConnectionEnabled,
       connectionCompression: input.connectionCompression,
       isTransportAvailable: () => !outbound || outbound.isConnected(),
       artifact,
       provisioner,
       authorizedRuntimeCapabilities: input.authorizedRuntimeCapabilities,
-      authorizedCapabilities: capabilities.map((capabilityId) =>
+      authorizedCapabilities: (["directory_browser", "workspace_files", "workspace_tools", "workspace_context", "workspace_skills",
+        "composer_attachments", "agent_tools_cli", "interactive_terminal"] as const).map((capabilityId) =>
         capabilityId === "workspace_files"
           ? ({ capabilityId, majorVersion: 8 } as const)
           : capabilityId === "agent_tools_cli"
@@ -430,7 +425,7 @@ export async function createExecutionEnvironmentRuntime(
         : availability.reportSidecarObservation(evidence),
       onBackgroundError: input.onBackgroundError,
     };
-    const runtime = new SidecarRuntimeOwner<SidecarClientSession>(
+    const runtime: SidecarRuntime = new SidecarRuntimeOwner<SidecarClientSession>(
       runtimeOptions,
     );
     resources.defer(
@@ -472,35 +467,45 @@ export async function createExecutionEnvironmentRuntime(
       configurationRevision: record.configurationRevision,
       activeConfigurationRevision,
       runtime,
-      enabled: capabilities.includes("interactive_terminal"),
+      enabled: true,
+      readWorkspaceRoots,
+      readTerminalGeneration: () => runtime.policyCapabilityGeneration("interactive_terminal"),
     });
-    if (capabilities.includes("directory_browser"))
-      directoryBrowser = new SidecarDirectoryBrowserProvider({
+    directoryBrowser = new SidecarDirectoryBrowserProvider({
         platform,
         scope,
         environmentId: record.id,
         policyRoots: configured.workspaceRoots,
+        readPolicyRoots: readRootPaths,
+        confirmed: () => runtime.canAcquireCapability("directory_browser", 1),
+        readWorkspaceRoots,
+        readFeatureGeneration: () => runtime.policyCapabilityGeneration("directory_browser"),
         runtime,
       });
-    const workspaceFiles = capabilities.includes("workspace_files")
-      ? new SidecarWorkspaceFileProvider({
+    const workspaceFiles = new SidecarWorkspaceFileProvider({
           scope,
           environmentId: record.id,
           policyRoots: configured.workspaceRoots,
+          readPolicyRoots: readRootPaths, enabled: () => runtime.canAcquireCapability("workspace_files", 8),
+            selectPolicyRoot: (candidate, primaryWorkspaceId) => {
+              const binding = primaryWorkspaceId ? input.readWorkspaceBinding?.(primaryWorkspaceId) : undefined;
+              const grant = workspaceRootGrant(readWorkspaceRoots(), candidate, binding);
+              const featureGeneration = runtime.policyCapabilityGeneration("workspace_files");
+              return grant && featureGeneration !== undefined ? {path: grant.path, key: `${grant.id}/${grant.generation}/${featureGeneration}`} : undefined;
+            },
           runtime,
-        })
-      : new UnsupportedWorkspaceFileProvider();
+        });
     resources.defer("remote workspace files", () => workspaceFiles.close(), {
       mode: "ownership_critical",
     });
-    const attachments = capabilities.includes("composer_attachments")
-      ? new SidecarExecutionAttachmentStager({
+    const attachments = new SidecarExecutionAttachmentStager({
           scope,
           environmentId: record.id,
           installationKey: input.toolProvenanceKey,
+          enabled: () => runtime.canAcquireCapability("composer_attachments", 1),
+          readAttachmentGeneration: () => runtime.policyCapabilityGeneration("composer_attachments"),
           runtime,
-        })
-      : new UnsupportedExecutionAttachmentStager();
+        });
     resources.defer("remote attachment staging", () => attachments.close(), {
       mode: "ownership_critical",
     });
@@ -512,15 +517,15 @@ export async function createExecutionEnvironmentRuntime(
       attachments,
       terminal,
       sidecarRuntime: runtime,
-      ...(agentToolCliEnabled ? { agentToolCliRuntime: runtime } : {}),
+      agentToolCliRuntime: runtime,
       operations: sidecarEnvironmentOperations({
         scope,
         environmentKind: configured.kind,
         environmentId: record.id,
         environmentLabel: configured.label,
-        policyRoots: configured.workspaceRoots,
+        readWorkspaceRoots,
         runtime,
-        enabledCapabilities: capabilities,
+        enabled: (id, version) => runtime.canAcquireCapability(id, version),
       }),
       workspaceIsolations,
       networkProfiles,
@@ -554,22 +559,24 @@ function sidecarEnvironmentOperations(input: {
   readonly environmentKind: "ssh" | "outbound";
   readonly environmentId: string;
   readonly environmentLabel: string;
-  readonly policyRoots: readonly string[];
+  readonly readWorkspaceRoots: ExecutionEnvironmentRuntimeInput["readWorkspaceRoots"];
   readonly runtime: SidecarRuntime;
-  readonly enabledCapabilities: readonly string[];
+  readonly enabled: (id: string, version: number) => boolean;
 }): EnvironmentOperations {
-  const policyRoot = (workspace: ValidatedWorkspace): string => {
+  const workspaceAdmission = (workspace: ValidatedWorkspace, feature: string) => {
     if (workspace.summary.environmentId !== input.environmentId)
       throw new Error("environment_workspace_operations_unavailable");
-    const root = input.policyRoots
-      .filter((candidate) => isWithinRemoteRoot(workspace.canonicalPath, candidate))
-      .sort((left, right) => right.length - left.length)[0];
-    if (!root) throw new Error("environment_workspace_operations_unavailable");
-    return root;
+    const grant = workspaceRootGrant(input.readWorkspaceRoots(), workspace.canonicalPath, workspace);
+    const generation = input.runtime.policyCapabilityGeneration(feature);
+    if (!grant || generation === undefined) throw new Error("environment_workspace_operations_unavailable");
+    return {policyRootPath: grant.path, assertCurrent() {
+      if (input.runtime.policyCapabilityGeneration(feature) !== generation ||
+          !workspaceRootGrant(input.readWorkspaceRoots(), workspace.canonicalPath, workspace)) {
+        throw new Error("environment_workspace_operations_unavailable");
+      }
+    }};
   };
-  const workspaceOperationsEnabled =
-    input.enabledCapabilities.includes("workspace_tools") &&
-    input.enabledCapabilities.includes("workspace_context");
+  const workspaceOperationsEnabled = () => input.enabled("workspace_tools", 2) && input.enabled("workspace_context", 1);
   const unavailable = Object.freeze({
     availability: "unavailable" as const,
     reason: "not_configured" as const,
@@ -578,7 +585,7 @@ function sidecarEnvironmentOperations(input: {
     environmentId: input.environmentId,
     environmentKind: input.environmentKind,
     environmentLabel: input.environmentLabel,
-    workspaceTools: workspaceOperationsEnabled
+    get workspaceTools() { return workspaceOperationsEnabled()
       ? Object.freeze({
           availability: "available" as const,
           implementation: "sidecar" as const,
@@ -588,11 +595,11 @@ function sidecarEnvironmentOperations(input: {
               scope: input.scope,
               environmentId: input.environmentId,
               declaredPath: workspace.canonicalPath,
-              policyRootPath: policyRoot(workspace),
+              ...workspaceAdmission(workspace, "workspace_tools"),
             }),
         })
-      : unavailable,
-    workspaceContext: workspaceOperationsEnabled
+      : unavailable; },
+    get workspaceContext() { return workspaceOperationsEnabled()
       ? Object.freeze({
           availability: "available" as const,
           implementation: "sidecar" as const,
@@ -602,11 +609,11 @@ function sidecarEnvironmentOperations(input: {
               scope: input.scope,
               environmentId: input.environmentId,
               declaredPath: workspace.canonicalPath,
-              policyRootPath: policyRoot(workspace),
+              ...workspaceAdmission(workspace, "workspace_context"),
             }),
         })
-      : unavailable,
-    workspaceSkills: input.enabledCapabilities.includes("workspace_skills")
+      : unavailable; },
+    get workspaceSkills() { return input.enabled("workspace_skills", 1)
       ? Object.freeze({
           availability: "available" as const,
           implementation: "sidecar" as const,
@@ -616,10 +623,10 @@ function sidecarEnvironmentOperations(input: {
               scope: input.scope,
               environmentId: input.environmentId,
               declaredPath: workspace.canonicalPath,
-              policyRootPath: policyRoot(workspace),
+              ...workspaceAdmission(workspace, "workspace_skills"),
             }),
         })
-      : unavailable,
+      : unavailable; },
   });
 }
 

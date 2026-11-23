@@ -1,9 +1,10 @@
+import {AsyncLocalStorage} from "node:async_hooks";
 import { configurationFingerprint } from "../config/configuration-fingerprint.js";
 import { constants } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
 import path from "node:path";
 import { environmentVariableOverridesSchema, mergeEnvironmentVariableOverrides, type EnvironmentVariableOverrides } from "../../shared/protocol/environment-variables.js";
-import { environmentVariablesResolveOperation, resolvedEnvironmentVariablesSchema } from "../../internal/sidecar-protocol/environment-variables-v1.js";
+import { authorizeVariableResolutionOperation,environmentVariablesResolveOperation, resolvedEnvironmentVariablesSchema } from "../../internal/sidecar-protocol/environment-variables-v1.js";
 import type { BackendModuleConfigurationInput, BackendModuleRuntimeContext } from "../backends/module.js";
 
 /** null is an explicit deletion, including a value inherited by the child. */
@@ -74,6 +75,14 @@ async function readProtectedSecret(filename: string): Promise<string> {
   finally { await file?.close().catch(() => undefined); }
 }
 
+const approvedVariableRequest = new AsyncLocalStorage<{backendInstanceId:string,threadId:string,digest:string}>();
+/** Only the resolver of an immutable, main-owned thread snapshot can request a disclosure ticket. */
+export function assertApprovedVariableRequest(request:unknown):void {
+  const approval=approvedVariableRequest.getStore();
+  if(!approval || !request || typeof request!=="object" || !("backendInstanceId" in request) ||
+     !("threadId" in request) || !("digest" in request) || request.backendInstanceId!==approval.backendInstanceId ||
+     request.threadId!==approval.threadId || request.digest!==approval.digest)throw new Error("sidecar_policy_variable_approval_required");
+}
 export function createThreadEnvironmentResolver(context: BackendModuleRuntimeContext): ThreadEnvironmentResolver {
   const resolve = async (threadId: string) => {
     const overrides = context.executionEnvironmentVariables?.(threadId) ?? {};
@@ -83,7 +92,10 @@ export function createThreadEnvironmentResolver(context: BackendModuleRuntimeCon
     const lease = await context.sidecarRuntime.acquire();
     try {
       if (!lease.channel.supportsOperation(environmentVariablesResolveOperation)) throw new Error("environment_variable_host_unsupported");
-      return (await lease.channel.call(environmentVariablesResolveOperation, { overrides })).values;
+      const owner={backendInstanceId:context.instance.id,threadId};
+      const approved={...owner,digest:configurationFingerprint(overrides)};
+      const {ticket}=await approvedVariableRequest.run(approved,()=>lease.channel.call(authorizeVariableResolutionOperation,approved));
+      return (await lease.channel.call(environmentVariablesResolveOperation,{...owner,ticket,overrides})).values;
     } finally { lease.release(); }
   };
   return Object.assign(resolve, { fingerprint: (threadId: string) => configurationFingerprint(context.executionEnvironmentVariables?.(threadId) ?? {}) });

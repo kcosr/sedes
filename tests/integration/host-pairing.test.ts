@@ -198,7 +198,7 @@ describe("outbound host pairing persistence", () => {
     f.configuration.save(f.scope, { mutationId: randomUUID(), expectedRevision: reapproved.configuration.revision, configuration: changed },
       document => f.projection.project(f.scope, document));
     expect(f.database.prepare("SELECT configuration_revision AS revision, availability, diagnostic_code AS diagnosticCode FROM execution_environments").get())
-      .toEqual({ revision: 1, availability: "unavailable", diagnosticCode: "configuration_apply_pending" });
+      .toEqual({ revision: 1, availability: "available", diagnosticCode: null });
   });
 
   it("rejects forged pairing references, cross-host retargeting, and removal until revoked; retained revoked definitions remain editable", () => {

@@ -5,7 +5,7 @@ import type { SidecarLaunchRecorder } from "./sidecar-launch-ledger.js";
 // pre-spawn recorder in their implementation. Enumerate operations within
 // their exact major version so new operations always start on the manual path.
 const coveredOperations: ReadonlyMap<string, readonly string[]> = new Map([
-  ["control:2", ["hello", "ping", "go_away"]],
+  ["control:3", ["hello", "ping", "go_away", "policy.read", "policy.stage", "policy.apply", "policy.acquire_route", "policy.acquire_opencode_route", "policy.authorize_variables"]],
   ["runtime_bodies:1", ["body.offer"]],
   ["environment_variables:1", ["variables.resolve"]],
   ["directory_browser:1", ["directories.list"]],

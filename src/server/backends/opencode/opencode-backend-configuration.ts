@@ -6,7 +6,7 @@ import {
   type OpenCodeConnectionDefaults,
 } from "../../../shared/protocol/opencode-configuration.js";
 import type { BackendModuleConfigurationInput } from "../module.js";
-import { compileBackendModelPolicy, type CompiledBackendModelPolicy } from "../model-policy.js";
+import { configuredModelPolicy, type CompiledBackendModelPolicy } from "../model-policy.js";
 
 export { opencodeModuleConfigurationSchema, opencodeConnectionDefaultsSchema };
 export type { OpenCodeModuleConfiguration, OpenCodeConnectionDefaults };
@@ -45,5 +45,5 @@ export function parseOpenCodeBackendConfiguration(input: BackendModuleConfigurat
     defaultsByConnectionId.set(connection.id, parsed.defaults);
   }
   return { ...configuration, backendInstanceId: input.backend.id, enabled: input.backend.enabled,
-    modelPolicy: compileBackendModelPolicy(input.backend.modelPolicy, "provider_model_effort"), defaultsByConnectionId };
+    modelPolicy: configuredModelPolicy(input, "provider_model_effort"), defaultsByConnectionId };
 }

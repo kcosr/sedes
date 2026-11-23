@@ -1,3 +1,4 @@
+import {attachFixturePolicy} from "../helpers/execution-policy-fixture.js";
 import { describe, expect, it, vi } from "vitest";
 import { PersistentSidecarServiceRegistry, SidecarResourceHandoffPendingError } from "../../src/server/sidecar/persistent-sidecar-service-registry.js";
 
@@ -13,13 +14,13 @@ describe("persistent sidecar resource ownership", () => {
     const stop = vi.fn(async () => undefined);
     const onDetach = vi.fn();
     service.register({ resourceId: "terminal-a", kind: "terminal", snapshot: () => ({ state: "active", revision: "1", blockers: ["live_terminal"] }), stop, onDetach });
-    const first = service.attach(configuration);
+    const first = attachFixturePolicy(service, configuration);
     service.assertAdmission(first);
     service.detach(first);
     expect(stop).not.toHaveBeenCalled();
     expect(onDetach).toHaveBeenCalledOnce();
     expect(service.status().resources).toHaveLength(1);
-    const next = service.attach(configuration);
+    const next = attachFixturePolicy(service, configuration);
     expect(next).toBeGreaterThan(first);
     expect(() => service.assertAdmission(first)).toThrow("sidecar_controller_stale");
     service.detach(first);
@@ -31,7 +32,7 @@ describe("persistent sidecar resource ownership", () => {
     const stop = vi.fn(async () => undefined);
     let live = true;
     service.register({ resourceId: "terminal-a", kind: "terminal", snapshot: () => ({ state: "idle", revision: live ? "1" : "2", blockers: live ? ["live_terminal"] : [] }), stop });
-    const controllerEpoch = service.attach(configuration);
+    const controllerEpoch = attachFixturePolicy(service, configuration);
     const request = { expectedServiceIncarnation: service.serviceIncarnation, controllerEpoch, expectedConfiguration: configuration,
       expectedResourcesFingerprint: service.status().resourcesFingerprint, force: false, reason: "upgrade" };
     await expect(service.stop(request)).rejects.toThrow("sidecar_service_upgrade_blocked");
@@ -48,7 +49,7 @@ describe("persistent sidecar resource ownership", () => {
 
   it("fences new work before taking the final idle snapshot and requires cleanup proof", async () => {
     const service = registry();
-    const epoch = service.attach(configuration);
+    const epoch = attachFixturePolicy(service, configuration);
     let stopping = false;
     let release!: () => void;
     const blocked = new Promise<void>((resolve) => { release = resolve; });
@@ -71,7 +72,7 @@ describe("persistent sidecar resource ownership", () => {
 
   it("does not report stopped after partial cleanup failure", async () => {
     const service = registry();
-    const controllerEpoch = service.attach(configuration);
+    const controllerEpoch = attachFixturePolicy(service, configuration);
     service.register({ resourceId: "provider-a", kind: "provider", snapshot: () => ({ state: "active", revision: "1", blockers: ["active_work"] }), stop: async () => { throw new Error("child still present"); } });
     await expect(service.stop({ expectedServiceIncarnation: service.serviceIncarnation, controllerEpoch, expectedConfiguration: configuration, expectedResourcesFingerprint: service.status().resourcesFingerprint, force: true, reason: "explicit_stop" })).rejects.toThrow("sidecar_service_cleanup_unproven");
     expect(service.status().state).toBe("cleanup_unproven");
@@ -81,8 +82,8 @@ describe("persistent sidecar resource ownership", () => {
   it("rejects cross-scope and stale stop confirmations", async () => {
     const service = registry();
     expect(() => service.assertScope({ ...scope, principalId: "principal-b" })).toThrow("sidecar_service_scope_mismatch");
-    const old = service.attach(configuration);
-    service.attach(configuration);
+    const old = attachFixturePolicy(service, configuration);
+    attachFixturePolicy(service, configuration);
     await expect(service.stop({ expectedServiceIncarnation: service.serviceIncarnation, controllerEpoch: old, expectedConfiguration: configuration, expectedResourcesFingerprint: service.status().resourcesFingerprint, force: true, reason: "stop" })).rejects.toThrow("sidecar_service_confirmation_stale");
   });
 
@@ -92,7 +93,7 @@ describe("persistent sidecar resource ownership", () => {
     const controllerEpoch = service.attach({ ...configuration, operationsRevision: 3 });
     expect(service.status().configurationState).toBe("pending");
     expect(service.status().effectiveConfiguration).toEqual(configuration);
-    expect(() => service.assertAdmission(controllerEpoch)).toThrow("sidecar_configuration_pending");
+    expect(() => service.assertAdmission(controllerEpoch)).toThrow("sidecar_policy_unsynchronized");
   });
 
   it("reports a concurrent stop as in progress instead of unproven cleanup", async () => {
@@ -101,7 +102,7 @@ describe("persistent sidecar resource ownership", () => {
     const blocked = new Promise<void>((resolve) => { release = resolve; });
     service.register({ resourceId: "provider-a", kind: "provider", snapshot: () => ({ state: "idle", revision: "1", blockers: [] }),
       prepareRestart: () => blocked, stop: async () => undefined });
-    const controllerEpoch = service.attach(configuration);
+    const controllerEpoch = attachFixturePolicy(service, configuration);
     const request = { expectedServiceIncarnation: service.serviceIncarnation, controllerEpoch, expectedConfiguration: configuration,
       expectedResourcesFingerprint: service.status().resourcesFingerprint, force: true, reason: "stop" };
     const first = service.stop(request);
@@ -118,7 +119,7 @@ describe("persistent sidecar resource ownership", () => {
     let exited = false;
     service.register({ resourceId: "terminal-a", kind: "terminal", snapshot: () => ({ state: "idle", revision: "1", blockers: [] }),
       stop: async () => { if (!exited) throw new Error("terminal_exit_unconfirmed"); } });
-    const controllerEpoch = service.attach(configuration);
+    const controllerEpoch = attachFixturePolicy(service, configuration);
     const request = () => ({ expectedServiceIncarnation: service.serviceIncarnation, controllerEpoch, expectedConfiguration: configuration,
       expectedResourcesFingerprint: service.status().resourcesFingerprint, reason: "stop" });
     await expect(service.stop({ ...request(), force: true })).rejects.toThrow("sidecar_service_cleanup_unproven");
@@ -135,7 +136,7 @@ describe("persistent sidecar resource ownership", () => {
     let revision = "turn-a";
     const stop = vi.fn(async () => undefined);
     service.register({ resourceId: "provider-a", kind: "provider", snapshot: () => ({ state: "active", revision, blockers: ["active_work"] }), stop });
-    const controllerEpoch = service.attach(configuration);
+    const controllerEpoch = attachFixturePolicy(service, configuration);
     const expectedResourcesFingerprint = service.status().resourcesFingerprint;
     revision = "turn-b";
     await expect(service.stop({ expectedServiceIncarnation: service.serviceIncarnation, controllerEpoch, expectedConfiguration: configuration, expectedResourcesFingerprint, force: true, reason: "restart" })).rejects.toThrow("sidecar_service_confirmation_stale");
@@ -149,7 +150,7 @@ describe("persistent sidecar resource ownership", () => {
     service.register({ resourceId: "provider-a", kind: "provider",
       snapshot: () => known ? { state: "idle", revision: "native-idle", blockers: [] } : { state: "unknown", revision: "cached-unknown", blockers: ["unknown_state"] },
       prepareRestart: async () => { known = true; }, stop });
-    const controllerEpoch = service.attach(configuration);
+    const controllerEpoch = attachFixturePolicy(service, configuration);
     await service.stop({ expectedServiceIncarnation: service.serviceIncarnation, controllerEpoch, expectedConfiguration: configuration,
       expectedResourcesFingerprint: service.status().resourcesFingerprint, force: false, reason: "upgrade" });
     expect(stop).toHaveBeenCalledWith("upgrade", { force: false });
@@ -162,7 +163,7 @@ describe("persistent sidecar resource ownership", () => {
     const stop = vi.fn(async () => undefined);
     service.register({ resourceId: "provider-a", kind: "provider", snapshot: () => ({ state: "active", revision, blockers: ["active_work"] }),
       prepareRestart: async () => { revision = "turn-b"; }, stop });
-    const controllerEpoch = service.attach(configuration);
+    const controllerEpoch = attachFixturePolicy(service, configuration);
     await expect(service.stop({ expectedServiceIncarnation: service.serviceIncarnation, controllerEpoch, expectedConfiguration: configuration,
       expectedResourcesFingerprint: service.status().resourcesFingerprint, force: true, reason: "restart" })).resolves.toBeUndefined();
     expect(stop).toHaveBeenCalledWith("restart", { force: true });
@@ -174,7 +175,7 @@ describe("persistent sidecar resource ownership", () => {
     const stop = vi.fn(async () => undefined);
     service.register({ resourceId: "provider-a", kind: "provider", snapshot: () => ({ state: "active", revision: "turn-a", blockers: ["active_work"] }),
       prepareRestart: async () => { throw new Error("provider disconnected"); }, stop });
-    const controllerEpoch = service.attach(configuration);
+    const controllerEpoch = attachFixturePolicy(service, configuration);
     await service.stop({ expectedServiceIncarnation: service.serviceIncarnation, controllerEpoch, expectedConfiguration: configuration,
       expectedResourcesFingerprint: service.status().resourcesFingerprint, force: true, reason: "stop" });
     expect(stop).toHaveBeenCalledWith("stop", { force: true });
@@ -190,7 +191,7 @@ describe("persistent sidecar resource ownership", () => {
     service.register({ resourceId: "provider-a", kind: "provider",
       snapshot: () => ({ state: known ? "idle" : "unknown", revision: known ? "idle" : "unknown", blockers: known ? [] : ["unknown_state"] }),
       prepareRestart, stop: async () => undefined });
-    const controllerEpoch = service.attach(configuration);
+    const controllerEpoch = attachFixturePolicy(service, configuration);
     const first = service.refreshStatus();
     const second = service.refreshStatus();
     await Promise.resolve();
@@ -209,7 +210,7 @@ describe("persistent sidecar resource ownership", () => {
       const stop = vi.fn(async () => undefined);
       const prepareRestart = vi.fn(() => new Promise<void>(() => undefined));
       service.register({ resourceId: "provider-a", kind: "provider", snapshot: () => ({ state: "unknown", revision: "unknown", blockers: ["unknown_state"] }), prepareRestart, stop });
-      const controllerEpoch = service.attach(configuration);
+      const controllerEpoch = attachFixturePolicy(service, configuration);
       const observation = service.refreshStatus();
       await vi.advanceTimersByTimeAsync(1_000);
       expect((await observation).resources[0]).toMatchObject({ state: "unknown" });
@@ -235,7 +236,7 @@ describe("persistent sidecar resource ownership", () => {
       });
       service.register({ resourceId: "provider-a", kind: "provider",
         snapshot: () => ({ state: known ? "idle" : "unknown", revision: known ? "idle" : "unknown", blockers: known ? [] : ["unknown_state"] }), prepareRestart, stop });
-      const controllerEpoch = service.attach(configuration);
+      const controllerEpoch = attachFixturePolicy(service, configuration);
       const observation = service.refreshStatus();
       await vi.advanceTimersByTimeAsync(1_000);
       const status = await observation;
@@ -267,7 +268,7 @@ describe("persistent sidecar resource ownership", () => {
     let acknowledged = false;
     service.register({ resourceId: "terminal-a", kind: "terminal", snapshot: () => ({ state: "idle", revision, blockers: acknowledged ? [] : ["unsettled_outcome"] }),
       stop: async () => { if (!acknowledged) throw new SidecarResourceHandoffPendingError(); } });
-    const controllerEpoch = service.attach(configuration);
+    const controllerEpoch = attachFixturePolicy(service, configuration);
     const request = { expectedServiceIncarnation: service.serviceIncarnation, controllerEpoch, expectedConfiguration: configuration,
       expectedResourcesFingerprint: service.status().resourcesFingerprint, force: true, reason: "stop" };
     await expect(service.stop(request)).rejects.toThrow("sidecar_resource_handoff_pending");

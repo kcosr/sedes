@@ -1,3 +1,4 @@
+import { realpath } from "node:fs/promises";
 import { resolveEnvironmentVariables, mergeResolvedEnvironment } from "../environment-variables/runtime-environment.js";
 import type { EnvironmentVariableOverrides } from "../../shared/protocol/environment-variables.js";
 import path from "node:path";
@@ -55,6 +56,8 @@ export class LocalInteractiveTerminalProvider implements InteractiveTerminalEnvi
     readonly terminalId: string;
     readonly incarnationId: string;
     readonly environmentVariables?: EnvironmentVariableOverrides;
+    readonly workspaceAuthority?: { readonly authorityRootId: string; readonly authorityRevision: number };
+    readonly assertWorkspaceCurrent?: () => void;
     readonly initialCwd: string;
     readonly shellProfile?: string;
     readonly rows: number;
@@ -84,6 +87,10 @@ export class LocalInteractiveTerminalProvider implements InteractiveTerminalEnvi
           : "/bin/bash";
     const environment = mergeResolvedEnvironment(this.#environment, await resolveEnvironmentVariables(input.environmentVariables ?? {}, this.#environment));
     const spawnTerminal = this.#spawnPty ?? (await import("node-pty")).spawn;
+    if (input.assertWorkspaceCurrent) {
+      if (await realpath(input.initialCwd) !== input.initialCwd) throw new Error("terminal_cwd_invalid");
+      input.assertWorkspaceCurrent();
+    }
     const pty = spawnTerminal(
       shell,
       process.platform === "win32" ? [] : ["-l"],
@@ -100,7 +107,7 @@ export class LocalInteractiveTerminalProvider implements InteractiveTerminalEnvi
         encoding: null,
       },
     );
-    return new LocalInteractiveTerminalProcess(pty, this.#cleanupOnNaturalExit);
+    return new LocalInteractiveTerminalProcess(pty, this.#cleanupOnNaturalExit, input.assertWorkspaceCurrent);
   }
 }
 
@@ -119,7 +126,7 @@ class LocalInteractiveTerminalProcess implements InteractiveTerminalProcess {
   #windowsPtyCleanupFailed = false;
   readonly #cleanupOnNaturalExit: boolean;
 
-  constructor(pty: IPty, cleanupOnNaturalExit: boolean) {
+  constructor(pty: IPty, cleanupOnNaturalExit: boolean, readonly assertWorkspaceCurrent?: () => void) {
     this.#pty = pty;
     this.#cleanupOnNaturalExit = cleanupOnNaturalExit;
     pty.onData((chunk: string | Uint8Array) => {
@@ -159,6 +166,7 @@ class LocalInteractiveTerminalProcess implements InteractiveTerminalProcess {
   }
 
   async write(bytes: Uint8Array): Promise<InteractiveTerminalWriteResult> {
+    try { this.assertWorkspaceCurrent?.(); } catch { return { outcome: "not_sent", diagnosticCode: "workspace_authority_stale" }; }
     if (this.#exited) return { outcome: "not_sent" };
     try {
       this.#pty.write(Buffer.from(bytes));
@@ -173,6 +181,7 @@ class LocalInteractiveTerminalProcess implements InteractiveTerminalProcess {
     readonly columns: number;
   }): Promise<void> {
     if (this.#exited) throw new Error("interactive_terminal_process_exited");
+    this.assertWorkspaceCurrent?.();
     this.#pty.resize(input.columns, input.rows);
   }
 

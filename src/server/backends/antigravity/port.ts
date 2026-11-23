@@ -48,6 +48,7 @@ export type AntigravityEvent = { readonly sequence: number } & (
   | { readonly kind: "operation"; readonly operationId: string; readonly outcome: AntigravityOutcome }
   | { readonly kind: "failure"; readonly failure: AntigravityFailure });
 export interface AntigravityAttachment extends AntigravityIdentity {
+  readonly toolPeerStamp?: string;
   readonly createdByOperationId?: string;
   readonly handleId: string;
   readonly generation: string;

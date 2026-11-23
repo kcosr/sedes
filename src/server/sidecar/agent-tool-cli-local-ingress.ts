@@ -240,6 +240,17 @@ export class AgentToolCliLocalIngress {
     }
   }
 
+  async available():Promise<boolean> {
+    if(!this.#server.listening || this.#closePromise) return false;
+    const owner=this.#unixOwnership;
+    if(!owner) return true;
+    try {
+      const metadata=await lstat(this.socketPath);
+      return metadata.isSocket() && (metadata.mode & 0o777)===0o600 && metadata.uid===process.geteuid?.() &&
+        metadata.dev===owner.socketIdentity.dev && metadata.ino===owner.socketIdentity.ino;
+    }catch{return false;}
+  }
+
   close(): Promise<void> {
     this.#closePromise ??= this.#performClose();
     return this.#closePromise;

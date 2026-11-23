@@ -1,3 +1,5 @@
+import { executionPolicyDigest, policyReadOperation, policyStageOperation, policyApplyOperation, executionPolicyBytes, type InstalledExecutionPolicy } from "../../src/internal/sidecar-protocol/execution-policy.js";
+import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SidecarOperationRegistry } from "../../src/internal/sidecar-protocol/operation-registry.js";
 import type { SidecarByteStream } from "../../src/internal/sidecar-protocol/contracts.js";
@@ -25,16 +27,15 @@ function fixture(transportKind: string) {
   type Carrier = Awaited<ReturnType<typeof f.attach>>;
   const streams = new WeakMap<SidecarByteStream, Carrier>(), carriers: Carrier[] = [];
   async function attach(recovery: boolean): Promise<PersistentSidecarByteStream> {
-    const carrier = await f.attach({ recovery }); carriers.push(carrier);
+    const carrier = await f.attach({ recovery, ownerSync: true }); carriers.push(carrier);
     const stream = { installation, serviceStatus: f.services.status(), closed: carrier.lease.closed.then(() => ({ reason: "fixture_closed" })),
       bytes: (async function* () {})(), write: async () => {}, close: () => carrier.close() };
     streams.set(stream, carrier); return stream;
   }
   const launch = vi.fn(async () => attach(false)), attachExisting = vi.fn(async () => attach(true));
-  let activeRevision = 1;
+  let desired = f.desired;
   const owner = new SidecarRuntimeOwner({ connectionCompression: () => true, scope: f.scope, executionEnvironmentId: environmentId,
-    environmentConfigurationRevision: 1, operationsConfigurationRevision: 1,
-    activeEnvironmentConfigurationRevision: () => activeRevision, activeOperationsConfigurationRevision: () => 1,
+    readDesiredPolicy: () => desired,
     authorizedCapabilities: [], authorizedRuntimeCapabilities: [], isAutomaticConnectionEnabled: () => true,
     artifact: { artifactId: SIDECAR_ARTIFACT_ID, modes: SIDECAR_ARTIFACT_MODES, executableDirectory: "/fixture",
       executablePath: "/fixture/sedes", artifactSha256: "a".repeat(64), artifactBytes: 1, buildId: "test",
@@ -45,7 +46,21 @@ function fixture(transportKind: string) {
       control: async () => { throw new Error("unused_service_control"); } },
     startSession: async ({ stream }) => {
       const carrier = streams.get(stream)!;
-      return { runtimeChannel: carrier.mainChannel, closed: carrier.lease.closed, negotiatedCapabilities: [], close: () => carrier.close() };
+      const readPolicy = () => carrier.mainPeer.call(policyReadOperation, {});
+      const session = { runtimeChannel: carrier.mainChannel, closed: carrier.lease.closed, negotiatedCapabilities: [],
+        readPolicy, recoveryView() { return this; },
+        async applyPolicy(next: InstalledExecutionPolicy) {
+          const prior = await readPolicy();
+          const binding = { incarnation: prior.incarnation, controllerEpoch: prior.controllerEpoch, revision: next.revision,
+            digest: next.digest, transferId: randomUUID() };
+          if (prior.installed?.digest !== next.digest) {
+            const bytes = executionPolicyBytes(next.snapshot);
+            await carrier.mainPeer.call(policyStageOperation, { ...binding, length: bytes.length, offset: 0, block: bytes.toString("base64") });
+          }
+          return carrier.mainPeer.call(policyApplyOperation, { ...binding, base: prior.installed, configuration: next.configuration });
+        },
+        close: () => carrier.close() };
+      return session;
     },
   });
   type Session = Awaited<ReturnType<typeof owner.acquireOperation>>["session"];
@@ -64,7 +79,11 @@ function fixture(transportKind: string) {
     clients.push(value); return value;
   }
   cleanups.push(async () => { for (const value of clients) await value.close(); await owner.close(); await f.close(); });
-  return { ...f, owner, provider, client, launch, attachExisting, carriers, setRevision: (revision: number) => { activeRevision = revision; } };
+  return { ...f, owner, provider, client, launch, attachExisting, carriers, withdrawBackend: async () => {
+    const snapshot = { ...desired.snapshot, backends: [] };
+    desired = { ...desired, snapshot, revision: desired.revision + 1, digest: executionPolicyDigest(snapshot) };
+    await owner.synchronizePolicy(undefined, true);
+  } };
 }
 
 describe("OpenCode recovery through the production sidecar owner", () => {
@@ -97,19 +116,15 @@ describe("OpenCode recovery through the production sidecar owner", () => {
     await normal.client.mutate("prompt", { sessionID: f.wire.sessionID, id: "msg_pending", text: "pending", delivery: "queue", resume: true }, control("pending"));
     const carrier = f.carriers[0]!;
     let closed = false; void carrier.lease.closed.then(() => { closed = true; });
-    f.setRevision(2);
+    await f.withdrawBackend();
     const recovered = f.client(); await recovered.startRetained();
     const narrow = recovered.acquire(f.target);
     await expect(narrow.client.read("getSession", { sessionID: f.wire.sessionID })).resolves.toMatchObject({ id: f.wire.sessionID });
     expect(closed).toBe(false); expect(f.attachExisting).not.toHaveBeenCalled(); expect(f.launch).toHaveBeenCalledOnce();
-    // An ordinary caller deliberately transitions to pending-config recovery;
-    // it remains readable after the current normal carrier is retired.
-    await recovered.start();
-    const ordinary = recovered.acquire(f.target);
-    await expect(ordinary.client.read("getSession", { sessionID: f.wire.sessionID })).resolves.toMatchObject({ id: f.wire.sessionID });
-    await expect(ordinary.client.mutate("prompt", { sessionID: f.wire.sessionID, id: "msg_stale", text: "denied", delivery: "queue", resume: true }, control("stale"))).rejects.toBeDefined();
+    await expect(recovered.start()).rejects.toBeDefined();
+    await expect(normal.client.mutate("prompt", { sessionID: f.wire.sessionID, id: "msg_stale", text: "denied", delivery: "queue", resume: true }, control("stale"))).rejects.toBeDefined();
     expect(f.promptCount()).toBe(1); expect(f.owners[0]!.start).toHaveBeenCalledOnce();
-    ordinary.release(); narrow.release(); normal.release();
+    narrow.release(); normal.release();
   });
 
   it.each(["ssh_stdio", "outbound_websocket"])("recovers a tool on its existing %s carrier without replacing normal authority", async kind => {

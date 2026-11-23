@@ -1,3 +1,6 @@
+import { currentBackendGrant, type ProviderPolicyAttachment } from "../../provider-policy-admission.js";
+import { configurationFingerprint } from "../../../config/configuration-fingerprint.js";
+import { deriveConnectionProfileId } from "../../../db/connection-profile-id.js";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { SidecarOperationDefinition, SidecarOperationRegistry } from "../../../../internal/sidecar-protocol/operation-registry.js";
@@ -78,6 +81,7 @@ export const codexManagedTuiOperations = [codexManagedTuiOperation, codexManaged
 export const codexManagedTuiCapability = { ...capability, operations: [codexManagedTuiControlOperation.operation, codexManagedTuiOperation.operation] } as const;
 
 export type CodexManagedTuiHostRuntime = Readonly<{
+  host?: object;
   configuration: ResolvedCodexRuntimeConfiguration;
   environmentChannel: ExecutionEnvironmentChannelProvider;
   environment: Readonly<Record<string, string | undefined>>;
@@ -148,8 +152,8 @@ export class CodexRuntimeManagedTuiHosts {
 
   async start(runtimeId: string, authority: CodexManagedTuiBindingAuthority,
     settings: CodexManagedTuiLaunchSettings, configuredExecutablePath: string | undefined,
-    controllerEpoch: number): Promise<CodexTuiStateV1> {
-    this.#assertAdmission(runtimeId, controllerEpoch);
+    controllerEpoch: number, assertPolicy?: () => void): Promise<CodexTuiStateV1> {
+    this.#assertAdmission(runtimeId, controllerEpoch); assertPolicy?.();
     const host = this.#host(runtimeId);
     this.#assertBinding(host, runtimeId, authority);
     settingsSchema.parse(settings);
@@ -158,11 +162,11 @@ export class CodexRuntimeManagedTuiHosts {
       channels: host.runtime.environmentChannel, configuration: host.runtime.configuration,
       environment: host.runtime.environment, ...(configuredExecutablePath ? { configuredExecutablePath } : {}),
       settings: () => settings,
-      assertLaunchAdmission: () => this.#assertAdmission(runtimeId, controllerEpoch),
+      assertLaunchAdmission: () => { this.#assertAdmission(runtimeId, controllerEpoch); assertPolicy?.(); },
       prepareThreadSettings: async ({ authority: current, settings: selection, signal }) => {
         const modelSelection = await prepareCodexManagedTuiThreadSettings({ client: host.runtime.supervisor.client,
           authority: current, settings: selection, signal });
-        this.#assertAdmission(runtimeId, controllerEpoch);
+        this.#assertAdmission(runtimeId, controllerEpoch); assertPolicy?.();
         return modelSelection;
       },
       onRuntimeVersionAssessment: assessment => {
@@ -173,7 +177,7 @@ export class CodexRuntimeManagedTuiHosts {
     const launcher = this.input.createLauncher?.(launcherInput) ?? new EnvironmentCodexManagedTuiLauncher(launcherInput);
     return await host.registry.start(authority, {
       launch: async launch => {
-        this.#assertAdmission(runtimeId, controllerEpoch);
+        this.#assertAdmission(runtimeId, controllerEpoch); assertPolicy?.();
         const pending = launcher.launch(launch);
         host.launches.add(pending);
         host.revision++;
@@ -183,7 +187,7 @@ export class CodexRuntimeManagedTuiHosts {
           host.processAuthorities.set(process, codexManagedTuiBindingFingerprint(authority));
           host.revision++;
           void process.closed.then(() => { host.processes.delete(process); host.processAuthorities.delete(process); host.revision++; }, () => { host.cleanupUnproven = true; host.revision++; });
-          try { this.#assertAdmission(runtimeId, controllerEpoch); }
+          try { this.#assertAdmission(runtimeId, controllerEpoch); assertPolicy?.(); }
           catch (error) {
             try { await process.close("codex_tui_launch_admission_fenced"); await boundedCleanup(process.closed); }
             catch (cleanupError) { host.cleanupUnproven = true; host.revision++; throw cleanupError; }
@@ -275,7 +279,7 @@ export class CodexRuntimeManagedTuiHosts {
 
 /** One authenticated peer/controller attachment. Output is transient and bounded;
  * absent/slow consumers lose their viewer, never ownership of the native PTY. */
-export function registerCodexManagedTuiHost(input: {
+export function registerCodexManagedTuiHost(input: ProviderPolicyAttachment & {
   hosts: CodexRuntimeManagedTuiHosts; registry: SidecarOperationRegistry; channel: SidecarRuntimeChannel;
   services: PersistentSidecarServiceRegistry; controllerEpoch: number;
 }): () => void {
@@ -298,14 +302,26 @@ export function registerCodexManagedTuiHost(input: {
     }
     settingsHolds.clear();
   };
-  const emit = (runtimeId: string, event: TuiEvent) => {
+  function permission(runtimeId: string, profileId?: string): string {
+    const runtime = input.hosts.input.getRuntime(runtimeId);
+    const grant = currentBackendGrant(input, runtime.host ?? runtime);
+    if (!grant?.managedTuiDigest) throw new Error("codex_tui_policy_denied");
+    const { tenantId, principalId } = runtime.configuration.scope;
+    const target = profileId && grant.targets.find(t => deriveConnectionProfileId(tenantId, principalId, t.id) === profileId);
+    if (profileId && !target) throw new Error("codex_tui_target_denied");
+    return JSON.stringify([grant.generation, grant.managedTuiDigest, target ? target.generation : null]);
+  }
+  const emit = (runtimeId: string, event: TuiEvent, permitted?: () => boolean) => {
     if (detached) return;
     const bytes = Buffer.byteLength(JSON.stringify(event));
     if (queuedBytes + bytes > 512 * 1024 || queuedEvents >= 128) { detach(); return; }
     queuedBytes += bytes; queuedEvents++;
     events = events.then(async () => {
       if (detached) return;
+      const maySend = () => { try { return permitted?.() ?? true; } catch { return false; } };
+      if (!maySend()) return;
       const body = await input.channel.encodeBody(event);
+      if (!maySend()) return;
       await input.channel.peer.sendEvent({ ...eventDefinition, payload: { runtimeId, body } });
     }).catch(detach).finally(() => { queuedBytes -= bytes; queuedEvents--; });
   };
@@ -315,6 +331,8 @@ export function registerCodexManagedTuiHost(input: {
     if (control === (command.action === "start")) throw new Error("codex_tui_control_lane_mismatch");
     if (command.controllerEpoch !== input.controllerEpoch) throw new Error("codex_tui_controller_stale");
     input.services.assertController(input.controllerEpoch);
+    if (!["stop", "fail", "settings.release", "detach", "viewer.detach"].includes(command.action)) permission(command.runtimeId,
+      "authority" in command ? command.authority.connectionProfileId : undefined);
     const registry = input.hosts.registry(command.runtimeId);
     let result: unknown = { ok: true };
     if ("authority" in command) input.hosts.assertBinding(command.runtimeId, command.authority);
@@ -334,9 +352,17 @@ export function registerCodexManagedTuiHost(input: {
         for (const [id, viewer] of viewers) if (viewer.runtimeId === command.runtimeId) { viewer.handle.detach(); viewers.delete(id); }
         break;
       }
-      case "start":
+      case "start": {
+        const stamp = permission(command.runtimeId, command.authority.connectionProfileId);
+        const check = () => {
+          if (permission(command.runtimeId, command.authority.connectionProfileId) !== stamp) throw new Error("codex_tui_policy_denied");
+          if (input.getExecutionPolicy().backends.find(b => b.id === command.authority.backendInstanceId)?.managedTuiDigest !==
+              configurationFingerprint(command.configuredExecutablePath ?? null)) throw new Error("codex_tui_executable_denied");
+        };
+        check();
         input.services.assertAdmission(input.controllerEpoch);
-        result = await input.hosts.start(command.runtimeId, command.authority, command.settings, command.configuredExecutablePath, input.controllerEpoch); break;
+        result = await input.hosts.start(command.runtimeId, command.authority, command.settings, command.configuredExecutablePath, input.controllerEpoch, check); break;
+      }
       case "settings.hold":
         input.hosts.assertControl(command.runtimeId, input.controllerEpoch);
         if (settingsHolds.has(command.leaseId)) throw new Error("codex_tui_settings_hold_exists");
@@ -352,10 +378,12 @@ export function registerCodexManagedTuiHost(input: {
       case "viewer.attach": {
         if (!attached.has(command.runtimeId)) throw new Error("codex_tui_not_attached");
         if (viewers.size >= 128 || viewers.has(command.viewerId)) throw new Error("codex_tui_viewer_capacity_exceeded");
+        const stamp = permission(command.runtimeId, command.authority.connectionProfileId);
+        const current = () => permission(command.runtimeId, command.authority.connectionProfileId) === stamp;
         const handle = registry.attachViewer(command.authority, command.resourceGeneration, {
           viewerId: command.viewerId,
-          assertControl: () => input.hosts.assertControl(command.runtimeId, input.controllerEpoch),
-          output: bytes => emit(command.runtimeId, { type: "output", viewerId: command.viewerId, bytes: Buffer.from(bytes).toString("base64") }),
+          assertControl: () => { if (!current()) throw new Error("codex_tui_policy_denied"); input.hosts.assertControl(command.runtimeId, input.controllerEpoch); },
+          output: bytes => { try { if (current()) emit(command.runtimeId, { type: "output", viewerId: command.viewerId, bytes: Buffer.from(bytes).toString("base64") }, current); } catch { /* Withdrawn viewer. */ } },
           stateChanged: () => {},
         });
         viewers.set(command.viewerId, { runtimeId: command.runtimeId, handle }); break;

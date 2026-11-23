@@ -1,3 +1,5 @@
+import { launchAdmission, currentBackendGrant, type ProviderPolicyAttachment } from "../../provider-policy-admission.js";
+import { runtimeLaunchDigest } from "../../provider-launch-digest.js";
 import { environmentVariableOverridesSchema } from "../../../../shared/protocol/environment-variables.js";
 import { sidecarUpgradeBlockerSchema } from "../../../../internal/sidecar-protocol/service-management-v1.js";
 import { z } from "zod";
@@ -54,7 +56,7 @@ const eventDefinition = { ...capability, event: "runtime.event", schema: z.stric
  * Queued events are transient transport buffers, bounded independently of
  * provider output. An absent/slow subscriber is detached rather than blocking
  * the provider's stdout reader or evicting pending results. */
-export function registerCodexRuntimeHost(input: {
+export function registerCodexRuntimeHost(input: ProviderPolicyAttachment & {
   registry: SidecarOperationRegistry; channel: SidecarRuntimeChannel;
   hosts: CodexRuntimeHostRegistry; services: PersistentSidecarServiceRegistry;
   controllerEpoch: number; onDetach(): void;
@@ -119,7 +121,10 @@ export function registerCodexRuntimeHost(input: {
   input.registry.register(codexRuntimeEnsureOperation, async ({ configuration }) => {
     if (detached) throw new Error("codex_runtime_attachment_detached");
     try {
-      const host = await input.hosts.ensure(configuration, input.controllerEpoch);
+      const admission = launchAdmission(input, "codex_app_server", configuration.instance.id,
+        runtimeLaunchDigest.codex_app_server(configuration, configuration.startupEnvironmentVariables), configuration.connections);
+      const host = await input.hosts.ensure(configuration, input.controllerEpoch, admission.assertCurrent);
+      admission.bind(host);
       return { runtimeId: host.runtimeId };
     } catch (error) {
       const refusal = codexNativeStoreRefusal(error);
@@ -140,6 +145,8 @@ export function registerCodexRuntimeHost(input: {
       input.services.assertController(input.controllerEpoch);
       host.assertScope(command.authority);
     } else if (command.action !== "attach") host.assertAuthority(command.authority);
+    if (["shell_path", "idle", "wake", "retire"].includes(command.action) ||
+        (command.action === "submit" && !host.isRetainedThreadRead(command.input))) currentBackendGrant(input, host);
     const order = eventOrder(host.runtimeId);
     // Capture response affinity before a reply settles its pending request.
     const affinity = order.commandAffinity(command);

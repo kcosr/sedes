@@ -73,8 +73,9 @@ test("execution settings persist typed configuration and distinguish unreachable
   const host = details(settings, "Temporary build host");
   await expect(host.getByRole("heading", { name: "Temporary build host", level: 2 })).toBeVisible();
   const status = host.getByRole("region", { name: "Temporary build host status", exact: true });
-  await expect(status).toContainText(/Changes pending|Configuration not applied|Connect to check it/u);
+  await expect(status).toContainText(/Changes pending|Awaiting host confirmation|Configuration not applied|Connect to check it/u);
   await expect(status.getByText("Connected", { exact: true })).toHaveCount(0);
+  await expect(headerActions(settings, "Temporary build host").getByRole("button", { name: "Restart sidecar", exact: true })).toHaveCount(0);
   await host.getByRole("tab", { name: /^Backends/u }).click();
   await expect(host.getByText("No backends in this environment.", { exact: true })).toBeVisible();
   await host.getByRole("tab", { name: "Activity", exact: true }).click();
@@ -625,9 +626,8 @@ test("large backend inventories stay compact and filterable on mobile in dark ap
   } });
   expect(saved.ok(), await saved.text()).toBe(true);
   const disconnectedBackend = backends[7]!;
-  // The large-inventory case checks rendering with one controlled, schema-valid
-  // disconnected runtime. It does not claim provider/lifecycle integration;
-  // the earlier cases exercise the real fixture service and lifecycle receipts.
+  // Render host evidence and a disconnected backend deterministically. The production
+  // carrier tests drive these states through the settings service and real sidecars.
   await page.route("**/api/configuration", async (route) => {
     if (route.request().method() !== "GET") { await route.continue(); return; }
     const response = await route.fetch();
@@ -635,7 +635,14 @@ test("large backend inventories stay compact and filterable on mobile in dark ap
     const presented = configurationSnapshotSchema.parse({ ...snapshot, runtimes: snapshot.runtimes.map(runtime =>
       runtime.resourceKind === "backend" && runtime.resourceId === disconnectedBackend.id
         ? { ...runtime, connectionState: "disconnected", preference: "disconnected", activeResources: 0, lastError: null }
-        : runtime) });
+        : runtime.resourceKind === "environment" && runtime.resourceId === environments[0]!.id
+          ? { ...runtime, connectionState: "connected", preference: "automatic", upgradeState: "current", applyState: "pending",
+            supportedActions: ["connect", "restart", "stop"], effects: [
+              { component: "host_policy", subjectId: "capability:workspace_files", desiredRevision: snapshot.revision, effectiveRevision: snapshot.revision, state: "applied",
+                lastHostConfirmation: { revision: snapshot.revision, digest: "a".repeat(64), incarnation: "observed-sidecar", epoch: 7 } },
+              { component: "host_policy", subjectId: `backend:${backends[0]!.id}`, desiredRevision: snapshot.revision, effectiveRevision: null, state: "awaiting_host" },
+              { component: "host_policy", subjectId: "capability:interactive_terminal", desiredRevision: snapshot.revision, effectiveRevision: null, state: "unsupported", detail: "PTY helper unavailable" },
+            ] } : runtime) });
     await route.fulfill({ response, json: presented });
   });
   await page.setViewportSize({ width: 1440, height: 1000 });
@@ -755,12 +762,38 @@ test("large backend inventories stay compact and filterable on mobile in dark ap
   await expectNoPageOverflow(page);
   expect(await content.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   await capture(page, testInfo, "execution-settings-environments-dark-mobile-320.png");
+  const hostLabel = environments[0]!.label;
+  await settings.getByRole("link", { name: hostLabel, exact: true }).click();
+  const host = details(settings, hostLabel);
+  const effects = host.getByRole("list", { name: "Saved settings" });
+  await expect(effects.getByRole("listitem")).toHaveText([
+    /Files and comparisons · Applied/u, new RegExp(`${backends[0]!.label} · Awaiting host confirmation`),
+    /Interactive terminals · Unsupported on this host · PTY helper unavailable/u,
+  ]);
+  await effects.locator("summary").filter({ hasText: "Files and comparisons" }).click();
+  await expect(effects.getByText("observed-sidecar", { exact: true })).toBeVisible();
+  await expect(effects.getByText("a".repeat(64), { exact: true })).toBeVisible();
+  await expect(host.getByRole("button", { name: "Retry apply", exact: true })).toBeVisible();
+  await expect(host.getByRole("button", { name: "Restart sidecar", exact: true })).toHaveCount(0);
+  await expectNoPageOverflow(page);
+  await showList(page, "environments");
   await selectSettingsCategory(page, "backends");
   await expect(names).toHaveCount(26);
 });
 
 
 test("owned backend startup edits stay enabled and show pending restart without changing the running incarnation", async ({ page }, testInfo) => {
+  // The scripted backend provides real save/observation data but has no restart
+  // executor. Supply that one advertised action for the browser presentation.
+  // The production reconciliation test executes and impact-checks this action.
+  await page.route("**/api/configuration", async route => {
+    if (route.request().method() !== "GET") return route.continue();
+    const response = await route.fetch();
+    const observed = configurationSnapshotSchema.parse(await response.json());
+    const backend = observed.runtimes.find(runtime => runtime.resourceId === "codex-stdio-e2e");
+    if (backend?.startupEnvironmentPending) backend.supportedActions = ["restart"];
+    return route.fulfill({ response, json: observed });
+  });
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto("/");
   await expect(page.getByTestId("desktop-sidebar")).toBeVisible();
@@ -791,9 +824,11 @@ test("owned backend startup edits stay enabled and show pending restart without 
   await expect(settings.getByText("Saved", { exact: true })).toBeVisible();
   const editor = settings.getByRole("region", { name: "Backend editor", exact: true });
   await editor.getByRole("link", { name: "Codex stdio", exact: true }).click();
+  await expect(details(settings, "Codex stdio").getByRole("button", { name: "Restart backend", exact: true })).toBeVisible();
+  await expect(details(settings, "Codex stdio").getByRole("button", { name: "Restart sidecar", exact: true })).toHaveCount(0);
   await showList(page, "backends");
   const backendRow = row(settings, "Codex stdio");
-  await expect(backendRow).toContainText("Pending restart", { timeout: 10_000 });
+  await expect(backendRow).toContainText("Restart backend required", { timeout: 10_000 });
   await backendRow.scrollIntoViewIfNeeded();
   await capture(page, testInfo, "execution-startup-pending-restart.png");
   await backendRow.getByRole("button", { name: "Actions for Codex stdio", exact: true }).click();

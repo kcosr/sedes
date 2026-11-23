@@ -10,6 +10,7 @@ import { SwitchField } from "../settings/SettingsField.js";
 import { followLink } from "../settings/SettingsNav.js";
 import { SettingsDetailHeader, SettingsEditor, type SettingsEditorSection } from "../settings/SettingsSplit.js";
 import { GeneralErrors } from "./detail-parts.js";
+import { capabilityLabels } from "./runtime-presentation.js";
 import { hostPlatform } from "./ExecutionInventory.js";
 import { CheckboxGroup, ListField, ReadOnlyField, TextField } from "./fields.js";
 import type { Configuration, EnvironmentDefinition } from "./types.js";
@@ -22,12 +23,6 @@ export const environmentKindNames: Record<EnvironmentDefinition["kind"], string>
 /** The fields the environment editor shows a control for, relative to the environment. */
 export const environmentFields = /^(label|hostAlias|connectionCompression|workspaceRoots(\.\d+)?|operations(\..+)?|workspaceIsolation(\..+)?|environmentVariables(\..+)?)$/u;
 
-export const capabilityLabels: Record<Capability, string> = {
-  directory_browser: "Directory browsing", workspace_files: "Files and comparisons",
-  workspace_tools: "Workspace tools and context", workspace_context: "Workspace context",
-  workspace_skills: "Workspace skills", composer_attachments: "Attachment staging",
-  agent_tools_cli: "Sedes tools for remote agents", interactive_terminal: "Interactive terminals",
-};
 const defaultCapabilities: Capability[] = ["directory_browser", "workspace_files"];
 const newTitles: Record<EnvironmentDefinition["kind"], string> = { local: "New local environment", ssh: "New SSH environment", outbound: "New environment" };
 

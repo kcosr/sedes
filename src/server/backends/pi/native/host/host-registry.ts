@@ -1,3 +1,4 @@
+import { observedLaunchDigest } from "../../../provider-policy-admission.js";
 import type { RequestScope } from "../../../../identity/identity-provider.js";
 import type { ExecutionEnvironmentChannelProvider } from "../../../../execution/environment-channel.js";
 import type { PersistentSidecarServiceRegistry } from "../../../../sidecar/persistent-sidecar-service-registry.js";
@@ -13,6 +14,10 @@ export class PiNativeHostRegistry {
   readonly #hosts = new Map<string, Entry>();
   readonly #starting = new Map<string, Promise<Entry>>();
   readonly #retiredHandles = new Map<string, ReadonlySet<string>>();
+  observedLaunchDigest(id: string): string | undefined {
+    return observedLaunchDigest(this.#hosts.get(id)?.host);
+  }
+
   constructor(readonly input: {
     readonly scope: RequestScope;
     readonly executionEnvironmentId: string;
@@ -23,7 +28,7 @@ export class PiNativeHostRegistry {
     readonly createHost?: (configuration: PiNativeRuntimeConfiguration, key: Uint8Array) => PiNativeHost;
   }) {}
 
-  async ensure(raw: PiNativeRuntimeConfiguration, epoch: number): Promise<PiNativeHost> {
+  async ensure(raw: PiNativeRuntimeConfiguration, epoch: number, assertLaunch?: () => void): Promise<PiNativeHost> {
     const configuration = this.#configuration(raw);
     this.input.services.assertController(epoch);
     let entry = this.#hosts.get(configuration.backendInstanceId);
@@ -31,7 +36,8 @@ export class PiNativeHostRegistry {
       this.input.services.assertAdmission(epoch);
       let starting = this.#starting.get(configuration.backendInstanceId);
       if (!starting) {
-        starting = this.#create(configuration, epoch);
+        assertLaunch?.();
+        starting = this.#create(configuration, epoch, assertLaunch);
         this.#starting.set(configuration.backendInstanceId, starting);
       }
       try { entry = await starting; }
@@ -47,7 +53,8 @@ export class PiNativeHostRegistry {
     await this.#starting.get(configuration.backendInstanceId)?.catch(() => undefined);
     this.input.services.assertController(epoch);
     const entry = this.#hosts.get(configuration.backendInstanceId);
-    if (entry && entry.fingerprint !== identity(configuration)) throw new PiNativeError("pi_native_configuration_restart_required");
+    if (entry && (entry.host.input.configuration.agentDirectory !== configuration.agentDirectory ||
+      entry.host.input.configuration.sessionDirectory !== configuration.sessionDirectory)) throw new PiNativeError("pi_native_configuration_scope_denied");
     return entry?.host;
   }
   async lookupRetained(backendInstanceId: string, epoch: number): Promise<PiNativeHost | undefined> {
@@ -92,9 +99,10 @@ export class PiNativeHostRegistry {
       configuration.executionEnvironmentId !== this.input.executionEnvironmentId) throw new PiNativeError("pi_native_configuration_scope_denied");
     return configuration;
   }
-  async #create(configuration: PiNativeRuntimeConfiguration, epoch: number): Promise<Entry> {
+  async #create(configuration: PiNativeRuntimeConfiguration, epoch: number, assertLaunch?: () => void): Promise<Entry> {
     const key = await loadPiNativeHostAuthenticationKey(this.input.serviceDirectory, configuration.backendInstanceId);
     this.input.services.assertAdmission(epoch);
+    assertLaunch?.();
     const host = this.input.createHost?.(configuration, key) ?? new PiNativeHost({ configuration, authenticationKey: key,
       channels: this.input.channels, environment: this.input.environment });
     let unregister = () => {};

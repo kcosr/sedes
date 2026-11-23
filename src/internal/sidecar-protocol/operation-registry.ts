@@ -13,7 +13,7 @@ export interface SidecarOperationDefinition<
   readonly requestSchema: z.ZodType<Request>;
   readonly responseSchema: z.ZodType<Response>;
   readonly maximumDeadlineMilliseconds: number | "caller_abort";
-  readonly lane: "control" | "operation";
+  readonly lane: "control" | "operation" | "staging" | "interactive";
 }
 
 export interface SidecarOperationContext {
@@ -33,11 +33,11 @@ export interface RegisteredSidecarOperation {
 
 export class SidecarOperationRegistry {
   readonly #operations = new Map<string, RegisteredSidecarOperation>();
-  readonly #beforeDispatch: (() => void) | undefined;
+  readonly #beforeDispatch: ((key: SidecarOperationKey, request:unknown) => void) | undefined;
   readonly #prepareDispatch: ((key: SidecarOperationKey) => void | Promise<void>) | undefined;
 
   constructor(input?: {
-    readonly beforeDispatch?: () => void;
+    readonly beforeDispatch?: (key: SidecarOperationKey, request:unknown) => void;
     readonly prepareDispatch?: (key: SidecarOperationKey) => void | Promise<void>;
   }) {
     this.#beforeDispatch = input?.beforeDispatch;
@@ -45,8 +45,8 @@ export class SidecarOperationRegistry {
   }
 
   /** Each attachment adds its own framed streams to an immutable handler base. */
-  fork(): SidecarOperationRegistry {
-    const registry = new SidecarOperationRegistry();
+  fork(beforeDispatch?: (key:SidecarOperationKey, request:unknown)=>void): SidecarOperationRegistry {
+    const registry = new SidecarOperationRegistry(beforeDispatch ? {beforeDispatch} : {});
     for (const operation of this.#operations.values()) registry.register(operation.definition, operation.handler);
     return registry;
   }
@@ -63,10 +63,10 @@ export class SidecarOperationRegistry {
     this.#operations.set(key, {
       definition: definition as SidecarOperationDefinition<unknown, unknown>,
       handler: ((request, context) => {
-        this.#beforeDispatch?.();
+        this.#beforeDispatch?.(definition, request);
         const ready = this.#prepareDispatch?.(definition);
         if (ready) return ready.then(() => {
-          this.#beforeDispatch?.();
+          this.#beforeDispatch?.(definition, request);
           context.signal.throwIfAborted();
           return handler(request as Request, context);
         });

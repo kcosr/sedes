@@ -1,3 +1,4 @@
+import { observedLaunchDigest } from "../provider-policy-admission.js";
 import type { OpenCodeToolInvocationStamp } from "./opencode-tool-invocation.js";
 import { configurationFingerprint } from "../../config/configuration-fingerprint.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
@@ -28,6 +29,10 @@ export class OpenCodeRuntimeHostRegistry {
   readonly #runtimes = new Map<string, Resident>();
   readonly #byId = new Map<string, Resident>();
   readonly #starting = new Map<string, Promise<Resident>>();
+  observedLaunchDigest(id: string): string | undefined {
+    return observedLaunchDigest(this.#runtimes.get(id)?.runtime);
+  }
+
   constructor(readonly input: {
     readonly scope: RequestScope;
     readonly executionEnvironmentId: string;
@@ -41,7 +46,7 @@ export class OpenCodeRuntimeHostRegistry {
     input.services.assertScope({ ...input.services.scope, ...input.scope, executionEnvironmentId: input.executionEnvironmentId });
   }
 
-  async ensure(configuration: OpenCodeRuntimeConfiguration, controllerEpoch: number): Promise<OpenCodeRuntime> {
+  async ensure(configuration: OpenCodeRuntimeConfiguration, controllerEpoch: number, assertLaunch?: () => void, bindLaunch?: (runtime: OpenCodeRuntime) => void): Promise<OpenCodeRuntime> {
     this.input.services.assertController(controllerEpoch);
     const admitted = this.#configuration(configuration);
     if (!admitted.instance.enabled || !admitted.connections.some(connection => connection.enabled)) throw error("configuration_disabled");
@@ -52,7 +57,8 @@ export class OpenCodeRuntimeHostRegistry {
     // Install the promise synchronously before the first resolver await.
     let starting = this.#starting.get(admitted.instance.id);
     if (!starting) {
-      starting = this.#start(admitted, controllerEpoch);
+      assertLaunch?.();
+      starting = this.#start(admitted, controllerEpoch, assertLaunch, bindLaunch);
       this.#starting.set(admitted.instance.id, starting);
     }
     try {
@@ -70,7 +76,8 @@ export class OpenCodeRuntimeHostRegistry {
     const admitted = this.#configuration(configuration), existing = await this.#existing(admitted.instance.id);
     this.input.services.assertController(controllerEpoch);
     if (!existing) return undefined;
-    this.#sameConfiguration(existing, admitted); return existing.runtime;
+    if (existing.configuration.nativeStorePath !== admitted.nativeStorePath) throw error("configuration_restart_required");
+    return existing.runtime;
   }
 
   /** Authenticated administration can reach the original owner after desired
@@ -204,20 +211,20 @@ export class OpenCodeRuntimeHostRegistry {
     void retiring.finally(() => { if (resident.stopping === retiring) resident.stopping = undefined; }).catch(() => undefined);
     return retiring;
   }
-  async #start(configuration: OpenCodeRuntimeConfiguration, controllerEpoch: number): Promise<Resident> {
+  async #start(configuration: OpenCodeRuntimeConfiguration, controllerEpoch: number, assertLaunch?: () => void, bindLaunch?: (runtime: OpenCodeRuntime) => void): Promise<Resident> {
     const resolved = await resolveOpenCodeRuntimeInput({ configuration, scope: this.input.scope,
       executionEnvironmentId: this.input.executionEnvironmentId, hostIncarnation: this.input.services.serviceIncarnation,
       environmentChannel: this.input.environmentChannel, environment: this.input.environment,
-      ...(this.input.agentTools ? { agentTools: this.input.agentTools } : {}) });
-    this.input.services.assertAdmission(controllerEpoch);
+      ...(this.input.agentTools ? { agentTools: { ...this.input.agentTools, bindRouteToEndpoint: true } } : {}) });
+    assertLaunch?.(); this.input.services.assertAdmission(controllerEpoch);
     if (configuration.connection.ownership === "owned" && this.input.beforeOwnedLaunch) {
       await this.input.beforeOwnedLaunch();
-      this.input.services.assertAdmission(controllerEpoch);
+      assertLaunch?.(); this.input.services.assertAdmission(controllerEpoch);
     }
     let resident: Resident;
     const runtime = (this.input.createRuntime ?? (input => new OpenCodeRuntime(input)))({ ...resolved,
       assertLaunchAdmission: () => {
-        this.input.services.assertAdmission(controllerEpoch);
+        assertLaunch?.(); this.input.services.assertAdmission(controllerEpoch);
         if (resident.frozen || resident.retiring) throw error("stopping");
       } });
     resident = { runtime, configuration, fingerprint: this.#fingerprint(configuration),
@@ -231,6 +238,7 @@ export class OpenCodeRuntimeHostRegistry {
       stop: (reason, { force }) => this.#retire(resident, reason, force) });
     this.#runtimes.set(configuration.instance.id, resident); this.#byId.set(runtime.runtimeId, resident);
     try {
+      bindLaunch?.(runtime);
       await runtime.start(); resident.host = runtime.nativeHost;
       if (resident.frozen) resident.host?.freezeAdmission();
       return resident;

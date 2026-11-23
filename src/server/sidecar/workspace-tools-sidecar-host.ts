@@ -1,3 +1,4 @@
+import { type WorkspacePolicyGuard, checkWorkspaceAuthority, withWorkspaceReadAuthority } from "./workspace-policy-guard.js";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { realpath, stat } from "node:fs/promises";
@@ -15,6 +16,7 @@ import { TrustedSearchExecutableResolver } from "../workspace-tools/trusted-sear
 import { SidecarOperationReceipts } from "./sidecar-operation-receipts.js";
 
 interface AdmittedWorkspace {
+  readonly assertCurrent?: () => void;
   readonly admissionId: string;
   readonly declaredPath: string;
   readonly policyRootPath: string;
@@ -51,11 +53,13 @@ export class WorkspaceToolsSidecarHost {
     };
   }
 
-  constructor(input: {
+  constructor(readonly input: {
+    readonly policyGuard?: WorkspacePolicyGuard;
     readonly sessionNonce: string;
     readonly mutations: CanonicalMutationSerializer;
     readonly search?: TrustedSearchExecutableResolver;
     readonly captureAdmission?: () => () => void;
+    readonly captureCleanup?: () => () => void;
   }) {
     this.#sessionNonce = input.sessionNonce;
     this.#captureAdmission = input.captureAdmission ?? (() => () => undefined);
@@ -72,7 +76,7 @@ export class WorkspaceToolsSidecarHost {
       }),
       openWorkspace: (request) => this.#guard(() => this.#open(request)),
       closeWorkspace: ({ workspaceHandle }) =>
-        this.#guard(() => this.#closeWorkspace(workspaceHandle)),
+        this.#guard(() => this.#closeWorkspace(workspaceHandle), "cleanup"),
       readFile: ({ workspaceHandle, ...request }, context) =>
         this.#guard(() =>
           this.#workspace(workspaceHandle).engine.read({
@@ -137,10 +141,11 @@ export class WorkspaceToolsSidecarHost {
   }
 
   /** Resolve shell cwd authority while revalidating the canonical root. */
-  async resolveWorkspace(workspaceHandle: string): Promise<string> {
+  async resolveWorkspace(workspaceHandle: string): Promise<{cwd: string; assertCurrent: () => void}> {
     const workspace = this.#workspace(workspaceHandle);
     await workspace.engine.validateRoot();
-    return workspace.declaredPath;
+    checkWorkspaceAuthority(workspace.assertCurrent);
+    return { cwd: workspace.declaredPath, assertCurrent: () => { this.#workspace(workspaceHandle); } };
   }
 
   /** One service-owned admission ledger shared by write, edit, and shell. */
@@ -188,6 +193,8 @@ export class WorkspaceToolsSidecarHost {
     this.#assertOpen();
     const assertAdmission = this.#admission();
     assertAdmission();
+    const assertCurrent = this.input.policyGuard?.capture("workspace_tools", request.policyRootPath);
+    checkWorkspaceAuthority(assertCurrent);
     const existingHandle = this.#admissions.get(request.admissionId);
     if (existingHandle) {
       const existing = this.#workspaces.get(existingHandle);
@@ -197,6 +204,7 @@ export class WorkspaceToolsSidecarHost {
         existing.policyRootPath !== request.policyRootPath
       )
         throw new SidecarOperationError("workspace_tools_operation_id_reused");
+      checkWorkspaceAuthority(existing.assertCurrent);
       return { workspaceHandle: existingHandle };
     }
     const [policy, workspace] = await Promise.all([
@@ -215,6 +223,7 @@ export class WorkspaceToolsSidecarHost {
     const engine = new WorkspaceToolEngine({
       pathGrammar: "workspace_relative",
       root: {
+        ...(assertCurrent && { assertCurrent }),
         canonicalPath: workspace,
         homePath: homedir(),
         operationKey: `${this.#sessionNonce}\0${workspaceHandle}`,
@@ -226,13 +235,15 @@ export class WorkspaceToolsSidecarHost {
     assertAdmission();
     if (this.#workspaces.size >= 1024)
       throw new SidecarOperationError("workspace_tools_unavailable", true);
-    this.#workspaces.set(workspaceHandle, { ...request, engine });
+    assertCurrent?.();
+    this.#workspaces.set(workspaceHandle, { ...request, engine, ...(assertCurrent && { assertCurrent }) });
     this.#admissions.set(request.admissionId, workspaceHandle);
     return { workspaceHandle };
   }
 
   #closeWorkspace(handle: string) {
-    const workspace = this.#workspace(handle);
+    const workspace = this.#workspaces.get(handle);
+    if (!workspace) throw new SidecarOperationError("workspace_tools_workspace_handle_invalid");
     this.#workspaces.delete(handle);
     this.#admissions.delete(workspace.admissionId);
     return { closed: true as const };
@@ -252,7 +263,7 @@ export class WorkspaceToolsSidecarHost {
       return await this.#receipts.run(
         operationId,
         { workspaceHandle, payload },
-        () => this.#guard(operation),
+        () => this.#guard(operation, "mutation"),
         maximumResultBytes,
       );
     } catch (error) {
@@ -291,13 +302,15 @@ export class WorkspaceToolsSidecarHost {
       throw new SidecarOperationError(
         "workspace_tools_workspace_handle_invalid",
       );
+    checkWorkspaceAuthority(workspace.assertCurrent);
     return workspace;
   }
 
-  async #guard<T>(operation: () => T | Promise<T>): Promise<T> {
+  async #guard<T>(operation: () => T | Promise<T>, mode: "read" | "mutation" | "cleanup" = "read"): Promise<T> {
     try {
-      this.#admission()();
-      return await operation();
+      if (mode === "cleanup" && this.input.captureCleanup) this.input.captureCleanup()();
+      else this.#admission()();
+      return await (mode === "read" ? withWorkspaceReadAuthority(operation) : operation());
     } catch (error) {
       if (error instanceof SidecarOperationError) throw error;
       if (error instanceof WorkspaceToolError)

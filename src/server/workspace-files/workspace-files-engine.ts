@@ -277,6 +277,7 @@ function gitStatus(xy: string): WorkspaceFileGitStatusKind {
 }
 
 export interface WorkspaceFilesEngineRoot {
+  readonly assertCurrent?: () => void;
   readonly canonicalPath: string;
   /** Adapter-owned identity used only for process-local write/watch isolation. */
   readonly operationKey: string;
@@ -816,6 +817,7 @@ export class WorkspaceFilesEngine {
     ) {
       throw new WorkspaceFileRootUnavailableError();
     }
+    primaryRootTarget.assertCurrent?.();
     try {
       await executeFile(
         "git",
@@ -1410,6 +1412,7 @@ export class WorkspaceFilesEngine {
             throw new WorkspaceFileRevisionConflictError();
           }
 
+          rootTarget.assertCurrent?.();
           await rename(temporaryPath, descriptorDestination);
           temporaryCreated = false;
           const written = await this.#openedTarget(

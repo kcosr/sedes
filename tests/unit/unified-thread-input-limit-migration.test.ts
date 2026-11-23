@@ -5,7 +5,7 @@ import { ConversationBindingRepository } from "../../src/server/db/repositories/
 import { ConversationCreationRepository } from "../../src/server/db/repositories/conversation-creation-repository.js";
 import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
 import { MAXIMUM_THREAD_INPUT_BYTES } from "../../src/shared/protocol/context-excerpts.js";
-import { savedAgentDatabase } from "../support/saved-agent-fixture.js";
+import { savedAgentDatabase, insertPreRootGrantWorkspace } from "../support/saved-agent-fixture.js";
 
 describe("unified thread input limit migration", () => {
   it("preserves creation rows, indexes, trigger order and foreign keys, with transactional rollback", () => {
@@ -18,7 +18,7 @@ describe("unified thread input limit migration", () => {
     try {
       const inventory = new InventoryRepository(database);
       const environment = inventory.getLocalEnvironment(scope);
-      const workspace = inventory.upsertWorkspace(scope, {
+      const workspace = insertPreRootGrantWorkspace(database, scope, {
         id: randomUUID(), environmentId: environment.id, canonicalPath: "/tmp/unified-input-migration",
         displayName: "Unified input", project: { kind: "new", name: "Unified input" },
         available: true, trustState: "trusted", environmentConfigurationRevision: environment.configurationRevision, now: 200,

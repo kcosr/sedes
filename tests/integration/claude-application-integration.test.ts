@@ -434,6 +434,7 @@ describe("Claude production application integration", () => {
       const inventory = new InventoryRepository(database);
       const currentEnvironment = inventory.updateEnvironmentAvailability(scope,
         environment.id, { available: true, now: 300 });
+      const root = projection.hostPolicy(scope, environment.id)!.snapshot.roots.find(candidate => candidate.path === process.cwd())!;
       inventory.upsertWorkspace(scope, {
         id: workspace.id,
         environmentId: environment.id,
@@ -441,8 +442,8 @@ describe("Claude production application integration", () => {
         displayName: "Claude integration workspace",
         available: true,
         trustState: "trusted",
-        environmentConfigurationRevision:
-          currentEnvironment.configurationRevision,
+        authorityRootId: root.id,
+        environmentConfigurationRevision: root.generation,
         now: 301,
       });
       const instance = backendInstance(
@@ -473,6 +474,7 @@ describe("Claude production application integration", () => {
         scope,
         allowedRoots: [process.cwd()],
         workspaceTrusted: () => true,
+        readWorkspaceRoots: () => projection.hostPolicy(scope, environment.id)!.snapshot.roots,
         configurationRevision: currentEnvironment.configurationRevision,
         activeConfigurationRevision: () =>
           currentEnvironment.configurationRevision,

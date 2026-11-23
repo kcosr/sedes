@@ -90,6 +90,28 @@ const WEBP_SIGNATURE = Buffer.from([
 ]);
 
 describe("LocalWorkspaceFileProvider", () => {
+  it("rechecks the workspace's original root before committing a write despite an overlapping grant", async () => {
+    const current = await fixture();
+    const original = { id: "original", path: current.root, generation: 4 };
+    const ancestor = { id: "ancestor", path: path.dirname(current.root), generation: 5 };
+    let grants = [original, ancestor];
+    const provider = new LocalWorkspaceFileProvider({
+      scope, environmentId, readWorkspaceRoots: () => grants,
+      readWorkspaceBinding: () => ({ authorityRootId: original.id, authorityRevision: original.generation }),
+      testHooks: { beforeWriteCommit: () => { grants = [ancestor, { ...original, generation: 6 }]; } },
+    });
+    try {
+      const filename = path.join(current.root, "keep.txt");
+      await writeFile(filename, "kept");
+      const content = await provider.read(scope, current.workspace, "keep.txt");
+      if (!("revision" in content) || typeof content.revision !== "string") throw new Error("missing_revision");
+      await expect(provider.write(scope, current.workspace, { path: "keep.txt", content: "replace", expectedRevision: content.revision }))
+        .rejects.toBeInstanceOf(WorkspaceFileRootUnavailableError);
+      expect(await readFile(filename, "utf8")).toBe("kept");
+      await expect(provider.read(scope, current.workspace, "keep.txt")).rejects.toBeInstanceOf(WorkspaceFileRootUnavailableError);
+    } finally { provider.close(); current.provider.close(); }
+  });
+
   it("streams exact saved bytes through a descriptor without using preview limits", async () => {
     const current = await fixture();
     const bytes = Buffer.alloc(17 * 1_024 * 1_024 + 37, 0x5a);

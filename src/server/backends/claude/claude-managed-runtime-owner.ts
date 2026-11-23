@@ -1,3 +1,4 @@
+import {closedWorkerControl} from "../../../internal/sidecar-protocol/control-v3.js";
 import { attachmentDiagnostic } from "../../diagnostics/attachment-diagnostics.js";
 import type { EnvironmentVariableOverrides } from "../../../shared/protocol/environment-variables.js";
 import { RetainedRuntimeLifecycle } from "../retained-runtime-lifecycle.js";
@@ -359,7 +360,7 @@ export class ClaudeManagedRuntimeOwner implements ClaudeOwnedRuntimeClient {
         compression: "none",
         expectedBuildId: artifact.buildId,
         expectedArtifactSha256: artifact.artifactSha256,
-        authorizedSidecarCapabilities: [{
+        supportedSidecarCapabilities: [{
           capabilityId: CLAUDE_RUNTIME_CAPABILITY_ID,
           majorVersion: CLAUDE_RUNTIME_MAJOR_VERSION,
         }],
@@ -551,7 +552,6 @@ function assertExactHello(
     readonly artifactSha256: string;
     readonly sidecarCapabilities: readonly SidecarCapabilityInventory[];
     readonly sedesCapabilities: readonly SidecarCapabilityInventory[];
-    readonly agentToolCli?: unknown;
   };
   const expectedWorker = claudeRuntimeWorkerOperations
     .map(({ operation }) => operation).sort();
@@ -562,7 +562,7 @@ function assertExactHello(
     item.capabilityId !== "control" && item !== worker);
   if (value.buildId !== artifact.buildId ||
       value.artifactSha256 !== artifact.artifactSha256 ||
-      value.agentToolCli !== undefined || !worker || unexpected.length ||
+      !closedWorkerControl(value.sidecarCapabilities) || !worker || unexpected.length ||
       JSON.stringify([...worker.operations].sort()) !== JSON.stringify(expectedWorker) ||
       JSON.stringify(value.sedesCapabilities) !== JSON.stringify([hostInventory()])) {
     throw new Error("claude_managed_runtime_capability_mismatch");

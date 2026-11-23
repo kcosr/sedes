@@ -26,7 +26,7 @@ import { InventoryRepository } from "../../src/server/db/repositories/inventory-
 import { SavedAgentRepository } from "../../src/server/db/repositories/saved-agent-repository.js";
 import { SavedAgentService } from "../../src/server/domain/saved-agent-service.js";
 import type { NormalizedAgentConfigurationOverrides } from "../../src/shared/protocol/saved-agents.js";
-import { savedAgentDatabase } from "../support/saved-agent-fixture.js";
+import { savedAgentDatabase, insertPreRootGrantWorkspace } from "../support/saved-agent-fixture.js";
 
 function antigravityConnection({ database, scope }: ReturnType<typeof savedAgentDatabase>) {
   const profiles = new BackendConfigurationRepository(database);
@@ -172,7 +172,7 @@ describe("Antigravity persistence", () => {
       const profiles = new BackendConfigurationRepository(database);
       const bindings = new ConversationBindingRepository(database);
       const environmentId = profiles.listProfiles(scope)[0]!.executionEnvironmentId;
-      const workspace = new InventoryRepository(database).upsertWorkspace(scope, {
+      const workspace = insertPreRootGrantWorkspace(database, scope, {
         environmentId, canonicalPath: "/tmp/antigravity", displayName: "Project", project: { kind: "new", name: "Project" },
         available: true, trustState: "trusted", environmentConfigurationRevision: 0, now: 200,
       });

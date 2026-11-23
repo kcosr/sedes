@@ -1,3 +1,6 @@
+import { WorkspaceFileRootUnavailableError } from "./contracts.js";
+import { workspaceRootGrant, type WorkspaceRootGrant } from "../execution/workspace-root-grant.js";
+import { isWithinRemoteRoot } from "../execution/remote-path.js";
 import path from "node:path";
 import type { WorkspaceFileLinkReference } from "../../shared/protocol/workspace-files.js";
 import type {
@@ -50,7 +53,9 @@ export class LocalWorkspaceFileProvider implements WorkspaceFileProvider {
   readonly #engine: WorkspaceFilesEngine;
   readonly #diffs = new WorkspaceDiffsEngine();
 
-  constructor(input: {
+  constructor(readonly input: {
+    readonly readWorkspaceRoots?: () => readonly WorkspaceRootGrant[];
+    readonly readWorkspaceBinding?: (workspaceId: string) => {authorityRootId?: string; authorityRevision: number};
     readonly scope: RequestScope;
     readonly environmentId: string;
     readonly watchers?: LocalWorkspaceFileWatcherRegistry;
@@ -105,7 +110,9 @@ export class LocalWorkspaceFileProvider implements WorkspaceFileProvider {
     ) {
       throw new Error("workspace_file_environment_unavailable");
     }
+    const authority = this.#capture(root.canonicalPath, root.rootKind === "primary" ? root.workspaceId : undefined);
     await this.#engine.validateRoot(root.canonicalPath);
+    authority?.check();
   }
 
   async discoverFileLinkRoot(
@@ -121,7 +128,10 @@ export class LocalWorkspaceFileProvider implements WorkspaceFileProvider {
       return undefined;
     }
     signal?.throwIfAborted();
+    const authority = this.#capture(absolutePath);
     const result = await this.#engine.discoverFileLinkRoot(absolutePath, signal);
+    authority?.check();
+    if (authority && result && !isWithinRemoteRoot(result.canonicalPath, authority.root.path)) return undefined;
     signal?.throwIfAborted();
     return result;
   }
@@ -134,10 +144,14 @@ export class LocalWorkspaceFileProvider implements WorkspaceFileProvider {
     if (primaryRoot.rootId !== "primary") {
       throw new Error("workspace_file_linked_worktree_primary_required");
     }
-    return this.#engine.discoverLinkedWorktrees(
-      this.#root(scope, primaryRoot),
-      signal,
-    );
+    const primary = this.#root(scope, primaryRoot);
+    const candidates = this.input.readWorkspaceRoots?.();
+    const result = await this.#engine.discoverLinkedWorktrees(primary, signal, candidates?.map(root => root.path));
+    primary.assertCurrent?.();
+    return candidates ? { ...result, worktrees: result.worktrees.filter(worktree => {
+      const old = workspaceRootGrant(candidates, worktree.canonicalCheckoutPath);
+      return old && this.input.readWorkspaceRoots?.().some(root => root.id === old.id && root.generation === old.generation);
+    }) } : result;
   }
 
   async removeLinkedWorktree(
@@ -145,8 +159,10 @@ export class LocalWorkspaceFileProvider implements WorkspaceFileProvider {
     target: Parameters<WorkspaceFileProvider["removeLinkedWorktree"]>[1],
     signal?: AbortSignal,
   ): Promise<void> {
+    const primary = this.#root(scope, target.primaryRoot);
+    const authority = this.#capture(target.canonicalCheckoutPath);
     await this.#engine.removeLinkedWorktree(
-      this.#root(scope, target.primaryRoot),
+      authority ? { ...primary, assertCurrent: () => { primary.assertCurrent?.(); authority.check(); } } : primary,
       target,
       signal,
     );
@@ -165,8 +181,10 @@ export class LocalWorkspaceFileProvider implements WorkspaceFileProvider {
       return undefined;
     }
     signal?.throwIfAborted();
-    const result = await this.#engine.resolveFileLink(this.#root(scope, root), reference);
+    const bound = this.#root(scope, root);
+    const result = await this.#engine.resolveFileLink(bound, reference);
     signal?.throwIfAborted();
+    bound.assertCurrent?.();
     return result;
   }
 
@@ -176,11 +194,13 @@ export class LocalWorkspaceFileProvider implements WorkspaceFileProvider {
     query: WorkspaceFileRootListQuery,
     signal?: AbortSignal,
   ) {
+    const bound = this.#root(scope, root);
     const result = await this.#engine.list(
-      this.#root(scope, root),
+      bound,
       query,
       signal,
     );
+    bound.assertCurrent?.();
     return {
       availability: "available" as const,
       rootId: root.rootId,
@@ -194,11 +214,13 @@ export class LocalWorkspaceFileProvider implements WorkspaceFileProvider {
     query: WorkspaceFileRootDirectoryQuery,
     signal?: AbortSignal,
   ) {
+    const bound = this.#root(scope, root);
     const result = await this.#engine.listDirectory(
-      this.#root(scope, root),
+      bound,
       query,
       signal,
     );
+    bound.assertCurrent?.();
     return {
       availability: "available" as const,
       rootId: root.rootId,
@@ -212,11 +234,13 @@ export class LocalWorkspaceFileProvider implements WorkspaceFileProvider {
     relativePath: string,
     signal?: AbortSignal,
   ) {
+    const bound = this.#root(scope, root);
     const result = await this.#engine.read(
-      this.#root(scope, root),
+      bound,
       relativePath,
       signal,
     );
+    bound.assertCurrent?.();
     return {
       availability: "available" as const,
       rootId: root.rootId,
@@ -231,12 +255,14 @@ export class LocalWorkspaceFileProvider implements WorkspaceFileProvider {
     operation: (source: WorkspaceFileDownloadSource) => Promise<T>,
     signal?: AbortSignal,
   ): Promise<T> {
-    return this.#engine.withDownload(
-      this.#root(scope, root),
-      input,
-      operation,
-      signal,
-    );
+    const bound = this.#root(scope, root);
+    return this.#engine.withDownload(bound, input, async source => {
+      bound.assertCurrent?.();
+      const result = await operation({ ...source, stream: (write, signal) =>
+        source.stream(chunk => { bound.assertCurrent?.(); return write(chunk); }, signal) });
+      bound.assertCurrent?.();
+      return result;
+    }, signal);
   }
 
   async write(
@@ -257,7 +283,9 @@ export class LocalWorkspaceFileProvider implements WorkspaceFileProvider {
     root: WorkspaceFileRootTarget,
     signal?: AbortSignal,
   ) {
-    const result = await this.#engine.status(this.#root(scope, root), signal);
+    const bound = this.#root(scope, root);
+    const result = await this.#engine.status(bound, signal);
+    bound.assertCurrent?.();
     return {
       availability: "available" as const,
       rootId: root.rootId,
@@ -274,7 +302,7 @@ export class LocalWorkspaceFileProvider implements WorkspaceFileProvider {
     root: WorkspaceFileRootTarget,
     signal?: AbortSignal,
   ) {
-    return this.#diffs.repositories(this.#diffRoot(scope, root), signal);
+    return this.#readDiff(scope, root, bound => this.#diffs.repositories(bound, signal));
   }
 
   diffRefCatalog(
@@ -283,7 +311,7 @@ export class LocalWorkspaceFileProvider implements WorkspaceFileProvider {
     query: WorkspaceDiffRefCatalogQuery,
     signal?: AbortSignal,
   ) {
-    return this.#diffs.refCatalog(this.#diffRoot(scope, root), query, signal);
+    return this.#readDiff(scope, root, bound => this.#diffs.refCatalog(bound, query, signal));
   }
 
   diffCreateComparison(
@@ -292,11 +320,7 @@ export class LocalWorkspaceFileProvider implements WorkspaceFileProvider {
     input: WorkspaceDiffComparisonCreateRequest,
     signal?: AbortSignal,
   ) {
-    return this.#diffs.createComparison(
-      this.#diffRoot(scope, root),
-      input,
-      signal,
-    );
+    return this.#readDiff(scope, root, bound => this.#diffs.createComparison(bound, input, signal));
   }
 
   diffChangedFiles(
@@ -305,7 +329,7 @@ export class LocalWorkspaceFileProvider implements WorkspaceFileProvider {
     query: WorkspaceDiffChangedFilesQuery,
     signal?: AbortSignal,
   ) {
-    return this.#diffs.changedFiles(this.#diffRoot(scope, root), query, signal);
+    return this.#readDiff(scope, root, bound => this.#diffs.changedFiles(bound, query, signal));
   }
 
   diffPatch(
@@ -314,7 +338,7 @@ export class LocalWorkspaceFileProvider implements WorkspaceFileProvider {
     input: WorkspaceDiffFileRequest,
     signal?: AbortSignal,
   ) {
-    return this.#diffs.patch(this.#diffRoot(scope, root), input, signal);
+    return this.#readDiff(scope, root, bound => this.#diffs.patch(bound, input, signal));
   }
 
   diffFileContent(
@@ -323,7 +347,7 @@ export class LocalWorkspaceFileProvider implements WorkspaceFileProvider {
     input: WorkspaceDiffFileContentRequest,
     signal?: AbortSignal,
   ) {
-    return this.#diffs.fileContent(this.#diffRoot(scope, root), input, signal);
+    return this.#readDiff(scope, root, bound => this.#diffs.fileContent(bound, input, signal));
   }
 
   diffReviewIdentity(
@@ -332,11 +356,7 @@ export class LocalWorkspaceFileProvider implements WorkspaceFileProvider {
     input: WorkspaceDiffReviewIdentityRequest,
     signal?: AbortSignal,
   ) {
-    return this.#diffs.reviewIdentity(
-      this.#diffRoot(scope, root),
-      input,
-      signal,
-    );
+    return this.#readDiff(scope, root, bound => this.#diffs.reviewIdentity(bound, input, signal));
   }
 
   diffValidateReviewAnchor(
@@ -345,11 +365,7 @@ export class LocalWorkspaceFileProvider implements WorkspaceFileProvider {
     input: WorkspaceDiffReviewAnchorRequest,
     signal?: AbortSignal,
   ) {
-    return this.#diffs.validateReviewAnchor(
-      this.#diffRoot(scope, root),
-      input,
-      signal,
-    );
+    return this.#readDiff(scope, root, bound => this.#diffs.validateReviewAnchor(bound, input, signal));
   }
 
   diffValidateReviewedFile(
@@ -358,11 +374,7 @@ export class LocalWorkspaceFileProvider implements WorkspaceFileProvider {
     input: WorkspaceDiffReviewedFileRequest,
     signal?: AbortSignal,
   ) {
-    return this.#diffs.validateReviewedFile(
-      this.#diffRoot(scope, root),
-      input,
-      signal,
-    );
+    return this.#readDiff(scope, root, bound => this.#diffs.validateReviewedFile(bound, input, signal));
   }
 
   diffReviewRepositoryIdentity(
@@ -371,11 +383,7 @@ export class LocalWorkspaceFileProvider implements WorkspaceFileProvider {
     input: WorkspaceDiffReviewRepositoryIdentityRequest,
     signal?: AbortSignal,
   ) {
-    return this.#diffs.reviewRepositoryIdentity(
-      this.#diffRoot(scope, root),
-      input,
-      signal,
-    );
+    return this.#readDiff(scope, root, bound => this.#diffs.reviewRepositoryIdentity(bound, input, signal));
   }
 
   async watch(
@@ -383,11 +391,30 @@ export class LocalWorkspaceFileProvider implements WorkspaceFileProvider {
     root: WorkspaceFileRootTarget,
     listener: () => void,
   ): Promise<WorkspaceFileWatchSubscription> {
-    return this.#engine.watch(this.#root(scope, root), listener);
+    const bound = this.#root(scope, root);
+    let revoked!: () => void;
+    const failed = new Promise<void>(resolve => { revoked = resolve; });
+    const subscription = await this.#engine.watch(bound, () => {
+      try { bound.assertCurrent?.(); } catch { revoked(); return; }
+      listener();
+    });
+    try { bound.assertCurrent?.(); } catch (error) { await subscription.close(); throw error; }
+    return { failed: Promise.race([subscription.failed, failed]), close: () => subscription.close() };
   }
 
   close(): void {
     this.#engine.close();
+  }
+
+  #capture(path: string, primaryWorkspaceId?: string) {
+    const roots = this.input.readWorkspaceRoots;
+    if (!roots) return undefined;
+    const binding = primaryWorkspaceId ? this.input.readWorkspaceBinding?.(primaryWorkspaceId) : undefined;
+    const root = workspaceRootGrant(roots(), path, binding);
+    if (!root || (primaryWorkspaceId && !binding)) throw new WorkspaceFileRootUnavailableError();
+    return { root, check() {
+      if (!roots().some(current => current.id === root.id && current.generation === root.generation)) throw new WorkspaceFileRootUnavailableError();
+    } };
   }
 
   #supports(scope: RequestScope, environmentId: string): boolean {
@@ -408,22 +435,22 @@ export class LocalWorkspaceFileProvider implements WorkspaceFileProvider {
     ) {
       throw new Error("workspace_file_environment_unavailable");
     }
+    const authority = this.#capture(root.canonicalPath, root.rootId === "primary" ? root.workspaceId : undefined);
     return {
+      ...(authority && { assertCurrent: authority.check }),
       canonicalPath: root.canonicalPath,
-      operationKey: `${scope.tenantId}\0${scope.principalId}\0${root.workspaceId}\0${root.rootId}`,
+      operationKey: [scope.tenantId, scope.principalId, root.workspaceId, root.rootId, ...(authority ? [authority.root.id, authority.root.generation] : [])].join("\0"),
     };
   }
 
-  #diffRoot(
-    scope: RequestScope,
-    root: WorkspaceFileRootTarget,
-  ): WorkspaceDiffsEngineRoot {
-    const resolved = this.#root(scope, root);
-    return {
-      canonicalPath: resolved.canonicalPath,
-      durableRootKey: resolved.operationKey,
-      operationKey: resolved.operationKey,
-      rootId: root.rootId,
-    };
+  #readDiff<T>(scope: RequestScope, root: WorkspaceFileRootTarget,
+    read: (root: WorkspaceDiffsEngineRoot) => Promise<T>): Promise<T> {
+    const bound = this.#root(scope, root);
+    return read({ canonicalPath: bound.canonicalPath, durableRootKey: bound.operationKey,
+      operationKey: bound.operationKey, rootId: root.rootId }).then(result => {
+      bound.assertCurrent?.();
+      return result;
+    });
   }
+
 }

@@ -14,15 +14,18 @@ export class SidecarWorkspaceContextReader implements WorkspaceContextReader {
       readonly environmentId: string;
       readonly declaredPath: string;
       readonly policyRootPath: string;
+      readonly assertCurrent?: () => void;
     },
   ) {}
   async read(signal?: AbortSignal) {
+    this.input.assertCurrent?.();
     const lease = await this.input.runtime.acquireOperation(
       this.input.scope,
       this.input.environmentId,
       signal ?? new AbortController().signal,
     );
     try {
+      this.input.assertCurrent?.();
       return await lease.session.call(
         workspaceContextReadOperation,
         {

@@ -28,6 +28,7 @@ import type { SidecarRuntimeChannel } from "../../src/server/sidecar/runtime-cha
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
 it("replaces the detached main presentation after a rejected Stop and reattaches without replaying work", async () => {
+  vi.spyOn(CodexSidecarRuntimeConnection.prototype, "lookup").mockResolvedValueOnce(undefined).mockResolvedValue("runtime");
   const ensure = vi.spyOn(CodexSidecarRuntimeConnection.prototype, "ensure").mockResolvedValue("runtime");
   vi.spyOn(CodexSidecarRuntimeConnection.prototype, "attach").mockResolvedValue({
     protocolVersion: CODEX_RUNTIME_PROTOCOL_VERSION, runtimeId: "runtime",
@@ -75,7 +76,7 @@ it("replaces the detached main presentation after a rejected Stop and reattaches
   const replacement = new CodexRemoteRuntimeSupervisor({ ...supervisor.input, serverRequests: new CodexServerRequestRouter() });
   try {
     expect((await replacement.attachment()).runtimeId).toBe("runtime");
-    expect(ensure).toHaveBeenCalledTimes(2);
+    expect(ensure).toHaveBeenCalledOnce();
     expect(replacement.client.lifecycleSnapshot()).toEqual({ state: "ready", generation: 1 });
     expect(submit).not.toHaveBeenCalled();
     expect(respond).not.toHaveBeenCalled();
@@ -92,6 +93,7 @@ it("replaces the detached main presentation after a rejected Stop and reattaches
 it("logs the first rejected lease cause before discard and preserves the retry schedule", async () => {
   vi.stubEnv("SEDES_DEBUG_DELIVERY", "1");
   const log = vi.spyOn(console, "error").mockImplementation(() => {});
+  vi.spyOn(CodexSidecarRuntimeConnection.prototype, "lookup").mockResolvedValueOnce(undefined).mockResolvedValue("runtime");
   vi.spyOn(CodexSidecarRuntimeConnection.prototype, "ensure").mockResolvedValue("runtime");
   vi.spyOn(CodexSidecarRuntimeConnection.prototype, "attach").mockResolvedValue({
     protocolVersion: CODEX_RUNTIME_PROTOCOL_VERSION, runtimeId: "runtime",
@@ -130,6 +132,7 @@ it("logs the first rejected lease cause before discard and preserves the retry s
 
 it("restarts through the same carrier, closes the old client, and retires only confirmed settled receipts", async () => {
   let incarnation = 0;
+  vi.spyOn(CodexSidecarRuntimeConnection.prototype, "lookup").mockResolvedValue(undefined);
   vi.spyOn(CodexSidecarRuntimeConnection.prototype, "ensure").mockImplementation(async () => `runtime-${++incarnation}`);
   vi.spyOn(CodexSidecarRuntimeConnection.prototype, "attach").mockImplementation(async authority => ({
     protocolVersion: CODEX_RUNTIME_PROTOCOL_VERSION, runtimeId: authority.runtimeId,
@@ -174,7 +177,7 @@ it("restarts through the same carrier, closes the old client, and retires only c
 it.each(["retained", "missing", "replaced_service"] as const)("recovers only the exact retained Codex runtime under a pending revision: %s", async disposition => {
   vi.useFakeTimers();
   const ensure = vi.spyOn(CodexSidecarRuntimeConnection.prototype, "ensure").mockResolvedValue("runtime");
-  const lookup = vi.spyOn(CodexSidecarRuntimeConnection.prototype, "lookup").mockResolvedValue(disposition === "missing" ? undefined : "runtime");
+  const lookup = vi.spyOn(CodexSidecarRuntimeConnection.prototype, "lookup").mockResolvedValueOnce(undefined).mockResolvedValue(disposition === "missing" ? undefined : "runtime");
   vi.spyOn(CodexSidecarRuntimeConnection.prototype, "attach").mockImplementation(async authority => ({
     protocolVersion: CODEX_RUNTIME_PROTOCOL_VERSION, runtimeId: authority.runtimeId,
     lifecycle: { state: "ready", generation: 1 }, runtimeAssessment: null, outcomes: [], pendingRequests: [],
@@ -202,7 +205,7 @@ it.each(["retained", "missing", "replaced_service"] as const)("recovers only the
     await vi.advanceTimersByTimeAsync(1001);
     expect(acquire).toHaveBeenCalledWith(expect.any(AbortSignal), { existingOnly: true });
     expect(ensure).toHaveBeenCalledOnce();
-    expect(lookup).toHaveBeenCalledOnce();
+    expect(lookup).toHaveBeenCalledTimes(2);
     if (disposition === "retained") {
       expect((await supervisor.attachment()).runtimeId).toBe("runtime");
       expect(supervisor.client.lifecycleSnapshot().state).toBe("ready");

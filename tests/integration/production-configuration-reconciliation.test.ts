@@ -1,3 +1,5 @@
+import { attachFixturePolicy } from "../helpers/execution-policy-fixture.js";
+import { runtimeLaunchDigest } from "../../src/server/backends/provider-launch-digest.js";
 import { createSidecarFramedCarrier } from "../helpers/persistent-sidecar-framed-fixture.js";
 import { authenticatedProductionFetch } from "../helpers/authenticated-production-client.js";
 import { randomUUID } from "node:crypto";
@@ -83,10 +85,13 @@ async function fixture() {
     defaultTargetId: "idle-pi-target", webSearch: null,
   });
   await service.save(scope, { mutationId: randomUUID(), expectedRevision: 0, configuration: document });
+  await vi.waitFor(async () => {
+    const current = await service.get(scope);
+    expect(current.runtimes.map(runtime => ({ id: runtime.resourceId, applyState: runtime.applyState }))).toEqual(expect.arrayContaining([
+      { id: environmentId, applyState: "applied" }, { id: "idle-pi", applyState: "applied" }, { id: "busy-claude", applyState: "applied" },
+    ]));
+  }, { timeout: 5000 });
   const snapshot = await service.get(scope);
-  expect(snapshot.runtimes.map(runtime => ({id: runtime.resourceId, applyState: runtime.applyState}))).toEqual(expect.arrayContaining([
-    {id: environmentId, applyState: "applied"}, {id: "idle-pi", applyState: "applied"}, {id: "busy-claude", applyState: "applied"},
-  ]));
   return { service, scope, environmentId, snapshot };
 }
 
@@ -176,6 +181,7 @@ describe("production configuration reconciliation", () => {
   }, 15_000);
 
   it.each(["idle", "active", "cleanup_unproven", "carrier", "unreachable"] as const)("refreshes a replaced Pi sidecar only after %s retirement is safe", async disposition => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const { service, scope, snapshot } = await fixture();
     const environmentId = randomUUID(), backendId = "replaced-native-pi";
     const configuration = structuredClone(snapshot.configuration);
@@ -208,8 +214,12 @@ describe("production configuration reconciliation", () => {
             environment: {}, launch: nativeLaunch });
           hosts.push(host); return host;
         } });
-      const controllerEpoch = services.attach({ environmentRevision: 0, operationsRevision: 0 });
-      const detach = registerPiNativeHost({ registry: carrier.hostRegistry, channel: carrier.hostChannel, hosts: registry, services, controllerEpoch });
+      const controllerEpoch = attachFixturePolicy(services, { environmentRevision: 0, operationsRevision: 0 }, "normal", {
+        roots: [], capabilities: [], backends: [{ id: backendId, kind: "pi_native", generation: 1,
+          launchDigest: runtimeLaunchDigest.pi_native({ initializationTimeoutMs: 30_000, projectTrusted: false }),
+          targets: [{ id: "replaced-native-target", generation: 1 }] }],
+      });
+      const detach = registerPiNativeHost({ registry: carrier.hostRegistry, channel: carrier.hostChannel, hosts: registry, services, controllerEpoch, getExecutionPolicy: () => services.executionPolicy(controllerEpoch), isRecoveryController: () => services.recoveryController });
       await carrier.start();
       return { carrier, services, hosts, registry,
         lease: () => ({ session: { runtimeChannel: carrier.mainChannel, closed: carrier.mainTransport.closed,
@@ -226,12 +236,17 @@ describe("production configuration reconciliation", () => {
       vi.spyOn(SidecarRuntimeOwner.prototype, "acquireRecovery").mockImplementation(async () => current.lease());
       const stop = vi.spyOn(SidecarRuntimeOwner.prototype, "controlService");
       await service.save(scope, { mutationId: randomUUID(), expectedRevision: snapshot.revision, configuration });
-      expect(modules).toHaveLength(1);
+      await vi.waitFor(() => expect(modules).toHaveLength(1));
       const first = modules[0]!;
       // A metadata read pins the real Pi port to this authenticated service;
       // there is no native child or active thread to require a manual restart.
       const initial = await first.administration!.inspect();
-      const reconcile = () => service.options.runtime!.reconcile(scope, service.repository.get(scope));
+      // Production maintenance notices replacement outside a settings save. The
+      // impact read on the same host queue provides a completion barrier.
+      const reconcile = async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+        await service.impact(scope, { resourceKind: "environment", resourceId: environmentId, action: "restart", expectedRevision: service.repository.get(scope).revision });
+      };
       await reconcile();
       expect(modules).toHaveLength(1);
       const close = vi.spyOn(first, "close");
@@ -282,6 +297,7 @@ describe("production configuration reconciliation", () => {
   }, 15_000);
 
   it("refreshes a remote OpenCode module whose service identity was captured during deferred startup", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const { service, scope, snapshot } = await fixture();
     const environmentId = randomUUID(), backendId = "background-opencode";
     const configuration = structuredClone(snapshot.configuration);
@@ -351,15 +367,20 @@ describe("production configuration reconciliation", () => {
       release();
       await vi.waitFor(() => expect(collection.runtimes.get(backendId)).toBe(created[0]));
       const first = created[0]!, close = vi.spyOn(first, "close");
-      const reconcile = () => service.options.runtime!.reconcile(scope, service.repository.get(scope));
+      const observe = () => service.impact(scope, { resourceKind: "environment", resourceId: environmentId,
+        action: "restart", expectedRevision: service.repository.get(scope).revision });
+      const reconcile = async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+        await observe();
+      };
       await reconcile();
       expect(created).toHaveLength(1);
       expect(close).not.toHaveBeenCalled();
       const original = current;
       current = await createPeer("replacement-service"); peers.push(current);
       await original.carrier.close();
-      await service.impact(scope, { resourceKind: "environment", resourceId: environmentId, action: "restart",
-        expectedRevision: service.repository.get(scope).revision });
+      // Observe the replacement identity before maintenance decides whether to retire the original module.
+      await observe();
       await reconcile();
       await vi.waitFor(() => {
         expect(created).toHaveLength(2);
@@ -405,13 +426,13 @@ describe("production configuration reconciliation", () => {
     configuration.targets.push({ id: "compression-pi-target", kind: "pi_sdk", label: "Remote workspace Pi", enabled: true,
       backendInstanceId: "compression-pi", executionEnvironmentId: environmentId });
     await service.save(scope, { mutationId: randomUUID(), expectedRevision: snapshot.revision, configuration });
-    expect((await service.get(scope)).runtimes.find(item => item.resourceId === "compression-pi")).toMatchObject({ applyState: "applied" });
+    await vi.waitFor(() => expect(apply.mock.contexts.some(collection => (collection as PrincipalBackendRuntimeCollection).runtimes.has("compression-pi"))).toBe(true));
     expect(creations).toBe(1);
     const collection = apply.mock.contexts[0] as PrincipalBackendRuntimeCollection;
     const backend = collection.runtimes.get("compression-pi");
     expect(backend).toBeDefined();
     const initial = await service.get(scope);
-    const initialRuntimes = initial.runtimes.filter(item => [environmentId, "compression-pi"].includes(item.resourceId));
+    const initialBackend = initial.runtimes.find(item => item.resourceId === "compression-pi");
     const close = vi.spyOn(runtime!, "close");
     const remove = vi.spyOn(PrincipalBackendRuntimeCollection.prototype, "remove");
     const policy = captured!.connectionCompression;
@@ -424,7 +445,9 @@ describe("production configuration reconciliation", () => {
       await service.save(scope, { mutationId: randomUUID(), expectedRevision: before.revision, configuration });
       const after = await service.get(scope);
       expect(after.revision).toBe(before.revision + 1);
-      expect(after.runtimes.filter(item => [environmentId, "compression-pi"].includes(item.resourceId))).toEqual(initialRuntimes);
+      expect(after.runtimes.find(item => item.resourceId === environmentId)?.effects).toContainEqual(
+        expect.objectContaining({ component: "connection_compression", state: "next_attachment", desiredRevision: after.revision }));
+      expect(after.runtimes.find(item => item.resourceId === "compression-pi")).toEqual(initialBackend);
       expect(policy()).toBe(connectionCompression);
       expect(creations).toBe(1);
       expect(collection.runtimes.get("compression-pi")).toBe(backend);
@@ -433,9 +456,11 @@ describe("production configuration reconciliation", () => {
     }
     configuration.executionEnvironments.find(item => item.id === environmentId)!.workspaceRoots.push("/additional-root");
     await service.save(scope, { mutationId: randomUUID(), expectedRevision: (await service.get(scope)).revision, configuration });
-    expect(creations).toBe(2);
-    expect(close).toHaveBeenCalledOnce();
-    expect(remove).toHaveBeenCalledWith("compression-pi", expect.objectContaining({ run: expect.any(Function) }));
+    expect(creations).toBe(1);
+    expect(close).not.toHaveBeenCalled();
+    expect(remove).not.toHaveBeenCalled();
+    expect((await service.get(scope)).runtimes.find(item => item.resourceId === environmentId)?.effects).toContainEqual(
+      expect.objectContaining({ component: "host_policy", subjectLabel: "/additional-root", state: "awaiting_host" }));
   });
 
   it("attaches a replacement module's retained work before the old pass settles", async () => {
@@ -585,6 +610,7 @@ describe("production configuration reconciliation", () => {
   });
 
   it.each(["opencode_executable_unavailable", "opencode_owned_cleanup_unproved"])("backs off %s startup failures while permitting initial attachment and explicit retries after proved cleanup", async code => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const { service, scope, snapshot, environmentId } = await fixture();
     let now = Date.now();
     vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -621,7 +647,7 @@ describe("production configuration reconciliation", () => {
     }
     expect(start).toHaveBeenCalledOnce();
     now += 5_000;
-    await save();
+    await vi.advanceTimersByTimeAsync(30_000);
     await vi.waitFor(() => expect(start).toHaveBeenCalledTimes(2));
     await vi.waitFor(async () => expect((await service.get(scope)).runtimes.find(runtime => runtime.resourceId === "background-opencode")?.applyState).toBe("unavailable"));
     unavailable = false;
@@ -812,6 +838,7 @@ describe("production configuration reconciliation", () => {
     configuration.targets.push({ ...structuredClone(original), id: removedId });
     configuration.targets.push({ ...structuredClone(original), id: disabledId, enabled: false });
     await service.save(scope, { mutationId: randomUUID(), expectedRevision: snapshot.revision, configuration });
+    await vi.waitFor(async () => expect((await service.get(scope)).runtimes.find(runtime => runtime.resourceId === backendId)?.connectionState).toBe("connected"));
     const lifecycle = async (action: "stop" | "start") => {
       const current = await service.get(scope);
       const impact = await service.impact(scope, { resourceKind: "backend", resourceId: backendId, action, expectedRevision: current.revision });
@@ -911,19 +938,19 @@ describe("production configuration reconciliation", () => {
       return prepared;
     }));
     const saved = await service.save(scope, { mutationId: randomUUID(), expectedRevision: snapshot.revision, configuration });
-    expect((await service.get(scope)).runtimes.find(item => item.resourceId === backendId))
-      .toMatchObject({ connectionState: "connected", applyState: "applied", startupEnvironmentPending: false });
+    await vi.waitFor(async () => expect((await service.get(scope)).runtimes.find(item => item.resourceId === backendId))
+      .toMatchObject({ connectionState: "connected", incarnation: "retained-provider", startupEnvironmentPending: false }));
     configuration.backends.find(item => item.id === backendId)!.environmentVariables!.startup = { BUILD_STAGE: { kind: "literal", value: "B" } };
     await service.save(scope, { mutationId: randomUUID(), expectedRevision: saved.revision, configuration });
-    expect((await service.get(scope)).runtimes.find(item => item.resourceId === backendId))
-      .toMatchObject({ connectionState: "connected", applyState: "pending", startupEnvironmentPending: true });
+    await vi.waitFor(async () => expect((await service.get(scope)).runtimes.find(item => item.resourceId === backendId))
+      .toMatchObject({ connectionState: "connected", applyState: "pending", startupEnvironmentPending: true }));
     await application!.close();
     application = undefined;
     inspect.mockClear(); recover.mockClear(); inspectService.mockClear();
     if (failFirstInspection) inspect.mockRejectedValueOnce(new Error("transient_observation_failure"));
     const restarted = await openApplication();
-    expect((await restarted.service.get(restarted.scope)).runtimes.find(item => item.resourceId === backendId))
-      .toMatchObject({ connectionState: "connected", applyState: "pending", startupEnvironmentPending: true, incarnation: "retained-provider" });
+    await vi.waitFor(async () => expect((await restarted.service.get(restarted.scope)).runtimes.find(item => item.resourceId === backendId))
+      .toMatchObject({ connectionState: "connected", applyState: "pending", startupEnvironmentPending: true, incarnation: "retained-provider" }));
     await restarted.service.get(restarted.scope);
     expect(inspect).toHaveBeenCalledTimes(failFirstInspection ? 2 : 1);
     expect(recover).toHaveBeenCalledTimes(failFirstInspection ? 2 : 1);
@@ -1332,6 +1359,7 @@ describe("production configuration reconciliation", () => {
   });
 
   it("keeps unchanged maintenance passes silent and local disconnect unavailable", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const { service, scope, snapshot } = await fixture();
     for (const runtime of snapshot.runtimes.filter(runtime => runtime.resourceKind === "backend")) {
       expect(runtime.supportedActions).toEqual(["connect", "start", "stop", "restart"]);
@@ -1343,26 +1371,17 @@ describe("production configuration reconciliation", () => {
     }
     const publish = vi.spyOn(ApplicationSnapshotPublicationBoundary.prototype, "publishAuthoritativeReplacement");
     const invalidate = vi.spyOn(DatabaseExecutionTargetReader.prototype, "invalidateHealth");
-    for (let pass = 0; pass < 3; pass++) await service.options.runtime!.reconcile(scope, snapshot);
+    for (let pass = 0; pass < 3; pass++) {
+      await vi.advanceTimersByTimeAsync(30_000);
+      await service.impact(scope, { resourceKind: "backend", resourceId: "idle-pi", action: "stop", expectedRevision: snapshot.revision });
+    }
     expect(publish).not.toHaveBeenCalled();
     expect(invalidate).not.toHaveBeenCalled();
   });
 
-  it("leaves every sibling runtime and its applied revision intact while an environment edit waits for main-side work", async () => {
+  it("publishes environment metadata without inspecting or disturbing sibling work", async () => {
     const { service, scope, environmentId, snapshot } = await fixture();
-    const database = service.repository.database;
-    const prepare = database.prepare.bind(database);
-    // Model the coordinator's loaded actor evidence without making a provider call.
-    vi.spyOn(database, "prepare").mockImplementation(sql => {
-      if (sql.startsWith("SELECT id FROM application_threads WHERE tenant_id = ? AND owner_principal_id = ? AND backend_instance_id = ? ORDER BY id")) {
-        return { all: (_tenant: string, _principal: string, backendId: string) => [{ id: `${backendId}-thread` }] } as ReturnType<typeof database.prepare>;
-      }
-      return prepare(sql);
-    });
-    let busy = true;
-    vi.spyOn(ThreadRuntimeCoordinator.prototype, "captureLoadedRuntime").mockImplementation(async (_scope, threadId) => ({
-      threadId, runState: busy && threadId === "busy-claude-thread" ? "running" : "idle",
-    }) as Awaited<ReturnType<ThreadRuntimeCoordinator["captureLoadedRuntime"]>>);
+    const capture = vi.spyOn(ThreadRuntimeCoordinator.prototype, "captureLoadedRuntime");
     const remove = vi.spyOn(PrincipalBackendRuntimeCollection.prototype, "remove");
     const apply = vi.spyOn(PrincipalBackendRuntimeCollection.prototype, "apply");
     const updated = structuredClone(snapshot.configuration);
@@ -1371,17 +1390,15 @@ describe("production configuration reconciliation", () => {
     for (let pass = 0; pass < 3; pass++) await service.options.runtime!.reconcile(scope, service.repository.get(scope));
     expect(remove).not.toHaveBeenCalled();
     expect(apply).not.toHaveBeenCalled();
-    const pending = await service.get(scope);
-    for (const id of [environmentId, "idle-pi", "busy-claude"]) {
-      expect(pending.runtimes.find(runtime => runtime.resourceId === id)).toMatchObject({
-        applyState: "pending", desiredRevision: snapshot.revision + 1, effectiveRevision: snapshot.revision, lastError: null,
-      });
+    expect(capture).not.toHaveBeenCalled();
+    const updatedState = await service.get(scope);
+    expect(updatedState.configuration.executionEnvironments[0]?.label).toBe("Changed local environment");
+    expect(updatedState.runtimes.find(runtime => runtime.resourceId === environmentId)).toMatchObject({
+      applyState: "applied", desiredRevision: updatedState.revision, effectiveRevision: updatedState.revision,
+    });
+    for (const id of ["idle-pi", "busy-claude"]) {
+      expect(updatedState.runtimes.find(runtime => runtime.resourceId === id))
+        .toEqual(snapshot.runtimes.find(runtime => runtime.resourceId === id));
     }
-    busy = false;
-    await service.options.runtime!.reconcile(scope, pending);
-    expect(remove).toHaveBeenCalledTimes(2);
-    expect(apply).toHaveBeenCalledTimes(2);
-    const applied = await service.get(scope);
-    expect(applied.runtimes.every(runtime => runtime.applyState === "applied" && runtime.effectiveRevision === pending.revision)).toBe(true);
   });
 });

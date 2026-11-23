@@ -3,6 +3,7 @@ import path from "node:path";
 import type { RequestScope } from "../identity/identity-provider.js";
 import { deriveComposerAttachmentScopeKey } from "../security/installation-secret.js";
 import {
+  materializationScope,
   ExecutionAttachmentStagingEngine,
   type ExecutionAttachmentStagingIdentity,
 } from "./execution-attachment-staging-engine.js";
@@ -59,8 +60,12 @@ export class LocalExecutionAttachmentStager implements ExecutionAttachmentStager
     request.signal?.throwIfAborted();
     const identity = this.#identity(request);
     const admissionId = randomUUID();
-    const opened = await this.#engine.open(admissionId, identity);
-    if (opened.state === "ready") return withoutState(opened);
+    const check = request.lease.assertCurrent;
+    const opened = await this.#engine.open(admissionId, identity, check);
+    if (opened.state === "ready") {
+      check?.();
+      return withoutState(opened);
+    }
     let offset = 0;
     try {
       for await (const source of request.content()) {
@@ -79,7 +84,9 @@ export class LocalExecutionAttachmentStager implements ExecutionAttachmentStager
         }
       }
       request.signal?.throwIfAborted();
-      return await this.#engine.commit(opened.uploadHandle);
+      const result = await this.#engine.commit(opened.uploadHandle);
+      check?.();
+      return result;
     } catch (error) {
       await this.#engine.abort(opened.uploadHandle).catch(() => undefined);
       throw error;
@@ -93,7 +100,7 @@ export class LocalExecutionAttachmentStager implements ExecutionAttachmentStager
     this.#assert(scope, request.lease);
     request.signal?.throwIfAborted();
     await this.#engine.release({
-      scopeKey: this.#scopeKey,
+      scopeKey: this.#materializationScope(request.lease),
       threadId: request.applicationThreadId,
       attachmentId: request.attachmentId,
       sha256: request.expectedSha256,
@@ -106,11 +113,18 @@ export class LocalExecutionAttachmentStager implements ExecutionAttachmentStager
     await this.#engine.close();
   }
 
+  #materializationScope(lease: ExecutionAttachmentMaterializationRequest["lease"]): string {
+    const workspace = lease.workspace;
+    return materializationScope(this.#scopeKey, workspace.authorityRootId ? {
+      path: workspace.canonicalPath, rootId: workspace.authorityRootId, rootGeneration: workspace.authorityRevision,
+    } : undefined);
+  }
+
   #identity(
     request: ExecutionAttachmentMaterializationRequest,
   ): ExecutionAttachmentStagingIdentity {
     return {
-      scopeKey: this.#scopeKey,
+      scopeKey: this.#materializationScope(request.lease),
       threadId: request.applicationThreadId,
       attachmentId: request.attachmentId,
       sha256: request.sha256,

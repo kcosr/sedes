@@ -1,3 +1,4 @@
+import { assertSingleAntigravityOwner } from "./configuration-ownership.js";
 import { parseAntigravityBackendConfiguration } from "../backends/antigravity/backend-configuration.js";
 import { parseOpenCodeBackendConfiguration } from "../backends/opencode/opencode-backend-configuration.js";
 import { parsePiNativeBackendConfiguration } from "../backends/pi/native/pi-native-backend-configuration.js";
@@ -6,7 +7,7 @@ import path from "node:path";
 import { configurationDocumentSchema, type ConfigurationDocument } from "../../shared/protocol/configuration-admin.js";
 import { parseCodexBackendConfiguration } from "../backends/codex/codex-backend-configuration.js";
 import { parseClaudeBackendConfiguration } from "../backends/claude/claude-backend-configuration.js";
-import { parseGrokBackendConfiguration } from "../backends/grok/grok-backend-configuration.js";
+import { validateGrokDesiredConfiguration } from "../backends/grok/grok-backend-configuration.js";
 import { compileBackendModelPolicy } from "../backends/model-policy.js";
 import type { BackendModuleConfigurationInput } from "../backends/module.js";
 import { DomainError } from "../domain/errors.js";
@@ -14,6 +15,7 @@ import { DomainError } from "../domain/errors.js";
 /** Pure validation only: never contacts a provider, reads secrets, or starts work. */
 export function validateConfigurationDocument(value: unknown): ConfigurationDocument {
   const document = configurationDocumentSchema.parse(value);
+  assertSingleAntigravityOwner(document);
   for (const environment of document.executionEnvironments) {
     const pathModule = environment.kind === "outbound" ? environment.platform === "win32" ? path.win32 : path.posix : environment.kind === "ssh" ? path.posix : path;
     for (const root of environment.workspaceRoots) {
@@ -45,7 +47,7 @@ export function validateConfigurationDocument(value: unknown): ConfigurationDocu
       switch (backend.kind) {
         case "codex_app_server": parseCodexBackendConfiguration(input); break;
         case "claude_agent_sdk": parseClaudeBackendConfiguration(input); break;
-        case "grok_build": parseGrokBackendConfiguration({ ...input, backend: { ...input.backend, kind: "grok_build" },
+        case "grok_build": validateGrokDesiredConfiguration({ ...input, backend: { ...input.backend, kind: "grok_build" },
           connections: input.connections.map(connection => ({ ...connection, kind: "grok_acp" as const })) }); break;
         case "opencode": parseOpenCodeBackendConfiguration(input); break;
         case "pi": compileBackendModelPolicy(backend.modelPolicy, "provider_model_effort"); break;

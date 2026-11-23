@@ -1,3 +1,4 @@
+import type { AgentToolRouteBinding } from "../../internal/sidecar-protocol/agent-tools-v6.js";
 import { agentToolsCatalogOperation, agentToolsDescribeOperation, agentToolsInvokeOperation,
   SidecarProtocolDeliveryError } from "../../internal/sidecar-protocol/index.js";
 import type { AgentToolCliRequest, AgentToolCliResult } from "../../internal/agent-tool-cli-protocol/index.js";
@@ -15,6 +16,7 @@ export async function relayAgentToolCliRequest(
   request: AgentToolCliRequest,
   signal: AbortSignal,
   capture: (sourceCapability: string) => OpenCodeToolInvocationStamp | undefined,
+  routeBinding?:AgentToolRouteBinding,
 ): Promise<AgentToolCliResult> {
   let stamp: OpenCodeToolInvocationStamp | undefined;
   try {
@@ -31,7 +33,7 @@ export async function relayAgentToolCliRequest(
     }
     throw error;
   }
-  return relayAgentToolRequest(peer, request, signal, stamp);
+  return relayAgentToolRequest(peer, request, signal, stamp,routeBinding);
 }
 
 export async function relayAgentToolRequest(
@@ -39,6 +41,7 @@ export async function relayAgentToolRequest(
   request: AgentToolCliRequest,
   signal: AbortSignal,
   stamp?: OpenCodeToolInvocationStamp,
+  routeBinding?:AgentToolRouteBinding,
 ): Promise<AgentToolCliResult> {
   switch (request.operation.type) {
     case "list": {
@@ -46,7 +49,7 @@ export async function relayAgentToolRequest(
       try {
         response = await peer.call(
           agentToolsCatalogOperation,
-          { sourceCapability: request.sourceCapability },
+          { ...(routeBinding?{routeBinding}:{}),sourceCapability: request.sourceCapability },
           { signal, deadlineMilliseconds: 30_000 },
         );
       } catch (error) {
@@ -63,7 +66,7 @@ export async function relayAgentToolRequest(
         response = await peer.call(
           agentToolsDescribeOperation,
           {
-            sourceCapability: request.sourceCapability,
+            ...(routeBinding?{routeBinding}:{}),sourceCapability: request.sourceCapability,
             toolIds: request.operation.toolIds,
           },
           { signal, deadlineMilliseconds: 30_000 },
@@ -86,11 +89,11 @@ export async function relayAgentToolRequest(
             message: "Sedes OpenCode tools require a current main server and execution-host sidecar. Upgrade and reconnect them before retrying." });
         }
         response = stamp ? await peer.call(openCodeToolInvokeOperation, {
-          stamp, request: { sourceCapability: request.sourceCapability, ...request.operation.request },
+          stamp, request: { ...(routeBinding?{routeBinding}:{}),sourceCapability: request.sourceCapability, ...request.operation.request },
         }, { signal }) : await peer.call(
           agentToolsInvokeOperation,
           {
-            sourceCapability: request.sourceCapability,
+            ...(routeBinding?{routeBinding}:{}),sourceCapability: request.sourceCapability,
             ...request.operation.request,
           },
           { signal },

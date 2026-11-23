@@ -1,3 +1,4 @@
+import { toolPeerStamp } from "../../src/server/backends/agent-tool-route.js";
 import { describe, expect, it, vi } from "vitest";
 import { AntigravityAgentToolService } from "../../src/server/backends/antigravity/agent-tools.js";
 import { agentToolPresentationPermitsAdapter, type BackendAgentToolPolicy } from "../../src/server/agent-tools/adapters/backend-facade.js";
@@ -18,7 +19,7 @@ describe("Antigravity Sedes tool authority", () => {
     expect(agentToolPresentationPermitsAdapter(policy(surface).presentation, "antigravity", surface === "native" ? "mcp" : "cli")).toBe(true);
     expect(agentToolPresentationPermitsAdapter(policy(surface).presentation, "antigravity", "pi_rpc")).toBe(false);
     if (surface === "cli") {
-      const instructions = service.instructions(source);
+      const instructions = service.instructions(source, toolPeerStamp("http://127.0.0.1:1234"));
       expect(instructions).toContain("'/runtime/bin/sedes'");
       expect(instructions.match(/PATH=/gu)).toHaveLength(1);
     }
@@ -39,7 +40,7 @@ describe("Antigravity Sedes tool authority", () => {
       cli: { availability: "available", endpoint: "http://127.0.0.1:1234", executableDirectory: "/main/bin", inheritedPath: "/usr/bin" } });
     await expect(invalid.prepareLaunch(source)).rejects.toThrow("endpoint_invalid");
   });
-  it("classifies an expired managed CLI lease as safely not dispatched", async () => {
+  it("withdraws CLI instructions from the resident peer after its lease expires", async () => {
     let expire!: () => void;
     const closed = new Promise<void>(resolve => { expire = resolve; });
     const release = vi.fn();
@@ -48,12 +49,10 @@ describe("Antigravity Sedes tool authority", () => {
       cli: { availability: "managed", provider: { acquire: async () => ({ availability: "available", endpoint: "unix:///tmp/sedes-test.sock",
         executableDirectory: "/host/bin", inheritedPath: "/usr/bin", closed, release }) } } });
     await service.prepareLaunch(source);
-    expect(service.instructions(source)).toContain("'/host/bin/sedes'");
+    const stamp = toolPeerStamp("unix:///tmp/sedes-test.sock");
+    expect(service.instructions(source, stamp)).toContain("'/host/bin/sedes'");
     expire(); await closed;
-    let failure: unknown;
-    try { service.instructions(source); } catch (error) { failure = error; }
-    expect(failure).toMatchObject({ category: "unavailable", crossedSubmissionBoundary: false, retryable: true });
-    expect(String(failure)).not.toContain("antigravity_agent_tool");
+    expect(service.instructions(source, stamp)).toBe("");
     expect(release).toHaveBeenCalledOnce();
     await service.close();
   });

@@ -201,6 +201,7 @@ export class WorkspaceFileService {
         applicationThreadIds: readonly string[],
       ): void | Promise<void>;
     },
+    readonly captureFileGrant?: (scope: RequestScope, workspace: InventoryWorkspaceRecord, target: WorkspaceFileRootTarget) => () => void,
   ) {}
 
   async listRoots(
@@ -814,6 +815,7 @@ export class WorkspaceFileService {
   /** Read exact bounded bytes in the thread's execution environment. Never treats a remote path as local. */
   async readAbsoluteFile(
     scope: RequestScope, threadId: string, absolutePath: string, maximumBytes: number, signal?: AbortSignal,
+    retainGrant?: (assertCurrent: () => void) => void,
   ): Promise<Uint8Array> {
     if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1 || maximumBytes > 16_777_216) {
       throw new DomainError("bad_request", "Invalid file capture limit.");
@@ -829,6 +831,11 @@ export class WorkspaceFileService {
         await this.#linkedCaptureTarget(scope, workspace, absolutePath, operationSignal);
       if (!located) throw new DomainError("not_found", "The source file is unavailable through Files.");
       const { target } = located;
+      const grant = this.captureFileGrant?.(scope, workspace, target);
+      if (grant) {
+        grant();
+        retainGrant?.(grant);
+      }
       return this.#withRootOperation(scope, workspace.id, target.rootId, async () => {
         const metadata = await this.providers.read(scope, target, located.path, operationSignal);
         if (metadata.availability !== "available") throw new DomainError("not_found", "The source file is unavailable.");
@@ -857,6 +864,7 @@ export class WorkspaceFileService {
     threadId: string,
     absolutePath: string,
     signal?: AbortSignal,
+    retainGrant?: (assertCurrent: () => void) => void,
   ): Promise<Extract<WorkspaceFileContentResult, {
     availability: "available";
     contentKind: "image";
@@ -874,6 +882,11 @@ export class WorkspaceFileService {
       operationSignal.throwIfAborted();
       if (!located) return undefined;
       const { target } = located;
+      const grant = this.captureFileGrant?.(scope, workspace, target);
+      if (grant) {
+        grant();
+        retainGrant?.(grant);
+      }
       return this.#withRootOperation(scope, workspace.id, target.rootId, async () => {
         operationSignal.throwIfAborted();
         const result = this.#providerResult(target.rootId,

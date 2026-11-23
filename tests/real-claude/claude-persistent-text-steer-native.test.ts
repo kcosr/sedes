@@ -1,3 +1,5 @@
+import { attachFixturePolicy } from "../helpers/execution-policy-fixture.js";
+import { runtimeLaunchDigest } from "../../src/server/backends/provider-launch-digest.js";
 import { randomUUID } from "node:crypto";
 import { createServer, type ServerResponse } from "node:http";
 import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
@@ -134,8 +136,11 @@ it("settles a text-stream steer while detached and replays the same native query
   };
   async function attach() {
     const carrier = await createSidecarFramedCarrier();
-    const controllerEpoch = services.attach(serviceConfiguration);
-    const detach = registerClaudePersistentRuntimeHost({ registry: carrier.hostRegistry, channel: carrier.hostChannel, hosts, controllerEpoch,
+    const controllerEpoch = attachFixturePolicy(services, serviceConfiguration, "normal", { roots: [], capabilities: [], backends: [{
+        id: configuration.backendInstanceId, kind: "claude_agent_sdk", generation: 1, launchDigest: runtimeLaunchDigest.claude_agent_sdk(configuration),
+        targets: [{ id: "live-target", generation: 1 }],
+      }] });
+    const detach = registerClaudePersistentRuntimeHost({ getExecutionPolicy: () => services.executionPolicy(controllerEpoch), registry: carrier.hostRegistry, channel: carrier.hostChannel, hosts, controllerEpoch,
       onDetach: () => services.detach(controllerEpoch) });
     await carrier.start();
     let disconnected!: () => void;

@@ -5,7 +5,7 @@ import {
   LengthPrefixedSidecarFrameTransport,
   SidecarOperationRegistry,
   SidecarProtocolPeer,
-  registerControlV2Operations,
+  registerControlV3Operations,
   registerWorkspaceContextV1Operations,
   registerWorkspaceToolsShellV2Operations,
   registerWorkspaceToolsV2Operations,
@@ -141,7 +141,7 @@ export async function runPiSandboxWorker(
       workspaceTools.close();
       workspaceContext.close();
     })());
-  registerControlV2Operations(registry, {
+  registerControlV3Operations(registry, {
     buildId: input.buildId,
     artifactSha256: digest,
     enabledSidecarCapabilities: [

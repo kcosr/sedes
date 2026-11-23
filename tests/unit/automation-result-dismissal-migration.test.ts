@@ -9,7 +9,7 @@ import { ConversationBindingRepository } from "../../src/server/db/repositories/
 import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
 import { readThreadAutomationContexts } from "../../src/server/application/thread-automation-context.js";
 import { readThreadAutomationSummary } from "../../src/server/application/thread-automation-summary.js";
-import { savedAgentDatabase } from "../support/saved-agent-fixture.js";
+import { savedAgentDatabase, insertPreRootGrantWorkspace } from "../support/saved-agent-fixture.js";
 
 const dismissalMigrations = backendNormalizedMigrations.filter(
   (migration) => migration.version <= 147,
@@ -19,7 +19,7 @@ function fixture() {
   const { database, scope } = savedAgentDatabase(146);
   const inventory = new InventoryRepository(database);
   const environment = inventory.getLocalEnvironment(scope);
-  const workspace = inventory.upsertWorkspace(scope, {
+  const workspace = insertPreRootGrantWorkspace(database, scope, {
     id: randomUUID(),
     environmentId: environment.id,
     canonicalPath: "/tmp/automation-result-dismissal-migration",
@@ -256,7 +256,7 @@ function mainEraFixture() {
   const { database, scope } = savedAgentDatabase(145);
   const inventory = new InventoryRepository(database);
   const environment = inventory.getLocalEnvironment(scope);
-  const workspace = inventory.upsertWorkspace(scope, {
+  const workspace = insertPreRootGrantWorkspace(database, scope, {
     id: randomUUID(),
     environmentId: environment.id,
     canonicalPath: "/tmp/automation-result-dismissal-upgrade",

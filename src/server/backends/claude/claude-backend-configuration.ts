@@ -5,7 +5,7 @@ import type {
   BackendModuleConnectionConfiguration,
 } from "../module.js";
 import {
-  compileBackendModelPolicy,
+  configuredModelPolicy,
   type CompiledBackendModelPolicy,
 } from "../model-policy.js";
 import {
@@ -119,8 +119,15 @@ export function parseClaudeBackendConfiguration(
   const runtime = claudeBackendModuleConfigurationSchema.parse(
     input.backend.moduleConfiguration,
   );
-  const modelPolicy = compileBackendModelPolicy(
-    input.backend.modelPolicy,
+  if (input.backend.enabled && input.readCurrentBackend) {
+    runtime.permissionPolicy = Object.freeze({ get allowedModes() {
+      const current = input.readCurrentBackend!();
+      return current?.enabled && current.id === input.backend.id && current.kind === "claude_agent_sdk" ?
+        current.moduleConfiguration.permissionPolicy.allowedModes : [];
+    } });
+  }
+  const modelPolicy = configuredModelPolicy(
+    input,
     "model_effort",
   );
   const connections = input.connections.map((connection) =>

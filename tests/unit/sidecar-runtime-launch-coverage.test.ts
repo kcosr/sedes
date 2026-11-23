@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { controlHelloOperation } from "../../src/internal/sidecar-protocol/control-v2.js";
+import { controlHelloOperation } from "../../src/internal/sidecar-protocol/control-v3.js";
 import { SidecarOperationRegistry } from "../../src/internal/sidecar-protocol/operation-registry.js";
 import { recordUncoveredRuntimeOperation } from "../../src/server/sidecar/sidecar-runtime-launch-coverage.js";
 import { antigravityRuntimeOperations } from "../../src/server/backends/antigravity/sidecar/wire.js";
@@ -31,11 +31,11 @@ describe("sidecar runtime launch coverage", () => {
       { capabilityId: "workspace_files", majorVersion: 8, operation: "diff.create" },
       { capabilityId: "workspace_tools", majorVersion: 2, operation: "search.grep" },
       { capabilityId: "workspace_tools", majorVersion: 2, operation: "new.command" },
-      { ...controlHelloOperation, majorVersion: 3 },
+      { ...controlHelloOperation, majorVersion: 4 },
     ]) await recordUncoveredRuntimeOperation(recorder, key);
     expect(recorder.markUnsupported.mock.calls).toEqual([
       ["workspace_files:8:files.watch_open"], ["workspace_files:8:diff.create"], ["workspace_tools:2:search.grep"],
-      ["workspace_tools:2:new.command"], ["control:3:hello"],
+      ["workspace_tools:2:new.command"], ["control:4:hello"],
     ]);
   });
 

@@ -169,9 +169,8 @@ export class CodexRemoteRuntimeSupervisor {
       const connection = new CodexSidecarRuntimeConnection(lease.channel);
       stage = existingOnly ? "runtime_lookup" : "runtime_ensure";
       stageStarted = performance.now();
-      const runtimeId = existingOnly
-        ? await connection.lookup(this.input.configuration)
-        : await connection.ensure(this.input.configuration);
+      const existing = await connection.lookup(this.input.configuration);
+      const runtimeId = existing ?? (existingOnly || this.#retainedIdentity ? null : await connection.ensure(this.input.configuration));
       this.#diagnostic("stage_complete", { stage, controllerEpoch: lease.controllerEpoch, durationMs: performance.now() - stageStarted });
       if (!runtimeId || (existingOnly && (runtimeId !== this.#retainedIdentity!.runtimeId || lease.serviceIncarnation !== this.#retainedIdentity!.serviceIncarnation))) {
         connection.close();

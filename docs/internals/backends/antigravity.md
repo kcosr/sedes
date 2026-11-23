@@ -51,6 +51,17 @@ host implementation runs locally and within the persistent SSH/outbound
 sidecar. Remote adapters borrow exact runtime/owner generations and retain
 operation outcomes and pending interactions independently of carrier lifetime.
 
+The saved policy allows one Antigravity instance per execution environment. The
+host registry independently reserves that native namespace. An ordinary lookup
+preserves the resident configuration. A new host must match the installed
+instance generation and launch digest. Adding a named target to the incumbent
+takes effect on the current connection after the sidecar confirms the policy.
+
+Each ACP opener records the tool endpoint used when it launched. The remote
+adapter compares this opaque stamp to the current scoped route before preparing
+tool instructions. After a tool withdrawal and regrant, active ACP sessions
+continue and tool access requires a newly admitted native opener.
+
 Creation uses provider-assigned identity and never blind-replays an uncertain
 create. Submission evidence authenticates exact input bytes and normalized
 presentation against the complete scoped binding. Identical text is not an

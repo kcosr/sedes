@@ -4,7 +4,7 @@ import { ClaudeThreadRepository } from "../../src/server/backends/claude/claude-
 import { applyDatabaseMigrations, backendNormalizedMigrations } from "../../src/server/db/migrate.js";
 import { ConversationBindingRepository } from "../../src/server/db/repositories/conversation-binding-repository.js";
 import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
-import { savedAgentDatabase } from "../support/saved-agent-fixture.js";
+import { savedAgentDatabase, insertPreRootGrantWorkspace } from "../support/saved-agent-fixture.js";
 
 const databases: ReturnType<typeof savedAgentDatabase>["database"][] = [];
 
@@ -17,7 +17,7 @@ function fixture() {
   databases.push(database);
   const inventory = new InventoryRepository(database);
   const environment = inventory.getLocalEnvironment(scope);
-  const workspace = inventory.upsertWorkspace(scope, {
+  const workspace = insertPreRootGrantWorkspace(database, scope, {
     id: randomUUID(),
     environmentId: environment.id,
     canonicalPath: "/tmp/claude-desired-settings-migration",

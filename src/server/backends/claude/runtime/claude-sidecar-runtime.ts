@@ -1,3 +1,5 @@
+import { launchAdmission, currentBackendGrant, type ProviderPolicyAttachment } from "../../provider-policy-admission.js";
+import { runtimeLaunchDigest } from "../../provider-launch-digest.js";
 import { z } from "zod";
 import { attachmentDiagnostic } from "../../../diagnostics/attachment-diagnostics.js";
 import { sidecarUpgradeBlockerSchema } from "../../../../internal/sidecar-protocol/service-management-v1.js";
@@ -50,7 +52,7 @@ export const claudePersistentRuntimeOperations = [claudePersistentRuntimeEnsureO
   claudePersistentRuntimeLookupOperation, claudePersistentRuntimeInspectOperation, claudePersistentRuntimeStopOperation] as const;
 const eventDefinition = { ...capability, event: "runtime.event", schema: z.strictObject({ runtimeId: z.string().uuid(), body: sidecarRuntimeBodySchema }) };
 
-export function registerClaudePersistentRuntimeHost(input: {
+export function registerClaudePersistentRuntimeHost(input: ProviderPolicyAttachment & {
   registry: SidecarOperationRegistry; channel: SidecarRuntimeChannel; hosts: ClaudePersistentRuntimeRegistry;
   controllerEpoch: number; onDetach(): void;
 }): () => void {
@@ -87,7 +89,11 @@ export function registerClaudePersistentRuntimeHost(input: {
   });
   input.registry.register(claudePersistentRuntimeEnsureOperation, configuration => {
     if (detached) throw new Error("claude_persistent_attachment_detached");
-    return { runtimeId: input.hosts.ensure(configuration, input.controllerEpoch).runtimeId };
+    const admission = launchAdmission(input, "claude_agent_sdk", configuration.backendInstanceId,
+      runtimeLaunchDigest.claude_agent_sdk(configuration, configuration.startupEnvironmentVariables));
+    const host = input.hosts.ensure(configuration, input.controllerEpoch);
+    admission.bind(host);
+    return { runtimeId: host.runtimeId };
   });
   input.registry.register(claudePersistentRuntimeExecuteOperation, async (body, context) => {
     if (detached) throw new Error("claude_persistent_attachment_detached");
@@ -118,7 +124,7 @@ export function registerClaudePersistentRuntimeHost(input: {
           stage, frameBytes: bytes, queuedEventBytes: eventBytes, queuedEventCount: eventCount, requestedClose: true }, error);
         detach();
       }).finally(() => { eventCount--; eventBytes -= bytes; });
-    });
+    }, () => currentBackendGrant(input, host));
     return await input.channel.encodeBody(result);
   });
   return detach;

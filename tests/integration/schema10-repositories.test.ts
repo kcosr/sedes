@@ -813,7 +813,10 @@ function createFixture(maximumMigrationVersion = Number.POSITIVE_INFINITY): Fixt
     appliedAt: 300,
   });
   applyDatabaseMigrations(database, backendNormalizedMigrations.filter(({ version }) => version <= maximumMigrationVersion));
-  importLegacyDatabaseConfigurationFixture(database, { configuration, localWorkspaceRoots: ["/tmp"], sourceLabel: "schema10-repositories" }, 300);
+  // Historical migration fixtures use their original tables and seeded identities.
+  if (maximumMigrationVersion === Number.POSITIVE_INFINITY) {
+    importLegacyDatabaseConfigurationFixture(database, { configuration, localWorkspaceRoots: ["/tmp"], sourceLabel: "schema10-repositories" }, 300);
+  }
   new InventoryRepository(database).updateEnvironmentAvailability(scope, environment.id, { available: true, now: 300 });
   return {
     database,
@@ -3859,7 +3862,7 @@ describe("inactive schema-10 repositories", () => {
     } finally { fixture.database.close(); }
   });
 
-  it("increments backend configuration revisions once for canonical model policy changes", () => {
+  it("preserves an active backend generation across live policy changes and fences disable", () => {
     const fixture = createFixture();
     try {
       let now = 400;
@@ -3874,7 +3877,8 @@ describe("inactive schema-10 repositories", () => {
       const save = () => repository.save(fixture.scope, { mutationId: randomUUID(), expectedRevision: repository.get(fixture.scope).revision, configuration: document }, next => projection.project(fixture.scope, next));
       save();
       const first = reader.getBackend(fixture.scope, "pi-primary");
-      expect(first.configurationRevision).toBe(before.configurationRevision + 1);
+      expect(first.configurationRevision).toBe(before.configurationRevision);
+      expect(first.configurationFingerprint).not.toBe(before.configurationFingerprint);
       now = 500;
       document.backends[0]!.modelPolicy = { type: "allowlist", allowed: [{ modelIds: ["model-a"], providerIds: ["openai"] }] };
       save();
@@ -3884,7 +3888,7 @@ describe("inactive schema-10 repositories", () => {
       document.targets[0]!.enabled = false;
       document.defaultTargetId = null;
       save();
-      expect(reader.getBackend(fixture.scope, "pi-primary")).toMatchObject({ configurationRevision: before.configurationRevision + 2, enabled: 0 });
+      expect(reader.getBackend(fixture.scope, "pi-primary")).toMatchObject({ configurationRevision: before.configurationRevision + 1, enabled: 0 });
     } finally { fixture.database.close(); }
   });
 

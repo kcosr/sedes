@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { connect, createServer, type Socket } from "node:net";
 import { LengthPrefixedSidecarFrameTransport, SidecarOperationRegistry, SidecarProtocolPeer,
-  controlHelloOperation, registerControlV2Operations } from "../../src/internal/sidecar-protocol/index.js";
+  controlHelloOperation, registerControlV3Operations } from "../../src/internal/sidecar-protocol/index.js";
 import { SidecarRuntimeChannel } from "../../src/server/sidecar/runtime-channel.js";
 import { sidecarSocketByteStream } from "../../src/server/sidecar/sidecar-socket-byte-stream.js";
 
@@ -42,16 +42,16 @@ export async function createSidecarFramedCarrier(compression: "none" | "zstd" = 
   return {
     mainPeer, hostPeer, mainChannel, hostChannel, mainRegistry, hostRegistry, mainTransport, hostTransport,
     wireBytes: () => clientSocket.bytesWritten + serverSocket.bytesWritten,
-    async start(options: Pick<Parameters<typeof registerControlV2Operations>[1], "prepareSedesCapabilities"> = {}) {
-      const capabilities = hostRegistry.capabilities().map(({ capabilityId, majorVersion }) => ({ capabilityId, majorVersion }));
-      registerControlV2Operations(hostRegistry, {
+    async start() {
+      const capabilities = hostRegistry.capabilities().filter(capability => capability.capabilityId !== "control").map(({ capabilityId, majorVersion }) => ({ capabilityId, majorVersion }));
+      registerControlV3Operations(hostRegistry, {
         buildId: "persistent-runtime-test", artifactSha256: "a".repeat(64),
-        enabledSidecarCapabilities: capabilities, enabledSedesCapabilities: mainRegistry.capabilities(), ...options,
+        enabledSidecarCapabilities: capabilities, enabledSedesCapabilities: mainRegistry.capabilities(),
       });
       mainPeer.start(); hostPeer.start();
       await mainPeer.call(controlHelloOperation, { compression,
         expectedBuildId: "persistent-runtime-test", expectedArtifactSha256: "a".repeat(64),
-        authorizedSidecarCapabilities: capabilities, offeredSedesCapabilities: mainRegistry.capabilities(),
+        supportedSidecarCapabilities: capabilities, offeredSedesCapabilities: mainRegistry.capabilities(),
       });
     },
     close() {

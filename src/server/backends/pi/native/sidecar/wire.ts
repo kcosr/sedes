@@ -75,7 +75,7 @@ export const piNativeHostResponseSchema = z.discriminatedUnion("status", [
   z.strictObject({ status: z.literal("ok"), runtimeVersion: z.string().max(128).nullable(), value: z.unknown() }),
   z.strictObject({ status: z.literal("failed"), runtimeVersion: z.string().max(128).nullable(), failure: piNativeFailureSchema }),
 ]);
-export const piNativeAttachmentSchema = piNativeIdentitySchema.extend({ handleId: id, generation: id, throughSequence: position, retainedAfterSequence: position,
+export const piNativeAttachmentSchema = piNativeIdentitySchema.extend({ toolPeerStamp: z.string().regex(/^[0-9a-f]{64}$/u).optional(), handleId: id, generation: id, throughSequence: position, retainedAfterSequence: position,
   retainedOperationIds: z.array(id).max(512) });
 export const piNativeDrainAttachmentSchema = piNativeAttachmentSchema.extend({ closed: z.boolean(), observationGap: z.boolean() });
 export const piNativeObservationReleaseSchema = z.enum(["pending", "released"]);

@@ -1,3 +1,4 @@
+import { type WorkspacePolicyGuard } from "./workspace-policy-guard.js";
 import { mergeResolvedEnvironment } from "../environment-variables/runtime-environment.js";
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import type { Readable } from "node:stream";
@@ -75,9 +76,11 @@ interface ShellReceipt {
 }
 
 /** Sidecar-local non-PTY Bash owner. No command or output is logged. */
+type ShellWorkspace = { readonly cwd: string; readonly assertCurrent: () => void };
+
 export class WorkspaceToolsShellHost {
   readonly handlers: WorkspaceToolsShellV2Handlers;
-  readonly #resolveWorkspace: (handle: string) => Promise<string> | string;
+  readonly #resolveWorkspace: (handle: string) => Promise<ShellWorkspace> | ShellWorkspace;
   readonly #openStream: (input: {
     readonly streamId: string;
     readonly initialCreditBytes: number;
@@ -116,8 +119,9 @@ export class WorkspaceToolsShellHost {
     };
   }
 
-  constructor(input: {
-    readonly resolveWorkspace: (handle: string) => Promise<string> | string;
+  constructor(readonly input: {
+    readonly policyGuard?: WorkspacePolicyGuard;
+    readonly resolveWorkspace: (handle: string) => Promise<ShellWorkspace> | ShellWorkspace;
     readonly openStream: (input: {
       readonly streamId: string;
       readonly initialCreditBytes: number;
@@ -301,7 +305,8 @@ export class WorkspaceToolsShellHost {
     if (workspaceCount >= this.#limits.maximumProcessesPerWorkspace) {
       throw new SidecarOperationError("shell_workspace_process_capacity", true);
     }
-    const cwd = await this.#resolveWorkspace(request.workspaceHandle);
+    const { cwd, assertCurrent } = await this.#resolveWorkspace(request.workspaceHandle);
+    const check = this.input.policyGuard?.capture("workspace_tools");
     if (this.#beforeLaunch) {
       signal.throwIfAborted();
       assertAdmission();
@@ -309,6 +314,8 @@ export class WorkspaceToolsShellHost {
     }
     signal.throwIfAborted();
     assertAdmission();
+    assertCurrent();
+    check?.();
     const stream = this.#openStream({
       streamId: request.streamId,
       initialCreditBytes: request.initialCreditBytes,

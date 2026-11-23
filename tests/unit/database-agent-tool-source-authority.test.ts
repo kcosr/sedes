@@ -158,6 +158,7 @@ describe("DatabaseAgentToolSourceAuthority", () => {
         new AbortController().signal,
       ),
     ).toEqual({
+      backendInstanceId: "backend-1",
       source: {
         scope: { tenantId, principalId },
         sourceThreadId: threadId,

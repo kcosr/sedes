@@ -832,11 +832,25 @@ a thread. A stale edit or lifecycle confirmation must be refreshed before
 another attempt; an unknown operation outcome is not permission to retry it
 with a new identity.
 
+On SSH and paired hosts with the current sidecar, saving a supported backend,
+named connection, workspace root or optional feature updates the existing
+attachment. A new route accepts work after its host grant and prerequisites
+are confirmed. Existing providers and terminals on the host continue. Sedes
+fences access removed by a save and independently reports the application of
+each changed setting on **Overview**. Inspect a feature marked **Unsupported
+on this host** or **Could not apply** for its specific prerequisite. A
+disconnected host retains the desired revision until reconnection. Use
+**Retry apply** to request another attempt on a connected host.
+
+Labels update immediately. Thread and execution defaults apply to new work.
+Connection compression is sampled on the next normal or recovery attachment.
+
 Backend startup defaults apply only to provider processes launched by Sedes.
 Owned Codex, Claude and Grok accept them; external Codex UDS/TCP and in-process
 Pi do not. Saving new startup values does not change a running process or
-restart it. **Pending restart** marks unapplied startup definitions; use the
-backend's explicit restart action and review affected threads. A new process
+restart it. **Restart backend required** identifies a running provider with
+pending launch settings. Use **Restart backend** and review affected threads
+if it should pick them up now. A new process
 uses current definitions at its first launch.
 
 Before removing a backend, its target, or an environment, stop the affected
@@ -854,7 +868,7 @@ operation results while main Sedes is disconnected. Pi SDK's reasoning loop
 still runs on main Sedes and does not survive its shutdown.
 
 **Disconnect** drops the main connection and persists that preference without
-stopping remote work. **Stop**, **Restart**, and **Upgrade and restart** operate
+stopping remote work. **Stop**, **Restart sidecar**, and **Upgrade and restart** operate
 on the service and require a current impact check. For a provider runtime
 that reports its work, such as remote Claude, the check lists running turns,
 background agents and commands, pending approvals, and conversations with
@@ -869,8 +883,7 @@ settled work and no live terminals, active turns, pending approvals, unsettled
 results, or unknown ownership. A shell at a prompt is live. Final terminal output must be handed off or preserved before
 replacement. A blocker keeps the row at **Upgrade available** or **Upgrade
 required** with the reason shown and **Upgrade and restart** offered; the host
-is not reported unreachable. A saved revision that cannot apply while remote
-work is active shows **Changes pending** with **Restart** offered. An explicit
+is not reported unreachable. An explicit
 restart confirmation authorizes interruption of active work and abandonment of
 unrecovered transient outcomes. Explicit Stop attempts owned-process cleanup even
 when provider state is unknown; retained outcomes do not veto it. Provider-native

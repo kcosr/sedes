@@ -15,7 +15,7 @@ vi.mock("../../src/server/backends/claude/runtime/claude-sidecar-runtime.js", as
     constructor() { connectionState.instances.push(this); }
     readonly ensureInputs: unknown[] = [];
     async ensure(configuration: unknown) { this.ensureInputs.push(configuration); return "runtime"; }
-    async lookup(_configuration: unknown, _epoch: number): Promise<string | undefined> { return "runtime"; }
+    async lookup(_configuration: unknown, _epoch: number): Promise<string | undefined> { return connectionState.instances.length === 1 ? undefined : "runtime"; }
     onEvent(_runtimeId: string, listener: (event: ClaudePersistentEvent) => void) { this.listener = listener; return () => { this.listener = undefined; }; }
     close() {}
   },
@@ -461,7 +461,7 @@ it("fences existing session identity when the sidecar runtime is replaced", asyn
   const session = client.createSession({ ...options, onFailure });
   await session.start();
   const { ClaudeSidecarRuntimeConnection } = await import("../../src/server/backends/claude/runtime/claude-sidecar-runtime.js");
-  const ensure = vi.spyOn(ClaudeSidecarRuntimeConnection.prototype, "ensure").mockResolvedValue("replacement-runtime");
+  const ensure = vi.spyOn(ClaudeSidecarRuntimeConnection.prototype, "lookup").mockResolvedValue("replacement-runtime");
   try {
     carriers[0]!.lost.resolve(); await vi.advanceTimersByTimeAsync(1001);
     expect(connectionState.instances[1]!.execute.mock.calls.some(([command]) => command.action === "open")).toBe(false);

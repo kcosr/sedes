@@ -33,10 +33,13 @@ export class SidecarExecutionAttachmentStager implements ExecutionAttachmentStag
   readonly #environmentId: string;
   readonly #scopeKey: string;
   readonly #runtime: SidecarRuntimeOwner<SidecarClientSession>;
+  readonly #enabled: () => boolean;
   #closed = false;
 
-  constructor(input: {
+  constructor(readonly input: {
+    readonly readAttachmentGeneration?: () => number | undefined;
     readonly scope: RequestScope;
+    readonly enabled?: () => boolean;
     readonly environmentId: string;
     readonly installationKey: Uint8Array;
     readonly runtime: SidecarRuntimeOwner<SidecarClientSession>;
@@ -44,6 +47,7 @@ export class SidecarExecutionAttachmentStager implements ExecutionAttachmentStag
     if (!input.environmentId) {
       throw new Error("sidecar_attachment_stager_configuration_invalid");
     }
+    this.#enabled = input.enabled ?? (() => true);
     this.#scope = Object.freeze({ ...input.scope });
     this.#environmentId = input.environmentId;
     this.#scopeKey = deriveComposerAttachmentScopeKey(
@@ -53,9 +57,17 @@ export class SidecarExecutionAttachmentStager implements ExecutionAttachmentStag
     this.#runtime = input.runtime;
   }
 
+  #authority(request: ExecutionAttachmentMaterializationRequest | ExecutionAttachmentReleaseRequest) {
+    if (!this.input.readAttachmentGeneration) return undefined;
+    const workspace = request.lease.workspace;
+    const featureGeneration = this.input.readAttachmentGeneration();
+    if (!workspace.authorityRootId || featureGeneration === undefined) throw unavailable(new Error("composer_attachment_authority_stale"));
+    return { path: workspace.canonicalPath, rootId: workspace.authorityRootId, rootGeneration: workspace.authorityRevision, featureGeneration };
+  }
+
   supports(scope: RequestScope, environmentId: string): boolean {
     return (
-      !this.#closed &&
+      !this.#closed && this.#enabled() &&
       sameRequestScope(scope, this.#scope) &&
       environmentId === this.#environmentId
     );
@@ -66,6 +78,12 @@ export class SidecarExecutionAttachmentStager implements ExecutionAttachmentStag
     request: ExecutionAttachmentMaterializationRequest,
   ) {
     this.#assert(scope, request);
+    const workspaceAuthority = this.#authority(request);
+    const check = () => {
+      request.lease.assertCurrent?.();
+      if (workspaceAuthority && workspaceAuthority.featureGeneration !== this.input.readAttachmentGeneration?.()) throw unavailable(new Error("composer_attachment_authority_stale"));
+    };
+    check();
     const admissionId = randomUUID();
     let uncertain: unknown;
     for (
@@ -86,10 +104,12 @@ export class SidecarExecutionAttachmentStager implements ExecutionAttachmentStag
       }
       let uploadHandle: string | undefined;
       try {
+        check();
         const opened = await lease.session.call(
           composerAttachmentsMaterializationOpenOperation,
           {
             admissionId,
+            ...(workspaceAuthority && { workspaceAuthority }),
             scopeKey: this.#scopeKey,
             threadId: request.applicationThreadId,
             attachmentId: request.attachmentId,
@@ -99,6 +119,7 @@ export class SidecarExecutionAttachmentStager implements ExecutionAttachmentStag
           },
           request.signal ? { signal: request.signal } : undefined,
         );
+        check();
         if (opened.state === "ready") return withoutState(opened);
         uploadHandle = opened.uploadHandle;
         let offset = opened.nextOffset;
@@ -107,6 +128,7 @@ export class SidecarExecutionAttachmentStager implements ExecutionAttachmentStag
           offset,
           request.signal,
         )) {
+          check();
           const appended = await lease.session.call(
             composerAttachmentsMaterializationAppendOperation,
             {
@@ -120,11 +142,14 @@ export class SidecarExecutionAttachmentStager implements ExecutionAttachmentStag
           );
           offset = appended.nextOffset;
         }
-        return await lease.session.call(
+        check();
+        const result = await lease.session.call(
           composerAttachmentsMaterializationCommitOperation,
           { uploadHandle },
           request.signal ? { signal: request.signal } : undefined,
         );
+        check();
+        return result;
       } catch (error) {
         if (isOutcomeUnknown(error)) {
           uncertain = error;
@@ -171,6 +196,7 @@ export class SidecarExecutionAttachmentStager implements ExecutionAttachmentStag
           composerAttachmentsMaterializationReleaseOperation,
           {
             scopeKey: this.#scopeKey,
+            workspaceAuthority: this.#authority(request),
             threadId: request.applicationThreadId,
             attachmentId: request.attachmentId,
             expectedSha256: request.expectedSha256,

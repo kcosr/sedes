@@ -3,7 +3,7 @@ import { z } from "zod";
 import { describe, expect, it, vi } from "vitest";
 import {
   SidecarFrameWriteError, SidecarOperationRegistry, SidecarProtocolPeer,
-  controlHelloOperation, controlPingOperation, registerControlV2Operations,
+  controlHelloOperation, controlPingOperation, registerControlV3Operations,
   type SidecarFrame, type SidecarFrameSendOptions, type SidecarFrameTransport,
   type SidecarTransportClosure,
 } from "../../src/internal/sidecar-protocol/index.js";
@@ -227,12 +227,12 @@ async function bodyFixture() {
   const sidecar = new SidecarProtocolPeer({ role: "sidecar", transport: pair.right, sessionNonce: "n".repeat(48), registry: rightRegistry });
   const left = new SidecarRuntimeChannel(sedes, leftRegistry);
   const right = new SidecarRuntimeChannel(sidecar, rightRegistry);
-  registerControlV2Operations(rightRegistry, {
+  registerControlV3Operations(rightRegistry, {
     buildId: "test", artifactSha256: "a".repeat(64), enabledSidecarCapabilities: [capability],
     enabledSedesCapabilities: leftRegistry.capabilities(),
   });
   sedes.start(); sidecar.start();
-  await sedes.call(controlHelloOperation, { compression: "none", expectedBuildId: "test", expectedArtifactSha256: "a".repeat(64), authorizedSidecarCapabilities: [capability], offeredSedesCapabilities: leftRegistry.capabilities() });
+  await sedes.call(controlHelloOperation, { compression: "none", expectedBuildId: "test", expectedArtifactSha256: "a".repeat(64), supportedSidecarCapabilities: [capability], offeredSedesCapabilities: leftRegistry.capabilities() });
   return { pair, sedes, left, right, close: async () => { left.close(); right.close(); await sedes.close("test_complete"); } };
 }
 class Queue implements AsyncIterable<SidecarFrame> {

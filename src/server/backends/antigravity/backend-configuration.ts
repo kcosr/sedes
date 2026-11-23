@@ -1,13 +1,13 @@
 import path from "node:path";
 import { antigravityConnectionConfigurationSchema, antigravityModuleConfigurationSchema, type AntigravityConnectionConfiguration } from "../../../shared/protocol/antigravity-configuration.js";
 import { mergeEnvironmentVariableOverrides } from "../../../shared/protocol/environment-variables.js";
-import { compileBackendModelPolicy } from "../model-policy.js";
+import { configuredModelPolicy } from "../model-policy.js";
 import type { BackendModuleConfigurationInput } from "../module.js";
 
 export function parseAntigravityBackendConfiguration(input: BackendModuleConfigurationInput) {
   if (input.backend.kind !== "antigravity") throw new Error("antigravity_backend_kind_invalid");
   const moduleConfiguration = antigravityModuleConfigurationSchema.parse(input.backend.moduleConfiguration ?? {});
-  const modelPolicy = compileBackendModelPolicy(input.backend.modelPolicy, "model_effort");
+  const modelPolicy = configuredModelPolicy(input, "model_effort");
   const defaultsByConnectionId = new Map<string, AntigravityConnectionConfiguration["defaults"]>();
   const environmentIds = new Set<string>();
   for (const connection of input.connections) {

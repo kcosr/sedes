@@ -12,7 +12,7 @@ import {
   decodeSidecarFrame,
   encodeSidecarEnvelope,
   encodeSidecarStreamDataFrame,
-  registerControlV2Operations,
+  registerControlV3Operations,
   workspaceToolsShellStartOperation,
   workspaceToolsShellTerminalSchema,
   WORKSPACE_TOOLS_V2_LIMITS,
@@ -36,8 +36,8 @@ const contextCapability = {
 } as const;
 
 describe("sidecar retained streams", () => {
-  it.each([5, 8, 9, 10, 11, 12, 13, 14, 15, 16])("uses exact wire v17 and rejects a tagged wire-v%s control envelope", async wireVersion => {
-    expect(SIDECAR_WIRE_VERSION).toBe(17);
+  it.each([5, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17])("uses exact wire v18 and rejects a tagged wire-v%s control envelope", async wireVersion => {
+    expect(SIDECAR_WIRE_VERSION).toBe(18);
     const fixture = await streamFixture();
     await fixture.pair.right.send(
       Buffer.concat([
@@ -663,7 +663,7 @@ async function streamFixture(
     files: [],
     fingerprint: "a".repeat(64),
   }));
-  registerControlV2Operations(sidecarRegistry, {
+  registerControlV3Operations(sidecarRegistry, {
     buildId: "test",
     artifactSha256: "a".repeat(64),
     enabledSidecarCapabilities: [capability, contextCapability],
@@ -694,7 +694,7 @@ async function streamFixture(
   await sedes.call(controlHelloOperation, { compression: "none",
     expectedBuildId: "test",
     expectedArtifactSha256: "a".repeat(64),
-    authorizedSidecarCapabilities: [capability, contextCapability],
+    supportedSidecarCapabilities: [capability, contextCapability],
     offeredSedesCapabilities: [],
   });
   return { pair, sedes, sidecar };

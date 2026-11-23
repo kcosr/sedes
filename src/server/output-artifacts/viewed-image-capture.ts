@@ -133,10 +133,7 @@ export class ViewedImageCaptureService implements ViewedImageCapture {
     const { scope, binding } = input;
     const workspaceId = this.dependencies.inventory.getThread(scope, binding.applicationThreadId).thread.workspaceId;
     const workspace = this.dependencies.inventory.getWorkspace(scope, workspaceId);
-    const environment = this.dependencies.inventory.getEnvironment(scope, binding.executionEnvironmentId);
     const canonicalPath = workspace.canonicalPath;
-    const configurationRevision = environment.configurationRevision;
-    const operationsConfigurationRevision = environment.operationsConfigurationRevision;
     const fences = [this.#generationKey(scope, "thread", binding.applicationThreadId),
       this.#generationKey(scope, "environment", binding.executionEnvironmentId)];
     const generations = fences.map(fence => this.#generations.get(fence) ?? 0);
@@ -154,8 +151,8 @@ export class ViewedImageCaptureService implements ViewedImageCapture {
           currentWorkspace.canonicalPath !== canonicalPath ||
           currentWorkspace.availability !== "available" ||
           currentEnvironment.availability !== "available" ||
-          currentEnvironment.configurationRevision !== configurationRevision ||
-          currentEnvironment.operationsConfigurationRevision !== operationsConfigurationRevision) {
+          currentWorkspace.authorityRootId !== workspace.authorityRootId ||
+          currentWorkspace.environmentConfigurationRevision !== workspace.environmentConfigurationRevision) {
         throw new Error("viewed_image_authority_changed");
       }
     };
@@ -218,9 +215,11 @@ export class ViewedImageCaptureService implements ViewedImageCapture {
       // Another completed observation may have published while this job was queued.
       result = this.dependencies.artifacts.findImage(input.scope, input.binding.applicationThreadId, input.publicationKey);
       if (!result) {
+        let assertFileGrant: (() => void) | undefined;
+        const assertCurrent = () => { job.assertCurrent(); assertFileGrant?.(); };
         const image = await this.dependencies.files.readAbsoluteImage(input.scope,
-          input.binding.applicationThreadId, input.absolutePath, job.controller.signal);
-        job.assertCurrent();
+          input.binding.applicationThreadId, input.absolutePath, job.controller.signal, check => { assertFileGrant = check; });
+        assertCurrent();
         if (image && image.sizeBytes > 0 && image.sizeBytes <= MAXIMUM_OUTPUT_IMAGE_BYTES &&
             image.content.length <= 4 * Math.ceil(MAXIMUM_OUTPUT_IMAGE_BYTES / 3)) {
           const bytes = Buffer.from(image.content, "base64");
@@ -229,7 +228,7 @@ export class ViewedImageCaptureService implements ViewedImageCapture {
           }
           result = await this.dependencies.artifacts.publishCapturedImage({ scope: input.scope,
             threadId: input.binding.applicationThreadId, publicationKey: input.publicationKey,
-            mediaType: image.mediaType, bytes, expectedByteSize: image.sizeBytes }, job.assertCurrent);
+            mediaType: image.mediaType, bytes, expectedByteSize: image.sizeBytes }, assertCurrent);
         }
       }
     } catch {

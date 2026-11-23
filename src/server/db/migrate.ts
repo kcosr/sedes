@@ -1,9 +1,11 @@
+import { liveExecutionPolicyMigration } from "./migrations/166-live-execution-policy.js";
 import { piNativeBackendKindMigration } from "./migrations/159-pi-native-backend-kind.js";
 import { piNativePersistenceMigration } from "./migrations/160-pi-native-persistence.js";
 import { piSessionClaimsMigration } from "./migrations/161-pi-session-claims.js";
 import { claudeDesiredSettingsRevisionMigration } from "./migrations/162-claude-desired-settings-revision.js";
 import { antigravityBackendKindMigration } from "./migrations/163-antigravity-backend-kind.js";
 import { antigravityPersistenceMigration } from "./migrations/164-antigravity-persistence.js";
+import { workspaceRootAuthorityMigration } from "./migrations/167-workspace-root-authority.js";
 import { antigravityLocalTitleMigration } from "./migrations/165-antigravity-local-title.js";
 import { automaticModelRetryMigration } from "./migrations/155-automatic-model-retry.js";
 import { modelFailureRetryStateMigration } from "./migrations/156-model-failure-retry-state.js";
@@ -344,6 +346,8 @@ export const backendNormalizedMigrations = [
   antigravityBackendKindMigration,
   antigravityPersistenceMigration,
   antigravityLocalTitleMigration,
+  liveExecutionPolicyMigration,
+  workspaceRootAuthorityMigration,
 ] as const;
 
 export type DatabaseMigration = {
@@ -353,6 +357,7 @@ export type DatabaseMigration = {
   readonly requiresForeignKeysDisabled?: true;
   readonly requiresLegacyAlterTable?: true;
   readonly verifyDatabaseIntegrity?: true;
+  readonly convertRows?: (database: Database.Database) => void;
   readonly preflight?: (database: Database.Database) => void;
 };
 
@@ -564,6 +569,7 @@ export function applyDatabaseMigrations(
     const apply = database.transaction(() => {
       migration.preflight?.(database);
       database.exec(migration.sql);
+      migration.convertRows?.(database);
       if (migration.verifyDatabaseIntegrity) {
         verifyDatabaseIntegrity(database, migration);
       }

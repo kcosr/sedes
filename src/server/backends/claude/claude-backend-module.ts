@@ -168,6 +168,8 @@ class ClaudeBackendModuleRuntime implements BackendModuleRuntime {
       prepared.connections.map((connection) => [connection.id, connection]),
     );
     const resolveConnectionDefaults = (connection: AgentConnectionProfile) => {
+      const current = context.targetDefinition?.(connection.templateId);
+      if (current?.kind === "claude_agent_sdk") return current.enabled === connection.enabled ? current.moduleConfiguration.defaults : undefined;
       const configured = preparedConnections.get(connection.templateId);
       if (!configured || configured.enabled !== connection.enabled) {
         return undefined;
@@ -232,7 +234,7 @@ class ClaudeBackendModuleRuntime implements BackendModuleRuntime {
       modelPolicy: prepared.modelPolicy,
       attachmentProvenanceKey: context.toolProvenanceKey,
       outputArtifacts: context.outputArtifacts,
-      connections: context.connections,
+      get connections() { return context.connections; },
       agentToolCli: context.agentToolCli,
       agentToolSourceCapabilities: context.agentToolSourceCapabilities,
       agentTools: context.agentTools,

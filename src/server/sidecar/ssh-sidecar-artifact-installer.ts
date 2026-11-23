@@ -24,7 +24,6 @@ import {
 } from "../../internal/sidecar-protocol/service-management-channel.js";
 import {
   SIDECAR_MANAGEMENT_VERSION,
-  sameSidecarServiceConfiguration,
   sameSidecarServiceScope,
   sidecarManagementResponseSchema,
   sidecarServiceScopeSchema,
@@ -72,6 +71,7 @@ export interface SshSidecarArtifactInstallerOptions {
   readonly agentToolEndpointKey: string;
   readonly serviceScope: SidecarServiceScope;
   readonly configuration: SidecarServiceConfiguration;
+  readonly requiresPolicyRecovery?: (incarnation: string) => boolean;
   readonly sshExecutable?: string;
   readonly spawnProcess?: SshProcessSpawner;
   /** Simulates an isolated passwd entry in disposable-sshd integration tests. */
@@ -88,6 +88,7 @@ export class SshSidecarArtifactInstaller implements SidecarProvisioner {
   readonly #testOnlyAccountHome: string | undefined;
   readonly #serviceScope: SidecarServiceScope;
   readonly #configuration: SidecarServiceConfiguration;
+  readonly #requiresPolicyRecovery: (incarnation: string) => boolean;
   #installation: SshSidecarArtifactInstallation | undefined;
 
   constructor(input: SshSidecarArtifactInstallerOptions) {
@@ -103,6 +104,7 @@ export class SshSidecarArtifactInstaller implements SidecarProvisioner {
     ) {
       throw new Error("sidecar_test_account_home_invalid");
     }
+    this.#requiresPolicyRecovery = input.requiresPolicyRecovery ?? (() => false);
     this.#host = input.host;
     this.#artifact = input.artifact;
     this.#agentToolEndpointKey = input.agentToolEndpointKey;
@@ -273,10 +275,7 @@ export class SshSidecarArtifactInstaller implements SidecarProvisioner {
         if (
           current.buildId !== this.#artifact.buildId ||
           current.artifactSha256 !== this.#artifact.artifactSha256 ||
-          !sameSidecarServiceConfiguration(
-            current.effectiveConfiguration,
-            this.#configuration,
-          )
+          current.runtimeWireVersion !== SIDECAR_WIRE_VERSION
         )
           throw new SidecarServiceManagementError(
             "sidecar_service_replaced_concurrently",
@@ -386,25 +385,12 @@ export class SshSidecarArtifactInstaller implements SidecarProvisioner {
       throw new Error("sidecar_carrier_generation_invalid");
     }
     let existing = await inspectForSidecarLaunch(this.inspect(signal));
-    for (
-      let attempt = 0;
-      existing &&
-      (existing.buildId !== this.#artifact.buildId ||
-        existing.artifactSha256 !== this.#artifact.artifactSha256 ||
-        existing.runtimeWireVersion !== SIDECAR_WIRE_VERSION ||
-        !sameSidecarServiceConfiguration(
-          existing.effectiveConfiguration,
-          this.#configuration,
-        ));
-      attempt += 1
-    ) {
-      // Inventory already proves replacement cannot be admitted. Do not mint
-      // a durable failed control on every ordinary reconnect attempt.
-      if (existing.resources.some((resource) => resource.state === "active" || resource.state === "unknown" || resource.blockers.length > 0)) {
-        if (existing.runtimeWireVersion !== SIDECAR_WIRE_VERSION) throw new SidecarServiceManagementError("sidecar_runtime_upgrade_required", existing);
-        // A compatible but outdated service keeps serving. It is reported as
-        // outdated and replaced automatically once its work settles.
-        break;
+    // A compatible daemon can authenticate its installed policy before an
+    // automatic binary upgrade. The owner performs that idle check after sync.
+    for (let attempt = 0; existing && existing.runtimeWireVersion !== SIDECAR_WIRE_VERSION; attempt++) {
+      if (this.#requiresPolicyRecovery(existing.serviceIncarnation) ||
+        existing.resources.some(resource => resource.state !== "idle" || resource.blockers.length)) {
+        throw new SidecarServiceManagementError("sidecar_runtime_upgrade_required", existing);
       }
       const outdated = existing;
       try {

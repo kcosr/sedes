@@ -83,10 +83,13 @@ function combineAbortSignals(
 
 import { recoverSidecarOperation } from "../sidecar/sidecar-operation-recovery.js";
 
+type SelectFilePolicyRoot = (path: string, primaryWorkspaceId?: string) => {path: string; key: string} | undefined;
+
 export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
   readonly #scope: RequestScope;
   readonly #environmentId: string;
-  readonly #policyRoots: readonly string[];
+  readonly #selectPolicyRoot?: SelectFilePolicyRoot;
+  readonly #policyRoots: () => readonly string[];
   readonly #runtime: SidecarRuntimeOwner<SidecarClientSession>;
   readonly #admissionIds = new Map<string, string>();
   readonly #validatedKinds = new Map<
@@ -95,11 +98,15 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
   >();
   readonly #handles = new Map<number, Map<string, string>>();
   readonly #candidateRootUsers = new Map<string, number>();
+  readonly #enabled: () => boolean;
   #closed = false;
 
   constructor(input: {
     readonly scope: RequestScope;
+    readonly enabled?: () => boolean;
     readonly environmentId: string;
+    readonly selectPolicyRoot?: SelectFilePolicyRoot;
+    readonly readPolicyRoots?: () => readonly string[];
     readonly policyRoots: readonly string[];
     readonly runtime: SidecarRuntimeOwner<SidecarClientSession>;
   }) {
@@ -107,7 +114,7 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
       !input.scope.tenantId ||
       !input.scope.principalId ||
       !input.environmentId ||
-      input.policyRoots.length === 0 ||
+      (!input.readPolicyRoots && input.policyRoots.length === 0) ||
       input.policyRoots.some(
         (root) =>
           !normalizedAbsolutePath(root),
@@ -115,9 +122,12 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
     ) {
       throw new Error("sidecar_workspace_file_provider_configuration_invalid");
     }
+    this.#enabled = input.enabled ?? (() => true);
     this.#scope = Object.freeze({ ...input.scope });
     this.#environmentId = input.environmentId;
-    this.#policyRoots = Object.freeze([...input.policyRoots]);
+    const roots = Object.freeze([...input.policyRoots]);
+    this.#selectPolicyRoot = input.selectPolicyRoot;
+    this.#policyRoots = input.readPolicyRoots ?? (() => roots);
     this.#runtime = input.runtime;
   }
 
@@ -152,7 +162,7 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
     signal?: AbortSignal,
   ): Promise<void> {
     this.#assert(scope, root.environmentId);
-    const policyRootPath = this.#policyRoot(root.canonicalPath);
+    const policyRootPath = this.#policyRoot(root.canonicalPath, root.rootKind === "primary" ? root.workspaceId : undefined);
     if (!policyRootPath) throw new WorkspaceFileRootUnavailableError();
     let lease: Awaited<
       ReturnType<
@@ -247,7 +257,7 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
       async (session, rootHandle, operationSignal) =>
         await session.call(
           workspaceFilesDiscoverLinkedWorktreesOperation,
-          { rootHandle, policyRootPaths: [...this.#policyRoots] },
+          { rootHandle, policyRootPaths: [...this.#policyRoots()] },
           ...sidecarCallOptions(operationSignal),
         ),
       signal,
@@ -1053,10 +1063,11 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
       throw classifyError(error);
     }
     const rootKind = this.#rootKind(root);
-    const policyRootPath = this.#policyRoot(root.canonicalPath);
+    const selected = this.#selectRoot(root.canonicalPath, rootKind === "primary" ? root.workspaceId : undefined);
+    const policyRootPath = selected?.path;
     const candidateKey = root.rootId === WORKSPACE_FILE_LINK_CANDIDATE_ROOT_ID
       ? rootHandleKey(root.workspaceId, root.rootId, rootKind, root.canonicalPath,
-        policyRootPath)
+        selected?.key)
       : undefined;
     if (candidateKey) {
       this.#candidateRootUsers.set(candidateKey, (this.#candidateRootUsers.get(candidateKey) ?? 0) + 1);
@@ -1149,9 +1160,10 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
     canonicalPath: string,
     signal?: AbortSignal,
   ): Promise<string> {
-    const policyRootPath = this.#policyRoot(canonicalPath);
-    if (!policyRootPath) throw new WorkspaceFileRootUnavailableError();
-    const key = rootHandleKey(workspaceId, rootId, rootKind, canonicalPath, policyRootPath);
+    const selected = this.#selectRoot(canonicalPath, rootKind === "primary" ? workspaceId : undefined);
+    const policyRootPath = selected?.path;
+    if (!selected || !policyRootPath) throw new WorkspaceFileRootUnavailableError();
+    const key = rootHandleKey(workspaceId, rootId, rootKind, canonicalPath, selected.key);
     let generation = this.#handles.get(lease.carrierGeneration);
     if (!generation) {
       generation = new Map();
@@ -1189,15 +1201,21 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
     );
   }
 
-  #policyRoot(candidate: string): string | undefined {
-    return this.#policyRoots
+  #policyRoot(candidate: string, primaryWorkspaceId?: string): string | undefined {
+    return this.#selectRoot(candidate, primaryWorkspaceId)?.path;
+  }
+
+  #selectRoot(candidate: string, primaryWorkspaceId?: string) {
+    if (this.#selectPolicyRoot) return this.#selectPolicyRoot(candidate, primaryWorkspaceId);
+    const path = this.#policyRoots()
       .filter((root) => isWithin(root, candidate))
       .sort((left, right) => right.length - left.length)[0];
+    return path ? {path, key: path} : undefined;
   }
 
   #supports(scope: RequestScope, environmentId: string): boolean {
     return (
-      !this.#closed &&
+      !this.#closed && this.#enabled() &&
       scope.tenantId === this.#scope.tenantId &&
       scope.principalId === this.#scope.principalId &&
       environmentId === this.#environmentId

@@ -101,15 +101,21 @@ function fixture(latestMigration = Number.POSITIVE_INFINITY) {
       (migration) => migration.version <= latestMigration,
     ),
   );
-  importLegacyDatabaseConfigurationFixture(
-    database,
-    {
-      configuration,
-      localWorkspaceRoots: ["/tmp"],
-      sourceLabel: "automation-turn-settlement",
-    },
-    400,
-  );
+  if (latestMigration === Number.POSITIVE_INFINITY) {
+    importLegacyDatabaseConfigurationFixture(
+      database,
+      {
+        configuration,
+        localWorkspaceRoots: ["/tmp"],
+        sourceLabel: "automation-turn-settlement",
+      },
+      400,
+    );
+  } else {
+    // The normalized migration already seeded the historical backend and targets.
+    database.prepare("UPDATE agent_backend_instances SET owner_principal_id = ? WHERE tenant_id = ? AND owner_principal_id IS NULL")
+      .run(scope.principalId, scope.tenantId);
+  }
   new InventoryRepository(database).updateEnvironmentAvailability(
     scope,
     environment.id,

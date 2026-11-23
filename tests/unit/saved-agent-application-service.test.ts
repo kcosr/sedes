@@ -209,6 +209,7 @@ function fixture(
     notices: [],
   }));
   const inventory = {
+    workspaceAuthorityIsCurrent: () => true,
     assertWorkspaceActive: vi.fn(),
     database,
     getWorkspace: (_scope: unknown, requestedWorkspaceId: string) => ({

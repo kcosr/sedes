@@ -1,3 +1,4 @@
+import { type WorkspaceRootGrant, workspaceRootGrant } from "./workspace-root-grant.js";
 import type { EnvironmentVariableOverrides } from "../../shared/protocol/environment-variables.js";
 import { createHash } from "node:crypto";
 import {
@@ -35,7 +36,9 @@ export class SshInteractiveTerminalProvider implements InteractiveTerminalEnviro
   readonly #activeConfigurationRevision: () => number | Promise<number>;
   readonly #runtime: SidecarRuntimeOwner<SidecarClientSession>;
 
-  constructor(input: {
+  constructor(readonly input: {
+    readonly readTerminalGeneration?: () => number | undefined;
+    readonly readWorkspaceRoots?: () => readonly WorkspaceRootGrant[];
     readonly scope: RequestScope;
     readonly environmentId: string;
     readonly enabled: boolean;
@@ -56,7 +59,7 @@ export class SshInteractiveTerminalProvider implements InteractiveTerminalEnviro
   }
 
   availability(scope: RequestScope, environmentId: string): "available" | "unavailable" {
-    return this.#enabled && this.#runtime.canAcquireCapability("interactive_terminal", 2) && scope.tenantId === this.#scope.tenantId && scope.principalId === this.#scope.principalId && environmentId === this.#environmentId
+    return this.#enabled && (!this.input.readTerminalGeneration || this.input.readTerminalGeneration() !== undefined) && this.#runtime.canAcquireCapability("interactive_terminal", 2) && scope.tenantId === this.#scope.tenantId && scope.principalId === this.#scope.principalId && environmentId === this.#environmentId
       ? "available" : "unavailable";
   }
 
@@ -64,6 +67,8 @@ export class SshInteractiveTerminalProvider implements InteractiveTerminalEnviro
     readonly scope: RequestScope; readonly environmentId: string;
     readonly terminalId: string; readonly incarnationId: string;
     readonly environmentVariables?: EnvironmentVariableOverrides;
+    readonly workspaceAuthority?: { readonly authorityRootId: string; readonly authorityRevision: number };
+    readonly assertWorkspaceCurrent?: () => void;
     readonly initialCwd: string; readonly shellProfile?: string;
     readonly rows: number; readonly columns: number;
   }): Promise<InteractiveTerminalProcess> {
@@ -71,10 +76,10 @@ export class SshInteractiveTerminalProvider implements InteractiveTerminalEnviro
     if (!this.#enabled) throw new SidecarUnavailableError();
     await this.#assertRevision();
     if (input.shellProfile !== undefined) throw new Error("interactive_terminal_shell_profile_unsupported");
-    const caller = this.#caller();
+    const caller = this.#caller(input.initialCwd, input.workspaceAuthority);
     const identity = { terminalId: input.terminalId, incarnationId: input.incarnationId };
     const prepared = await caller.call(terminalPrepareOperation, {
-      ...identity, initialCwd: input.initialCwd, rows: input.rows, columns: input.columns,
+      ...identity, ...(input.workspaceAuthority && { workspaceAuthority: input.workspaceAuthority }), initialCwd: input.initialCwd, rows: input.rows, columns: input.columns,
       ...(input.environmentVariables ? { environmentVariables: input.environmentVariables } : {}),
     });
     // A create response lost in transit is recovered by identity, never retried
@@ -119,12 +124,24 @@ export class SshInteractiveTerminalProvider implements InteractiveTerminalEnviro
     } catch (error) { caller.close!(); throw error; }
   };
 
-  #caller(): TerminalSidecarCaller {
+  #caller(cwd?: string, binding?: { authorityRootId: string; authorityRevision: number }): TerminalSidecarCaller {
+    const readGeneration = this.input.readTerminalGeneration;
+    const generation = readGeneration?.();
+    const roots = this.input.readWorkspaceRoots;
+    const grant = roots && cwd ? workspaceRootGrant(roots(), cwd, binding) : undefined;
+    const check = () => {
+      if ((readGeneration && (generation === undefined || readGeneration() !== generation)) ||
+          (cwd && roots && (!grant || !roots().some(root => root.id === grant.id && root.generation === grant.generation)))) {
+        throw new SidecarUnavailableError();
+      }
+    };
+    check();
     return {
       call: async <Request, Response>(definition: SidecarOperationDefinition<Request, Response>, request: Request): Promise<Response> => {
         const controller = new AbortController();
         const lease = await this.#runtime.acquireOperation(this.#scope, this.#environmentId, controller.signal);
         try {
+          if ([terminalPrepareOperation.operation, terminalCreateOperation.operation, terminalInputOperation.operation, terminalResizeOperation.operation].some(operation => operation === definition.operation)) check();
           if (!lease.session.negotiatedCapabilities.some(capability => capability.capabilityId === definition.capabilityId && capability.majorVersion === definition.majorVersion && capability.operations.includes(definition.operation))) throw new SidecarUnavailableError();
           return await lease.session.call(definition, request, { signal: controller.signal });
         }

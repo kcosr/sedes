@@ -19,6 +19,13 @@ For the surrounding ownership model, see [Architecture](architecture.md). For
 the contributor requirements that apply when extending this contract, see the
 [backend integration contract rules](backend-integration-contract-rules.md#provider-output-artifacts).
 
+
+A file-backed publication retains its thread binding and the grants used for
+the read. Before committing bytes, Sedes rechecks the source root and Files
+generation. An unrelated backend or root added during a capture leaves that
+capture valid. Removing and granting the same root again creates a new
+generation and requires a fresh read.
+
 ## Contents
 
 - [Normalized contract](#normalized-contract)
@@ -235,9 +242,9 @@ including queue wait. Observations with the same principal, thread, exact
 binding, and publication key share one read, which is aborted only when its
 last subscriber leaves.
 
-Capture authority is the exact binding, including its creation time; the
-thread's workspace and canonical path; workspace and environment availability;
-and the environment's configuration and operations-configuration revisions.
+Capture authority includes the exact binding and its creation time, the thread's
+workspace and canonical path, workspace and environment availability, and the
+source root and Files capability generations.
 The service rechecks it before and after the read and synchronously inside
 the SQLite transaction that records the association. If that commit fails, the
 newly written blob is removed unless another association references it.

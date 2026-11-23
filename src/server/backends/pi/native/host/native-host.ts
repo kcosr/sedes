@@ -1,3 +1,4 @@
+import { toolPeerStamp } from "../../../agent-tool-route.js";
 import type { VerifiedPiRuntimeVersion } from "../runtime-release.js";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -37,7 +38,7 @@ type Operation = { fingerprint: string; outcome: PiNativeOutcome; bytes: number;
 type CatalogProcess = { id: string; process?: Process; directory?: string; cleanupUnproven: boolean; closing?: Promise<void> };
 type StreamContent = { text: string; encodedBytes: number; lastCodeUnit: number };
 type Session = {
-  identity: PiNativeSessionIdentity; handleId: string; generation: string; environmentFingerprint: string;
+  identity: PiNativeSessionIdentity; handleId: string; generation: string; environmentFingerprint: string; toolPeerStamp?: string;
   process?: Process; directory?: string; writer?: { release(): Promise<void> };
   starting?: Promise<PiNativeAttachment>; closing?: Promise<void>;
   retiring?: Promise<PiNativeRetirement>;
@@ -206,6 +207,10 @@ export class PiNativeHost implements PiNativePort {
     this.#current(authority, signal);
     return result;
   }
+  hasRetainedSession(input: PiNativeSessionIdentity): boolean {
+    const session = this.#byFile.get(input.sessionFile);
+    return !!session && sameSession(session.identity, input);
+  }
   async readHistory(input: PiNativeSessionIdentity, signal?: AbortSignal, authority = LOCAL_AUTHORITY): Promise<PiNativeHistory> {
     this.#current(authority, signal);
     const result = await this.#store.readHistory(input, signal);
@@ -217,7 +222,7 @@ export class PiNativeHost implements PiNativePort {
     this.#current(authority, signal);
     if (Object.hasOwn(input.executionEnvironment ?? {}, "PI_CODING_AGENT_DIR")) throw new PiNativeError("pi_native_agent_directory_scope_invalid");
     const agentToolEnvironment = piNativeAgentToolEnvironmentSchema.parse(input.agentToolEnvironment ?? {});
-    const environmentFingerprint = configurationFingerprint({ execution: input.executionEnvironment ?? {}, agentTools: agentToolEnvironment });
+    const environmentFingerprint = configurationFingerprint(input.executionEnvironment ?? {});
     const existing = this.#byFile.get(input.sessionFile);
     if (existing) {
       if (existing.retiring) {
@@ -239,6 +244,7 @@ export class PiNativeHost implements PiNativePort {
     if (this.#sessions.size >= (this.input.maximumSessions ?? 32)) throw new PiNativeError("pi_native_session_capacity");
     const identity = { sessionId: input.sessionId, sessionFile: input.sessionFile, cwd: input.cwd };
     const session: Session = { identity, handleId: randomUUID(), generation: randomUUID(), environmentFingerprint,
+      toolPeerStamp: toolPeerStamp(agentToolEnvironment.SEDES_AGENT_TOOL_ENDPOINT),
       closed: false, cleanupUnproven: false, cleanupProven: false, attached: true, draining: false, controlOnly: false, active: false, activityGeneration: 0, interactions: new Set(), dialogs: new Set(),
       operations: new Map(), tombstones: new Map(), cancelledObservationIds: new Set(), events: [], sequence: 0, acknowledged: 0, offered: 0,
       eventBytes: 0, streamBytes: 0, observationBytes: 0, continuityLost: false, wake: new Set(), streamId: randomUUID(), streamContent: new Map(), coalesced: new Map() };
@@ -866,7 +872,7 @@ function sameSession(left: PiNativeSessionIdentity, right: PiNativeSessionIdenti
   return left.sessionId === right.sessionId && left.sessionFile === right.sessionFile && left.cwd === right.cwd;
 }
 function attachment(session: Session): PiNativeAttachment {
-  return { ...session.identity, handleId: session.handleId, generation: session.generation, throughSequence: session.sequence, retainedAfterSequence: session.acknowledged,
+  return { ...session.identity, ...(session.toolPeerStamp ? { toolPeerStamp: session.toolPeerStamp } : {}), handleId: session.handleId, generation: session.generation, throughSequence: session.sequence, retainedAfterSequence: session.acknowledged,
     retainedOperationIds: [...session.operations.keys()] };
 }
 function validId(value: string): boolean { return typeof value === "string" && value.length > 0 && value.length <= 512; }

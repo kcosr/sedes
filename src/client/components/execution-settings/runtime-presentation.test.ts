@@ -18,9 +18,9 @@ describe("runtime presentation", () => {
   it("labels startup-only changes as pending restart while the provider stays connected", () => {
     const presented = presentRuntime(runtime({ resourceKind: "backend", startupEnvironmentPending: true, applyState: "pending", effectiveRevision: 3 }), { resourceKind: "backend", sidecar: false });
     expect(presented.headline).toBe("Connected");
-    expect(presented.qualifier).toBe("Pending restart");
-    expect(presented.detail).toContain("Saving did not restart the running provider");
-    expect(presented.primary?.label).toBe("Restart");
+    expect(presented.qualifier).toBe("Restart backend required");
+    expect(presented.detail).toContain("after its next restart");
+    expect(presented.primary?.label).toBe("Restart backend");
   });
   it("explains an unknown command without incorrectly asking the user to connect again", () => {
     const presentation = presentRuntime(runtime({ connectionState: "unknown", lifecycleOperation: {
@@ -32,11 +32,11 @@ describe("runtime presentation", () => {
   });
 
   it.each([
-    ["healthy", runtime(), { headline: "Connected", qualifier: undefined, primary: undefined, secondary: ["Restart", "Stop", "Disconnect"], tone: "success", pill: "Connected" }],
+    ["healthy", runtime(), { headline: "Connected", qualifier: undefined, primary: undefined, secondary: ["Restart sidecar", "Stop", "Disconnect"], tone: "success", pill: "Connected" }],
     ["upgrade required", runtime({ upgradeState: "required", applyState: "pending" }), { headline: "Connected", qualifier: "Upgrade required", primary: "Upgrade and restart", secondary: ["Stop", "Disconnect"], tone: "warning", pill: "Upgrade required" }],
     ["upgrade available", runtime({ upgradeState: "pending" }), { headline: "Connected", qualifier: "Upgrade available", primary: "Upgrade and restart", secondary: ["Stop", "Disconnect"], tone: "info", pill: "Upgrade available" }],
-    ["changes pending", runtime({ applyState: "pending", effectiveRevision: 3 }), { headline: "Connected", qualifier: "Changes pending", primary: "Restart", secondary: ["Stop", "Disconnect"], tone: "warning", pill: "Changes pending" }],
-    ["configuration not applied", runtime({ applyState: "unavailable" }), { headline: "Connected", qualifier: "Configuration not applied", primary: "Reapply configuration", secondary: ["Restart", "Stop", "Disconnect"], tone: "danger", pill: "Configuration not applied" }],
+    ["changes pending", runtime({ applyState: "pending", effectiveRevision: 3 }), { headline: "Connected", qualifier: "Changes pending", primary: "Retry apply", secondary: ["Restart sidecar", "Stop", "Disconnect"], tone: "warning", pill: "Changes pending" }],
+    ["configuration not applied", runtime({ applyState: "unavailable" }), { headline: "Connected", qualifier: "Configuration not applied", primary: "Retry apply", secondary: ["Restart sidecar", "Stop", "Disconnect"], tone: "danger", pill: "Configuration not applied" }],
     ["intentionally disconnected", runtime({ connectionState: "disconnected", preference: "disconnected" }), { headline: "Intentionally disconnected", qualifier: undefined, primary: "Connect", secondary: ["Stop"], tone: "neutral", pill: "Intentionally disconnected" }],
     ["disconnected with upgrade", runtime({ connectionState: "disconnected", upgradeState: "pending" }), { headline: "Disconnected", qualifier: "Upgrade available", primary: "Connect", secondary: ["Disconnect", "Stop", "Upgrade and restart"], tone: "info", pill: "Upgrade available" }],
     ["intentionally stopped", runtime({ connectionState: "stopped", preference: "stopped" }), { headline: "Intentionally stopped", qualifier: undefined, primary: "Start", secondary: [], tone: "neutral", pill: "Intentionally stopped" }],
@@ -129,7 +129,7 @@ describe("runtime presentation", () => {
     const backend = { resourceKind: "backend" as const, sidecar: false, enabled: false };
     expect(summarize(runtime({ resourceKind: "backend", supportedActions: ["disconnect", "stop"] }), backend)).toMatchObject({ qualifier: "Backend disabled", primary: "Stop", secondary: ["Disconnect"], tone: "warning", pill: "Backend disabled" });
     expect(summarize(runtime({ resourceKind: "backend", connectionState: "stopped", supportedActions: ["disconnect", "stop"] }), backend)).toMatchObject({ qualifier: "Backend disabled", primary: undefined, secondary: [] });
-    expect(summarize(runtime({ resourceKind: "backend", supportedActions: ["connect", "start", "stop", "restart"] }), { ...backend, enabled: true })).toMatchObject({ primary: undefined, secondary: ["Restart", "Stop"] });
+    expect(summarize(runtime({ resourceKind: "backend", supportedActions: ["connect", "start", "stop", "restart"] }), { ...backend, enabled: true })).toMatchObject({ primary: undefined, secondary: ["Restart backend", "Stop"] });
   });
 
   it("names an unconfirmed command in the pill without hiding a failed apply", () => {

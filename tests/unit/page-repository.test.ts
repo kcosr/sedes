@@ -152,16 +152,16 @@ describe("immutable thread HTML pages", () => {
     completeRefresh();
   });
 
-  it("fences environment changes during asynchronous file capture before publication", async () => {
+  it("fences root withdrawal during asynchronous file capture before publication", async () => {
     const { repository } = fixture();
-    let environmentRevision = 1;
+    let rootGeneration = 1;
     const service = new PageService({ repository, files: { readAbsoluteFile: async () => {
-      environmentRevision = 2;
+      rootGeneration = 2;
       return Buffer.from("<html>captured</html>");
     } }, inventory: {
       getThread: () => ({ thread: { workspaceId: "workspace" } }),
-      getWorkspace: () => ({ id: "workspace", environmentId: "environment", canonicalPath: "/work", availability: "available" }),
-      getEnvironment: () => ({ availability: "available", configurationRevision: environmentRevision, operationsConfigurationRevision: 1 }),
+      getWorkspace: () => ({ id: "workspace", environmentId: "environment", canonicalPath: "/work", authorityRootId: "root", environmentConfigurationRevision: rootGeneration, availability: "available" }),
+      getEnvironment: () => ({ availability: "available", configurationRevision: 1, operationsConfigurationRevision: 1 }),
     } as never });
     await expect(service.publish(scope, "thread", { path: "/work/page.html", title: "Page" }, { invocationId: "new" })).rejects.toThrow("environment changed");
     expect(repository.list(scope, "thread").items).toEqual([]);

@@ -1,3 +1,5 @@
+import type { InstalledExecutionPolicy } from "../../src/internal/sidecar-protocol/execution-policy.js";
+import { ownerPolicy } from "../helpers/sidecar-owner-policy.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -47,9 +49,12 @@ vi.mock("../../src/server/sidecar/sidecar-runtime.js", async (original) => {
       }
       get negotiatedCapabilities() { return this.transportAvailable() ? fake.negotiatedCapabilities ?? [] : []; }
       private transportAvailable() { return (this.options.isTransportAvailable as (() => boolean) | undefined)?.() ?? true; }
+      private desired() { return (this.options.readDesiredPolicy as () => InstalledExecutionPolicy)(); }
+      policyWorkspaceRoots() { return this.desired().snapshot.roots; }
+      policyCapabilityGeneration(id: string) { return this.desired().snapshot.capabilities.find(entry => entry.id === id)?.generation; }
       canAcquireCapability(capabilityId: string, majorVersion: number) {
         const matches = (capability: { capabilityId: string; majorVersion: number }) => capability.capabilityId === capabilityId && capability.majorVersion === majorVersion;
-        return this.transportAvailable() && (this.options.authorizedCapabilities as { capabilityId: string; majorVersion: number }[]).some(matches) &&
+        return this.transportAvailable() && !!this.policyCapabilityGeneration(capabilityId) && (this.options.authorizedCapabilities as { capabilityId: string; majorVersion: number }[]).some(matches) &&
           (fake.negotiatedCapabilities === undefined || fake.negotiatedCapabilities.some(matches));
       }
       connect = fake.connect;
@@ -123,6 +128,11 @@ function input(
   const current = record(configured);
   return {
     configured,
+    readWorkspaceRoots: () => configured.workspaceRoots.map((path,index) => ({id: `root-${index}`, path, generation: 4})),
+    readDesiredPolicy: () => {
+      const desired = ownerPolicy(configured.kind !== "local" && configured.operations.kind === "sidecar" ? configured.operations.enabledCapabilities : []);
+      return {...desired, snapshot: {...desired.snapshot, roots:configured.workspaceRoots.map((path,index) => ({id: `root-${index}`,path,generation:4}))}};
+    },
     record: current,
     scope,
     stateDirectory: "/tmp/sedes-environment-factory-test",
@@ -146,6 +156,7 @@ function input(
 function workspace(id: string, canonicalPath: string): ValidatedWorkspace {
   return {
     canonicalPath,
+    authorityRootId:"root-0",
     authorityRevision: 4,
     summary: {
       id: "workspace",
@@ -232,12 +243,12 @@ describe("execution environment runtime composition", () => {
     expect(runtime.terminal).toBeDefined();
     expect(runtime.terminal!.availability(scope, environmentId)).toBe("unavailable");
     expect(runtime.terminal!.recoverTerminal).toBeTypeOf("function");
-    expect(fake.terminalOptions[0]!.enabled).toBe(false);
+    expect(fake.terminalOptions[0]!.enabled).toBe(true);
     expect(fake.terminalOptions[0]!.runtime).toBe(runtime.sidecarRuntime);
-    expect(fake.runtimeOptions[0]!.authorizedCapabilities).toEqual([]);
+    expect(fake.runtimeOptions[0]!.authorizedCapabilities).toHaveLength(8);
     expect(fake.runtimeOptions[0]!.authorizedRuntimeCapabilities).toEqual([]);
     expect(fake.runtimeOptions[0]!.connectionCompression).toBe(options.connectionCompression);
-    expect(runtime.agentToolCliRuntime).toBeUndefined();
+    expect(runtime.agentToolCliRuntime).toBe(runtime.sidecarRuntime);
     expect(runtime.workspaceFiles.supportsPrimaryRoot(scope, environmentId)).toBe(false);
     expect(runtime.attachments.supports(scope, environmentId)).toBe(false);
     expect(runtime.operations.workspaceTools.availability).toBe("unavailable");
@@ -323,6 +334,8 @@ describe("execution environment runtime composition", () => {
     fake.negotiatedCapabilities = [];
     expect(runtime.terminal!.availability(scope, environmentId)).toBe("unavailable");
     expect(fake.terminalOptions[0]).not.toHaveProperty("host");
+    expect(runtime.operations.workspaceTools.availability).toBe("unavailable");
+    fake.negotiatedCapabilities = undefined;
     expect(runtime.operations.workspaceTools.availability).toBe("available");
     expect(runtime.operations.workspaceContext.availability).toBe("available");
     expect(runtime.operations.workspaceSkills.availability).toBe("available");
@@ -374,11 +387,11 @@ describe("execution environment runtime composition", () => {
     };
     const runtime = await createExecutionEnvironmentRuntime(options);
     expect(runtime.sidecarRuntime).toBeDefined();
-    expect(runtime.agentToolCliRuntime).toBeUndefined();
+    expect(runtime.agentToolCliRuntime).toBe(runtime.sidecarRuntime);
     expect(runtime.terminal!.availability(scope, environmentId)).toBe("unavailable");
     expect(runtime.attachments.supports(scope, environmentId)).toBe(false);
     expect(runtime.operations.workspaceTools.availability).toBe("unavailable");
-    expect(fake.runtimeOptions[0]!.authorizedCapabilities).toEqual([]);
+    expect(fake.runtimeOptions[0]!.authorizedCapabilities).toHaveLength(8);
     expect(fake.runtimeOptions[0]!.authorizedRuntimeCapabilities).toBe(
       options.authorizedRuntimeCapabilities,
     );
@@ -393,14 +406,14 @@ describe("execution environment runtime composition", () => {
         remote({ kind: "sidecar", enabledCapabilities: ["directory_browser"] }),
       ),
     );
-    expect(runtime.agentToolCliRuntime).toBeUndefined();
+    expect(runtime.agentToolCliRuntime).toBe(runtime.sidecarRuntime);
     expect(runtime.terminal!.availability(scope, environmentId)).toBe("unavailable");
     expect(runtime.attachments.supports(scope, environmentId)).toBe(false);
     expect(runtime.operations.workspaceTools.availability).toBe("unavailable");
     await runtime.close();
   });
 
-  it("fences remote availability observations by scope, environment revision, and closure", async () => {
+  it("publishes transport availability through a live settings change and fences retired providers", async () => {
     const options = input(remote());
     let current = options.record;
     const runtime = await createExecutionEnvironmentRuntime({
@@ -424,11 +437,8 @@ describe("execution environment runtime composition", () => {
     });
     expect(options.reportAvailability).toHaveBeenCalledOnce();
     current = { ...current, configurationRevision: 5 };
-    await expect(
-      runtime.channels.reportRuntimeAvailability(channelScope, {
-        availability: "available",
-      }),
-    ).rejects.toThrow();
+    await runtime.channels.reportRuntimeAvailability(channelScope, {availability: "available"});
+    expect(options.reportAvailability).toHaveBeenCalledTimes(2);
     await runtime.close();
     current = options.record;
     await expect(

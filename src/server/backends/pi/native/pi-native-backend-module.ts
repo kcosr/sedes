@@ -117,7 +117,8 @@ class PiNativeModuleRuntime implements BackendModuleRuntime {
     const repository = new PiNativeThreadRepository(context.database);
     const preferences = new ConnectionSettingPreferenceRepository(context.database);
     const resolveDefaults = (connection: AgentConnectionProfile) => {
-      const defaults = prepared.defaults.get(connection.templateId);
+      const current = context.targetDefinition?.(connection.templateId);
+      const defaults = current?.kind === "pi_rpc" ? current.moduleConfiguration.defaults : prepared.defaults.get(connection.templateId);
       return defaults ? {
         ...(defaults.provider && defaults.model ? { modelProvider: defaults.provider, modelId: defaults.model } : {}),
         ...(defaults.thinkingLevel ? { thinkingLevel: defaults.thinkingLevel } : {}),
@@ -147,11 +148,7 @@ class PiNativeModuleRuntime implements BackendModuleRuntime {
       create: connection => {
         this.#assertConnection(connection);
         const existing = this.#drivers.get(connection.id);
-        if (existing) {
-          if (existing.connection.configurationRevision !== connection.configurationRevision)
-            throw new Error("pi_native_configuration_changed");
-          return existing;
-        }
+        if (existing?.connection.configurationRevision === connection.configurationRevision) return existing;
         const driver = new PiNativeConversationDriver({ instance: this.instance, connection, port,
           claimNativeSession: (scope, input) => new PiSessionClaims(context.database).reserve(scope, input),
           modelPolicy: prepared.modelPolicy, operations: repository, usage: context.usage, agentTools: this.#agentTools,
@@ -173,8 +170,10 @@ class PiNativeModuleRuntime implements BackendModuleRuntime {
     if (this.#closed || connection.kind !== "pi_rpc" || connection.backendInstanceId !== this.instance.id ||
         connection.tenantId !== this.scope.tenantId || connection.ownerPrincipalId !== this.scope.principalId ||
         connection.executionEnvironmentId !== this.prepared.executionEnvironmentId ||
-        !this.context.connections.some(candidate => candidate.id === connection.id && candidate.templateId === connection.templateId))
+        !this.context.connections.some(candidate => candidate.id === connection.id && candidate.templateId === connection.templateId && candidate.enabled === connection.enabled))
       throw new Error("pi_native_connection_mismatch");
+    if (!this.context.connections.some(candidate => candidate.id === connection.id && candidate.configurationRevision === connection.configurationRevision))
+      throw new Error("pi_native_configuration_changed");
   }
   agentToolRuntimeAvailability(input: Parameters<PiNativeAgentToolService["availability"]>[0]) {
     return this.#agentTools.availability(input);

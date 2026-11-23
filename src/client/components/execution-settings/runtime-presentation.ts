@@ -1,4 +1,4 @@
-import type { ConfigurationLifecycleRequest, ConfigurationRuntimeState } from "../../../shared/protocol/configuration-admin.js";
+import type { configurationSidecarCapabilities, ConfigurationDocument, ConfigurationEffect, ConfigurationLifecycleRequest, ConfigurationRuntimeState } from "../../../shared/protocol/configuration-admin.js";
 import type { Tone } from "../ui/tone.js";
 
 export type RuntimeAction = ConfigurationLifecycleRequest["action"];
@@ -15,6 +15,43 @@ export const applyLabels: Record<ConfigurationRuntimeState["applyState"], string
 export const upgradeLabels: Record<ConfigurationRuntimeState["upgradeState"], string> = {
   unknown: "Upgrade status unknown", current: "Up to date", pending: "Upgrade available", required: "Upgrade required",
 };
+export const effectLabels: Record<ConfigurationEffect["state"], string> = {
+  applied: "Applied", unknown: "Unconfirmed", awaiting_host: "Awaiting host confirmation",
+  unsupported: "Unsupported on this host", failed: "Could not apply", future_defaults: "For new threads",
+  next_attachment: "On next connection", next_launch: "On next backend launch", restart_backend: "Restart backend required",
+};
+export const componentLabels: Record<ConfigurationEffect["component"], string> = {
+  presentation: "Display settings", defaults: "Thread defaults", host_policy: "Host access",
+  provider_launch: "Backend startup", connection_compression: "Connection compression", ownership: "Runtime ownership",
+};
+export const capabilityLabels: Record<typeof configurationSidecarCapabilities[number], string> = {
+  directory_browser: "Directory browsing", workspace_files: "Files and comparisons",
+  workspace_tools: "Workspace tools and context", workspace_context: "Workspace context",
+  workspace_skills: "Workspace skills", composer_attachments: "Attachment staging",
+  agent_tools_cli: "Sedes tools for remote agents", interactive_terminal: "Interactive terminals",
+};
+
+export function effectSubject(effect: ConfigurationEffect, resource: { resourceId: string; label: string }, configuration?: ConfigurationDocument): string {
+  const id = effect.subjectId;
+  if (effect.subjectLabel) return effect.subjectLabel;
+  if (id === resource.resourceId) return resource.label;
+  if (id.startsWith("capability:")) {
+    const capability = id.slice("capability:".length);
+    if (Object.hasOwn(capabilityLabels, capability)) return capabilityLabels[capability as keyof typeof capabilityLabels];
+  }
+  if (id.startsWith("target:")) return configuration?.targets.find(target => target.id === id.slice(7))?.label ?? id;
+  if (id.startsWith("backend:")) return configuration?.backends.find(backend => backend.id === id.slice(8))?.label ?? id;
+  if (id.startsWith("managed_tui:")) return "Managed Codex terminal";
+  switch (id) {
+    case "admission_policy": return "Model and permission policy";
+    case "workspace_isolation": return "Workspace isolation";
+    case "execution_variables": return "Execution variables";
+    case "startup_variables": return "Startup variables";
+    case "withdrawals": return "Withdrawn access";
+    case "default_target": return "Default connection";
+    default: return id;
+  }
+}
 const connectionLabels: Record<ConfigurationRuntimeState["connectionState"], string> = {
   unknown: "Status unknown", connected: "Connected", disconnected: "Disconnected", unreachable: "Unreachable", stopped: "Confirmed stopped", reconciling: "Reconciling", recovery_required: "Recovery required",
 };
@@ -109,7 +146,7 @@ export function presentRuntime(runtime: ConfigurationRuntimeState | undefined, o
   const version = runtime.softwareVersion ?? "unknown version";
   const active = runtime.activeResources;
   const interruption = active > 0 ? ` ${active} resource${active === 1 ? "" : "s"} may be affected; review the interruption details before continuing.` : "";
-  const act = (action: RuntimeAction, label = actionLabels[action], emphasis: RuntimeActionPresentation["emphasis"] = "default"): RuntimeActionPresentation => ({ action, label, emphasis });
+  const act = (action: RuntimeAction, label = action === "restart" ? (environment ? "Restart sidecar" : "Restart backend") : actionLabels[action], emphasis: RuntimeActionPresentation["emphasis"] = "default"): RuntimeActionPresentation => ({ action, label, emphasis });
   const retry = act("connect", "Retry connection");
   const disconnectable = runtime.supportedActions.includes("disconnect");
   const unconfirmedStop = (until: string) => ` Stop only records that the ${noun} should not start automatically; shutdown on the host is unconfirmed until ${until}.`;
@@ -117,8 +154,13 @@ export function presentRuntime(runtime: ConfigurationRuntimeState | undefined, o
   let qualifierTone: Tone = "neutral";
   let detail: string;
   let tone: Tone = "neutral";
+  const effects = runtime.effects ?? [];
+  const restartBackend = !environment && (runtime.startupEnvironmentPending || effects.some(effect => effect.state === "restart_backend"));
+  const failed = effects.some(effect => effect.state === "failed");
+  const unsupported = effects.some(effect => effect.state === "unsupported");
+  const awaitingHost = effects.some(effect => effect.state === "awaiting_host");
   const pending = () => {
-    qualifier = runtime.startupEnvironmentPending ? "Pending restart" : "Changes pending";
+    qualifier = restartBackend ? effectLabels.restart_backend : awaitingHost ? effectLabels.awaiting_host : "Changes pending";
     qualifierTone = "warning";
   };
   let primary: RuntimeActionPresentation | undefined;
@@ -194,11 +236,11 @@ export function presentRuntime(runtime: ConfigurationRuntimeState | undefined, o
         detail = `The installed sidecar (${version}) is incompatible with this server; remote operations are unavailable until it is upgraded. Upgrading restarts the sidecar.${interruption}`;
         primary = act("upgrade");
         secondary = [act("stop", undefined, "destructive"), act("disconnect")];
-      } else if (runtime.applyState === "unavailable" || runtime.applyState === "rejected") {
-        qualifier = "Configuration not applied";
+      } else if (failed || unsupported || runtime.applyState === "unavailable" || runtime.applyState === "rejected") {
+        qualifier = failed ? effectLabels.failed : unsupported ? effectLabels.unsupported : "Configuration not applied";
         qualifierTone = "danger";
-        detail = `The saved configuration (revision ${runtime.desiredRevision}) could not be applied.`;
-        primary = act("connect", "Reapply configuration");
+        detail = failed || unsupported ? "See the affected settings below." : `The saved configuration (revision ${runtime.desiredRevision}) could not be applied.`;
+        if (!unsupported || failed || awaitingHost) primary = act("connect", "Retry apply");
         secondary = [act("restart"), act("stop", undefined, "destructive"), act("disconnect")];
       } else if (!enabled) {
         qualifier = "Backend disabled";
@@ -214,13 +256,13 @@ export function presentRuntime(runtime: ConfigurationRuntimeState | undefined, o
         detail = `A newer sidecar is available. It installs automatically when the host is idle, or upgrade now to restart the sidecar.${interruption}`;
         primary = act("upgrade");
         secondary = [act("stop", undefined, "destructive"), act("disconnect")];
-      } else if (runtime.applyState === "pending") {
+      } else if (runtime.applyState === "pending" || restartBackend || awaitingHost) {
         pending();
-        detail = runtime.startupEnvironmentPending
-          ? `Saved startup variables will apply when this provider restarts. Saving did not restart the running provider.${interruption}`
-          : `Saved revision ${runtime.desiredRevision} is not applied yet (applied: ${runtime.effectiveRevision ?? "none"}). Non-disruptive changes apply automatically; restart to apply everything now.${interruption}`;
-        primary = act("restart");
-        secondary = [act("stop", undefined, "destructive"), act("disconnect")];
+        detail = restartBackend
+          ? `The running backend will use its saved startup settings after its next restart.${interruption}`
+          : `Saved revision ${runtime.desiredRevision} is awaiting confirmation. ${runtime.effectiveRevision === null ? "No applied revision has been confirmed." : `The last applied revision was ${runtime.effectiveRevision}.`}`;
+        primary = restartBackend ? act("restart") : act("connect", "Retry apply");
+        secondary = [act("restart"), act("stop", undefined, "destructive"), act("disconnect")];
       } else {
         detail = environment
           ? `Sidecar ${version} is up to date.${active > 0 ? ` ${active} active or unconfirmed resource${active === 1 ? "" : "s"}.` : ""}`

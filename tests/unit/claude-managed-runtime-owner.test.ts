@@ -8,7 +8,7 @@ import {
   LengthPrefixedSidecarFrameTransport,
   SidecarOperationRegistry,
   SidecarProtocolPeer,
-  registerControlV2Operations,
+  registerControlV3Operations,
   type SidecarByteStream,
   type SidecarByteStreamClosure,
 } from "../../src/internal/sidecar-protocol/index.js";
@@ -499,7 +499,7 @@ function memoryWorkerGeneration(
     ...handlers,
     getSessionMessages: ({ sessionId, ...options }) => historyPager.getPage(sessionId, options, async () => history),
   } : handlers);
-  registerControlV2Operations(registry, {
+  registerControlV3Operations(registry, {
     buildId: artifact.buildId,
     artifactSha256: artifact.artifactSha256,
     enabledSidecarCapabilities: [{

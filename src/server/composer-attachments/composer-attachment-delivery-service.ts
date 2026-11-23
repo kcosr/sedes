@@ -85,6 +85,7 @@ export class ComposerAttachmentDeliveryService {
         canonicalEvidence: frozenEvidence([]),
       };
     }
+    lease.assertCurrent?.();
     if (!this.supports(scope, lease.environment.id)) {
       throw new BackendError({
         category: "unavailable",
@@ -160,6 +161,7 @@ export class ComposerAttachmentDeliveryService {
           ) {
             throw new Error("composer_attachment_staging_evidence_mismatch");
           }
+          lease.assertCurrent?.();
           const verifiedAt = this.now();
           if (
             previous?.state === "ready" &&

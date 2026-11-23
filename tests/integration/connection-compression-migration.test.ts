@@ -45,10 +45,10 @@ describe("connection compression migration", () => {
         database.prepare("INSERT INTO execution_configuration_receipts VALUES (?,?,?,?,?,?,?,?)")
           .run(owner.tenantId, owner.principalId, "lifecycle-request", "lifecycle", "a".repeat(64), '{"retained":"request"}', '{"state":"applied","retained":"result"}', 457);
       }
-      applyDatabaseMigrations(database, backendNormalizedMigrations);
+      applyDatabaseMigrations(database, backendNormalizedMigrations.filter(migration => migration.version <= 157));
       database.close();
       database = openOverlayDatabase(filename, { migrate: false });
-      applyDatabaseMigrations(database, backendNormalizedMigrations);
+      applyDatabaseMigrations(database, backendNormalizedMigrations.filter(migration => migration.version <= 157));
       const repository = new ConfigurationRepository(database);
       for (const owner of [scope, otherScope]) {
         expect(repository.get(owner)).toEqual({ revision: 9, configuration: migratedDocument, runtimes: [] });
@@ -78,6 +78,7 @@ describe("connection compression migration", () => {
     try {
       const { scope } = initial;
       const now = () => 1_800_000_000_000;
+      applyDatabaseMigrations(database, backendNormalizedMigrations);
       const configuration = new ConfigurationRepository(database, now);
       const projection = new ConfigurationProjection(database, { pi: "test", codex_app_server: "test", claude_agent_sdk: "test", grok_build: "test" }, now);
       const hosts = new HostPairingRepository(database, configuration, { project: (owner, document) => projection.project(owner, document), now });
@@ -136,6 +137,7 @@ describe("connection compression migration", () => {
         database.prepare("UPDATE host_pairing_receipts SET result_json = ? WHERE tenant_id = ? AND owner_principal_id = ? AND mutation_id = ?")
           .run(resultJson, scope.tenantId, scope.principalId, request.mutationId);
       }
+      database.prepare("DELETE FROM schema_migrations WHERE version = 157").run();
       applyDatabaseMigrations(database, backendNormalizedMigrations);
       database.close();
       database = openOverlayDatabase(filename, { migrate: false });

@@ -1,3 +1,4 @@
+import { environmentFingerprints, hostExecutionPolicy, writeExecutionPolicy } from "./configuration-execution-policy.js";
 import { assertOutboundPairingReferences } from "./configuration-outbound-pairing.js";
 import type Database from "better-sqlite3";
 import type { ConfigurationBackend, ConfigurationDocument } from "../../shared/protocol/configuration-admin.js";
@@ -32,6 +33,27 @@ export class ConfigurationProjection {
       WHERE tenant_id = ? AND owner_principal_id IS NULL`).run(scope.principalId, scope.tenantId);
   }
 
+  hostPolicy(scope: RequestScope, environmentId: string) {
+    return hostExecutionPolicy(this.database, scope, environmentId);
+  }
+
+  /** Keep the first contradictory observation across main restarts and later saves. The fence belongs to
+   * one authenticated service incarnation, so a confirmed replacement can accept a full installation. */
+  policyRecovery(scope: RequestScope, environmentId: string) {
+    const args = [scope.tenantId, scope.principalId, environmentId];
+    const blocked = this.database.prepare(`SELECT 1 FROM execution_policy_recovery_fences
+      WHERE tenant_id = ? AND owner_principal_id = ? AND environment_id = ? AND incarnation = ?`);
+    const record = this.database.prepare(`INSERT INTO execution_policy_recovery_fences
+      (tenant_id, owner_principal_id, environment_id, incarnation, desired_revision, desired_digest, installed_revision, installed_digest)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(tenant_id, owner_principal_id, environment_id, incarnation) DO NOTHING`);
+    return {
+      blocked: (incarnation: string): boolean => Boolean(blocked.get(...args, incarnation)),
+      requireRecovery: (incarnation: string, desired: {revision: number; digest: string}, installed: {revision: number; digest: string}): void => {
+        record.run(...args, incarnation, desired.revision, desired.digest, installed.revision, installed.digest);
+      },
+    };
+  }
+
   /** No provider I/O. Projection and desired definition commit together. */
   project(scope: RequestScope, document: ConfigurationDocument): void {
     if (!this.database.inTransaction) throw new Error("configuration_projection_transaction_required");
@@ -44,13 +66,8 @@ export class ConfigurationProjection {
     assertOutboundPairingReferences(this.database, scope, document);
     const now = this.now();
     for (const environment of document.executionEnvironments) {
-      const fingerprint = configurationFingerprint(environment.kind === "local"
-        ? { kind: environment.kind, workspaceRoots: environment.workspaceRoots }
-        : environment.kind === "ssh" ? { kind: environment.kind, hostAlias: environment.hostAlias, workspaceRoots: environment.workspaceRoots }
-        : { kind: environment.kind, pairingId: environment.pairingId, platform: environment.platform, workspaceRoots: environment.workspaceRoots });
-      const operationsFingerprint = configurationFingerprint(environment.kind === "local"
-        ? { kind: "local", workspaceIsolation: environment.workspaceIsolation }
-        : environment.operations);
+      const snapshot = writeExecutionPolicy(this.database, scope, environment.id, document);
+      const { fingerprint, operationsFingerprint } = environmentFingerprints(environment, snapshot);
       const current = this.database.prepare(`SELECT kind, label, diagnostic_code AS diagnosticCode, configuration_fingerprint AS fingerprint,
         operations_configuration_fingerprint AS operationsFingerprint FROM execution_environments
         WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?`)
@@ -68,7 +85,7 @@ export class ConfigurationProjection {
             diagnostic_code = CASE WHEN ? THEN 'configuration_apply_pending' ELSE diagnostic_code END, updated_at = ?
           WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?`)
           .run(environment.label, fingerprint, operationsFingerprint, authorityChanged ? 1 : 0, operationsChanged ? 1 : 0,
-            requiresApply ? 1 : 0, requiresApply ? 1 : 0,
+            current.diagnosticCode === "configuration_removed" ? 1 : 0, current.diagnosticCode === "configuration_removed" ? 1 : 0,
             now, scope.tenantId, scope.principalId, environment.id);
       } else {
         this.database.prepare(`INSERT INTO execution_environments
@@ -90,9 +107,9 @@ export class ConfigurationProjection {
         if (current.kind !== backend.kind) throw new DomainError("conflict", "Backend kind is immutable.");
         if (current.label !== backend.label || current.enabled !== Number(backend.enabled) || current.fingerprint !== fingerprint || current.release !== release) {
           this.database.prepare(`UPDATE agent_backend_instances SET label = ?, enabled = ?, configuration_fingerprint = ?,
-            protocol_release = ?, configuration_revision = configuration_revision + 1, updated_at = ?
+            protocol_release = ?, configuration_revision = configuration_revision + ?, updated_at = ?
             WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?`)
-            .run(backend.label, Number(backend.enabled), fingerprint, release, now, scope.tenantId, scope.principalId, backend.id);
+            .run(backend.label, Number(backend.enabled), fingerprint, release, Number(current.enabled !== Number(backend.enabled) || current.release !== release), now, scope.tenantId, scope.principalId, backend.id);
         }
       } else this.database.prepare(`INSERT INTO agent_backend_instances
         (tenant_id, owner_principal_id, id, kind, label, enabled, configuration_revision, configuration_fingerprint, protocol_release, created_at, updated_at)
@@ -110,9 +127,9 @@ export class ConfigurationProjection {
       if (current) {
         if (current.backendId !== target.backendInstanceId || current.environmentId !== target.executionEnvironmentId || current.kind !== target.kind) throw new DomainError("conflict", "Target binding is immutable.");
         if (current.label !== target.label || current.enabled !== Number(target.enabled) || current.fingerprint !== fingerprint) this.database.prepare(`UPDATE agent_connection_profiles
-          SET label = ?, enabled = ?, configuration_fingerprint = ?, configuration_revision = configuration_revision + 1, updated_at = ?
+          SET label = ?, enabled = ?, configuration_fingerprint = ?, configuration_revision = configuration_revision + ?, updated_at = ?
           WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?`)
-          .run(target.label, Number(target.enabled), fingerprint, now, scope.tenantId, scope.principalId, current.id);
+          .run(target.label, Number(target.enabled), fingerprint, Number(current.enabled !== Number(target.enabled)), now, scope.tenantId, scope.principalId, current.id);
       } else this.database.prepare(`INSERT INTO agent_connection_profiles
         (tenant_id, owner_principal_id, id, template_id, backend_instance_id, backend_kind, execution_environment_id,
           kind, label, enabled, configuration_revision, configuration_fingerprint, created_at, updated_at)
@@ -131,6 +148,9 @@ export class ConfigurationProjection {
     const environments = new Set(document.executionEnvironments.map(item => item.id));
     const oldEnvironments = this.database.prepare(`SELECT id FROM execution_environments WHERE tenant_id = ? AND owner_principal_id = ?
       AND (availability != 'unavailable' OR diagnostic_code IS NOT 'configuration_removed')`).all(scope.tenantId, scope.principalId) as { id: string }[];
-    for (const environment of oldEnvironments) if (!environments.has(environment.id)) this.database.prepare(`UPDATE execution_environments SET availability = 'unavailable', diagnostic_code = 'configuration_removed', revision = revision + 1, updated_at = ? WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?`).run(now, scope.tenantId, scope.principalId, environment.id);
+    for (const environment of oldEnvironments) if (!environments.has(environment.id)) {
+      writeExecutionPolicy(this.database, scope, environment.id, document);
+      this.database.prepare(`UPDATE execution_environments SET availability = 'unavailable', diagnostic_code = 'configuration_removed', revision = revision + 1, updated_at = ? WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?`).run(now, scope.tenantId, scope.principalId, environment.id);
+    }
   }
 }

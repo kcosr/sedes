@@ -58,12 +58,12 @@ describe("Codex web search migration", () => {
       database.prepare("INSERT INTO execution_configuration_receipts VALUES (?,?,?,?,?,?,?,?)")
         .run(scope.tenantId, scope.principalId, lifecycleRequest.mutationId, "lifecycle", lifecycleRow.request_fingerprint, lifecycleRow.request_json, lifecycleRow.result_json, 457);
 
-      applyDatabaseMigrations(database, backendNormalizedMigrations);
+      applyDatabaseMigrations(database, backendNormalizedMigrations.filter(migration => migration.version <= 158));
       const migratedRows = database.prepare("SELECT * FROM principal_execution_configuration ORDER BY tenant_id, owner_principal_id").all();
       const migratedReceipts = database.prepare("SELECT * FROM execution_configuration_receipts ORDER BY tenant_id, owner_principal_id, mutation_id").all();
       database.close();
       database = openOverlayDatabase(filename, { migrate: false });
-      applyDatabaseMigrations(database, backendNormalizedMigrations);
+      applyDatabaseMigrations(database, backendNormalizedMigrations.filter(migration => migration.version <= 158));
       expect(database.prepare("SELECT * FROM principal_execution_configuration ORDER BY tenant_id, owner_principal_id").all()).toEqual(migratedRows);
       expect(database.prepare("SELECT * FROM execution_configuration_receipts ORDER BY tenant_id, owner_principal_id, mutation_id").all()).toEqual(migratedReceipts);
 
@@ -105,6 +105,7 @@ describe("Codex web search migration", () => {
     const { database, scope } = initial;
     try {
       const now = () => 1_800_000_000_000;
+      applyDatabaseMigrations(database, backendNormalizedMigrations);
       const configuration = new ConfigurationRepository(database, now);
       const projection = new ConfigurationProjection(database, { pi: "test", codex_app_server: "test", claude_agent_sdk: "test", grok_build: "test" }, now);
       const hosts = new HostPairingRepository(database, configuration, { project: (owner, document) => projection.project(owner, document), now });
@@ -142,6 +143,7 @@ describe("Codex web search migration", () => {
       database.prepare("UPDATE host_pairing_receipts SET result_json = json_set(result_json, '$.configuration.configuration.webSearch', json(?)) WHERE operation IN ('accept','revoke','reapprove')")
         .run(JSON.stringify(oldSelection));
 
+      database.prepare("DELETE FROM schema_migrations WHERE version = 158").run();
       applyDatabaseMigrations(database, backendNormalizedMigrations);
       applyDatabaseMigrations(database, backendNormalizedMigrations);
       const repository = new ConfigurationRepository(database, now);

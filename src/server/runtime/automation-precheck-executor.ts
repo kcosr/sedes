@@ -64,6 +64,7 @@ export class AutomationPrecheckExecutor {
       this.runtimeProvider.executeCommand(input.scope, {
         environmentId: thread.thread.environmentId,
         workspace: {
+          ...(workspace.authorityRootId && { authorityRootId: workspace.authorityRootId }),
           authorityRevision: workspace.environmentConfigurationRevision,
           summary: {
             id: workspace.id,

@@ -18,6 +18,8 @@ export interface ExecutionDirectoryBrowseRequest extends ParsedDirectoryBrowseRe
 export interface ValidatedWorkspace {
   readonly summary: WorkspaceSummary;
   readonly canonicalPath: string;
+  /** Scoped root grant for policy-managed environments. */
+  readonly authorityRootId?: string;
   readonly authorityRevision: number;
 }
 
@@ -33,6 +35,7 @@ export interface ExecutionEnvironmentLease {
   readonly scope: ExecutionScope;
   readonly environment: EnvironmentSummary;
   readonly workspace: ValidatedWorkspace;
+  readonly assertCurrent?: () => void;
   release(): Promise<void>;
 }
 

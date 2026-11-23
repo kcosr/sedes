@@ -1,3 +1,7 @@
+import { deriveConnectionProfileId } from "../../src/server/db/connection-profile-id.js";
+import { configurationFingerprint } from "../../src/server/config/configuration-fingerprint.js";
+import { launchAdmission } from "../../src/server/backends/provider-policy-admission.js";
+import {attachFixturePolicy} from "../helpers/execution-policy-fixture.js";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { z } from "zod";
@@ -15,7 +19,7 @@ import type { SidecarRuntimeBody } from "../../src/server/sidecar/runtime-body-c
 
 const scope = { tenantId: "tenant", principalId: "principal" };
 const authority: CodexManagedTuiBindingAuthority = {
-  scope, applicationThreadId: "thread", backendInstanceId: "backend", connectionProfileId: "connection",
+  scope, applicationThreadId: "thread", backendInstanceId: "backend", connectionProfileId: deriveConnectionProfileId(scope.tenantId, scope.principalId, "template"),
   executionEnvironmentId: "remote", backendConversationId: "native-thread", workspaceId: "workspace",
   canonicalWorkspacePath: "/remote/workspace", opaqueBindingDetail: "native-binding", runtimeLeaseId: "main-lease", appServerGeneration: 3,
 };
@@ -63,7 +67,13 @@ function fixture() {
   });
   const launcher = new CodexRuntimeManagedTuiLauncher({ settings: () => settings, validateModelSelection: vi.fn(async () => {}) });
   async function attach(offset = 0) {
-    const epoch = services.attach(configuration);
+    const digest = "a".repeat(64);
+    const epoch = attachFixturePolicy(services, configuration, "normal", { roots: [], capabilities: [], backends: [
+      { id: "backend", kind: "codex_app_server", generation: 1, launchDigest: digest,
+        managedTuiDigest: configurationFingerprint(null), targets: [{ id: "template", generation: 1 }] },
+    ] });
+    const getExecutionPolicy = () => services.executionPolicy(epoch);
+    launchAdmission({ getExecutionPolicy }, "codex_app_server", "backend", digest).bind(runtime);
     const operations = new SidecarOperationRegistry();
     const listeners = new Set<(event: unknown) => void>();
     const closed = deferred<unknown>();
@@ -87,7 +97,7 @@ function fixture() {
         listeners.add(wrapped); return () => { listeners.delete(wrapped); };
       },
     } as unknown as SidecarRuntimeChannel;
-    const detachHost = registerCodexManagedTuiHost({ hosts, services, registry: operations, channel, controllerEpoch: epoch });
+    const detachHost = registerCodexManagedTuiHost({ getExecutionPolicy, hosts, services, registry: operations, channel, controllerEpoch: epoch });
     const attachment = { channel, runtimeId: "incarnation", controllerEpoch: epoch, providerGeneration: 3, generationOffset: offset, closed: closed.promise };
     const errors: unknown[] = [];
     const assessment = vi.fn();
@@ -279,7 +289,7 @@ describe("persistent Codex managed TUI", () => {
     const remote = await host.attach();
     await remote.registry.start(authority, host.launcher);
     remote.lose();
-    const epoch = host.services.attach(configuration);
+    const epoch = attachFixturePolicy(host.services, configuration);
     const status = host.services.status();
     expect(status.resources[0]?.blockers).toContain("live_terminal");
     await expect(host.services.stop({ controllerEpoch: epoch, expectedServiceIncarnation: status.serviceIncarnation,

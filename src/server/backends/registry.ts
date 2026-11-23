@@ -3,6 +3,7 @@ import type {
   AgentConnectionProfile,
   ConnectionKind,
   ConversationBackendDriver,
+  ConversationHandle,
   ConversationCreationIdentity,
 } from "./contracts.js";
 import { DomainError } from "../domain/errors.js";
@@ -18,11 +19,36 @@ export interface BackendDriverFactory {
    * `supportsConversationCreation` is true.
    */
   readonly creationIdentity?: ConversationCreationIdentity;
+  readonly connectionGeneration?: (connection: AgentConnectionProfile) => number | undefined;
   create(connection: AgentConnectionProfile): ConversationBackendDriver;
 }
 
 function backendKey(scope: RequestScope, backendInstanceId: string): string {
   return `${scope.tenantId}\0${scope.principalId}\0${backendInstanceId}`;
+}
+
+/** A retained handle may still observe, reconcile, settle interactions and interrupt.
+ * New effects require the generation that admitted the original handle. */
+function guardHandle(handle: ConversationHandle, assertCurrent: () => void): ConversationHandle {
+  return new Proxy(handle, {
+    get(target, property) {
+      const value: unknown = Reflect.get(target, property, target);
+      if (typeof value !== "function") return value;
+      switch (property) {
+        case "submit":
+        case "steer":
+        case "perform":
+        case "mutateProviderFeature":
+        case "recoverModelFailure":
+          return (...args: unknown[]) => {
+            assertCurrent();
+            return Reflect.apply(value, target, args);
+          };
+        default:
+          return value.bind(target);
+      }
+    },
+  });
 }
 
 export class AgentBackendRegistry {
@@ -109,6 +135,8 @@ export class AgentBackendRegistry {
 
   driver(connection: AgentConnectionProfile): ConversationBackendDriver {
     const factory = this.#factory(connection);
+    const generation = factory.connectionGeneration?.(connection);
+    if (factory.connectionGeneration && generation === undefined) throw new DomainError("runtime_unavailable", "The target is no longer available.", true);
     const driver = factory.create(connection);
     if (
       !sameBackendInstance(driver.instance, factory.instance) ||
@@ -118,8 +146,12 @@ export class AgentBackendRegistry {
         "The backend factory returned a driver for a different configured target.",
       );
     }
-    // Borrowed drivers cannot initiate work after their factory is withdrawn.
-    // Existing handles are retired by the caller's admission fence, not here.
+    const assertGeneration = () => {
+      if (factory.connectionGeneration && (this.factories.get(backendKey(factory.scope, factory.instance.id)) !== factory ||
+          factory.connectionGeneration(connection) !== generation)) {
+        throw new DomainError("runtime_unavailable", "The target authorization changed.", true);
+      }
+    };
     return new Proxy(driver, {
       get: (target, property) => {
         const value: unknown = Reflect.get(target, property, target);
@@ -131,6 +163,7 @@ export class AgentBackendRegistry {
           if (this.factories.get(key) !== factory) {
             throw new Error("backend_registry_generation_changed");
           }
+          assertGeneration();
           const result: unknown = Reflect.apply(value, target, args);
           const pending = this.#inFlight.get(key) ?? new Set<Promise<void>>();
           this.#inFlight.set(key, pending);
@@ -145,6 +178,9 @@ export class AgentBackendRegistry {
                 this.#inFlight.delete(key);
             });
           pending.add(settled);
+          if (property === "attach" && factory.connectionGeneration) {
+            return Promise.resolve(result as Promise<ConversationHandle>).then(handle => guardHandle(handle, assertGeneration));
+          }
           return result;
         };
       },
@@ -244,8 +280,6 @@ function sameConnection(
     left.kind === right.kind &&
     left.backendInstanceId === right.backendInstanceId &&
     left.executionEnvironmentId === right.executionEnvironmentId &&
-    left.label === right.label &&
-    left.enabled === right.enabled &&
-    left.configurationRevision === right.configurationRevision
+    left.enabled === right.enabled
   );
 }

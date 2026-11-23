@@ -50,7 +50,7 @@ export const remoteTerminalWriteResultSchema = z.discriminatedUnion("outcome", [
 const common = { capabilityId: "interactive_terminal", majorVersion: 2, maximumDeadlineMilliseconds: 10_000, lane: "operation" } as const;
 export const terminalPrepareOperation = defineSidecarOperation({
   ...common, operation: "terminal.prepare",
-  requestSchema: remoteTerminalIdentitySchema.extend({ environmentVariables: environmentVariableOverridesSchema.optional(), initialCwd: z.string().min(1).max(4096), rows, columns }),
+  requestSchema: remoteTerminalIdentitySchema.extend({ environmentVariables: environmentVariableOverridesSchema.optional(), workspaceAuthority: z.strictObject({ authorityRootId: z.string().regex(/^[0-9a-f]{64}$/u), authorityRevision: z.number().int().positive() }).optional(), initialCwd: z.string().min(1).max(4096), rows, columns }),
   responseSchema: z.strictObject({ ticket: id }),
 });
 export const terminalCreateOperation = defineSidecarOperation({
@@ -63,7 +63,7 @@ export const terminalAttachOperation = defineSidecarOperation({
   responseSchema: z.strictObject({ controllerToken: id, snapshot: remoteTerminalSnapshotSchema }),
 });
 export const terminalReadOperation = defineSidecarOperation({
-  ...common, operation: "terminal.read",
+  ...common, operation: "terminal.read",lane:"interactive",
   requestSchema: control.extend({ afterSeq: seq }),
   responseSchema: z.discriminatedUnion("kind", [
     z.strictObject({ kind: z.literal("records"), records: z.array(remoteTerminalRecordSchema).max(64), headSeq: seq }),
@@ -71,12 +71,12 @@ export const terminalReadOperation = defineSidecarOperation({
   ]),
 });
 export const terminalSnapshotChunkOperation = defineSidecarOperation({
-  ...common, operation: "terminal.snapshot_chunk",
+  ...common, operation: "terminal.snapshot_chunk",lane:"interactive",
   requestSchema: control.extend({ snapshotId: id, offset: seq }),
   responseSchema: z.strictObject({ data: bytes }),
 });
 export const terminalInputOperation = defineSidecarOperation({
-  ...common, operation: "terminal.input", lane: "control",
+  ...common, operation: "terminal.input", lane: "interactive",
   requestSchema: control.extend({
     controlSeq: z.number().int().positive().safe(), data: z.string().regex(/^[A-Za-z0-9_-]*$/u).max(87_382),
     producer: z.strictObject({ producerId: id, inputSeq: z.number().int().positive().safe() }).optional(),
@@ -84,12 +84,12 @@ export const terminalInputOperation = defineSidecarOperation({
   responseSchema: remoteTerminalWriteResultSchema,
 });
 export const terminalProducerOperation = defineSidecarOperation({
-  ...common, operation: "terminal.producer", lane: "control",
+  ...common, operation: "terminal.producer", lane: "interactive",
   requestSchema: control.extend({ producerId: id }),
   responseSchema: z.strictObject({ highWater: seq }),
 });
 export const terminalResizeOperation = defineSidecarOperation({
-  ...common, operation: "terminal.resize", lane: "control",
+  ...common, operation: "terminal.resize", lane: "interactive",
   requestSchema: control.extend({ controlSeq: z.number().int().positive().safe(), rows, columns }),
   responseSchema: z.strictObject({ resized: z.literal(true) }),
 });

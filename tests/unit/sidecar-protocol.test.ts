@@ -13,7 +13,7 @@ import {
   defineSidecarOperation,
   decodeSidecarFrame,
   encodeSidecarEnvelope,
-  registerControlV2Operations,
+  registerControlV3Operations,
   sidecarAgentToolCliMetadataSchema,
   workspaceFilesInvalidatedEventSchema,
   workspaceFilesDiffCreateComparisonOperation,
@@ -260,16 +260,11 @@ describe("sidecar private protocol", () => {
     sidecarRegistry.register(workspaceEchoOperation, ({ value }) => ({
       value,
     }));
-    registerControlV2Operations(sidecarRegistry, {
+    registerControlV3Operations(sidecarRegistry, {
       buildId,
       artifactSha256,
       enabledSidecarCapabilities: [workspaceCapability],
       enabledSedesCapabilities: [agentToolInventory],
-      prepareSedesCapabilities: () => ({
-        endpoint: "unix:///tmp/sedes-agent-tools.sock",
-        executableDirectory: "/tmp/sedes-sidecar",
-        inheritedPath: "/usr/bin",
-      }),
     });
     const sedesIds = [randomUUID(), collisionId];
     const sedes = new SidecarProtocolPeer({
@@ -295,7 +290,7 @@ describe("sidecar private protocol", () => {
     const hello = await sedes.call(controlHelloOperation, { compression: "none",
       expectedBuildId: buildId,
       expectedArtifactSha256: artifactSha256,
-      authorizedSidecarCapabilities: [workspaceCapability],
+      supportedSidecarCapabilities: [workspaceCapability],
       offeredSedesCapabilities: [agentToolInventory],
     });
     expect(hello).toMatchObject({
@@ -303,15 +298,13 @@ describe("sidecar private protocol", () => {
       sidecarCapabilities: [
         {
           capabilityId: "control",
-          majorVersion: 2,
+          majorVersion: 3,
           operations: ["go_away", "hello", "ping"],
         },
         { ...workspaceCapability, operations: ["files.echo"] },
       ],
       sedesCapabilities: [agentToolInventory],
-      agentToolCli: {
-        endpoint: "unix:///tmp/sedes-agent-tools.sock",
-      },
+
     });
 
     expect(() => sedes.assertReady()).not.toThrow();
@@ -331,61 +324,12 @@ describe("sidecar private protocol", () => {
     expect(() => sedes.assertReady()).toThrow("sidecar_protocol_peer_closed");
   });
 
-  it("waits for agent-tool ingress readiness before completing hello", async () => {
-    let ready!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      ready = resolve;
-    });
-    const fixture = peerFixture({ prepare: async () => await gate });
-    const pending = fixture.hello();
-    let settled = false;
-    void pending.finally(() => {
-      settled = true;
-    });
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(settled).toBe(false);
-    ready();
-    await expect(pending).resolves.toMatchObject({
-      agentToolCli: { endpoint: "unix:///tmp/sedes-agent-tools.sock" },
-    });
+  it("discovers the reverse tool contract without disclosing a local endpoint",async()=>{
+    const fixture=peerFixture();
+    const hello=await fixture.hello();
+    expect(hello.sedesCapabilities).toEqual([agentToolInventory]);
+    expect(hello).not.toHaveProperty("agentToolCli");
     await fixture.sedes.close("test_complete");
-  });
-
-  it("requires metadata exactly when agent_tools_cli is accepted", async () => {
-    const pair = frameTransportPair();
-    const sedesRegistry = new SidecarOperationRegistry();
-    sedesRegistry.register(agentToolCatalogOperation, () => ({ tools: [] }));
-    registerRemainingAgentToolOperations(sedesRegistry);
-    const sidecarRegistry = new SidecarOperationRegistry();
-    registerControlV2Operations(sidecarRegistry, {
-      buildId,
-      artifactSha256,
-      enabledSidecarCapabilities: [],
-      enabledSedesCapabilities: [agentToolInventory],
-    });
-    const sedes = new SidecarProtocolPeer({
-      role: "sedes",
-      transport: pair.left,
-      sessionNonce,
-      registry: sedesRegistry,
-    });
-    const sidecar = new SidecarProtocolPeer({
-      role: "sidecar",
-      transport: pair.right,
-      sessionNonce,
-      registry: sidecarRegistry,
-    });
-    sedes.start();
-    sidecar.start();
-    await expect(
-      sedes.call(controlHelloOperation, { compression: "none",
-        expectedBuildId: buildId,
-        expectedArtifactSha256: artifactSha256,
-        authorizedSidecarCapabilities: [],
-        offeredSedesCapabilities: [agentToolInventory],
-      }),
-    ).rejects.toMatchObject({ code: "sidecar_agent_tool_cli_not_ready" });
-    await sedes.close("test_complete");
   });
 
   it("rejects partial and reordered Sedes capability offers", async () => {
@@ -659,7 +603,6 @@ function peerFixture(input?: {
     readonly left: SidecarFrameTransport;
     readonly right: SidecarFrameTransport;
   };
-  readonly prepare?: () => Promise<void>;
   readonly catalogHandler?: SidecarOperationHandler<
     z.infer<typeof agentToolCatalogOperation.requestSchema>,
     z.infer<typeof agentToolCatalogOperation.responseSchema>
@@ -675,19 +618,11 @@ function peerFixture(input?: {
   registerRemainingAgentToolOperations(sedesRegistry);
   const sidecarRegistry = new SidecarOperationRegistry();
   sidecarRegistry.register(workspaceEchoOperation, ({ value }) => ({ value }));
-  registerControlV2Operations(sidecarRegistry, {
+  registerControlV3Operations(sidecarRegistry, {
     buildId,
     artifactSha256,
     enabledSidecarCapabilities: [workspaceCapability],
     enabledSedesCapabilities: [agentToolInventory],
-    prepareSedesCapabilities: async () => {
-      await input?.prepare?.();
-      return {
-        endpoint: "unix:///tmp/sedes-agent-tools.sock",
-        executableDirectory: "/tmp/sedes-sidecar",
-        inheritedPath: "/usr/bin",
-      };
-    },
   });
   const sedes = new SidecarProtocolPeer({
     role: "sedes",
@@ -723,7 +658,7 @@ function helloRequest(
     compression: "none" as const,
     expectedBuildId: buildId,
     expectedArtifactSha256: artifactSha256,
-    authorizedSidecarCapabilities: [workspaceCapability],
+    supportedSidecarCapabilities: [workspaceCapability],
     offeredSedesCapabilities,
   };
 }

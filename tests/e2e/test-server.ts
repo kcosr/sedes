@@ -4446,6 +4446,7 @@ async function main(): Promise<void> {
     environmentId: environmentRecord.id,
     scope,
     allowedRoots: fixtureWorkspaceRoots,
+    readWorkspaceRoots: () => configurationFixture.projection.hostPolicy(scope, environmentRecord.id)?.snapshot.roots ?? [],
     workspaceTrusted: () => true,
     configurationRevision: environmentRecord.configurationRevision,
     activeConfigurationRevision: () =>

@@ -210,7 +210,8 @@ export class PiNativeConversationDriver implements ConversationBackendDriver {
     const stale = () => new BackendError({ category: "unavailable", retryable: true, crossedSubmissionBoundary: false,
       safeMessage: "The Pi workspace catalog changed while loading. Retry the read.", backendCode: "pi_native_catalog_context_changed" });
     if (previous?.workspaceId === workspace.summary.id &&
-      (previous.workspaceRevision > workspace.summary.revision || previous.authorityRevision > workspace.authorityRevision)) throw stale();
+      (previous.workspaceRevision > workspace.summary.revision ||
+        (previous.workspaceRevision === workspace.summary.revision && previous.authorityRevision > workspace.authorityRevision))) throw stale();
     const owner = previous?.identity === identity ? previous : { identity, workspaceId: workspace.summary.id,
       workspaceRevision: workspace.summary.revision, authorityRevision: workspace.authorityRevision };
     if (previous && previous !== owner) this.#catalogs.invalidate(workspace);

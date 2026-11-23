@@ -24,6 +24,7 @@ export class SidecarWorkspaceSkillReader implements WorkspaceSkillReader {
       readonly environmentId: string;
       readonly declaredPath: string;
       readonly policyRootPath: string;
+      readonly assertCurrent?: () => void;
     },
   ) {}
 
@@ -62,12 +63,14 @@ export class SidecarWorkspaceSkillReader implements WorkspaceSkillReader {
     signal?: AbortSignal,
   ): Promise<Response> {
     const effectiveSignal = signal ?? new AbortController().signal;
+    this.input.assertCurrent?.();
     const lease = await this.input.runtime.acquireOperation(
       this.input.scope,
       this.input.environmentId,
       effectiveSignal,
     );
     try {
+      this.input.assertCurrent?.();
       try {
         return await lease.session.call(definition, request, {
           signal: effectiveSignal,

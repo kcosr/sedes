@@ -60,6 +60,7 @@ type WorkspaceRow = {
   readonly availability: "available" | "unavailable";
   readonly trustState: "trusted" | "untrusted";
   readonly revision: number;
+  readonly authorityRootId: string | null;
   readonly authorityRevision: number;
   readonly environmentConfigurationRevision: number;
 };
@@ -169,13 +170,19 @@ function workspaceRow(
           workspace.display_name AS displayName,
           workspace.availability, workspace.trust_state AS trustState,
           workspace.revision,
+          workspace.authority_root_id AS authorityRootId,
           workspace.environment_configuration_revision AS authorityRevision,
-          environment.configuration_revision AS environmentConfigurationRevision
+          CASE WHEN p.environment_id IS NULL THEN environment.configuration_revision
+            ELSE COALESCE((SELECT json_extract(root.value, '$.generation') FROM json_each(p.snapshot_json, '$.roots') AS root
+              WHERE json_extract(root.value, '$.id') = workspace.authority_root_id), -1)
+          END AS environmentConfigurationRevision
         FROM workspaces AS workspace
         JOIN execution_environments AS environment
           ON environment.tenant_id = workspace.tenant_id
           AND environment.owner_principal_id = workspace.owner_principal_id
           AND environment.id = workspace.environment_id
+        LEFT JOIN live_execution_policies AS p ON p.tenant_id = workspace.tenant_id
+          AND p.owner_principal_id = workspace.owner_principal_id AND p.environment_id = workspace.environment_id
         WHERE workspace.tenant_id = ? AND workspace.owner_principal_id = ?
           AND workspace.environment_id = ? AND workspace.id = ?
       `,
@@ -525,6 +532,7 @@ export class DatabaseConversationTargetStore {
     }
     return {
       canonicalPath: row.canonicalPath,
+      ...(row.authorityRootId && { authorityRootId: row.authorityRootId }),
       authorityRevision: row.authorityRevision,
       summary: {
         id: row.id,
@@ -571,6 +579,7 @@ export class DatabaseConversationTargetStore {
       displayName: revalidated.summary.displayName,
       available: revalidated.summary.availability === "available",
       trustState: revalidated.summary.trustState,
+      ...(revalidated.authorityRootId && { authorityRootId: revalidated.authorityRootId }),
       environmentConfigurationRevision: revalidated.authorityRevision,
       now: this.#now(),
     });
@@ -579,6 +588,7 @@ export class DatabaseConversationTargetStore {
     }
     return {
       canonicalPath: persisted.canonicalPath,
+      ...(persisted.authorityRootId && { authorityRootId: persisted.authorityRootId }),
       authorityRevision: persisted.environmentConfigurationRevision,
       summary: {
         id: persisted.id,

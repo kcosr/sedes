@@ -9,7 +9,7 @@ import { createOpenCodeApiFixture } from "../support/opencode-api-fixture.js";
 
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const close of cleanups.splice(0).reverse()) await close(); vi.restoreAllMocks(); });
-function fixture() {
+function fixture(bindRouteToEndpoint = false) {
   const wire = createOpenCodeApiFixture();
   const client = new OpenCodeHttpClient({ endpoint: "http://127.0.0.1:4096", password: "fixture", fetch: wire.fetch });
   const adapter = new OpenCodeHttpNativeAdapter(client);
@@ -22,7 +22,7 @@ function fixture() {
   let endpoint: OpenCodeHostToolEndpoint | undefined = { endpoint: "http://127.0.0.1:4784", executableDirectory: "/host/bin" };
   const invoke = vi.fn<OpenCodeHostToolInvoker>(async () => ({ ok: true }));
   const capture = vi.fn(host.captureToolInvocation.bind(host));
-  const tools = new OpenCodeHostAgentTools({ adapter, cli: () => endpoint, capture, invoke, assertCurrent: async () => {} });
+  const tools = new OpenCodeHostAgentTools({ adapter, bindRouteToEndpoint, cli: () => endpoint, capture, invoke, assertCurrent: async () => {} });
   let call!: Parameters<OpenCodeMcpIngress["admit"]>[0]["invoke"];
   vi.spyOn(OpenCodeMcpIngress.prototype, "admit").mockImplementation(async input => {
     call = input.invoke;
@@ -128,6 +128,20 @@ describe("OpenCode execution-host tool ingress", () => {
     // invocation was neither queued nor replayed by the host bridge.
     await expect(f.call()).resolves.toEqual({ ok: true });
     expect(f.invoke).toHaveBeenCalledTimes(2); expect(f.register).toHaveBeenCalledOnce();
+  });
+
+  it("keeps an old MCP registration closed after the tool route is withdrawn and regranted", async () => {
+    const f = fixture(true);
+    await f.open();
+    const oldRoute = f.route();
+    f.setEndpoint(undefined);
+    await expect(f.call()).rejects.toThrow();
+    f.setEndpoint({ endpoint: "unix:///host/regranted.sock", executableDirectory: "/host/bin" });
+    await expect(f.call()).rejects.toThrow();
+    await f.open();
+    await expect(oldRoute(f.request, new AbortController().signal)).rejects.toThrow();
+    await expect(f.call()).resolves.toEqual({ ok: true });
+    expect(f.invoke).toHaveBeenCalledOnce();
   });
 
   it("routes only opaque admitted CLI capabilities and retains revoked recognition", async () => {

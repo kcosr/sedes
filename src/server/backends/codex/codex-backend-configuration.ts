@@ -6,7 +6,7 @@ import type {
   BackendModuleConnectionConfiguration,
 } from "../module.js";
 import {
-  compileBackendModelPolicy,
+  configuredModelPolicy,
   type CompiledBackendModelPolicy,
 } from "../model-policy.js";
 import {
@@ -333,8 +333,21 @@ export function parseCodexBackendConfiguration(
         modelIdSchema.parse(modelId);
     }
   }
-  const modelPolicy = compileBackendModelPolicy(
-    input.backend.modelPolicy,
+  if (input.backend.enabled && input.readCurrentBackend) {
+    const current = () => {
+      const definition = input.readCurrentBackend!();
+      return definition?.enabled && definition.id === input.backend.id && definition.kind === "codex_app_server" ?
+        definition.moduleConfiguration.policy : undefined;
+    };
+    configuration.policy = Object.freeze({
+      get allowedSandboxModes() { return current()?.allowedSandboxModes ?? []; },
+      get allowedNetworkAccess() { return current()?.allowedNetworkAccess ?? []; },
+      get allowedApprovalPolicies() { return current()?.allowedApprovalPolicies ?? []; },
+      get allowedApprovalReviewers() { return current()?.allowedApprovalReviewers ?? []; },
+    });
+  }
+  const modelPolicy = configuredModelPolicy(
+    input,
     "model_effort",
   );
   const connections = input.connections.map((connection) =>

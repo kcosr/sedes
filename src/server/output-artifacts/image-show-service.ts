@@ -99,15 +99,14 @@ export class ImageShowService {
   #captureFiles(scope: RequestScope, threadId: string): () => void {
     const workspaceId = this.dependencies.inventory.getThread(scope, threadId).thread.workspaceId;
     const workspace = this.dependencies.inventory.getWorkspace(scope, workspaceId);
-    const environment = this.dependencies.inventory.getEnvironment(scope, workspace.environmentId);
     const check = () => {
       const currentThread = this.dependencies.inventory.getThread(scope, threadId);
       const currentWorkspace = this.dependencies.inventory.getWorkspace(scope, workspaceId);
       const currentEnvironment = this.dependencies.inventory.getEnvironment(scope, workspace.environmentId);
       if (currentThread.thread.workspaceId !== workspaceId || currentWorkspace.canonicalPath !== workspace.canonicalPath ||
         currentWorkspace.environmentId !== workspace.environmentId || currentWorkspace.availability !== "available" ||
-        currentEnvironment.availability !== "available" || currentEnvironment.configurationRevision !== environment.configurationRevision ||
-        currentEnvironment.operationsConfigurationRevision !== environment.operationsConfigurationRevision) throw new ImageShowError("changed");
+        currentEnvironment.availability !== "available" || currentWorkspace.authorityRootId !== workspace.authorityRootId ||
+        currentWorkspace.environmentConfigurationRevision !== workspace.environmentConfigurationRevision) throw new ImageShowError("changed");
     };
     check(); return check;
   }
@@ -140,10 +139,12 @@ export class ImageShowService {
 
   async #run(job: Job): Promise<void> {
     try {
-      job.assertCurrent();
+      let assertFileGrant: (() => void) | undefined;
+      const assertCurrent = () => { job.assertCurrent(); assertFileGrant?.(); };
+      assertCurrent();
       const bytes = await this.dependencies.files.readAbsoluteFile(job.scope, job.threadId, job.input.path,
-        MAXIMUM_OUTPUT_IMAGE_BYTES, job.controller.signal);
-      job.assertCurrent();
+        MAXIMUM_OUTPUT_IMAGE_BYTES, job.controller.signal, check => { assertFileGrant = check; });
+      assertCurrent();
       if (!bytes.byteLength || bytes.byteLength > MAXIMUM_OUTPUT_IMAGE_BYTES) throw new ImageShowError("size");
       const inspection = inspectSupportedRasterImage(bytes);
       if (!inspection) {
@@ -156,14 +157,14 @@ export class ImageShowService {
       let result: ImageShowResult | undefined;
       try {
         await this.dependencies.artifacts.publishCapturedImage({ scope: job.scope, threadId: job.threadId,
-        publicationKey: `shown:${job.authority.invocationId}`, mediaType: inspection.mediaType, bytes }, job.assertCurrent,
+        publicationKey: `shown:${job.authority.invocationId}`, mediaType: inspection.mediaType, bytes }, assertCurrent,
       (artifact: OutputImageArtifactDescriptor) => {
         const image: ShownImage = { representation: "artifact", artifactId: artifact.artifactId, mimeType: artifact.mediaType,
           byteSize: artifact.byteSize, sha256: artifact.sha256, ...(displayFileName(job.input.path) ? { fileName: displayFileName(job.input.path)! } : {}),
           ...(job.input.title ? { alt: { text: job.input.title } } : {}) };
         result = { image: this.dependencies.repository.record(job.scope, job.threadId, {
           invocationId: job.authority.invocationId, inputSha256: job.inputSha256, bindingSha256: job.bindingSha256,
-          image, anchor: job.publication.anchor, assertCurrent: job.assertCurrent }).image };
+          image, anchor: job.publication.anchor, assertCurrent }).image };
         });
       } catch (error) {
         if (error instanceof ImageShowError) throw error;

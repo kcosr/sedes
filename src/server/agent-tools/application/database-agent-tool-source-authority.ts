@@ -27,6 +27,7 @@ type ScopedResourceRow = {
 };
 
 type ScopedThreadFacts = {
+  readonly backendInstanceId: string;
   readonly threadId: string;
   readonly workspaceId: string;
   readonly environmentId: string;
@@ -38,6 +39,7 @@ export type AgentToolSourceCapabilityPresentation =
 
 /** A resolved thread reference and the presentation it was issued for. */
 export interface ResolvedAgentToolSourceCapability {
+  readonly backendInstanceId?: string;
   readonly source: TrustedAgentToolSource;
   readonly presentation: AgentToolSourceCapabilityPresentation;
   readonly accessDecisionAuthority?: BackendAgentToolAccessDecisionAuthority;
@@ -103,7 +105,7 @@ export class DatabaseAgentToolSourceAuthority
     if (presentation !== "cli" && presentation !== "mcp") {
       throw new Error("agent_tool_source_capability_presentation_invalid");
     }
-    const current = this.#resolve(
+    const {source: current} = this.#resolve(
       source.scope,
       source.sourceThreadId,
       source.sourceEnvironmentId,
@@ -131,7 +133,7 @@ export class DatabaseAgentToolSourceAuthority
     sourceThreadId: string,
     signal: AbortSignal,
   ): TrustedAgentToolSource {
-    return this.#resolve(scope, sourceThreadId, undefined, signal);
+    return this.#resolve(scope, sourceThreadId, undefined, signal).source;
   }
 
   resolveCapabilityInScope(
@@ -425,14 +427,14 @@ export class DatabaseAgentToolSourceAuthority
     sourceThreadId: string,
     executionEnvironmentId: string | undefined,
     signal: AbortSignal,
-  ): TrustedAgentToolSource {
+  ): {source: TrustedAgentToolSource; backendInstanceId: string} {
     this.#assertOpen(signal);
     const facts = this.database
       .prepare(
         `
           SELECT thread.id AS threadId, workspace.id AS workspaceId,
             thread.environment_id AS environmentId,
-            backend.kind AS backendKind
+            backend.id AS backendInstanceId, backend.kind AS backendKind
           FROM application_threads AS thread
           JOIN workspaces AS workspace
             ON workspace.tenant_id = thread.tenant_id
@@ -468,13 +470,13 @@ export class DatabaseAgentToolSourceAuthority
         "The source thread was not found.",
       );
     }
-    return Object.freeze({
+    return { backendInstanceId: facts.backendInstanceId, source: Object.freeze({
       scope: Object.freeze({ ...scope }),
       sourceThreadId: facts.threadId,
       sourceWorkspaceId: facts.workspaceId,
       sourceEnvironmentId: facts.environmentId,
       backendKind: facts.backendKind,
-    });
+    }) };
   }
 
   #resolveCapability(
@@ -498,7 +500,7 @@ export class DatabaseAgentToolSourceAuthority
         "The agent-tool source capability is invalid or expired.",
       );
     }
-    const source = this.#resolve(
+    const {source, backendInstanceId} = this.#resolve(
         scope,
         reference.threadId,
         executionEnvironmentId,
@@ -508,6 +510,7 @@ export class DatabaseAgentToolSourceAuthority
     this.#assertOpen(signal);
     return Object.freeze({
       source,
+      ...(transport === "execution_environment_sidecar" ? { backendInstanceId } : {}),
       presentation: reference.presentation,
       ...(accessDecisionAuthority ? { accessDecisionAuthority } : {}),
     });

@@ -19,6 +19,8 @@ export type PiSandboxAllocationRecord = {
   readonly allocationId: string;
   readonly executionEnvironmentId: string;
   readonly sourceWorkspaceId: string;
+  readonly sourceAuthorityRootId?: string | null;
+  readonly sourceAuthorityGeneration?: number | null;
   readonly sourceCanonicalPath: string;
   readonly allocationRootPath: string;
   readonly homePath: string;
@@ -48,6 +50,7 @@ const columns = `
   allocation_id AS allocationId,
   execution_environment_id AS executionEnvironmentId,
   source_workspace_id AS sourceWorkspaceId,
+  source_authority_root_id AS sourceAuthorityRootId, source_authority_generation AS sourceAuthorityGeneration,
   source_canonical_path AS sourceCanonicalPath,
   allocation_root_path AS allocationRootPath,
   home_path AS homePath,
@@ -135,7 +138,7 @@ export class PiSandboxAllocationRepository {
 
       const authority = this.database
         .prepare(
-          `SELECT 1
+          `SELECT workspace.authority_root_id AS rootId, workspace.environment_configuration_revision AS generation
            FROM application_threads AS thread
            JOIN workspaces AS workspace
              ON workspace.tenant_id = thread.tenant_id
@@ -153,7 +156,7 @@ export class PiSandboxAllocationRepository {
           input.executionEnvironmentId,
           input.sourceWorkspaceId,
           input.sourceCanonicalPath,
-        );
+        ) as { rootId: string | null; generation: number } | undefined;
       if (!authority) {
         throw new DomainError(
           "not_found",
@@ -166,10 +169,10 @@ export class PiSandboxAllocationRepository {
           `INSERT INTO pi_sandbox_allocations(
              tenant_id, owner_principal_id, application_thread_id,
              allocation_id, execution_environment_id, source_workspace_id,
-             source_canonical_path, allocation_root_path, home_path,
+             source_canonical_path, source_authority_root_id, source_authority_generation, allocation_root_path, home_path,
              workspace_path, workspace_access, network_profile, state, retention,
              created_at, updated_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'reserved', 'active', ?, ?)`,
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'reserved', 'active', ?, ?)`,
         )
         .run(
           scope.tenantId,
@@ -179,6 +182,8 @@ export class PiSandboxAllocationRepository {
           input.executionEnvironmentId,
           input.sourceWorkspaceId,
           input.sourceCanonicalPath,
+          authority.rootId,
+          authority.generation,
           input.allocationRootPath,
           input.homePath,
           input.workspacePath,

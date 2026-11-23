@@ -120,7 +120,7 @@ describe("workspace tools shell host", () => {
     const host = new WorkspaceToolsShellHost({
       resolveWorkspace: async () => {
         current = false;
-        return "/tmp";
+        return { cwd: "/tmp", assertCurrent() {} };
       },
       captureAdmission: () => () => {
         if (!current) throw new Error("sidecar_controller_stale");
@@ -308,7 +308,7 @@ function shellFixture(options?: {
   };
   const host = new WorkspaceToolsShellHost({
     ...(options?.beforeLaunch ? { beforeLaunch: options.beforeLaunch } : {}),
-    resolveWorkspace: () => "/tmp",
+    resolveWorkspace: () => ({ cwd: "/tmp", assertCurrent() {} }),
     openStream: () => {
       openedStreams += 1;
       return stream;

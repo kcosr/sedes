@@ -1,3 +1,4 @@
+import { type WorkspacePolicyGuard, checkWorkspaceAuthority, withWorkspaceReadAuthority } from "./workspace-policy-guard.js";
 import { randomUUID } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
@@ -34,6 +35,7 @@ import { pathIsWithin } from "../path-containment.js";
 import { SidecarOperationReceipts } from "./sidecar-operation-receipts.js";
 
 interface AdmittedRoot {
+  readonly assertCurrent?: () => void;
   readonly admissionId: string;
   readonly rootId: WorkspaceFileRootId;
   readonly rootKind:
@@ -133,9 +135,11 @@ export class WorkspaceFilesSidecarHost {
     };
   }
 
-  constructor(input: {
+  constructor(readonly input: {
+    readonly policyGuard?: WorkspacePolicyGuard;
     readonly sessionNonce: string;
     readonly captureAdmission?: () => () => void;
+    readonly captureCleanup?: () => () => void;
     readonly engine?: WorkspaceFilesEngine;
     readonly diffsEngine?: WorkspaceDiffsEngine;
     readonly sendInvalidation: (subscriptionHandle: string) => Promise<void>;
@@ -170,7 +174,7 @@ export class WorkspaceFilesSidecarHost {
       rootOpen: (request, context) =>
         this.#guard(() => this.#rootOpen(request, context.signal)),
       rootClose: (request) =>
-        this.#guard(() => this.#rootClose(request.rootHandle)),
+        this.#guard(() => this.#rootClose(request.rootHandle), "cleanup"),
       list: (request, context) =>
         this.#guard(async () => {
           const result = await this.#engine.list(
@@ -208,7 +212,7 @@ export class WorkspaceFilesSidecarHost {
       downloadStart: (request, context) =>
         this.#guard(() => this.#downloadStart(request, context.signal)),
       downloadCancel: (request) =>
-        this.#guard(() => this.#downloadCancel(request.streamId)),
+        this.#guard(() => this.#downloadCancel(request.streamId), "cleanup"),
       write: (request) =>
         this.#receipts.run(
           request.operationId,
@@ -219,7 +223,7 @@ export class WorkspaceFilesSidecarHost {
                 path: request.path,
                 content: request.content,
                 expectedRevision: request.expectedRevision,
-              }),
+              }), "mutation",
             ),
         ),
       status: (request, context) =>
@@ -260,6 +264,7 @@ export class WorkspaceFilesSidecarHost {
             this.#guard(async () => {
               const assertAdmission = this.#admission();
               assertAdmission();
+              const check = this.input.policyGuard?.capture("workspace_files", request.policyRootPath);
               const policyRoot = await canonicalDirectory(
                 request.policyRootPath,
               );
@@ -270,18 +275,20 @@ export class WorkspaceFilesSidecarHost {
               ) {
                 throw new WorkspaceFileRootUnavailableError();
               }
+              check?.();
+              const root = this.#root(request.rootHandle);
               await this.#engine.removeLinkedWorktree(
-                this.#root(request.rootHandle),
+                check ? { ...root, assertCurrent: () => { root.assertCurrent?.(); check(); } } : root,
                 request,
                 context.signal,
               );
               return { removed: true as const };
-            }),
+            }, "mutation"),
         ),
       watchOpen: (request, context) =>
         this.#guard(() => this.#watchOpen(request.rootHandle, context.signal)),
       watchClose: (request) =>
-        this.#guard(() => this.#watchClose(request.subscriptionHandle)),
+        this.#guard(() => this.#watchClose(request.subscriptionHandle), "cleanup"),
       diffRepositories: (request, context) =>
         this.#guard(() =>
           this.#diffsEngine.repositories(
@@ -386,6 +393,8 @@ export class WorkspaceFilesSidecarHost {
     readonly policyRootPath: string;
   }): Promise<{ readonly validated: true }> {
     this.#assertOpen();
+    const assertCurrent = this.input.policyGuard?.capture("workspace_files", request.policyRootPath);
+    checkWorkspaceAuthority(assertCurrent);
     if (!isWithin(request.policyRootPath, request.declaredPath)) {
       throw new WorkspaceFileRootUnavailableError();
     }
@@ -394,6 +403,7 @@ export class WorkspaceFilesSidecarHost {
       canonicalDirectory(request.declaredPath),
     ]);
     if (
+      (this.input.policyGuard && canonicalPolicy !== request.policyRootPath) ||
       canonicalRoot !== request.declaredPath ||
       !isWithin(canonicalPolicy, canonicalRoot)
     ) {
@@ -442,6 +452,7 @@ export class WorkspaceFilesSidecarHost {
           expectedRevision: request.expectedRevision,
         },
         async (source: WorkspaceFileDownloadSource) => {
+          this.#admittedRoot(request.rootHandle);
           sourceOpened = true;
           metadata.resolve({
             path: source.path,
@@ -457,10 +468,12 @@ export class WorkspaceFilesSidecarHost {
             });
             stream = openedStream;
             await source.stream(
-              async (chunk) =>
+              async (chunk) => {
+                this.#admittedRoot(request.rootHandle);
                 await openedStream.send("data", chunk, {
                   signal: controller.signal,
-                }),
+                });
+              },
               controller.signal,
             );
             await openedStream.terminal(
@@ -593,8 +606,11 @@ export class WorkspaceFilesSidecarHost {
       ) {
         throw new SidecarOperationError("sidecar_root_admission_mismatch");
       }
+      checkWorkspaceAuthority(existing.assertCurrent);
       return { rootHandle: existingHandle };
     }
+    const assertCurrent = this.input.policyGuard?.capture("workspace_files", request.policyRootPath);
+    checkWorkspaceAuthority(assertCurrent);
     if (!isWithin(request.policyRootPath, request.declaredPath)) {
       throw new WorkspaceFileRootUnavailableError();
     }
@@ -603,6 +619,7 @@ export class WorkspaceFilesSidecarHost {
       canonicalDirectory(request.declaredPath),
     ]);
     if (
+      (this.input.policyGuard && canonicalPolicy !== request.policyRootPath) ||
       canonicalRoot !== request.declaredPath ||
       !isWithin(canonicalPolicy, canonicalRoot)
     ) {
@@ -613,11 +630,14 @@ export class WorkspaceFilesSidecarHost {
     if (this.#roots.size >= 1024)
       throw new SidecarOperationError("sidecar_root_capacity", true);
     const rootHandle = randomUUID();
+    checkWorkspaceAuthority(assertCurrent);
     const admitted: AdmittedRoot = Object.freeze({
       ...request,
+      ...(assertCurrent && { assertCurrent }),
       engineRoot: Object.freeze({
+        ...(assertCurrent && { assertCurrent }),
         canonicalPath: canonicalRoot,
-        durableRootKey: `${request.rootId}\0${request.rootKind}\0${canonicalPolicy}\0${canonicalRoot}`,
+        durableRootKey: [request.rootId, request.rootKind, canonicalPolicy, canonicalRoot, ...(assertCurrent ? [assertCurrent.identity] : [])].join("\0"),
         operationKey: `${this.#sessionNonce}\0${rootHandle}`,
         rootId: request.rootId,
       }),
@@ -644,6 +664,7 @@ export class WorkspaceFilesSidecarHost {
   async #discoverLinkRoot(absolutePath: string, policyRootPath: string, signal?: AbortSignal) {
     signal?.throwIfAborted();
     this.#assertOpen();
+    checkWorkspaceAuthority(this.input.policyGuard?.capture("workspace_files", policyRootPath));
     if (!isWithin(policyRootPath, absolutePath)) {
       return { status: "not_found" as const };
     }
@@ -651,7 +672,7 @@ export class WorkspaceFilesSidecarHost {
       canonicalDirectory(policyRootPath),
       realpath(absolutePath).catch(() => undefined),
     ]);
-    if (!canonicalCandidate || !isWithin(canonicalPolicy, canonicalCandidate)) {
+    if ((this.input.policyGuard && canonicalPolicy !== policyRootPath) || !canonicalCandidate || !isWithin(canonicalPolicy, canonicalCandidate)) {
       return { status: "not_found" as const };
     }
     const discovered = await this.#engine.discoverFileLinkRoot(absolutePath, signal);
@@ -693,10 +714,11 @@ export class WorkspaceFilesSidecarHost {
         "sidecar_linked_worktree_primary_root_required",
       );
     }
+    for (const path of policyRootPaths) checkWorkspaceAuthority(this.input.policyGuard?.capture("workspace_files", path));
     const canonicalPolicies = (
       await Promise.all(
         policyRootPaths.map((candidate) =>
-          canonicalDirectory(candidate).catch(() => undefined),
+          canonicalDirectory(candidate).then(canonical => this.input.policyGuard && canonical !== candidate ? undefined : canonical).catch(() => undefined),
         ),
       )
     ).filter((candidate) => candidate !== undefined);
@@ -717,6 +739,7 @@ export class WorkspaceFilesSidecarHost {
     const root = this.#root(rootHandle);
     const subscriptionHandle = randomUUID();
     const subscription = await this.#engine.watch(root, () => {
+      try { this.#admittedRoot(rootHandle); } catch { this.#watches.get(subscriptionHandle)?.subscription.close(); this.#watches.delete(subscriptionHandle); return; }
       void this.#sendInvalidation(subscriptionHandle).catch(() => undefined);
     });
     try {
@@ -763,13 +786,15 @@ export class WorkspaceFilesSidecarHost {
     this.#assertOpen();
     const root = this.#roots.get(rootHandle);
     if (!root) throw new SidecarOperationError("sidecar_root_handle_invalid");
+    checkWorkspaceAuthority(root.assertCurrent);
     return root;
   }
 
-  async #guard<T>(operation: () => T | Promise<T>): Promise<T> {
+  async #guard<T>(operation: () => T | Promise<T>, mode: "read" | "mutation" | "cleanup" = "read"): Promise<T> {
     try {
-      this.#admission()();
-      return await operation();
+      if (mode === "cleanup" && this.input.captureCleanup) this.input.captureCleanup()();
+      else this.#admission()();
+      return await (mode === "read" ? withWorkspaceReadAuthority(operation) : operation());
     } catch (error) {
       if (error instanceof SidecarOperationError) throw error;
       if (error instanceof WorkspaceFileRevisionConflictError) {

@@ -28,9 +28,10 @@ function nativeEvent(seq: number, type: string, data: Record<string, unknown>) {
 
 describe("OpenCode resident runtime over shared sidecar framing", () => {
   it.each(["owned", "external"] as const)("learns the %s database namespace on the remote host when paths are omitted", async ownership => {
-    const f = fixture(ownership); await f.attach();
+    const f = fixture(ownership);
     const { nativeStorePath: _store, configDirectory: _config, ...defaults } = f.configuration;
     if (defaults.connection.ownership === "owned") defaults.connection = { ownership: "owned", channel: { type: "process_stdio" } };
+    await f.attach({ authorizedConfiguration: defaults });
     const client = f.client(defaults);
     expect(() => client.nativeNamespaceKey).toThrow();
     await client.start();
@@ -43,9 +44,10 @@ describe("OpenCode resident runtime over shared sidecar framing", () => {
   });
 
   it("rejects a remote namespace inconsistent with the observed database identity", async () => {
-    const f = fixture(); const carrier = await f.attach();
+    const f = fixture();
     const { nativeStorePath: _store, ...defaults } = f.configuration;
-    await f.hosts.ensure(defaults, carrier.lease.controllerEpoch);
+    const carrier = await f.attach({ authorizedConfiguration: defaults });
+    await callOpenCodeRemoteRuntime(carrier.lease, { action: "ensure", configuration: defaults });
     const owner = f.owners[0]!, snapshot = owner.snapshot();
     vi.spyOn(owner, "snapshot").mockReturnValue({ ...snapshot, identity: { ...snapshot.identity!, nativeStorePath: "/other/opencode.db" } });
     await expect(f.client(defaults).start()).rejects.toThrow("opencode_runtime_unavailable");

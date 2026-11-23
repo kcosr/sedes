@@ -1,3 +1,6 @@
+import { executionPolicyDigest, policyReadOperation, policyStageOperation, policyApplyOperation, type InstalledExecutionPolicy } from "../../src/internal/sidecar-protocol/execution-policy.js";
+import { runtimeLaunchDigest } from "../../src/server/backends/provider-launch-digest.js";
+import { attachFixturePolicy } from "./execution-policy-fixture.js";
 import { OPENCODE_RELEASE } from "../../src/server/backends/opencode/opencode-release.js";
 import { OpenCodeRuntimeError } from "../../src/server/backends/opencode/opencode-release.js";
 import { randomUUID } from "node:crypto";
@@ -31,6 +34,9 @@ export function createPersistentOpenCodeFixture(ownership: "owned" | "external" 
         secret: { source: "environment", variable: "SEDES_OPENCODE_PASSWORD" } } } },
   };
   const serviceConfiguration = { environmentRevision: 1, operationsRevision: 1 };
+  const snapshot = { roots: [], capabilities: [], backends: [{ id: configuration.instance.id, kind: "opencode", generation: 1,
+    launchDigest: runtimeLaunchDigest.opencode(configuration), targets: [{ id: "template", generation: 1 }] }] };
+  const desired: InstalledExecutionPolicy = { revision: 1, snapshot, configuration: serviceConfiguration, digest: executionPolicyDigest(snapshot) };
   const archive = vi.fn(async (_record: unknown) => {});
   const services = new PersistentSidecarServiceRegistry({ scope: { ...scope, executionEnvironmentId, installationId: "installation" },
     buildId: "test", artifactSha256: "a".repeat(64), runtimeWireVersion: 1, configuration: serviceConfiguration, recordAbandonment: archive });
@@ -88,14 +94,25 @@ export function createPersistentOpenCodeFixture(ownership: "owned" | "external" 
     if (!current) throw new Error("fixture_carrier_missing"); return current;
   }) };
   const carriers: { close(): Promise<void> }[] = [], clients: OpenCodeRemoteRuntime[] = [];
-  async function attach(options: { recovery?: boolean; environmentRevision?: number; openCodeTools?: boolean } = {}) {
-    const carrier = await createSidecarFramedCarrier(), controllerEpoch = services.attach(
-      { ...serviceConfiguration, environmentRevision: options.environmentRevision ?? serviceConfiguration.environmentRevision }, options.recovery ? "recovery" : "normal");
-    const detach = registerOpenCodeRuntimeHost({ registry: carrier.hostRegistry, channel: carrier.hostChannel, hosts, services, controllerEpoch });
+  async function attach(options: { recovery?: boolean; environmentRevision?: number; openCodeTools?: boolean; authorizedConfiguration?: OpenCodeRuntimeConfiguration; ownerSync?: boolean } = {}) {
+    const carrier = await createSidecarFramedCarrier();
+    const pair = { ...serviceConfiguration, environmentRevision: options.environmentRevision ?? serviceConfiguration.environmentRevision };
+    const mode = options.recovery ? "recovery" : "normal";
+    const installed = options.authorizedConfiguration ? { ...snapshot, backends: snapshot.backends.map(backend => ({
+      ...backend, launchDigest: runtimeLaunchDigest.opencode(options.authorizedConfiguration!),
+    })) } : snapshot;
+    const controllerEpoch = options.ownerSync ? services.attach(pair, mode) : attachFixturePolicy(services, pair, mode, options.openCodeTools
+      ? { ...installed, capabilities: [{ id: "agent_tools_cli", generation: 1 }] } : installed);
+    const readPolicy = () => services.readPolicy(controllerEpoch, () => "ready");
+    carrier.hostRegistry.register(policyReadOperation, readPolicy);
+    carrier.hostRegistry.register(policyStageOperation, request => services.stagePolicy(controllerEpoch, request));
+    carrier.hostRegistry.register(policyApplyOperation, request => { services.applyPolicy(controllerEpoch, request); return readPolicy(); });
+    const detach = registerOpenCodeRuntimeHost({ registry: carrier.hostRegistry, channel: carrier.hostChannel, hosts, services, controllerEpoch, getExecutionPolicy: () => services.executionPolicy(controllerEpoch), isRecoveryController: () => services.recoveryController });
     if (options.openCodeTools) carrier.mainRegistry.register(openCodeToolInvokeOperation, () => { throw new Error("unexpected_fixture_tool_invocation"); });
     await carrier.start();
     let disconnect!: () => void, closed = false;
     const lease: SidecarRuntimeLease = { channel: carrier.mainChannel, controllerEpoch, serviceIncarnation: services.serviceIncarnation,
+      ...(options.openCodeTools && !options.recovery ? { acquireOpenCodeRoute: async () => 1 } : {}),
       closed: new Promise<void>(resolve => { disconnect = resolve; }), release: vi.fn() };
     current = lease;
     const attached = { ...carrier, lease, async close() {
@@ -105,7 +122,7 @@ export function createPersistentOpenCodeFixture(ownership: "owned" | "external" 
     } };
     carriers.push(attached); return attached;
   }
-  return { scope, configuration, services, hosts, wire, adapter, archive, owners, controls, provider, acquireRecovery, acquireExisting, attach,
+  return { desired, scope, configuration, services, hosts, wire, adapter, archive, owners, controls, provider, acquireRecovery, acquireExisting, attach,
     setNormalError(error?: Error) { normalError = error; },
     holdPromptResponse() {
       let release!: () => void, entered!: () => void;

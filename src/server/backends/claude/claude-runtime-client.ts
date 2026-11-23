@@ -62,6 +62,9 @@ export interface ClaudeRuntimeProbeResult {
 }
 
 export interface ClaudeRuntimeSessionOptions {
+  /** The durable Sedes binding for an application-owned query. Native callers
+   * without an application binding retain their exact launch authority. */
+  readonly applicationThreadId?: string;
   readonly executionEnvironment?: ResolvedEnvironmentVariables;
   readonly executablePath: string;
   readonly initializationTimeoutMs: number;

@@ -1,3 +1,4 @@
+import { ConfigurationProjection } from "../../src/server/configuration-admin/configuration-projection.js";
 import { afterEach, describe, expect, it } from "vitest";
 import type Database from "better-sqlite3";
 import { openOverlayDatabase } from "../../src/server/db/database.js";
@@ -49,7 +50,14 @@ function fixture(migrateLatest = true, filename = ":memory:") {
   });
   applyBackendNormalizationMigration(database, { configuration, quiescentCutoverConfirmed: true, appliedAt: 20 });
   applyDatabaseMigrations(database, backendNormalizedMigrations.filter(value => migrateLatest || value.version < 142));
-  importLegacyDatabaseConfigurationFixture(database, { configuration, localWorkspaceRoots: ["/tmp"], sourceLabel: "Provenance regression" }, 25);
+  if (migrateLatest) {
+    importLegacyDatabaseConfigurationFixture(database, { configuration, localWorkspaceRoots: ["/tmp"], sourceLabel: "Provenance regression" }, 25);
+  } else {
+    database.transaction(() => {
+      new ConfigurationProjection(database, {}).adoptLegacyOwnership(scope);
+      new BackendConfigurationRepository(database).reconcile(scope, configuration, {localWorkspaceRoots:["/tmp"], now:25});
+    })();
+  }
   const profile = new BackendConfigurationRepository(database).listProfiles(scope).find(row => row.backendInstanceId === "codex-proof")!;
   const bindings = new ConversationBindingRepository(database);
   const thread = bindings.createUnboundThread(scope, { workspaceId: workspace.id, connectionProfileId: profile.id, title: "Proof", now: 30 });

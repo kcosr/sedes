@@ -304,6 +304,7 @@ export class WorkspaceApplicationService {
       displayName: validated.summary.displayName,
       available: validated.summary.availability === "available",
       trustState: validated.summary.trustState,
+      ...(validated.authorityRootId && { authorityRootId: validated.authorityRootId }),
       environmentConfigurationRevision: validated.authorityRevision,
       now: this.input.now?.() ?? Date.now(),
     });

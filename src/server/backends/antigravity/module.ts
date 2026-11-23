@@ -35,10 +35,15 @@ interface CreatePortInput {
 function createPort({ context, configuration, environment }: CreatePortInput): AntigravityPort {
   if (context.environmentOperations.environmentKind !== "local") {
     if (!context.sidecarRuntime) throw new Error("antigravity_sidecar_required");
-    return new AntigravityRemotePort({ configuration, sidecarRuntime: context.sidecarRuntime });
+    return new AntigravityRemotePort({ configuration, sidecarRuntime: context.sidecarRuntime, assertNativeOwner: context.assertNativeOwner, confirmNativeOwner: context.confirmNativeOwner });
   }
   return new AntigravityHost({
     configuration,
+    reserveNativeOwner: () => {
+      context.assertNativeOwner?.(configuration.backendInstanceId);
+      context.confirmNativeOwner?.(configuration.backendInstanceId);
+    },
+    releaseNativeOwner: () => context.confirmNativeOwner?.(null, configuration.backendInstanceId),
     channels: context.environmentChannel,
     environment,
     history: createAntigravityNativeHistoryReader(configuration),
@@ -142,7 +147,7 @@ function createRuntime(
   executionEnvironmentId: string,
 ): BackendModuleRuntime {
   const { scope, instance } = context;
-  const profiles = new Map(context.connections.map(connection => [connection.id, connection]));
+  const profileFor = (id: string) => context.connections.find(connection => connection.id === id);
   const drivers = new Map<string, AntigravityDriver>();
   const settings = new AntigravityThreadRepository(context.database);
   const operations = new ConversationOperationRepository(context.database);
@@ -152,8 +157,10 @@ function createRuntime(
   const threadPersistence = new AntigravityThreadPersistence({
     scope, backendInstanceId: instance.id, settings, modelPolicy: prepared.modelPolicy,
     defaultsForConnection: id => {
-      const templateId = profiles.get(id)?.templateId;
-      return templateId === undefined ? undefined : prepared.defaultsByConnectionId.get(templateId);
+      const templateId = profileFor(id)?.templateId;
+      if (templateId === undefined) return;
+      const current = context.targetDefinition?.(templateId);
+      return current?.kind === "antigravity_acp" ? current.moduleConfiguration.defaults : prepared.defaultsByConnectionId.get(templateId);
     },
     nativeNamespaceKey,
   });
@@ -163,7 +170,7 @@ function createRuntime(
   let closed = false;
   let closing: Promise<void> | undefined;
   function assertConnection(connection: AgentConnectionProfile): void {
-    const configured = profiles.get(connection.id);
+    const configured = profileFor(connection.id);
     if (closed || !configured || configured.configurationRevision !== connection.configurationRevision ||
         configured.templateId !== connection.templateId || configured.enabled !== connection.enabled ||
         configured.executionEnvironmentId !== connection.executionEnvironmentId) {
@@ -178,7 +185,7 @@ function createRuntime(
       create(connection) {
         assertConnection(connection);
         let driver = drivers.get(connection.id);
-        if (!driver) {
+        if (driver?.connection.configurationRevision !== connection.configurationRevision) {
           driver = new AntigravityDriver({ instance, connection, scope, port, settings,
             modelPolicy: prepared.modelPolicy, nativeNamespaceKey, correlationKey, usage: context.usage, agentTools, modeCatalog,
             isOperationAbandoned: (threadId, operationId) => operations.isOperationAbandoned(scope, threadId, operationId),

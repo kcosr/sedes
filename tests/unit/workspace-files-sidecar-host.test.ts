@@ -1,3 +1,4 @@
+import { createWorkspacePolicyGuard } from "../../src/server/sidecar/workspace-policy-guard.js";
 import { randomUUID } from "node:crypto";
 import {
   mkdtemp,
@@ -24,6 +25,42 @@ afterEach(async () => {
 });
 
 describe("WorkspaceFilesSidecarHost", () => {
+  it("binds handles to installed roots and rejects an in-flight read after withdrawal and regrant", async () => {
+    const parent = await mkdtemp(path.join(tmpdir(), "sedes-files-grant-"));
+    roots.push(parent);
+    const child = path.join(parent, "child");
+    await mkdir(child);
+    const primary = { id: "primary-root", path: child, generation: 1 };
+    const ancestor = { id: "ancestor", path: parent, generation: 3 };
+    let grants = [primary];
+    let complete!: () => void;
+    let started!: () => void;
+    const entered = new Promise<void>(resolve => { started = resolve; });
+    const pause = new Promise<void>(resolve => { complete = resolve; });
+    const engine = {
+      close: () => undefined, validateRoot: async () => undefined,
+      list: async () => { started(); await pause; return { entries: ["secret"], scanTruncated: false }; },
+    } as unknown as WorkspaceFilesEngine;
+    const host = new WorkspaceFilesSidecarHost({
+      policyGuard: createWorkspacePolicyGuard(() => ({ roots: grants, capabilities: [{ id: "workspace_files", generation: 2 }], backends: [] })),
+      sessionNonce: "n".repeat(32), engine, sendInvalidation: async () => {}, sendWatchFailure: async () => {},
+      openDownloadStream: () => { throw new Error("unexpected_stream"); }, onDownloadCleanupFailure: () => {},
+    });
+    try {
+      const request = { admissionId: randomUUID(), rootId: "primary" as const, rootKind: "primary" as const, declaredPath: child, policyRootPath: child };
+      await expect(host.handlers.rootOpen({ ...request, declaredPath: parent, policyRootPath: parent }, context())).rejects.toThrow("workspace_policy_denied");
+      const { rootHandle } = await host.handlers.rootOpen(request, context());
+      grants.push(ancestor);
+      const pending = host.handlers.list({ rootHandle, pageSize: 20 }, context());
+      await entered;
+      grants = [ancestor, { ...primary, generation: 4 }];
+      complete();
+      await expect(pending).rejects.toThrow("workspace_policy_revoked");
+      await expect(host.handlers.rootOpen(request, context())).rejects.toThrow("workspace_policy_revoked");
+      await expect(host.handlers.rootClose({ rootHandle }, context())).resolves.toEqual({ closed: true });
+    } finally { complete(); host.close(); }
+  });
+
   it("rechecks the checkout removal path against the declared policy root", async () => {
     const policy = await mkdtemp(
       path.join(tmpdir(), "h-sidecar-remove-policy-"),

@@ -1,3 +1,4 @@
+import { ownerPolicy, ownerPolicyPeer } from "../helpers/sidecar-owner-policy.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   SidecarOperationRegistry,
@@ -140,6 +141,7 @@ function runtimeFixture() {
     let resolveClosed!: () => void;
     const closed = new Promise<void>((resolve) => { resolveClosed = resolve; });
     return {
+      ...ownerPolicyPeer(registry.status()), recoveryView() { return this; },
       accountHome: installation.accountHome, closed,
       close: vi.fn(async (_reason: string) => {
         isClosed = true;
@@ -181,16 +183,13 @@ function runtimeFixture() {
   const launch = vi.fn(async () => stream("normal"));
   const attachExisting = vi.fn(async () => stream("recovery"));
   const owner = new SidecarRuntimeOwner<SidecarClientSession>({ connectionCompression: () => true,
-    scope, executionEnvironmentId: "remote", environmentConfigurationRevision: 1,
-    operationsConfigurationRevision: 1,
+    scope, executionEnvironmentId: "remote", readDesiredPolicy: () => ownerPolicy(["workspace_files","workspace_tools","workspace_context"]),
     authorizedCapabilities: [
       { capabilityId: "workspace_files", majorVersion: 8 },
       { capabilityId: "workspace_tools", majorVersion: 2 },
       { capabilityId: "workspace_context", majorVersion: 1 },
     ],
     authorizedRuntimeCapabilities: [],
-    activeEnvironmentConfigurationRevision: () => 1,
-    activeOperationsConfigurationRevision: () => 1,
     isAutomaticConnectionEnabled: () => true,
     artifact: {
       artifactId: SIDECAR_ARTIFACT_ID, modes: SIDECAR_ARTIFACT_MODES,

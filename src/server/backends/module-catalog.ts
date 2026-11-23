@@ -96,6 +96,10 @@ export class BackendModuleCatalog {
     return Object.freeze(Object.fromEntries(this.#protocolReleaseByBackendKind));
   }
 
+  remoteRuntimeCapabilities() {
+    return [...this.#byBackendKind.values()].flatMap(module => module.remoteRuntimeCapabilities ?? []);
+  }
+
   resolveConfiguration(
     configuration: BackendConfigurationFile,
   ): ResolvedBackendConfigurationFile {
@@ -134,6 +138,7 @@ export class BackendModuleCatalog {
   }
 
   prepare(input: {
+    readonly readCurrentBackend?: BackendModuleConfigurationInput["readCurrentBackend"];
     readonly backends: readonly BackendModuleBackendConfiguration[];
     readonly connections: readonly BackendModuleConnectionConfiguration[];
     readonly executionEnvironments: BackendModuleConfigurationInput["executionEnvironments"];
@@ -164,6 +169,7 @@ export class BackendModuleCatalog {
         this.assertCompatible(backend, connection);
       }
       const contribution = backendModule.prepare({
+        readCurrentBackend: input.readCurrentBackend,
         backend,
         connections,
         executionEnvironments: input.executionEnvironments,

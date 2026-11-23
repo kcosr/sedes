@@ -89,11 +89,9 @@ function fixture(latestMigration = Number.POSITIVE_INFINITY) {
     database,
     backendNormalizedMigrations.filter((migration) => migration.version <= latestMigration),
   );
-  importLegacyDatabaseConfigurationFixture(
-    database,
-    { configuration, localWorkspaceRoots: ["/tmp"], sourceLabel: "turn-reply-speech" },
-    400,
-  );
+  if (latestMigration === Number.POSITIVE_INFINITY) {
+    importLegacyDatabaseConfigurationFixture(database, { configuration, localWorkspaceRoots: ["/tmp"], sourceLabel: "turn-reply-speech" }, 400);
+  }
   const foreign: RequestScope = { tenantId: scope.tenantId, principalId: randomUUID() };
   database
     .prepare("INSERT INTO principals(tenant_id, id, kind, created_at) VALUES (?, ?, 'local_human', ?)")

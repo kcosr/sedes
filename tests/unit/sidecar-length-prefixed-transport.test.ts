@@ -124,6 +124,23 @@ describe("length-prefixed sidecar frame transport", () => {
     await transport.close("test_complete");
   });
 
+  it("gives an aged staging block a turn after at most one urgent and one interactive write",async()=>{
+    const time=vi.spyOn(performance,"now").mockReturnValue(10);
+    const stream=new TestByteStream();
+    stream.blockWrites=true;
+    const transport=createTransport(stream);
+    try{
+      const send=(label:string,lane:"control"|"operation"|"staging"|"interactive")=>transport.send(Buffer.from(label),{lane});
+      const sent=[send("active","operation"),send("bulk","operation"),send("stage","staging"),
+        send("control1","control"),send("control2","control"),send("echo1","interactive"),send("echo2","interactive")];
+      await stream.waitForBlockedWrite();
+      time.mockReturnValue(511);
+      stream.releaseWrites();
+      await Promise.all(sent);
+      expect(stream.writes.map(decodeStreamFrame)).toEqual(["active","control1","echo1","stage","control2","echo2","bulk"]);
+    }finally{time.mockRestore();await transport.close("test_complete");}
+  });
+
   it("applies backpressure when one read coalesces more frames than the inbound queue holds", async () => {
     const stream = new TestByteStream();
     const transport = createTransport(stream);

@@ -553,11 +553,13 @@ describe("Codex production application integration", () => {
     applyDatabaseMigrations(database, backendNormalizedMigrations);
 
     const backendConfiguration = new BackendConfigurationRepository(database);
-    importLegacyDatabaseConfigurationFixture(database, { configuration, localWorkspaceRoots: [workspacePath], sourceLabel: "codex-persistence-fixture" }, 400);
+    const {projection} = importLegacyDatabaseConfigurationFixture(database, { configuration, localWorkspaceRoots: [workspacePath], sourceLabel: "codex-persistence-fixture" }, 400);
 
     new InventoryRepository(database).updateEnvironmentAvailability(scope, configuration.executionEnvironments[0]!.id, { available: true, now: 400 });
     const localAuthority = new InventoryRepository(database);
     const reconciledEnvironment = localAuthority.getLocalEnvironment(scope);
+    const roots = () => projection.hostPolicy(scope, reconciledEnvironment.id)!.snapshot.roots;
+    const root = roots()[0]!;
     localAuthority.upsertWorkspace(scope, {
       id: workspaceRecord.id,
       environmentId: workspaceRecord.environmentId,
@@ -565,8 +567,8 @@ describe("Codex production application integration", () => {
       displayName: workspaceRecord.displayName,
       available: true,
       trustState: "trusted",
-      environmentConfigurationRevision:
-        reconciledEnvironment.configurationRevision,
+      authorityRootId: root.id,
+      environmentConfigurationRevision: root.generation,
       now: 401,
     });
     const codexBackend = backendInstance(
@@ -612,6 +614,7 @@ describe("Codex production application integration", () => {
       environmentId: environmentRecord.id,
       scope,
       allowedRoots: [workspacePath],
+      readWorkspaceRoots: roots,
       workspaceTrusted: () => true,
       configurationRevision: reconciledEnvironment.configurationRevision,
       activeConfigurationRevision: () =>

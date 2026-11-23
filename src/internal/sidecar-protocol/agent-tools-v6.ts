@@ -10,6 +10,8 @@ import {
 } from "../agent-tool-cli-protocol/index.js";
 import { defineSidecarOperation } from "./operation-registry.js";
 
+const routeBindingSchema = z.strictObject({backendInstanceId:z.string().min(1).max(256),backendGeneration:z.number().int().positive(),capabilityGeneration:z.number().int().positive()});
+export type AgentToolRouteBinding = z.infer<typeof routeBindingSchema>;
 const sourceCapabilitySchema = z
   .string()
   .min(32)
@@ -17,6 +19,7 @@ const sourceCapabilitySchema = z
   .regex(/^[A-Za-z0-9_-]+$/u);
 const sourceCapabilityRequestSchema = z.strictObject({
   sourceCapability: sourceCapabilitySchema,
+    routeBinding:routeBindingSchema.optional(),
 });
 const errorResultSchema = z.strictObject({
   outcome: z.literal("error"),
@@ -59,6 +62,7 @@ export const agentToolsDescribeOperation = defineSidecarOperation({
   maximumDeadlineMilliseconds: 30_000,
   requestSchema: z.strictObject({
     sourceCapability: sourceCapabilitySchema,
+    routeBinding:routeBindingSchema.optional(),
     toolIds: toolIdsSchema,
   }),
   responseSchema: z.discriminatedUnion("outcome", [
@@ -78,6 +82,7 @@ export const agentToolsInvokeOperation = defineSidecarOperation({
   maximumDeadlineMilliseconds: "caller_abort",
   requestSchema: createAgentToolInvocationRequestSchema.safeExtend({
     sourceCapability: sourceCapabilitySchema,
+    routeBinding:routeBindingSchema.optional(),
   }),
   responseSchema: z.discriminatedUnion("outcome", [
     z.strictObject({

@@ -95,6 +95,7 @@ export interface BackendModuleExecutionEnvironmentConfiguration {
 }
 
 export interface BackendModuleConfigurationInput {
+  readonly readCurrentBackend?: () => import("../../shared/protocol/configuration-admin.js").ConfigurationBackend | undefined;
   readonly backend: BackendModuleBackendConfiguration;
   readonly connections: readonly BackendModuleConnectionConfiguration[];
   readonly executionEnvironments: readonly BackendModuleExecutionEnvironmentConfiguration[];
@@ -177,6 +178,8 @@ export interface BackendRuntimeRecoveryContext {
   readonly scope: RequestScope;
   readonly instance: AgentBackendInstance;
   readonly connections: readonly AgentConnectionProfile[];
+  readonly assertNativeOwner?: (backendInstanceId: string) => void;
+  readonly confirmNativeOwner?: (backendInstanceId: string | null, expectedOwner?: string) => void;
   readonly sidecarRuntime: {
     acquireRecovery(signal?: AbortSignal): Promise<SidecarRuntimeLease>;
   };
@@ -223,6 +226,10 @@ export interface BackendModuleRuntime {
 }
 
 export interface BackendModuleRuntimeContext {
+  /** Current target configuration after live reconciliation. */
+  readonly targetDefinition?: (templateId: string) => import("../../shared/protocol/configuration-admin.js").ConfigurationTarget | undefined;
+  readonly assertNativeOwner?: (backendInstanceId: string) => void;
+  readonly confirmNativeOwner?: (backendInstanceId: string | null, expectedOwner?: string) => void;
   readonly usage: UsageSink;
   /** Scope-bound immutable execution snapshot; secret references remain unresolved. */
   readonly executionEnvironmentVariables?: (applicationThreadId: string) => EnvironmentVariableOverrides;
@@ -272,6 +279,7 @@ export type AgentToolCliRuntimeResolution =
       endpoint: string;
       executableDirectory: string;
       inheritedPath: string;
+      readonly routeGeneration?: number;
       /** Settles when this exact managed endpoint generation is no longer usable. */
       readonly closed: Promise<unknown>;
       /** Idempotent, non-throwing release of the endpoint lifecycle hold. */

@@ -1,3 +1,4 @@
+import { observedLaunchDigest } from "../../provider-policy-admission.js";
 import { configurationFingerprint } from "../../../config/configuration-fingerprint.js";
 import type { RequestScope } from "../../../identity/identity-provider.js";
 import type { ExecutionEnvironmentChannelProvider } from "../../../execution/environment-channel.js";
@@ -11,14 +12,18 @@ import { claudePersistentConfigurationSchema, type ClaudePersistentConfiguration
 
 export class ClaudePersistentRuntimeRegistry {
   readonly #hosts = new Map<string, { host: ClaudePersistentRuntimeHost; fingerprint: string; retire(force?: boolean, reason?: string): Promise<void> }>();
+  observedLaunchDigest(id: string): string | undefined {
+    return observedLaunchDigest(this.#hosts.get(id)?.host);
+  }
+
   constructor(readonly input: {
     scope: RequestScope; executionEnvironmentId: string;
     environmentChannel: ExecutionEnvironmentChannelProvider;
     environment: Readonly<Record<string, string | undefined>>;
     services: PersistentSidecarServiceRegistry;
     artifact: () => Promise<ManagedWorkerArtifactRegistration>;
-    validateQueryEnvironment?: (environment: Readonly<Record<string, string | undefined>>) => void;
-    validateAgentToolMcp?: (agentToolMcp: ClaudeRuntimeAgentToolMcp) => void;
+    validateQueryEnvironment?: (environment: Readonly<Record<string, string | undefined>>, backendInstanceId: string) => void;
+    validateAgentToolMcp?: (agentToolMcp: ClaudeRuntimeAgentToolMcp, backendInstanceId: string) => void;
     createRuntime?: (configuration: ClaudePersistentConfiguration) => ClaudeOwnedRuntimeClient & { close(): Promise<void> };
     /** Residency limit for detached, quiescent queries; tests shorten it. */
     detachedSessionTtlMs?: number;
@@ -75,8 +80,7 @@ export class ClaudePersistentRuntimeRegistry {
       configuration.executionEnvironmentId !== this.input.executionEnvironmentId) throw new Error("claude_persistent_configuration_scope_denied");
     const existing = this.#hosts.get(configuration.backendInstanceId);
     if (!existing) return undefined;
-    const fingerprint = runtimeIdentityFingerprint(configuration);
-    if (existing.fingerprint !== fingerprint) throw new Error("claude_persistent_configuration_restart_required");
+    if (existing.host.input.configuration.configDirectory !== configuration.configDirectory) throw new Error("claude_persistent_configuration_scope_denied");
     return existing.host;
   }
 
