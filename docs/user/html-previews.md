@@ -8,10 +8,11 @@ own **Send** control; it has no access to your credentials or other Sedes tools.
 
 Inline content appears without a permanent header or dimensions footer. Use
 **Open in Pages** at the top right to open that exact revision in the thread's
-Pages panel. Move, resize, or maximize the panel using its standard header
-controls. The document header contains the title, **Download HTML**, a revision
-lock, refresh, and previous/next arrows around a `1/3` revision indicator when
-the page has multiple revisions. Single-revision pages omit the revision controls.
+Pages panel and fill the workbench. On desktop, use **Restore** to return the
+panel to its docked layout, where you can move or resize it. The document
+header contains the title, **Download HTML**, a revision lock, refresh, and
+previous/next arrows around a `1/3` revision indicator when the page has
+multiple revisions. Single-revision pages omit the revision controls.
 Refresh reloads the selected saved revision and resets its local interaction
 state. **Back to Pages** returns to the thread's page list.
 

@@ -1,5 +1,13 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { createPortal } from "react-dom";
+import type { PageRevision } from "../../shared/protocol/pages.js";
 import { SHOW_CHAT_EVENT } from "../app/android-back.js";
 import { useChatAutofocus } from "../app/use-chat-autofocus.js";
 import {
@@ -9,6 +17,8 @@ import {
 import { useEnvironmentPalette } from "../app/use-environment-palette.js";
 import { usePublishTasksDock } from "../components/tasks/tasks-host.js";
 import { DiscardChangesDialog } from "../components/ui/discard-changes-dialog.js";
+import { PageOpenProvider } from "../pages/page-opening.js";
+import { createPagesPanelIntent } from "../pages/pages-panel-intent.js";
 import type {
   ApplicationClientState,
   ApplicationClientStore,
@@ -101,6 +111,7 @@ import { useThreadTerminals } from "./use-thread-terminals.js";
  */
 
 const MOBILE_QUERY = "(max-width: 819px)";
+const PAGES_MAXIMIZED_MESSAGE = `${PANEL_TITLES.pages} panel maximized.`;
 
 interface DirtyConfirmation {
   readonly description: string;
@@ -180,6 +191,18 @@ function PanelLayoutReady({
   );
   const [mobileKind, setMobileKind] = useState<PanelKind>();
   const [announcement, setAnnouncement] = useState("");
+  const openPage = useCallback(
+    (page: PageRevision) => {
+      if (page.threadId !== threadId) return;
+      const opened = store.open("pages", {
+        maximize: desktop,
+        intent: createPagesPanelIntent(page),
+        focusScope: { kind: "thread", threadId },
+      });
+      if (opened && desktop) setAnnouncement(PAGES_MAXIMIZED_MESSAGE);
+    },
+    [desktop, store, threadId],
+  );
   const [statuses, setStatuses] = useState<
     ReadonlyMap<PanelKind, PanelChromeStatus>
   >(() => new Map());
@@ -312,6 +335,12 @@ function PanelLayoutReady({
   useEffect(() => {
     if (!desktop && snapshot.maximized !== null) store.restore();
   }, [desktop, snapshot.maximized, store]);
+
+  // Leaving maximized Pages lets a later chat link announce it again.
+  useEffect(() => {
+    if (snapshot.maximized === "pages") return;
+    setAnnouncement((message) => message === PAGES_MAXIMIZED_MESSAGE ? "" : message);
+  }, [snapshot.maximized]);
 
   // Focusing or pressing inside a panel uses it: make-room hides the least
   // recently used edge regions first. The listeners are native, on the
@@ -932,7 +961,9 @@ function PanelLayoutReady({
       </div>
 
       {createPortal(
-        renderChat(chatControls, active && onStage("chat")),
+        <PageOpenProvider openPage={openPage}>
+          {renderChat(chatControls, active && onStage("chat"))}
+        </PageOpenProvider>,
         targets.chat,
         `chat:${threadId}`,
       )}
