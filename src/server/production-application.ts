@@ -2396,7 +2396,7 @@ export async function startProductionApplication(
     const observedServices = new Map<string, SidecarServiceStatus | null>();
     const backendPresence = new Map<string, boolean>();
     const observedBackends = new Map<string, Awaited<ReturnType<NonNullable<BackendModuleRuntime["administration"]>["inspect"]>>>();
-    const remoteBackendObservations = new WeakMap<BackendModuleRuntime, { serviceIdentity: string; pending: Promise<void> }>();
+    const remoteBackendObservations = new WeakMap<BackendModuleRuntime, { serviceIdentity: string; refreshing: boolean }>();
     const observationFailures = new Map<string, "unreachable" | SidecarOwnershipRecoveryCode | BackendRuntimeDiagnostic>();
     const requiresOwnershipRecovery = (error: unknown): boolean => sidecarOwnershipRecoveryCode(error) !== undefined;
     const observationFailure = (error: unknown, backendId?: string) => sidecarOwnershipRecoveryCode(error) ??
@@ -2600,6 +2600,7 @@ export async function startProductionApplication(
       let runtime: ConfigurationRuntimeState;
       let service: SidecarServiceStatus | undefined;
       let administration: BackendModuleRuntime["administration"];
+      let remoteBackendAbsenceConfirmed = false;
       let recoveryAction: "stop" | undefined;
       let backendObservation: Awaited<ReturnType<NonNullable<BackendModuleRuntime["administration"]>["inspect"]>> | undefined;
       if (record.resourceKind === "environment") {
@@ -2674,19 +2675,25 @@ export async function startProductionApplication(
         // Local administration reads the current owned runtime without opening
         // it. Keep lazy startup transitions visible without requiring an impact
         // preview; remote inspection remains cached by service identity.
-        if (refresh || (!remote && owned?.administration) || (owned && remote && cached?.serviceIdentity !== serviceIdentity())) {
-          const observation = { serviceIdentity: serviceIdentity(), pending: Promise.resolve() };
+        if (refresh || (!remote && owned?.administration) || (owned && remote && !cached?.refreshing && cached?.serviceIdentity !== serviceIdentity())) {
+          // A passive poll serves cached data while an explicit lifecycle inspection is in flight.
+          const observation = { serviceIdentity: serviceIdentity(), refreshing: refresh };
           // Module preparation knows desired startup settings, not those of a
           // retained remote process. Recover its applied fingerprint once per
           // module/attachment using existing-only administration, never ensure.
           if (owned && remote) remoteBackendObservations.set(owned, observation);
           const isCurrent = () => !owned || !remote ||
             (moduleRuntimes.get(id) === owned && remoteBackendObservations.get(owned) === observation);
-          observation.pending = (async () => {
+          const pending = (async () => {
             try {
-              administration = remote ? await recoverBackendAdministration(id, isCurrent) : owned?.administration;
-              const inventory = await administration?.inspect();
+              const control = remote ? await recoverBackendAdministration(id, isCurrent) : owned?.administration;
+              const inventory = await control?.inspect();
               if (!isCurrent()) return;
+              if (refresh) {
+                administration = control;
+                backendObservation = inventory;
+                remoteBackendAbsenceConfirmed = remote && control === undefined;
+              }
               if (inventory) { observedBackends.set(id, inventory); attachRetainedWork(id); }
               observationFailures.delete(key);
             } catch (error) {
@@ -2695,14 +2702,15 @@ export async function startProductionApplication(
               if (owned && remote) remoteBackendObservations.delete(owned);
             } finally {
               observation.serviceIdentity = serviceIdentity();
+              observation.refreshing = false;
             }
           })();
           // Snapshot reads serve cached carrier evidence. Explicit impact and
           // lifecycle checks await fresh evidence on their host's queue.
-          if (refresh || !remote) await observation.pending;
+          if (refresh || !remote) await pending;
         }
         const loaded = await backendThreads(id);
-        backendObservation = observedBackends.get(id);
+        if (!refresh) backendObservation = observedBackends.get(id);
         if (backendObservation?.startupEnvironmentFingerprint) {
           appliedStartupEnvironmentFingerprints.set(id, backendObservation.startupEnvironmentFingerprint);
         }
@@ -2762,7 +2770,7 @@ export async function startProductionApplication(
           }
         }
       }
-      return {runtime, service, backendObservation, administration, recoveryAction, interruptions: interruptions.length > 128 ? [...interruptions.slice(0, 127), `${interruptions.length - 127} additional affected resources.`] : interruptions,
+      return {runtime, service, backendObservation, administration, remoteBackendAbsenceConfirmed, recoveryAction, interruptions: interruptions.length > 128 ? [...interruptions.slice(0, 127), `${interruptions.length - 127} additional affected resources.`] : interruptions,
         fence: configurationFingerprint({resourceKind: record.resourceKind, id, incarnation: runtime.incarnation, policyConflict: runtime.connectionState === "policy_conflict",
           service: service ? {epoch: service.controllerEpoch, state: service.state, resources: service.resourcesFingerprint, configuration: service.desiredConfiguration} : null,
           backend: backendObservation?.revision ?? null, localRetirement: runtime.supportedActions.includes("confirm_retirement"),
@@ -3350,8 +3358,10 @@ export async function startProductionApplication(
           if (evidence.runtime.connectionState === "recovery_required" && request.action !== "disconnect" &&
               !retryFailedBackend) return result("unavailable");
           if (["stop", "restart", "upgrade"].includes(request.action) && observationFailures.has(key)) return result("unavailable");
-          if (cleanupRecovery && request.action === "stop" && backendHasRemoteProvider(id) &&
-              (!evidence.administration || !evidence.backendObservation) && backendPresence.get(id) !== false) return result("unavailable");
+          if (request.resourceKind === "backend" && (request.action === "stop" || request.action === "restart") && backendHasRemoteProvider(id) &&
+              (!evidence.administration || !evidence.backendObservation) && !evidence.remoteBackendAbsenceConfirmed) {
+            return result("unavailable", {...evidence.runtime, lastError: "Could not confirm the remote provider's state. Inspect its current impact and try again."});
+          }
           const receiptOwner = request.resourceKind === "environment" ? environmentRuntimes.get(id)?.sidecarRuntime : undefined;
           const priorFence = await fencePriorLifecycleForStop({
             request, pending: configurationRepository.pendingLifecycle(scope),

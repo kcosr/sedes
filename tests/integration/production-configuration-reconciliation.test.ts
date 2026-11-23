@@ -1306,6 +1306,74 @@ describe("production configuration reconciliation", () => {
     expect(launches).toEqual([{ BUILD_STAGE: { kind: "literal", value: "A" } }, { BUILD_STAGE: { kind: "literal", value: "B" } }]);
   });
 
+  it.each(["stop", "restart"] as const)("keeps the remote %s control handle while Settings reads a new controller epoch", async action => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const { service, scope, snapshot } = await fixture();
+    const environmentId = randomUUID(), backendId = "controlled-claude";
+    const configuration = structuredClone(snapshot.configuration);
+    configuration.executionEnvironments.push({ id: environmentId, kind: "ssh", label: "Controlled host", hostAlias: "test-target",
+      connectionCompression: true, workspaceRoots: ["/workspace"], operations: { kind: "none" } });
+    configuration.backends.push({ id: backendId, kind: "claude_agent_sdk", label: "Controlled Claude", enabled: true, modelPolicy: { type: "catalog" },
+      moduleConfiguration: { initializationTimeoutMs: 1000, permissionPolicy: { allowedModes: ["default"] } } });
+    configuration.targets.push({ id: "controlled-target", backendInstanceId: backendId, executionEnvironmentId: environmentId,
+      kind: "claude_agent_sdk", label: "Controlled Claude", enabled: true, moduleConfiguration: { defaults: { permissionMode: "default" } } });
+
+    const serviceConfiguration = { environmentRevision: 1, operationsRevision: 1 };
+    const host = new PersistentSidecarServiceRegistry({ scope: { ...scope, installationId: "test-installation", executionEnvironmentId: environmentId },
+      buildId: "controlled", artifactSha256: "a".repeat(64), runtimeWireVersion: SIDECAR_WIRE_VERSION, configuration: serviceConfiguration });
+    host.attach(serviceConfiguration);
+    const inspectService = vi.spyOn(SidecarRuntimeOwner.prototype, "inspectService").mockImplementation(async () => host.status());
+    vi.spyOn(SidecarRuntimeOwner.prototype, "connect").mockImplementation(async () => host.status());
+    vi.spyOn(SidecarRuntimeOwner.prototype, "retryPolicy").mockResolvedValue();
+    vi.spyOn(SidecarRuntimeOwner.prototype, "synchronizePolicy").mockResolvedValue();
+
+    let running = true;
+    const stop = vi.fn(async () => {
+      if (action === "restart") throw new BackendRuntimeControlRejectedError("blocked");
+      running = false;
+    });
+    const owner = { inspect: async () => ({ state: "idle" as const, incarnation: "controlled-provider", revision: "controlled-revision", blockers: [] }),
+      stop, restart: stop };
+    const recover = vi.fn(async () => running ? owner : undefined);
+    const prepare = compiledBackendModuleCatalog.prepare.bind(compiledBackendModuleCatalog);
+    vi.spyOn(compiledBackendModuleCatalog, "prepare").mockImplementation(input => prepare(input).map(prepared => {
+      if (prepared.backendInstanceId === backendId) prepared.recoverAdministration = recover;
+      return prepared;
+    }));
+    const { revision } = await service.save(scope, { mutationId: randomUUID(), expectedRevision: snapshot.revision, configuration });
+    const settings = async () => (await service.get(scope)).runtimes.find(runtime => runtime.resourceId === backendId);
+    await vi.waitFor(async () => expect(await settings()).toMatchObject({ incarnation: "controlled-provider", connectionState: "connected" }));
+    const target = { action, resourceKind: "backend" as const, resourceId: backendId, expectedRevision: revision };
+    const impact = await service.impact(scope, target);
+    expect(impact.incarnation).toBe("controlled-provider");
+
+    // The command first learns the new service epoch from management. Pause
+    // recovery before it returns the provider handle, then let Settings read.
+    const epoch = host.attach(serviceConfiguration);
+    let releaseRecovery!: () => void;
+    const gate = new Promise<void>(resolve => { releaseRecovery = resolve; });
+    const heldRecovery = vi.fn(async () => { await gate; return owner; });
+    recover.mockImplementationOnce(heldRecovery);
+    const mutationId = randomUUID();
+    const operation = service.lifecycle(scope, { ...target, mutationId, expectedIncarnation: impact.incarnation, impactToken: impact.token });
+    try {
+      await vi.waitFor(() => expect(heldRecovery).toHaveBeenCalledOnce());
+      expect(await inspectService.mock.results.at(-1)!.value).toMatchObject({ controllerEpoch: epoch });
+      await settings();
+      expect(stop).not.toHaveBeenCalled();
+    } finally { releaseRecovery(); }
+    const receipt = await operation;
+    expect(stop).toHaveBeenCalledExactlyOnceWith({ expectedRevision: "controlled-revision", force: true });
+    expect(await service.lifecycleReceipt(scope, mutationId)).toEqual(receipt);
+    if (action === "stop") {
+      expect(running).toBe(false);
+      expect(receipt).toMatchObject({ state: "applied", runtime: { connectionState: "stopped" } });
+    } else {
+      expect(running).toBe(true);
+      expect(receipt).toMatchObject({ state: "rejected", runtime: { lastError: expect.stringContaining("refused shutdown") } });
+    }
+  }, 15_000);
+
   it("allows another backend Stop after a confirmed provider refusal but fences uncertain transport outcomes", async () => {
     const { service, scope, snapshot } = await fixture();
     const environmentId = randomUUID();
