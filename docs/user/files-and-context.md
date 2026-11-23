@@ -241,6 +241,11 @@ corresponding actions are **Add note & send**, **Add note & steer**, and
 **Add note & queue**. Uploads, draft conflicts, and pending composer actions
 must finish before sending.
 
+With the note field focused, press **Ctrl+Enter** (**Command+Enter** on macOS)
+to add the quote to the draft. Press **Ctrl+Shift+Enter**
+(**Command+Shift+Enter** on macOS) to add the quote and deliver the draft using
+the current Send, Steer, or Queue action.
+
 After delivery, the excerpt is immutable conversation content. Sedes does not
 reread the file or source turn during replay. Paths, line numbers, item IDs,
 revisions, and Markdown hints help explain where the quote came from; they do

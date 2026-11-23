@@ -20,6 +20,60 @@ afterEach(() => {
 });
 
 describe("PierreSelectionAction", () => {
+  it.each([{ metaKey: true }, { ctrlKey: true }])(
+    "uses modified Enter to add and Shift to deliver (%o)",
+    (modifier) => {
+      const onStage = vi.fn();
+      render(
+        <PierreSelectionAction label="selected text" startInNoteMode onCancel={vi.fn()} onStage={onStage} />,
+      );
+      const note = screen.getByRole("textbox");
+      expect(note).toHaveFocus();
+      fireEvent.change(note, { target: { value: "  Please explain this.  " } });
+
+      expect(fireEvent.keyDown(note, { key: "Enter", ...modifier })).toBe(false);
+      expect(fireEvent.keyDown(note, { key: "Enter", ...modifier, shiftKey: true })).toBe(false);
+      expect(onStage.mock.calls).toEqual([["Please explain this."], ["Please explain this.", true]]);
+    },
+  );
+
+  it("leaves ordinary Enter and input-method keys alone and consumes held shortcuts", () => {
+    const onStage = vi.fn();
+    render(
+      <PierreSelectionAction label="selected text" startInNoteMode onCancel={vi.fn()} onStage={onStage} />,
+    );
+    const note = screen.getByRole("textbox");
+    const shortcut = { key: "Enter", ctrlKey: true, shiftKey: true };
+    expect(fireEvent.keyDown(note, { key: "Enter" })).toBe(true);
+    expect(fireEvent.keyDown(note, { key: "Enter", shiftKey: true })).toBe(true);
+    expect(fireEvent.keyDown(note, { ...shortcut, altKey: true })).toBe(true);
+    expect(fireEvent.keyDown(note, { ...shortcut, metaKey: true })).toBe(true);
+    expect(fireEvent.keyDown(note, { ...shortcut, isComposing: true })).toBe(true);
+    expect(fireEvent.keyDown(note, { ...shortcut, keyCode: 229 })).toBe(true);
+    expect(fireEvent.keyDown(note, { ...shortcut, repeat: true })).toBe(false);
+    expect(onStage).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { initialError: "The selection could not be captured." },
+    { unavailableReason: "The message composer is unavailable." },
+  ])("blocks both shortcuts when the actions are unavailable (%o)", (actionProps) => {
+    const onStage = vi.fn();
+    render(
+      <PierreSelectionAction
+        {...actionProps}
+        label="selected text"
+        startInNoteMode
+        onCancel={vi.fn()}
+        onStage={onStage}
+      />,
+    );
+    const note = screen.getByRole("textbox");
+    fireEvent.keyDown(note, { key: "Enter", ctrlKey: true });
+    fireEvent.keyDown(note, { key: "Enter", ctrlKey: true, shiftKey: true });
+    expect(onStage).not.toHaveBeenCalled();
+  });
+
   it("offers explicit ordered stage and immediate-send actions in note mode", () => {
     const onStage = vi
       .fn()

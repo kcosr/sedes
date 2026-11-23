@@ -163,7 +163,7 @@ describe("ConversationMessageSelectionSurface", () => {
     expect(note).toBeVisible();
     expect(note).toHaveValue("Explain this.");
     expect(within(toolbar).getByRole("blockquote")).toHaveTextContent("Select");
-    fireEvent.click(screen.getByRole("button", { name: "Add & send" }));
+    fireEvent.keyDown(note, { key: "Enter", metaKey: true, shiftKey: true });
 
     expect(attachAndSubmit).toHaveBeenCalledWith(
       expect.objectContaining({ excerpt: "Select", note: "Explain this." }),
@@ -172,6 +172,7 @@ describe("ConversationMessageSelectionSurface", () => {
       "Wait for attachment uploads to finish before sending.",
     );
     expect(screen.getByRole("toolbar")).toBeInTheDocument();
+    expect(note).toHaveValue("Explain this.");
   });
 
   it("opens Add note directly for the whole question and keeps its source hints", async () => {

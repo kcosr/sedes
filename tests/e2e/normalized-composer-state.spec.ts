@@ -134,13 +134,18 @@ test("active chat notes deliver the combined composer draft with Steer and Queue
       const draftText = `Existing composer instructions for ${mode}.`;
       await fillAndPersistDraft(page, draftText, "Message Codex");
       await selectSource();
-      await actions.getByRole("textbox", { name: "Note about selected message text" }).fill("Already attached context");
-      await actions.getByRole("button", { name: "Add", exact: true }).click();
+      const noteField = actions.getByRole("textbox", { name: "Note about selected message text" });
+      await noteField.fill("Already attached context");
+      if (mode === "steer") {
+        await noteField.press("Control+Enter");
+      } else {
+        await actions.getByRole("button", { name: "Add", exact: true }).click();
+      }
       await expect(actions).toBeHidden();
       await expect(page.getByTestId("composer").getByLabel("Context excerpts")).toContainText("Already attached context");
       await selectSource();
       const note = `New annotation for ${mode}.`;
-      await actions.getByRole("textbox", { name: "Note about selected message text" }).fill(note);
+      await noteField.fill(note);
       const send = actions.getByRole("button", { name: `Add & ${mode}`, exact: true });
       const sendDescription = "Includes this selection, note, and any existing composer content.";
       await expect(send).toBeEnabled();
@@ -165,7 +170,11 @@ test("active chat notes deliver the combined composer draft with Steer and Queue
         const body = response.request().postDataJSON();
         return body.kind === "deliver" && body.mode === mode;
       });
-      await send.click();
+      if (mode === "steer") {
+        await noteField.press("Control+Shift+Enter");
+      } else {
+        await send.click();
+      }
       expect((await combinedDraft).request().postDataJSON()).toMatchObject({
         text: draftText,
         contextExcerpts: [
