@@ -13,6 +13,7 @@ import {
   type HTMLAttributes,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -21,13 +22,16 @@ import {
 } from "./markdown-stream-fade.js";
 import { opacityAt } from "./smooth-streaming-text.js";
 import { openExternal } from "../../app/router";
+import { useClipboardCopy } from "../../app/use-clipboard-copy.js";
 import { Check, Copy, ExternalLink, FileText, MessageSquareText, X } from "lucide-react";
 import {
   classifyMarkdownHref,
   type MarkdownFileLinkSource,
   type WorkspaceFileLinkHandler,
+  type WorkspaceFileLinkRequest,
   useWorkspaceFileLinkHandler,
 } from "../../workspace-files/workspace-file-link-routing.js";
+import { Button } from "../ui/button.js";
 import { rehypeMarkdownSourcePositions } from "./markdown-source-positions.js";
 import { remarkChecklistPositions, rehypeChecklistInputs, markdownChecklistState, type MarkdownChecklistControls } from "./markdown-checklists.js";
 import { remarkSoftBreaks } from "./markdown-soft-breaks.js";
@@ -153,19 +157,56 @@ const PLAIN_PRE_COMPONENT: NonNullable<MarkdownComponents["pre"]> = ({
 type MarkdownLinkState = {
   readonly fileLinkSource?: MarkdownFileLinkSource;
   readonly workspaceFileLinks?: WorkspaceFileLinkHandler;
+  readonly copyFileReferences: boolean;
   /** Shows or clears the file link notice while the content is mounted. */
   readonly showFileLinkNotice: (notice: string | undefined) => void;
 };
 
 const MarkdownLinkContext = createContext<MarkdownLinkState>({
+  copyFileReferences: false,
   showFileLinkNotice: () => undefined,
 });
+
+function FileReferenceCopyButton({ request }: {
+  readonly request: WorkspaceFileLinkRequest;
+}): React.JSX.Element {
+  const { copy, copyState } = useClipboardCopy();
+  const { reference, target } = request;
+  const text = target.kind === "source_line"
+    ? `${reference.path}:${target.lineNumber}`
+    : reference.path;
+  const announcement = copyState === "copied"
+    ? "File reference copied."
+    : copyState === "failed" ? "Copying the file reference failed." : "";
+  const Icon = copyState === "copied" ? Check : copyState === "failed" ? X : Copy;
+
+  return (
+    <>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-xs"
+        className="markdown-file-reference-copy"
+        aria-label={`Copy file reference for ${text}`}
+        title={copyState === "failed" ? "Copy failed" : "Copy file reference"}
+        onClick={() => void copy(text)}
+      >
+        <Icon aria-hidden="true" strokeWidth={1.8} />
+      </Button>
+      {/* Keep feedback outside the selectable transcript text. */}
+      {createPortal(
+        <span className="sr-only" role="status">{announcement}</span>,
+        document.body,
+      )}
+    </>
+  );
+}
 
 const LINK_COMPONENT: NonNullable<MarkdownComponents["a"]> = ({
   href,
   children: linkChildren,
 }) => {
-  const { fileLinkSource, workspaceFileLinks, showFileLinkNotice } =
+  const { fileLinkSource, workspaceFileLinks, copyFileReferences, showFileLinkNotice } =
     useContext(MarkdownLinkContext);
   const classification = href
     ? classifyMarkdownHref(href, fileLinkSource)
@@ -203,7 +244,7 @@ const LINK_COMPONENT: NonNullable<MarkdownComponents["a"]> = ({
         </a>
       );
     }
-    return (
+    const link = (
       <a
         href={fallbackHref ?? "#"}
         onClick={(event) => {
@@ -228,10 +269,18 @@ const LINK_COMPONENT: NonNullable<MarkdownComponents["a"]> = ({
             });
         }}
       >
-        {linkChildren}
-        <FileText size={12} strokeWidth={1.8} />
+        {copyFileReferences ? (
+          <span className="markdown-file-reference-label">{linkChildren}</span>
+        ) : linkChildren}
+        <FileText aria-hidden="true" size={12} strokeWidth={1.8} />
       </a>
     );
+    return copyFileReferences ? (
+      <span className="markdown-file-reference">
+        {link}
+        <FileReferenceCopyButton key={href} request={classification.request} />
+      </span>
+    ) : link;
   }
   const safe = href && safeUrl(href);
   if (!safe) return <span>{linkChildren}</span>;
@@ -291,6 +340,7 @@ export const MarkdownContent = memo(function MarkdownContent({
   enableMermaid = true,
   streaming = false,
   copyCodeBlocks = false,
+  copyFileReferences = false,
   fileLinkSource,
   sourcePositionMetadata = false,
   rehypePlugins = NO_REHYPE_PLUGINS,
@@ -304,6 +354,8 @@ export const MarkdownContent = memo(function MarkdownContent({
   streaming?: boolean;
   /** Adds a raw-code copy action to fenced code blocks. */
   copyCodeBlocks?: boolean;
+  /** Adds a path copy action to workspace file links. */
+  copyFileReferences?: boolean;
   /** Keeps relative links in a rendered Markdown file's authorized root. */
   fileLinkSource?: MarkdownFileLinkSource;
   /** Adds Markdown source-line hints to rendered blocks for semantic capture. */
@@ -347,8 +399,8 @@ export const MarkdownContent = memo(function MarkdownContent({
     if (mounted.current) setFileLinkNotice(notice);
   }, []);
   const linkState = useMemo(
-    () => ({ fileLinkSource, workspaceFileLinks, showFileLinkNotice }),
-    [fileLinkSource, workspaceFileLinks, showFileLinkNotice],
+    () => ({ fileLinkSource, workspaceFileLinks, copyFileReferences, showFileLinkNotice }),
+    [fileLinkSource, workspaceFileLinks, copyFileReferences, showFileLinkNotice],
   );
   return (
     <div className="markdown">

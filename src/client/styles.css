@@ -6454,6 +6454,29 @@ textarea:disabled {
   vertical-align: -0.1em;
 }
 
+/* The label wraps with the sentence while the two icons stay together. */
+.markdown-file-reference {
+  white-space: nowrap;
+}
+
+.markdown-file-reference-label {
+  white-space: normal;
+}
+
+.markdown-file-reference-copy {
+  height: var(--icon-lg);
+  margin-inline-start: var(--space-0-5);
+  color: var(--muted-foreground-2);
+  vertical-align: middle;
+}
+
+@media (hover: none), (pointer: coarse) {
+  .markdown-file-reference-copy {
+    width: var(--control-touch);
+    height: var(--control-xs);
+  }
+}
+
 .markdown [data-assistant-question-text] {
   color: var(--chat-question);
   text-decoration: underline dotted;

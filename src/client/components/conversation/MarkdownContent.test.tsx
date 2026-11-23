@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -487,6 +488,73 @@ describe("MarkdownContent Mermaid fences", () => {
 });
 
 describe("MarkdownContent workspace file links", () => {
+  it.each([
+    ["src/app.ts:42", "src/app.ts:42"],
+    ["file:///work/project/a%20guide.md:8", "/work/project/a guide.md:8"],
+    ["file:///C:/work/a%20guide.md", "C:\\work\\a guide.md"],
+  ])("copies the path in %s without opening the file", async (href, text) => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    const openReference = vi.fn();
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+
+    render(
+      <WorkspaceFileLinkProvider handler={{ openReference }}>
+        <MarkdownContent copyFileReferences>
+          {`See [the source](${href}) for details and [the docs](https://example.test/).`}
+        </MarkdownContent>
+      </WorkspaceFileLinkProvider>,
+    );
+
+    const link = screen.getByRole("link", { name: "the source" });
+    const copy = screen.getByRole("button", { name: `Copy file reference for ${text}` });
+    expect(link.nextElementSibling).toBe(copy);
+    fireEvent.click(copy);
+
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("File reference copied."));
+    expect(link.closest("p")?.textContent).toBe("See the source for details and the docs.");
+    expect(writeText).toHaveBeenCalledExactlyOnceWith(text);
+    expect(openReference).not.toHaveBeenCalled();
+  });
+
+  it("clears temporary copy feedback after a clipboard failure", async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error("denied"));
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    vi.useFakeTimers();
+
+    try {
+      render(
+        <WorkspaceFileLinkProvider handler={{ openReference: vi.fn() }}>
+          <MarkdownContent copyFileReferences>{"[Source](src/app.ts)"}</MarkdownContent>
+        </WorkspaceFileLinkProvider>,
+      );
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Copy file reference for src/app.ts" }));
+      });
+      expect(screen.getByRole("status")).toHaveTextContent("Copying the file reference failed.");
+      act(() => vi.advanceTimersByTime(1_800));
+      expect(screen.getByRole("status")).toBeEmptyDOMElement();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves file links alone in Markdown surfaces that do not opt in", () => {
+    render(
+      <WorkspaceFileLinkProvider handler={{ openReference: vi.fn() }}>
+        <MarkdownContent>{"[Source](src/app.ts)"}</MarkdownContent>
+      </WorkspaceFileLinkProvider>,
+    );
+
+    expect(screen.getByRole("link", { name: "Source" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Copy file reference/ })).toBeNull();
+  });
+
   it.each([
     ["file:///C:/work/project/a%20guide.md", "C:\\work\\project\\a guide.md"],
     ["file:///work/project/a%20guide.md", "/work/project/a guide.md"],

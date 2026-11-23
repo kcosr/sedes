@@ -30,6 +30,7 @@ export function ProgressiveMarkdown({
   children,
   streaming,
   copyCodeBlocks = false,
+  copyFileReferences = false,
   sourcePositionMetadata = false,
   highlightQuestions = false,
   animationActive = true,
@@ -39,6 +40,8 @@ export function ProgressiveMarkdown({
   streaming: boolean;
   /** Adds copy controls to fenced code blocks in the rendered Markdown. */
   readonly copyCodeBlocks?: boolean;
+  /** Adds copy controls to workspace file links in the rendered Markdown. */
+  readonly copyFileReferences?: boolean;
   readonly sourcePositionMetadata?: boolean;
   readonly highlightQuestions?: boolean;
   /** Hidden reasoning keeps its content mounted, but must not keep a RAF alive. */
@@ -188,6 +191,7 @@ export function ProgressiveMarkdown({
         <MarkdownStreamFadeContext.Provider value={frame}>
           <MarkdownContent
             copyCodeBlocks={copyCodeBlocks}
+            copyFileReferences={copyFileReferences}
             enableMermaid
             rehypePlugins={rehypePlugins}
             sourcePositionMetadata={sourcePositionMetadata && !presentation}

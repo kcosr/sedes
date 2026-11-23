@@ -96,6 +96,9 @@ User-facing changes are collected here before release. See the
 
 ### Added
 
+- Copy a file path and line number directly from a file link in an agent reply.
+  ([#147](https://github.com/kcosr/sedes/pull/147))
+
 - Use **Command+Shift+P** or **Ctrl+Shift+P** to switch between the two most
   recently opened threads in the current client session.
   ([#144](https://github.com/kcosr/sedes/pull/144))

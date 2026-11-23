@@ -263,6 +263,10 @@ thread's preferred linked worktree when set; otherwise it uses Primary. A
 relative link inside a rendered Markdown file stays anchored to that source
 file's root and directory.
 
+In an agent reply, select **Copy file reference** beside a file link to copy
+its path, including the line number when present. Select the link to open the
+file in Files.
+
 The link still passes normal root, environment, file-type, and sensitive-file
 checks. Merely rendering a link does not authorize a path, attach a directory,
 or grant the agent access. Ambiguous, truncated, missing, or disallowed targets
