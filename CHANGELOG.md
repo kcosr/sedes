@@ -305,10 +305,11 @@ User-facing changes are collected here before release. See the
   ([#111](https://github.com/kcosr/sedes/pull/111))
 
 - Published HTML documents now open in a thread-scoped **Pages** panel with
-  move, resize, maximize, revision browsing, zoom, and downloads. Chat opens
-  its exact saved revision; the page list opens the latest. The old dialogs
-  are removed. This update resets saved device panel arrangements and sizes
-  once and removes obsolete layout records; thread terminal tabs remain.
+  move, resize, maximize, revision browsing, zoom, and downloads. Opening a page
+  from chat shows its exact saved revision and fills the workbench. The page
+  list opens the latest revision. The old dialogs are removed. This update
+  resets saved device panel arrangements and sizes once and removes obsolete
+  layout records. Thread terminal tabs remain.
   See [HTML previews](docs/user/html-previews.md).
   ([#110](https://github.com/kcosr/sedes/pull/110))
 

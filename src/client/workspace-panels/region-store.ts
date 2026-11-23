@@ -87,6 +87,8 @@ export interface PanelRegionFocusInput {
 export interface PanelRegionOpenInput extends PanelRegionFocusInput {
   /** Open there and make it the panel's placement (the place menu). */
   readonly region?: RegionId;
+  /** Fill the desktop stage as part of opening. */
+  readonly maximize?: boolean;
   /** Delivered to the panel; it consumes it with `consumeIntent`. */
   readonly intent?: unknown;
 }
@@ -295,7 +297,8 @@ export class PanelRegionStore {
   open(kind: PanelKind, input: PanelRegionOpenInput = {}): boolean {
     if (!this.#canLoad(kind)) return false;
     if (input.region !== undefined && !isRegionId(input.region)) return false;
-    const next = openPanel(this.#currentView(), kind, input.region);
+    const opened = openPanel(this.#currentView(), kind, input.region);
+    const next = input.maximize ? maximizePanel(opened, kind) : opened;
     const deliversIntent = input.intent !== undefined;
     if (deliversIntent) this.#intents.set(kind, input.intent);
     this.#commit(next, {

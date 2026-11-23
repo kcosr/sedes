@@ -319,6 +319,30 @@ describe("PanelRegionStore terminal tabs", () => {
 });
 
 describe("PanelRegionStore intents and focus", () => {
+  it("opens and maximizes a panel in one update with its intent and focus request", () => {
+    const { storage } = memoryStorage();
+    const store = createStore(storage);
+    store.maximize("chat");
+    const intent = { sequence: 1 };
+    const focusScope = { kind: "thread", threadId: "thread-1" } as const;
+    const listener = vi.fn();
+    store.subscribe(() => listener(store.getSnapshot(), store.intent("pages")));
+
+    expect(store.open("pages", { maximize: true, intent, focusScope })).toBe(true);
+
+    expect(listener).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        maximized: "pages",
+        visible: ["pages"],
+        focusRequest: expect.objectContaining({ kind: "pages", scope: focusScope }),
+      }),
+      intent,
+    );
+    const reloaded = createStore(storage);
+    expect(reloaded.maximized()).toBeNull();
+    expect(reloaded.getSnapshot().visible).toEqual(["chat", "pages"]);
+  });
+
   it("delivers an intent and consumes it by sequence", () => {
     const store = createStore();
     const listener = vi.fn();

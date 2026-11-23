@@ -39,9 +39,6 @@ import { useSidebarInventoryScope } from "../app/use-sidebar-inventory-scope";
 import { useEnvironmentColorsEnabled } from "../app/use-environment-colors-enabled";
 import { openThreadRoute } from "../workspace-panels/thread-panel-navigation.js";
 import { lazyView } from "./LazyView.js";
-import { PageOpenProvider } from "../pages/page-opening.js";
-import { createPagesPanelIntent } from "../pages/pages-panel-intent.js";
-import type { PageRevision } from "../../shared/protocol/pages.js";
 
 const ArchivedView = lazyView(
   "archived threads",
@@ -110,14 +107,6 @@ export const Workbench = memo(function Workbench({
     route.name === "thread" ? route.threadId : undefined,
   );
   const selectedThreadId = route.name === "thread" ? route.threadId : undefined;
-  const openPage = useCallback((page: PageRevision) => {
-    if (!selectedThreadId || page.threadId !== selectedThreadId) return;
-    panelLayoutStore.open("pages", {
-      intent: createPagesPanelIntent(page),
-      focus: true,
-      focusScope: { kind: "thread", threadId: selectedThreadId },
-    });
-  }, [panelLayoutStore, selectedThreadId]);
   useEffect(() => {
     if (!selectedThreadId) return;
     threadRegistry.retain(selectedThreadId);
@@ -239,7 +228,7 @@ export const Workbench = memo(function Workbench({
     );
     return (
       <WorkspaceFileLinkProvider handler={workspaceFileLinkHandler}>
-        <PageOpenProvider openPage={openPage}>{panelLayout}</PageOpenProvider>
+        {panelLayout}
       </WorkspaceFileLinkProvider>
     );
   }
