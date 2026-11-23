@@ -11,6 +11,7 @@ User-facing changes are collected here before release. See the
   `agent_tools_cli@7` contract. Rebuild/update them together for the new Execution
   catalog group; older tool relays fail closed. See
   [agent-managed configuration](docs/operator/configuration.md#agent-managed-configuration).
+  ([#152](https://github.com/kcosr/sedes/pull/152))
 
 - Execution Settings uses client protocol **179** and runtime wire **18**.
   Upgrade clients, the server, sidecar and bundled workers together. On a current host, adding a supported
@@ -117,6 +118,7 @@ User-facing changes are collected here before release. See the
   preserve omitted settings, and authorized detail reads return literal variable
   values. See [agent-managed configuration](docs/operator/configuration.md#agent-managed-configuration)
   and [tool-policy delegation](docs/user/tool-policies.md#delegate-management-to-an-agent).
+  ([#152](https://github.com/kcosr/sedes/pull/152))
 
 - Copy a file path and line number directly from a file link in an agent reply.
   ([#147](https://github.com/kcosr/sedes/pull/147))
