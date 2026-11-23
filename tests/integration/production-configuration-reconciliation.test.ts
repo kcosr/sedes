@@ -173,7 +173,7 @@ describe("production configuration reconciliation", () => {
     await expect(service.save(scope, { mutationId: randomUUID(), expectedRevision: revision, configuration: removed })).rejects.toThrow(/confirm retirement/i);
     await expect(service.save(scope, { mutationId: randomUUID(), expectedRevision: revision, configuration: {
       ...configuration, targets: removed.targets,
-    } })).rejects.toThrow(/confirm retirement/i);
+    } })).rejects.toThrow(/requires a target that fixes its execution environment/);
     const third = structuredClone(configuration);
     addAntigravity(third, environmentId, "replacement", true);
     const saveReplacement = () => service.save(scope, { mutationId: randomUUID(), expectedRevision: service.repository.get(scope).revision, configuration: third });
@@ -1560,11 +1560,16 @@ describe("production configuration reconciliation", () => {
     const replacement = { ...status, serviceIncarnation: "replacement", resources: [], resourcesFingerprint: "c".repeat(64) };
     const inspect = vi.spyOn(SidecarRuntimeOwner.prototype, "inspectService").mockResolvedValue(status);
     const connect = vi.spyOn(SidecarRuntimeOwner.prototype, "connect").mockResolvedValue(replacement);
+    const deliverPolicy = vi.spyOn(SidecarRuntimeOwner.prototype, "retryPolicy").mockResolvedValue();
+    vi.spyOn(SidecarRuntimeOwner.prototype, "synchronizePolicy").mockResolvedValue();
     const control = vi.spyOn(SidecarRuntimeOwner.prototype, "controlService").mockImplementation(async ({ operation }) => {
       inspect.mockResolvedValue(operation === "stop" ? undefined : replacement);
       return undefined;
     });
     const saved = await service.save(scope, { mutationId: randomUUID(), expectedRevision: snapshot.revision, configuration });
+    // Saving starts the new host on its own queue. Use the fixture's policy carrier
+    // and wait for that owner before introducing the restored-host conflict.
+    await vi.waitFor(() => expect(deliverPolicy).toHaveBeenCalled(), { timeout: 5_000 });
     const projection = new ConfigurationProjection(service.repository.database, {});
     projection.policyRecovery(scope, environmentId).requireRecovery(status.serviceIncarnation,
       { revision: 4, digest: "a".repeat(64) }, { revision: 5, digest: "b".repeat(64) });
