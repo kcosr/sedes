@@ -113,6 +113,8 @@ export interface SidecarRuntimeOwnerOptions<
   /** Read when each new normal or recovery connection starts. */
   readonly connectionCompression: () => boolean;
   readonly isAutomaticConnectionEnabled: () => boolean | Promise<boolean>;
+  /** Synchronous preference for selection, including before the first attachment. */
+  readonly isAutomaticConnectionEligible?: () => boolean;
   readonly artifact: SidecarArtifactRegistration;
   readonly provisioner: SidecarProvisioner;
   readonly sedesOperations: SidecarOperationRegistry;
@@ -154,6 +156,7 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
   readonly #authorizedCapabilities: readonly SidecarAuthorizedCapability[];
   readonly #authorizedRuntimeCapabilities: readonly SidecarRuntimeCapability[];
   readonly #isAutomaticConnectionEnabled: () => boolean | Promise<boolean>;
+  readonly #isAutomaticConnectionEligible: () => boolean;
   readonly #connectionCompression: () => boolean;
   readonly #artifact: SidecarArtifactRegistration;
   readonly #provisioner: SidecarRuntimeOwnerOptions<Session>["provisioner"];
@@ -251,6 +254,7 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
     );
     this.#authorizedRuntimeCapabilities = Object.freeze(input.authorizedRuntimeCapabilities.map((capability) => Object.freeze({ ...capability })));
     this.#isAutomaticConnectionEnabled = input.isAutomaticConnectionEnabled;
+    this.#isAutomaticConnectionEligible = input.isAutomaticConnectionEligible ?? (() => true);
     this.#connectionCompression = input.connectionCompression;
     this.#artifact = input.artifact;
     this.#provisioner = input.provisioner;
@@ -269,8 +273,9 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
   canAcquireCapability(capabilityId: string, majorVersion: number): boolean {
     if (!this.#canAttach()) return false;
     if (this.#policy.capabilityGeneration(capabilityId, true) === undefined) return false;
-    return capabilityId === AGENT_TOOL_CLI_CAPABILITY.capabilityId ? majorVersion === AGENT_TOOL_CLI_CAPABILITY.majorVersion :
-      this.negotiatedCapabilities.some(capability => capability.capabilityId === capabilityId && capability.majorVersion === majorVersion);
+    if (capabilityId === AGENT_TOOL_CLI_CAPABILITY.capabilityId) return majorVersion === AGENT_TOOL_CLI_CAPABILITY.majorVersion;
+    const capabilities = this.#lastNegotiatedCapabilities ?? this.#authorizedCapabilities;
+    return capabilities.some(capability => capability.capabilityId === capabilityId && capability.majorVersion === majorVersion);
   }
 
   policyStatus() { return this.#policy.status; }
@@ -278,6 +283,19 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
   policyBackendGeneration(id: string): number | undefined { return this.#policy.backendGeneration(id); }
   acquirableTargetGeneration(backendId: string, targetId: string): number | undefined {
     return this.#canAttach() ? this.#policy.targetGeneration(backendId, targetId, true) : undefined;
+  }
+
+  async confirmTargetSelection(backendId: string, targetId: string): Promise<boolean> {
+    if (!this.#canAttach()) return false;
+    const generation = this.#policy.targetGeneration(backendId, targetId, true);
+    if (generation === undefined) return false;
+    if (this.#policy.targetGeneration(backendId, targetId) === generation) return true;
+    try {
+      return await this.withTargetAuthorization(backendId, targetId, generation, () => true);
+    } catch (error) {
+      if (error instanceof SidecarUnavailableError) return false;
+      throw error;
+    }
   }
 
   async withTargetAuthorization<T>(backendId: string, targetId: string, generation: number, operation: () => T): Promise<T> {
@@ -293,7 +311,7 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
   }
 
   #canAttach(): boolean {
-    return !this.#closed && !this.#intentionallyDisconnected && this.#retirementFailure === undefined && this.#isTransportAvailable();
+    return !this.#closed && !this.#intentionallyDisconnected && this.#retirementFailure === undefined && this.#isTransportAvailable() && this.#isAutomaticConnectionEligible();
   }
   policyCapabilityGeneration(id: string): number | undefined { return this.#policy.capabilityGeneration(id); }
   acquirableCapabilityGeneration(id: string): number | undefined { return this.#canAttach() ? this.#policy.capabilityGeneration(id, true) : undefined; }
@@ -313,8 +331,13 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
   async retryPolicy(signal: AbortSignal): Promise<void> {
     // Starting a normal session after idle expiry checks the host preference
     // and synchronizes its first policy without a service-management command.
-    if (this.#current) await this.synchronizePolicy(signal, true);
-    else await this.#session(signal);
+    this.#clearIdleTimer();
+    try {
+      if (this.#current) await this.synchronizePolicy(signal, true);
+      else await this.#session(signal);
+    } finally {
+      this.#scheduleIdleIfEligible();
+    }
   }
 
   async synchronizePolicy(signal?: AbortSignal, force = false): Promise<void> {

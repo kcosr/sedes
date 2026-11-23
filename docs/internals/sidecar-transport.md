@@ -67,8 +67,10 @@ grants at save and exposes additions after host confirmation. A running
 attachment can update these grants while unrelated turns, terminals and file
 watches stay on their original connection.
 
-After idle retirement or carrier loss, unchanged grants from the last confirmed
-incarnation keep targets and features selectable. A foreground driver call or
+A first request after main starts, or a save after an idle disconnect, can
+initiate discovery for a configured target or feature. A known unsupported
+subject stays unavailable. After carrier loss, unchanged grants from the last
+confirmed incarnation keep targets and features selectable. A foreground driver call or
 new turn on a held handle reacquires the carrier and confirms the target on its
 current controller before entering the provider. Discovery of a different
 incarnation discards the previous selection evidence. Exact settlement, such

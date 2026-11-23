@@ -1560,7 +1560,12 @@ export async function startProductionApplication(
     const executionTargets = new DatabaseExecutionTargetReader({
       configuration: backendConfiguration,
       registry,
-      targetAdmitted: profile => moduleRuntimes.has(profile.backendInstanceId) && targetGeneration(connectionProfile(profile)) !== undefined,
+      targetAdmitted: profile => {
+        if (!moduleRuntimes.has(profile.backendInstanceId)) return false;
+        const owner = environmentRuntimes.get(profile.executionEnvironmentId)?.sidecarRuntime;
+        return owner ? owner.confirmTargetSelection(profile.backendInstanceId, profile.templateId) :
+          targetGeneration(connectionProfile(profile)) !== undefined;
+      },
       environmentOperations,
       workspaceIsolationNetworkProfiles:
         advertisedWorkspaceIsolationNetworkProfiles,
@@ -2749,6 +2754,9 @@ export async function startProductionApplication(
                 ? [[item.id.slice("backend:".length), item.observedLaunchDigest] as const] : []))});
       }
     };
+    // A policy-changing save wakes a detached automatic host once. Display-only
+    // saves and readiness notifications do not request a fresh attachment.
+    const savedPolicyDeliveries = new Set<string>();
     const reconcileHost = async (environmentId: string): Promise<void> => {
       const before = reconciliationFingerprint();
       const previousEnvironments = new Map(environmentRuntimes);
@@ -2756,11 +2764,13 @@ export async function startProductionApplication(
       const id = environmentId;
       if (desiredConfiguration.configuration.executionEnvironments.some(host => host.id === id) || environmentRuntimes.has(id)) {
         const definition = desiredConfiguration.configuration.executionEnvironments.find(item => item.id === id);
+        if (!definition || appliedEnvironmentFingerprints.get(id) !== environmentRuntimeFingerprint(id)) {
+          await replaceEnvironmentIfIdle(id, definition);
+        }
         if (definition && appliedEnvironmentFingerprints.get(id) === environmentRuntimeFingerprint(id)) {
           appliedEnvironmentRevisions.set(id, configurationRepository.runtime(scope, "environment", id).desiredRevision);
-          await synchronizeHostPolicy(id, maintenanceSignal());
-        } else {
-          await replaceEnvironmentIfIdle(id, definition);
+          await synchronizeHostPolicy(id, maintenanceSignal(), savedPolicyDeliveries.delete(id))
+            .catch(reportBackgroundError(`Execution host ${id} policy delivery`));
         }
       }
       for (const id of new Set([...moduleRuntimes.keys(), ...backendStartups.keys(), ...desiredConfiguration.configuration.backends.map(item => item.id)])) {
@@ -2854,6 +2864,9 @@ export async function startProductionApplication(
         agentToolRuntimeAvailability.set("research.web_search", availability);
       }
     };
+    const policyRevisions = new Map(desiredConfiguration.configuration.executionEnvironments
+      .filter(host => host.kind !== "local")
+      .map(host => [host.id, configurationProjection.hostPolicy(scope, host.id)?.revision] as const));
     let publishedConfigurationRevision = desiredConfiguration.revision;
     const scheduleLiveConfiguration = (snapshot = configurationRepository.get(scope), force = false): void => {
       const previous = desiredConfiguration;
@@ -2879,7 +2892,18 @@ export async function startProductionApplication(
       for (const record of desiredConfiguration.runtimes) {
         if (force || record.desiredRevision > publishedConfigurationRevision) touched.add(resourceHost(record));
       }
-      for (const host of touched) scheduleHostReconciliation(host);
+      for (const id of touched) {
+        const definition = snapshot.configuration.executionEnvironments.find(host => host.id === id);
+        if (definition && definition.kind !== "local") {
+          const revision = configurationProjection.hostPolicy(scope, id)?.revision;
+          if (revision !== undefined && revision !== policyRevisions.get(id)) savedPolicyDeliveries.add(id);
+          policyRevisions.set(id, revision);
+        } else {
+          policyRevisions.delete(id);
+          savedPolicyDeliveries.delete(id);
+        }
+        scheduleHostReconciliation(id);
+      }
       if (previous.revision !== desiredConfiguration.revision && !drain.isDraining) {
         void activeApplicationSnapshots.publishAuthoritativeReplacement(scope).catch(reportBackgroundError("Execution settings publication"));
       }

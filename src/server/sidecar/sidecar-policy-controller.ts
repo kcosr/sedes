@@ -91,7 +91,8 @@ export class SidecarPolicyController {
     this.#lastRequested = undefined;
     this.#status = undefined;
     this.#retryIndex = 0;
-    this.#conflict = false;
+    // A disconnected quarantined peer stays fenced until a new incarnation is observed.
+    this.#conflict = this.#conflict && retainForAcquisition;
     for (const lease of this.#routeLeases) lease.end();
     if (published) this.#notify();
   }
@@ -109,13 +110,24 @@ export class SidecarPolicyController {
     return evidence && !diverges(evidence.confirmed, desired) ? evidence : undefined;
   }
 
+  /** A desired subject without an observation can initiate discovery. Once
+   * the current attachment has replied, its readiness governs acquisition. */
+  #mayDiscover(forAcquisition: boolean, desired: InstalledExecutionPolicy): boolean {
+    return forAcquisition && !this.#conflict &&
+      (!this.#connection || (!this.#status && !!this.#attempt)) &&
+      !diverges(this.#renewable?.confirmed ?? null, desired);
+  }
+
   capabilityGeneration(id: string, forAcquisition = false): number | undefined {
     const desired = this.#readDesired();
     const grant = desired.snapshot.capabilities.find(entry => entry.id === id);
     const evidence = this.#evidence(forAcquisition, desired);
-    return grant && evidence?.confirmed.snapshot.capabilities.some(
+    if (!grant) return undefined;
+    const observed = evidence?.confirmed.snapshot.capabilities.some(
       installed => installed.id === id && installed.generation === grant.generation,
-    ) && subjectReady(evidence, `capability:${id}`, grant.generation) ? grant.generation : undefined;
+    );
+    return (observed ? subjectReady(evidence, `capability:${id}`, grant.generation) : this.#mayDiscover(forAcquisition, desired))
+      ? grant.generation : undefined;
   }
 
   backendGeneration(id: string, forAcquisition = false): number | undefined {
@@ -132,20 +144,25 @@ export class SidecarPolicyController {
     const evidence = this.#evidence(forAcquisition, desired);
     const backend = desired.snapshot.backends.find(entry => entry.id === backendId);
     const installed = evidence?.confirmed.snapshot.backends.find(entry => entry.id === backendId);
-    if (!backend || backend.generation !== installed?.generation ||
-      !subjectReady(evidence, `backend:${backendId}`, backend.generation)) return undefined;
-    const target = backend.targets.find(entry => entry.id === targetId);
-    return target && installed.targets.some(entry => entry.id === targetId && entry.generation === target.generation)
+    const target = backend?.targets.find(entry => entry.id === targetId);
+    if (!backend || !target) return undefined;
+    const discover = this.#mayDiscover(forAcquisition, desired);
+    if (backend.generation !== installed?.generation) return discover ? target.generation : undefined;
+    if (!subjectReady(evidence, `backend:${backendId}`, backend.generation)) return undefined;
+    return discover || installed.targets.some(entry => entry.id === targetId && entry.generation === target.generation)
       ? target.generation : undefined;
   }
 
   workspaceRoots(forAcquisition = false): InstalledExecutionPolicy["snapshot"]["roots"] {
     const desired = this.#readDesired();
     const evidence = this.#evidence(forAcquisition, desired);
-    if (!evidence) return [];
-    return desired.snapshot.roots.filter(root => evidence.confirmed.snapshot.roots.some(
-      installed => installed.id === root.id && installed.path === root.path && installed.generation === root.generation,
-    ) && subjectReady(evidence, `root:${root.id}`, root.generation));
+    const discover = this.#mayDiscover(forAcquisition, desired);
+    return desired.snapshot.roots.filter(root => {
+      const observed = evidence?.confirmed.snapshot.roots.some(
+        installed => installed.id === root.id && installed.path === root.path && installed.generation === root.generation,
+      );
+      return observed ? subjectReady(evidence, `root:${root.id}`, root.generation) : discover;
+    });
   }
 
   routeGeneration(backendId: string): number | undefined {

@@ -68,7 +68,7 @@ function status(desired?: InstalledExecutionPolicy): ExecutionPolicyStatus {
 afterEach(() => vi.useRealTimers());
 
 describe("persistent sidecar policy synchronization", () => {
-  it("limits disconnected evidence to acquisition of unchanged grants on a known incarnation", async () => {
+  it("uses desired grants only for discovery and denies rollback or a known stale incarnation", async () => {
     let desired = policy(3);
     const peer = {readPolicy: async () => status(desired), applyPolicy: async (next: InstalledExecutionPolicy) => status(next)};
     const controller = new SidecarPolicyController(() => desired, vi.fn());
@@ -83,10 +83,32 @@ describe("persistent sidecar policy synchronization", () => {
     desired = policy(2);
     expect(controller.targetGeneration("backend", "target", true)).toBeUndefined();
     desired = policy(4);
-    expect(controller.capabilityGeneration("agent_tools_cli", true)).toBeUndefined();
+    expect(controller.capabilityGeneration("agent_tools_cli", true)).toBe(4);
+    expect(controller.capabilityGeneration("agent_tools_cli")).toBeUndefined();
     controller.attach(peer, {...service, serviceIncarnation: "different"});
     expect(controller.targetGeneration("backend", "target", true)).toBeUndefined();
     controller.detach();
+  });
+
+  it("admits first-use discovery for a new idle grant but honors observed unsupported subjects", async () => {
+    let desired = policy(1);
+    const current = {...status(desired), readiness: status(desired).readiness.map(entry => ({...entry, state: "unsupported" as const}))};
+    const controller = new SidecarPolicyController(() => desired, vi.fn());
+    controller.attach({readPolicy: async () => current, applyPolicy: async () => current}, service);
+    await controller.synchronize();
+    controller.detach(true);
+    expect(controller.targetGeneration("backend", "target", true)).toBeUndefined();
+    expect(controller.workspaceRoots(true)).toEqual([]);
+    expect(controller.capabilityGeneration("agent_tools_cli", true)).toBeUndefined();
+    const saved = policy(2);
+    desired = {...saved, snapshot: {...saved.snapshot, roots: [...saved.snapshot.roots, {id:"new", path:"/new", generation:2}],
+      backends: [...saved.snapshot.backends, {...saved.snapshot.backends[0]!, id:"new", generation:2}] }};
+    expect(controller.workspaceRoots(true)).toEqual([{id:"new",path:"/new",generation:2}]);
+    expect(controller.capabilityGeneration("agent_tools_cli", true)).toBe(2);
+    expect(controller.targetGeneration("new", "target", true)).toBe(1);
+    expect(controller.workspaceRoots()).toEqual([]);
+    expect(controller.capabilityGeneration("agent_tools_cli")).toBeUndefined();
+    expect(controller.targetGeneration("new", "target")).toBeUndefined();
   });
 
   it("confirms a fresh epoch, keeps surviving subjects usable while applying, and fences a withdrawn route immediately", async () => {

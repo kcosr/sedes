@@ -125,7 +125,7 @@ export interface ExecutionEnvironmentRuntimeInput {
   /** Compiled backend grants are independent of ancillary Files/tool grants. */
   readonly authorizedRuntimeCapabilities: SidecarRuntimeOwnerOptions<SidecarClientSession>["authorizedRuntimeCapabilities"];
   readonly activeEnvironmentRecord: () => InventoryEnvironmentRecord;
-  readonly automaticConnectionEnabled: () => boolean | Promise<boolean>;
+  readonly automaticConnectionEnabled: () => boolean;
   readonly connectionCompression: () => boolean;
   readonly reportAvailability: (
     available: boolean,
@@ -400,6 +400,7 @@ export async function createExecutionEnvironmentRuntime(
       isAutomaticConnectionEnabled: input.automaticConnectionEnabled,
       connectionCompression: input.connectionCompression,
       isTransportAvailable: () => !outbound || outbound.isConnected(),
+      isAutomaticConnectionEligible: input.automaticConnectionEnabled,
       artifact,
       provisioner,
       authorizedRuntimeCapabilities: input.authorizedRuntimeCapabilities,

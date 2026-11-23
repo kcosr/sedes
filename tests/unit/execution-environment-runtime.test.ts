@@ -56,7 +56,7 @@ vi.mock("../../src/server/sidecar/sidecar-runtime.js", async (original) => {
       policyCapabilityGeneration(id: string) { return this.desired().snapshot.capabilities.find(entry => entry.id === id)?.generation; }
       canAcquireCapability(capabilityId: string, majorVersion: number) {
         const matches = (capability: { capabilityId: string; majorVersion: number }) => capability.capabilityId === capabilityId && capability.majorVersion === majorVersion;
-        return this.transportAvailable() && !!this.policyCapabilityGeneration(capabilityId) && (this.options.authorizedCapabilities as { capabilityId: string; majorVersion: number }[]).some(matches) &&
+        return this.transportAvailable() && (this.options.isAutomaticConnectionEligible as () => boolean)() && !!this.policyCapabilityGeneration(capabilityId) && (this.options.authorizedCapabilities as { capabilityId: string; majorVersion: number }[]).some(matches) &&
           (fake.negotiatedCapabilities === undefined || fake.negotiatedCapabilities.some(matches));
       }
       connect = fake.connect;
@@ -318,6 +318,9 @@ describe("execution environment runtime composition", () => {
     expect(
       await (fake.runtimeOptions[0]!.isAutomaticConnectionEnabled as () => Promise<boolean>)(),
     ).toBe(false);
+    expect(runtime.terminal!.availability(scope, environmentId)).toBe("unavailable");
+    expect(runtime.workspaceFiles!.supportsPrimaryRoot(scope, environmentId)).toBe(false);
+    expect(runtime.operations.workspaceTools.availability).toBe("unavailable");
     automatic = true;
     expect(
       await (fake.runtimeOptions[0]!.isAutomaticConnectionEnabled as () => Promise<boolean>)(),

@@ -338,8 +338,10 @@ describe("SidecarRuntimeOwner", () => {
       create: () => ({instance, connection, attach}) as unknown as ConversationBackendDriver,
     });
     try {
-      const lease = await value.owner.acquireOperation(scope, environmentId, new AbortController().signal);
-      lease.release();
+      const cold = registry.driver(connection);
+      expect(value.startSession).not.toHaveBeenCalled();
+      expect(await value.owner.confirmTargetSelection(instance.id, connection.templateId)).toBe(true);
+      await cold.attach({} as Parameters<typeof cold.attach>[0]);
       await vi.advanceTimersByTimeAsync(5000);
       expect(value.owner.policyStatus()).toBeUndefined();
       const driver = registry.driver(connection);
@@ -367,6 +369,11 @@ describe("SidecarRuntimeOwner", () => {
       await expect(handle.submit(input)).rejects.toThrow();
       expect(submit).toHaveBeenCalledTimes(1);
       expect(value.startSession).toHaveBeenCalledTimes(3);
+      // A freshly saved generation can request its own confirmation while idle.
+      const replacement = await registry.driver(connection).attach({} as Parameters<typeof driver.attach>[0]);
+      expect(value.startSession).toHaveBeenCalledTimes(4);
+      await expect(replacement.submit(input)).resolves.toBe("submitted");
+      await expect(handle.submit(input)).rejects.toThrow();
     } finally { await value.owner.close(); vi.useRealTimers(); }
   });
 
@@ -377,8 +384,9 @@ describe("SidecarRuntimeOwner", () => {
     const provider = new SshInteractiveTerminalProvider({ scope, environmentId, enabled: true, configurationRevision: 3, activeConfigurationRevision: () => 3,
       runtime: value.owner as unknown as ConstructorParameters<typeof SshInteractiveTerminalProvider>[0]["runtime"] });
     try {
-      expect(provider.availability(scope, environmentId)).toBe("unavailable");
-      expect(value.owner.canAcquireCapability("interactive_terminal", 2)).toBe(false);
+      expect(provider.availability(scope, environmentId)).toBe("available");
+      expect(value.owner.canAcquireCapability("interactive_terminal", 2)).toBe(true);
+      expect(value.owner.policyCapabilityGeneration("interactive_terminal")).toBeUndefined();
       expect(value.owner.canAcquireCapability("interactive_terminal", 99)).toBe(false);
       const first = await value.owner.acquireOperation(scope, environmentId, new AbortController().signal);
       expect(value.owner.canAcquireCapability("interactive_terminal", 2)).toBe(terminalSupported);
@@ -758,6 +766,29 @@ describe("SidecarRuntimeOwner", () => {
     expect(value.install).not.toHaveBeenCalled();
     expect(value.owner.activeAgentToolLeaseCount).toBe(0);
     await value.owner.close();
+  });
+
+  it("installs a newly saved Files grant on an idle-expired host without a maintenance tick", async () => {
+    vi.useFakeTimers();
+    let filesEnabled = false;
+    const value = fixture({idleMilliseconds: 5000, readDesiredPolicy: () => ownerPolicy(
+      filesEnabled ? ["workspace_files"] : [], {environmentRevision: 1, operationsRevision: filesEnabled ? 2 : 1},
+    )});
+    const signal = new AbortController().signal;
+    try {
+      await value.owner.retryPolicy(signal);
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(value.owner.policyStatus()).toBeUndefined();
+      filesEnabled = true;
+      await value.owner.retryPolicy(signal);
+      expect(value.startSession).toHaveBeenCalledTimes(2);
+      expect(value.owner.policyCapabilityGeneration("workspace_files")).toBe(1);
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(value.owner.policyStatus()).toBeUndefined();
+    } finally {
+      await value.owner.close();
+      vi.useRealTimers();
+    }
   });
 
   it("retries policy on demand and respects an explicit host disconnect", async () => {

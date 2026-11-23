@@ -70,6 +70,22 @@ const root: WorkspaceFileRootTarget = {
 };
 
 describe("SidecarWorkspaceFileProvider", () => {
+  it("rechecks a tentatively selected Files grant after cold attachment and before root validation", async () => {
+    let generation = 1;
+    const call = vi.fn();
+    const release = vi.fn();
+    const runtime = {acquireOperation: async () => {
+      generation++;
+      return {session: {call}, release};
+    }} as unknown as SidecarRuntimeOwner<SidecarClientSession>;
+    const provider = new SidecarWorkspaceFileProvider({scope, environmentId, policyRoots: ["/srv"], runtime,
+      selectPolicyRoot: () => ({path: "/srv", key: String(generation)})});
+    await expect(provider.validateRoot(scope, {workspaceId: root.workspaceId, environmentId, rootKind: "primary", canonicalPath: root.canonicalPath}))
+      .rejects.toBeInstanceOf(WorkspaceFileRootUnavailableError);
+    expect(call).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it("closes candidate roots admitted by interrupted opens without a later read or waiting for close", async () => {
     // Mirrors the host: an admission completes even when the caller stops
     // waiting, and reopening the same admission joins or returns it.

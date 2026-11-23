@@ -162,8 +162,8 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
     signal?: AbortSignal,
   ): Promise<void> {
     this.#assert(scope, root.environmentId);
-    const policyRootPath = this.#policyRoot(root.canonicalPath, root.rootKind === "primary" || root.rootId ? root.workspaceId : undefined, root.rootId);
-    if (!policyRootPath) throw new WorkspaceFileRootUnavailableError();
+    const selection = this.#captureRoot(root.canonicalPath, root.rootKind === "primary" || root.rootId ? root.workspaceId : undefined, root.rootId);
+    if (!selection) throw new WorkspaceFileRootUnavailableError();
     let lease: Awaited<
       ReturnType<
         SidecarRuntimeOwner<SidecarClientSession>["acquireOperation"]
@@ -180,15 +180,17 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
       throw classifyError(error);
     }
     try {
+      selection.assertCurrent();
       await lease.session.call(
         workspaceFilesRootValidateOperation,
         {
           rootKind: root.rootKind,
           declaredPath: root.canonicalPath,
-          policyRootPath,
+          policyRootPath: selection.path,
         },
         ...sidecarCallOptions(signal),
       );
+      selection.assertCurrent();
       this.#validatedKinds.set(
         rootKey(root.workspaceId, root.canonicalPath),
         root.rootKind,
@@ -208,8 +210,8 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
     signal?: AbortSignal,
   ): Promise<WorkspaceFileDiscoveredLinkRoot | undefined> {
     this.#assert(scope, environmentId);
-    const policyRootPath = this.#policyRoot(absolutePath);
-    if (!policyRootPath) return undefined;
+    const selection = this.#captureRoot(absolutePath);
+    if (!selection) return undefined;
     let lease: Awaited<
       ReturnType<
         SidecarRuntimeOwner<SidecarClientSession>["acquireOperation"]
@@ -225,11 +227,13 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
       throw classifyError(error);
     }
     try {
+      selection.assertCurrent();
       const result = await lease.session.call(
         workspaceFilesDiscoverLinkRootOperation,
-        { absolutePath, policyRootPath },
+        { absolutePath, policyRootPath: selection.path },
         ...sidecarCallOptions(signal),
       );
+      selection.assertCurrent();
       return result.status === "discovered"
         ? {
             canonicalPath: result.declaredRootPath,
@@ -270,8 +274,8 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
     signal?: AbortSignal,
   ): Promise<void> {
     this.#assert(scope, target.primaryRoot.environmentId);
-    const policyRootPath = this.#policyRoot(target.canonicalCheckoutPath);
-    if (!policyRootPath) throw new WorkspaceFileRootUnavailableError();
+    const selection = this.#captureRoot(target.canonicalCheckoutPath);
+    if (!selection) throw new WorkspaceFileRootUnavailableError();
     let lease: Awaited<
       ReturnType<
         SidecarRuntimeOwner<SidecarClientSession>["acquireOperation"]
@@ -302,6 +306,7 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
     }
     const operationId = randomUUID();
     try {
+      selection.assertCurrent();
       await lease.session
         .call(
           workspaceFilesRemoveLinkedWorktreeOperation,
@@ -309,7 +314,7 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
             operationId,
             rootHandle,
             canonicalCheckoutPath: target.canonicalCheckoutPath,
-            policyRootPath,
+            policyRootPath: selection.path,
             canonicalGitDir: target.canonicalGitDir,
             identityToken: target.identityToken,
           },
@@ -1201,10 +1206,14 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
     );
   }
 
-  #policyRoot(candidate: string, workspaceId?: string, rootId?: string): string | undefined {
-    return this.#selectRoot(candidate, workspaceId, rootId)?.path;
+  #captureRoot(candidate: string, workspaceId?: string, rootId?: string) {
+    const selected = this.#selectRoot(candidate, workspaceId, rootId);
+    if (!selected) return undefined;
+    return {path: selected.path, assertCurrent: () => {
+      if (!this.#enabled() || this.#selectRoot(candidate, workspaceId, rootId)?.key !== selected.key)
+        throw new WorkspaceFileRootUnavailableError();
+    }};
   }
-
   #selectRoot(candidate: string, workspaceId?: string, rootId?: string) {
     if (this.#selectPolicyRoot) return this.#selectPolicyRoot(candidate, rootId === WORKSPACE_FILE_LINK_CANDIDATE_ROOT_ID ? undefined : workspaceId, rootId);
     const path = this.#policyRoots()

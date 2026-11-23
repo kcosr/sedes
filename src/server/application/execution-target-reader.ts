@@ -48,7 +48,7 @@ export class DatabaseExecutionTargetReader implements ExecutionTargetReader {
     readonly input: {
       readonly configuration: BackendConfigurationRepository;
       readonly registry: AgentBackendRegistry;
-      readonly targetAdmitted?: (profile: ConnectionProfileRecord) => boolean;
+      readonly targetAdmitted?: (profile: ConnectionProfileRecord) => boolean | Promise<boolean>;
       /** Static environment operation contributions; resolving them never starts a sidecar. */
       readonly environmentOperations?: ReadonlyMap<
         string,
@@ -219,7 +219,7 @@ export class DatabaseExecutionTargetReader implements ExecutionTargetReader {
         unavailableReason: boundDisplayText("This backend is disabled."),
       };
     }
-    if (this.input.targetAdmitted && !this.input.targetAdmitted(profile)) {
+    if (this.input.targetAdmitted && !(await this.input.targetAdmitted(profile))) {
       return {...base, available: false, unavailableReason: boundDisplayText("Waiting for the execution target to become ready.")};
     }
     const environmentDisposition = this.#environmentDisposition(

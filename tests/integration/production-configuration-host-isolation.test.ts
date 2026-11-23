@@ -23,6 +23,7 @@ it.each(["maintenance", "impact", "removal"] as const)("publishes another host's
   const a = randomUUID(), b = randomUUID();
   const entered = gate(), release = gate(), hostsCreated = gate();
   let armed = false, ready = false;
+  let recovered = false;
   const forcedRetries: string[] = [];
   const notify = new Map<string, () => void>();
   let application: RunningApplication | undefined;
@@ -59,7 +60,7 @@ it.each(["maintenance", "impact", "removal"] as const)("publishes another host's
     vi.spyOn(owner, "retryPolicy").mockImplementation(async () => {
       installed = input.readDesiredPolicy!();
       forcedRetries.push(id);
-      ready = true;
+      ready = recovered;
     });
     vi.spyOn(owner, "policyStatus").mockImplementation((): ExecutionPolicyStatus | undefined => {
       if (!installed) return undefined;
@@ -96,6 +97,8 @@ it.each(["maintenance", "impact", "removal"] as const)("publishes another host's
     notify.get(a)!();
     notify.get(b)!();
     await vi.waitFor(() => expect(service.repository.runtime(scope, "environment", b).effects?.find(e => e.subjectId === "capability:workspace_tools")?.state).toBe("applied"), {timeout:5_000});
+    expect(forcedRetries.slice().sort()).toEqual([a, b].sort());
+    forcedRetries.length = 0;
     armed = true;
     if (blocker === "maintenance") await vi.advanceTimersByTimeAsync(30_001);
     else if (blocker === "impact") operation = service.impact(scope, {resourceKind:"environment",resourceId:b,action:"restart",expectedRevision:initial.revision});
@@ -111,7 +114,12 @@ it.each(["maintenance", "impact", "removal"] as const)("publishes another host's
     expect((await service.get(scope)).configuration.executionEnvironments.find(e => e.id === a)?.label).toBe("Renamed during remote wait");
     const observed = () => service.repository.runtime(scope, "environment", a).effects?.find(e => e.subjectId === "backend:added-pi");
     await vi.waitFor(() => expect(observed()).toMatchObject({state:"awaiting_host", desiredRevision:saved.revision, lastHostConfirmation:{epoch:1}}));
+    // There was no maintenance tick for this save on A. The new backend policy
+    // itself requests an attachment, even if the carrier previously idle-expired.
+    expect(forcedRetries).toEqual([a]);
+    forcedRetries.length = 0;
     if (blocker === "maintenance") {
+      recovered = true;
       const action = {resourceKind: "backend" as const, resourceId: "added-pi", action: "connect" as const, expectedRevision: saved.revision};
       const preview = await service.impact(scope, action);
       await service.lifecycle(scope, {...action, mutationId: randomUUID(), expectedIncarnation: preview.incarnation, impactToken: preview.token});
@@ -124,6 +132,20 @@ it.each(["maintenance", "impact", "removal"] as const)("publishes another host's
     release.open();
     if (blocker === "removal") expect(await outcome).toMatchObject({code:"conflict"});
     else expect(await outcome).toBeUndefined();
+    if (blocker === "maintenance") {
+      forcedRetries.length = 0;
+      const host = configuration.executionEnvironments.find(e => e.id === a)!;
+      host.label = "Metadata only";
+      const renamed = await service.save(scope, {mutationId: randomUUID(), expectedRevision: service.repository.get(scope).revision, configuration});
+      const disconnect = {resourceKind: "environment" as const, resourceId: a, action: "disconnect" as const, expectedRevision: renamed.revision};
+      const preview = await service.impact(scope, disconnect);
+      expect(forcedRetries).toEqual([]);
+      await service.lifecycle(scope, {...disconnect, mutationId: randomUUID(), expectedIncarnation: preview.incarnation, impactToken: preview.token});
+      host.workspaceRoots.push("/new-root-while-disconnected");
+      const offline = await service.save(scope, {mutationId: randomUUID(), expectedRevision: service.repository.get(scope).revision, configuration});
+      await service.impact(scope, {...disconnect, expectedRevision: offline.revision});
+      expect(forcedRetries).toEqual([]);
+    }
   } finally {
     release.open();
     await operation?.catch(() => {});
