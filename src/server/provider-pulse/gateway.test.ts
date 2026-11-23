@@ -164,6 +164,21 @@ describe("createProviderPulseGateway", () => {
     );
   });
 
+  it("projects recognized provider brands and leaves unknown providers unbranded", async () => {
+    const status = await gatewayReturning(
+      Response.json(
+        pulseStatus([account(1, "antigravity"), account(2, "fireworks")]),
+      ),
+    ).readStatus();
+
+    expect(status.accounts[0]).toMatchObject({
+      provider: "antigravity",
+      brand: "antigravity",
+    });
+    expect(status.accounts[1]?.provider).toBe("fireworks");
+    expect(status.accounts[1]).not.toHaveProperty("brand");
+  });
+
   it("preserves bounded balance fields and omits a brand for unknown providers", async () => {
     const gateway = gatewayReturning(
       Response.json(

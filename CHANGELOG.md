@@ -413,6 +413,10 @@ User-facing changes are collected here before release. See the
 
 ### Fixed
 
+- Provider Pulse Antigravity accounts show the Antigravity icon in the sidebar
+  usage menu instead of a generic letter.
+  ([#153](https://github.com/kcosr/sedes/pull/153))
+
 - Complete shared backend documentation for Antigravity, OpenCode, and native
   Pi, including history ownership, remote tools, setup, and feature limits.
   Distinguish native Pi from Pi SDK throughout the affected guides.
