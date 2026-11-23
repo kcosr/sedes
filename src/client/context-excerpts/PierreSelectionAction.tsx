@@ -11,6 +11,7 @@ import { createPortal } from "react-dom";
 import { Copy, MessageSquareText, Paperclip, Send } from "lucide-react";
 import { MAXIMUM_CONTEXT_EXCERPT_NOTE_BYTES } from "../../shared/index.js";
 import { OPEN_OVERLAY_SELECTOR } from "../app/android-back.js";
+import { activePrimaryShortcutModifier } from "../app/keyboard-shortcuts.js";
 import { Button } from "../components/ui/button.js";
 import { ContextQuote, type ContextQuoteKind } from "./ContextQuote.js";
 
@@ -278,9 +279,19 @@ export function PierreSelectionAction({
                 setError(undefined);
               }}
               onKeyDown={(event) => {
-                if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-                  event.preventDefault();
-                  stage();
+                if (
+                  event.defaultPrevented ||
+                  event.key !== "Enter" ||
+                  event.altKey ||
+                  !activePrimaryShortcutModifier(event) ||
+                  event.nativeEvent.isComposing ||
+                  event.nativeEvent.keyCode === 229
+                ) {
+                  return;
+                }
+                event.preventDefault();
+                if (!event.repeat && !initialError && !unavailableReason) {
+                  stage(event.shiftKey);
                 }
               }}
               placeholder="Note for the agent (optional)"

@@ -298,10 +298,13 @@ User-facing changes are collected here before release. See the
   **Add**, **Add & send**, **Copy**, and **Cancel** actions.
   The note field takes focus when the editor opens. Click or tap outside the
   editor to dismiss it.
+  With the note field focused for a chat, file, or diff excerpt, press
+  **Command+Shift+Enter** or **Ctrl+Shift+Enter** to add the excerpt and use
+  the composer's current Send, Steer, or Queue action.
   Conversation excerpts in drafts and sent messages show a compact quote
   preview and expand to the full text. See
   [Context excerpts](docs/user/files-and-context.md#capture-an-exact-context-excerpt).
-  ([#142](https://github.com/kcosr/sedes/pull/142))
+  ([#142](https://github.com/kcosr/sedes/pull/142), [#151](https://github.com/kcosr/sedes/pull/151))
 
 - Claude uses Agent SDK **0.3.319**, tested through Claude Code **2.1.319**,
   with the existing stable **>=2.1.287** runtime floor and warnings for newer
