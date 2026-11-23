@@ -23,6 +23,11 @@ export interface ValidatedWorkspace {
   readonly authorityRevision: number;
 }
 
+export interface ExecutionWorkspaceValidationOptions {
+  readonly binding?: Pick<ValidatedWorkspace, "authorityRootId" | "authorityRevision">;
+  readonly signal?: AbortSignal;
+}
+
 /** Definitive operator-policy denial, distinct from unavailable validation. */
 export class ExecutionWorkspaceAdmissionDeniedError extends Error {
   constructor() {
@@ -92,10 +97,12 @@ export interface ExecutionEnvironmentProvider {
     scope: ExecutionScope,
     environmentId: string,
     candidatePath: string,
+    options?: ExecutionWorkspaceValidationOptions,
   ): Promise<ValidatedWorkspace>;
   revalidateWorkspace(
     scope: ExecutionScope,
     workspace: ValidatedWorkspace,
+    signal?: AbortSignal,
   ): Promise<ValidatedWorkspace>;
   acquireLease(
     scope: ExecutionScope,

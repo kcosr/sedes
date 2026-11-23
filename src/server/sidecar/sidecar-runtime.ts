@@ -334,6 +334,7 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
     binding?: {readonly authorityRootId?: string; readonly authorityRevision: number},
     signal = this.#attachmentController.signal,
   ): Promise<void> {
+    signal.throwIfAborted();
     if (!this.#canAttach() || this.#policy.conflict) throw new SidecarUnavailableError();
     const desired = this.#readDesiredPolicy();
     const grant = path === undefined ? undefined : workspaceRootGrant(desired.snapshot.roots, path, binding);
@@ -342,8 +343,11 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
     if (this.#current && current) {
       if (current.revision === desired.revision && current.digest === desired.digest) return;
       const confirmed = this.#policy.workspaceRoots();
-      const relevant = grant ? [grant] : desired.snapshot.roots;
-      if (relevant.every(root => confirmed.some(entry => entry.id === root.id && entry.generation === root.generation))) return;
+      if (path !== undefined) {
+        // Any surviving confirmed grant can admit a new path. A saved
+        // workspace must still match its original root and generation.
+        if (workspaceRootGrant(confirmed, path, binding)) return;
+      } else if (desired.snapshot.roots.every(root => confirmed.some(entry => entry.id === root.id && entry.generation === root.generation))) return;
     }
     // Explicitly opening a new root may retry its pending policy during
     // backoff. An already-confirmed root has returned above.

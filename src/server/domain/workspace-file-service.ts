@@ -142,6 +142,10 @@ type RootOperationLifecycle = {
   readonly drainCallbacks: Set<() => void>;
 };
 
+function workspaceBinding(workspace: InventoryWorkspaceRecord) {
+  return {authorityRootId: workspace.authorityRootId ?? undefined, authorityRevision: workspace.environmentConfigurationRevision};
+}
+
 function validatedFileRoot(workspace: ValidatedWorkspace): {authority?: FileRootAdmission} {
   return workspace.authorityRootId ? {authority: {
     authorityRootId: workspace.authorityRootId,
@@ -933,7 +937,7 @@ export class WorkspaceFileService {
     if (!isWithinRemoteRoot(absolutePath, workspace.canonicalPath) ||
         !this.providers.supportsPrimaryRoot(scope, workspace.environmentId)) return undefined;
     const reopened = await untilAborted(this.execution.validateWorkspace(
-      scope, workspace.environmentId, workspace.canonicalPath), signal).catch(() => undefined);
+      scope, workspace.environmentId, workspace.canonicalPath, {binding: workspaceBinding(workspace), signal}), signal).catch(() => undefined);
     signal.throwIfAborted();
     if (reopened?.canonicalPath !== workspace.canonicalPath) return undefined;
     const target: WorkspaceFileRootTarget = {
@@ -1592,7 +1596,7 @@ export class WorkspaceFileService {
       .validateWorkspace(
         scope,
         workspace.environmentId,
-        paths.dirname(absolutePath),
+        paths.dirname(absolutePath), {signal},
       ), signal)
       .catch(() => undefined);
     signal?.throwIfAborted();
@@ -1618,7 +1622,7 @@ export class WorkspaceFileService {
       .validateWorkspace(
         scope,
         workspace.environmentId,
-        discovered.canonicalPath,
+        discovered.canonicalPath, {signal},
       ), signal)
       .catch(() => undefined);
     signal?.throwIfAborted();
@@ -1881,7 +1885,7 @@ export class WorkspaceFileService {
       };
     }
     const reopened = await this.execution
-      .validateWorkspace(scope, workspace.environmentId, linkRoot.canonicalPath)
+      .validateWorkspace(scope, workspace.environmentId, linkRoot.canonicalPath, {signal})
       .catch(() => undefined);
     if (reopened?.canonicalPath !== linkRoot.canonicalPath) {
       return { diagnosticCode: ROOT_UNAVAILABLE };
@@ -1968,7 +1972,7 @@ export class WorkspaceFileService {
       (retained.expiresAt === Number.POSITIVE_INFINITY ||
         (!force && retained.expiresAt > Date.now()))
     ) {
-      return retained.promise;
+      return untilAborted(retained.promise, signal);
     }
     const promise = this.#refreshLinkedWorktrees(scope, workspace, signal);
     const entry = { promise, expiresAt: Number.POSITIVE_INFINITY };
@@ -2024,9 +2028,10 @@ export class WorkspaceFileService {
         validated = await this.execution.validateWorkspace(
           scope,
           workspace.environmentId,
-          candidate.canonicalPath,
+          candidate.canonicalPath, {signal},
         );
       } catch (error) {
+        signal?.throwIfAborted();
         if (!(error instanceof ExecutionWorkspaceAdmissionDeniedError)) {
           admissionComplete = false;
         }
@@ -2163,6 +2168,7 @@ export class WorkspaceFileService {
             scope,
             workspace.environmentId,
             candidate.canonicalPath,
+            {signal, binding: candidate.kind === "primary" ? workspaceBinding(workspace) : undefined},
           );
           if (reopened.canonicalPath !== candidate.canonicalPath) {
             return {
@@ -2191,7 +2197,7 @@ export class WorkspaceFileService {
               const admittedCheckout = await this.execution.validateWorkspace(
                 scope,
                 workspace.environmentId,
-                candidate.canonicalCheckoutPath,
+                candidate.canonicalCheckoutPath, {signal},
               );
               removal =
                 admittedCheckout.canonicalPath ===

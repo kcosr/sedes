@@ -290,7 +290,7 @@ export async function createExecutionEnvironmentRuntime(
       environmentId: record.id,
       scope,
       allowedRoots: configured.workspaceRoots,
-      confirmWorkspacePolicy: (path, binding) => runtime.confirmWorkspacePolicy(path, binding),
+      confirmWorkspacePolicy: (path, binding, signal) => runtime.confirmWorkspacePolicy(path, binding, signal),
       readWorkspaceRoots,
       label: configured.label,
       availability: outbound ? "unavailable" : record.availability,

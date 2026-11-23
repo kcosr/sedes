@@ -34,6 +34,7 @@ import {
   type ExecutionEnvironmentProvider,
   type ExecutionScope,
   type ValidatedWorkspace,
+  type ExecutionWorkspaceValidationOptions,
 } from "./contracts.js";
 import { workspaceRootGrant, type WorkspaceRootGrant } from "./workspace-root-grant.js";
 import { pathIsWithin } from "../path-containment.js";
@@ -440,16 +441,10 @@ export class LocalExecutionEnvironment implements ExecutionEnvironmentProvider {
     scope: ExecutionScope,
     environmentId: string,
     candidatePath: string,
+    options: ExecutionWorkspaceValidationOptions = {},
   ): Promise<ValidatedWorkspace> {
-    return this.#validate(scope, environmentId, candidatePath);
-  }
-
-  async #validate(
-    scope: ExecutionScope,
-    environmentId: string,
-    candidatePath: string,
-    original?: ValidatedWorkspace,
-  ): Promise<ValidatedWorkspace> {
+    const {binding, signal} = options;
+    signal?.throwIfAborted();
     await this.#assertActive(scope, environmentId);
     if (!path.isAbsolute(candidatePath)) {
       throw new ExecutionWorkspaceAdmissionDeniedError();
@@ -470,12 +465,13 @@ export class LocalExecutionEnvironment implements ExecutionEnvironmentProvider {
     if (!roots.some((root) => pathIsWithin(root, canonicalPath))) {
       throw new ExecutionWorkspaceAdmissionDeniedError();
     }
-    const grant = grants && workspaceRootGrant(grants, canonicalPath, original);
-    if (grants && original && !grant) throw new Error("workspace_authority_stale");
+    const grant = grants && workspaceRootGrant(grants, canonicalPath, binding);
+    if (grants && binding && !grant) throw new Error("workspace_authority_stale");
     const trusted = await this.#workspaceTrusted(canonicalPath);
     if (grants && (!grant || !this.#readWorkspaceRoots?.().some(current => current.id === grant.id && current.generation === grant.generation && current.path === grant.path))) {
       throw new ExecutionWorkspaceAdmissionDeniedError();
     }
+    signal?.throwIfAborted();
     const id = this.#workspaceIds.get(canonicalPath) ?? randomUUID();
     this.#workspaceIds.set(canonicalPath, id);
     return {
@@ -499,8 +495,9 @@ export class LocalExecutionEnvironment implements ExecutionEnvironmentProvider {
   async revalidateWorkspace(
     scope: ExecutionScope,
     workspace: ValidatedWorkspace,
+    signal?: AbortSignal,
   ): Promise<ValidatedWorkspace> {
-    const reopened = await this.#validate(scope, workspace.summary.environmentId, workspace.canonicalPath, workspace);
+    const reopened = await this.validateWorkspace(scope, workspace.summary.environmentId, workspace.canonicalPath, {binding: workspace, signal});
     this.#workspaceIds.set(reopened.canonicalPath, workspace.summary.id);
     return {
       ...reopened,

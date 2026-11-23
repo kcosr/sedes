@@ -73,10 +73,11 @@ connections. Selecting a target or starting work confirms that host's grants
 on demand. Explicit remote selection allows ten seconds to confirm the grant and
 reacquire the carrier. Once admitted, provider health uses the provider’s own
 startup limit. When Codex is already attaching to its native runtime,
-selection can wait for that attempt to finish. Opening a newly saved workspace
-root can retry a pending application. An unchanged, confirmed root remains
-usable. A save after an idle disconnect can also initiate delivery on the
-affected host. A known unsupported subject stays unavailable. After carrier
+selection can wait for that attempt to finish. A workspace keeps its confirmed
+root when a newly saved nested root also contains its path. A new open can
+retry policy delivery when its path has no applicable confirmed root.
+Cancelling that request releases its wait while shared delivery continues.
+A save after an idle disconnect can also initiate delivery on the affected host. A known unsupported subject stays unavailable. After carrier
 loss, unchanged grants from the last confirmed incarnation keep targets and
 features selectable. A foreground driver call or
 new turn on a held handle reacquires the carrier and confirms the target on its

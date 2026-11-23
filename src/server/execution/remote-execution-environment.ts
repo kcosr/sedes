@@ -18,6 +18,7 @@ import {
   type ExecutionEnvironmentProvider,
   type ExecutionScope,
   type ValidatedWorkspace,
+  type ExecutionWorkspaceValidationOptions,
 } from "./contracts.js";
 import { SshEnvironmentError } from "./ssh-open-ssh.js";
 
@@ -33,7 +34,7 @@ export class RemoteExecutionEnvironment implements ExecutionEnvironmentProvider 
   readonly #platform: RemotePlatform;
   readonly #isExecutionAvailable: () => boolean;
   readonly #scope: RequestScope;
-  readonly #confirmWorkspacePolicy?: (path: string, binding?: ValidatedWorkspace) => Promise<void>;
+  readonly #confirmWorkspacePolicy?: (path: string, binding?: ExecutionWorkspaceValidationOptions["binding"], signal?: AbortSignal) => Promise<void>;
   readonly #readWorkspaceRoots?: () => readonly WorkspaceRootGrant[];
   readonly #roots: readonly string[];
   readonly #configurationRevision: number;
@@ -57,7 +58,7 @@ export class RemoteExecutionEnvironment implements ExecutionEnvironmentProvider 
       readonly platform: RemotePlatform;
       readonly environmentId: string;
       readonly scope: RequestScope;
-      readonly confirmWorkspacePolicy?: (path: string, binding?: ValidatedWorkspace) => Promise<void>;
+      readonly confirmWorkspacePolicy?: (path: string, binding?: ExecutionWorkspaceValidationOptions["binding"], signal?: AbortSignal) => Promise<void>;
       readonly readWorkspaceRoots?: () => readonly WorkspaceRootGrant[];
       readonly allowedRoots: readonly string[];
       readonly label?: string;
@@ -163,21 +164,18 @@ export class RemoteExecutionEnvironment implements ExecutionEnvironmentProvider 
     scope: ExecutionScope,
     environmentId: string,
     candidatePath: string,
+    options: ExecutionWorkspaceValidationOptions = {},
   ): Promise<ValidatedWorkspace> {
-    return this.#validate(scope, environmentId, candidatePath);
-  }
-
-  async #validate(
-    scope: ExecutionScope,
-    environmentId: string,
-    candidatePath: string,
-    original?: ValidatedWorkspace,
-  ): Promise<ValidatedWorkspace> {
+    const {binding, signal} = options;
+    signal?.throwIfAborted();
     await this.#assertActive(scope, environmentId);
-    await this.#confirmWorkspacePolicy?.(candidatePath, original);
+    await this.#confirmWorkspacePolicy?.(candidatePath, binding, signal).catch(error => {
+      signal?.throwIfAborted();
+      throw error;
+    });
     const grants = this.#readWorkspaceRoots?.();
-    const grant = grants && workspaceRootGrant(grants, candidatePath, original);
-    if (grants && original && !grant) throw new Error("workspace_authority_stale");
+    const grant = grants && workspaceRootGrant(grants, candidatePath, binding);
+    if (grants && binding && !grant) throw new Error("workspace_authority_stale");
     if (
       !isNormalizedRemotePath(candidatePath, this.#platform) ||
       (grants ? !grant : !this.#roots.some((root) => isWithinRemoteRoot(candidatePath, root)))
@@ -189,6 +187,7 @@ export class RemoteExecutionEnvironment implements ExecutionEnvironmentProvider 
     // established by the foreground carrier/backend protocol, not a second
     // transport command whose filesystem observation cannot be held as a lease.
     const canonicalPath = candidatePath;
+    signal?.throwIfAborted();
     const id = this.#workspaceIds.get(canonicalPath) ?? randomUUID();
     this.#workspaceIds.set(canonicalPath, id);
     return {
@@ -211,8 +210,9 @@ export class RemoteExecutionEnvironment implements ExecutionEnvironmentProvider 
   async revalidateWorkspace(
     scope: ExecutionScope,
     workspace: ValidatedWorkspace,
+    signal?: AbortSignal,
   ): Promise<ValidatedWorkspace> {
-    const reopened = await this.#validate(scope, workspace.summary.environmentId, workspace.canonicalPath, workspace);
+    const reopened = await this.validateWorkspace(scope, workspace.summary.environmentId, workspace.canonicalPath, {binding: workspace, signal});
     this.#workspaceIds.set(reopened.canonicalPath, workspace.summary.id);
     return {
       ...reopened,

@@ -1,3 +1,4 @@
+import { RemoteExecutionEnvironment } from "../../src/server/execution/remote-execution-environment.js";
 import { AgentBackendRegistry } from "../../src/server/backends/registry.js";
 import type { AgentConnectionProfile, ConversationBackendDriver } from "../../src/server/backends/contracts.js";
 import { executionPolicyDigest, type InstalledExecutionPolicy } from "../../src/internal/sidecar-protocol/execution-policy.js";
@@ -833,30 +834,62 @@ describe("SidecarRuntimeOwner", () => {
     }
   });
 
-  it("opens a newly saved root after a failed delivery without stalling an unchanged root", async () => {
+  it("revalidates a bound SSH workspace beneath a pending nested root without resetting backoff", async () => {
     const base = ownerPolicy();
-    const old = {id: "old", path: "/old", generation: 1};
-    const added = {id: "new", path: "/new", generation: 1};
-    const make = (roots: (typeof old)[], revision: number) => {
+    const existing = {id: "existing", path: "/home/u", generation: 1};
+    const nested = {id: "nested", path: "/home/u/proj", generation: 2};
+    const separate = {id: "separate", path: "/new", generation: 1};
+    const make = (roots: (typeof existing)[], revision: number) => {
       const snapshot = {...base.snapshot, roots};
       return {...base, snapshot, revision, digest: executionPolicyDigest(snapshot)};
     };
-    let desired = make([old], 1);
+    let desired = make([existing], 1);
     const value = fixture({readDesiredPolicy: () => desired});
+    const remote = new RemoteExecutionEnvironment({
+      kind: "ssh", platform: "linux", scope, environmentId, allowedRoots: [existing.path],
+      configurationRevision: 1, activeConfigurationRevision: () => 1, directoryBrowser: () => undefined,
+      readWorkspaceRoots: () => value.owner.acquirableWorkspaceRoots(),
+      confirmWorkspacePolicy: (path, binding, signal) => value.owner.confirmWorkspacePolicy(path, binding, signal),
+    });
     const signal = new AbortController().signal;
     const watch = await value.owner.acquireWatch(scope, environmentId, signal);
+    const gate = deferred<void>();
     try {
-      desired = make([old, added], 2);
+      const original = await remote.validateWorkspace(scope, environmentId, nested.path);
+      expect(original.authorityRootId).toBe(existing.id);
+      desired = make([existing, nested, separate], 2);
+      const installed = watch.session.applyPolicy.bind(watch.session);
       const apply = vi.spyOn(watch.session, "applyPolicy").mockRejectedValueOnce(new Error("policy delivery interrupted"));
       await expect(value.owner.synchronizePolicy()).rejects.toThrow("policy delivery interrupted");
-      await value.owner.confirmWorkspacePolicy("/old/thread");
+      for (const options of [{}, {binding: original}]) {
+        const opened = await remote.validateWorkspace(scope, environmentId, nested.path, options);
+        expect(opened.authorityRootId).toBe(existing.id);
+      }
+      expect((await remote.revalidateWorkspace(scope, original)).authorityRootId).toBe(existing.id);
       expect(apply).toHaveBeenCalledTimes(1);
-      const opening = value.owner.confirmWorkspacePolicy("/new/thread");
-      await opening;
+
+      const caller = new AbortController();
+      const entered = deferred<void>();
+      apply.mockImplementationOnce(async (...args) => {
+        entered.resolve();
+        await gate.promise;
+        return installed(...args);
+      });
+      const opening = remote.validateWorkspace(scope, environmentId, separate.path, {signal: caller.signal});
+      await entered.promise;
+      caller.abort(new Error("opening cancelled"));
+      await expect(opening).rejects.toBe(caller.signal.reason);
+      expect((await remote.revalidateWorkspace(scope, original)).authorityRootId).toBe(existing.id);
+      gate.resolve();
+      await value.owner.synchronizePolicy();
       expect(apply).toHaveBeenCalledTimes(2);
-      expect(value.owner.acquirableWorkspaceRoots()).toEqual([old, added]);
+      expect((await remote.validateWorkspace(scope, environmentId, nested.path)).authorityRootId).toBe(nested.id);
+      expect((await remote.revalidateWorkspace(scope, original)).authorityRootId).toBe(existing.id);
+      desired = make([nested, separate], 3);
+      await expect(remote.revalidateWorkspace(scope, original)).rejects.toThrow("workspace_authority_stale");
+      expect(apply).toHaveBeenCalledTimes(2);
       expect(value.launch).toHaveBeenCalledOnce();
-    } finally { watch.release(); await value.owner.close(); }
+    } finally { gate.resolve(); watch.release(); remote.close(); await value.owner.close(); }
   });
 
   it("applies environment and operation revisions to the admitted service while a watch is open", async () => {

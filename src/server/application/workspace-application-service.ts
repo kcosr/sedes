@@ -280,8 +280,9 @@ export class WorkspaceApplicationService {
         scope,
         request.environmentId,
         request.path,
+        {signal},
       ),
-    );
+    ).catch(error => { signal.throwIfAborted(); throw error; });
     signal.throwIfAborted();
     if (validated.summary.environmentId !== request.environmentId) {
       throw new DomainError(
