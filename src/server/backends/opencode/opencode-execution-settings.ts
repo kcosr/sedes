@@ -16,11 +16,13 @@ export interface OpenCodeSettingsCapture {
   readonly snapshot: OpenCodeOperationSettingsSnapshot;
   readonly catalog: OpenCodeModelCatalogRead;
 }
-// A capture older than this, for example after a slow attachment read, repeats
-// the full check so dispatch never relies on a stale model catalog.
+// A capture's catalog may be relied on only this long, measured on a monotonic
+// clock from before its catalog read until after the dispatch-time session read.
+// Slow capture, attachment, collision or session reads repeat the full check.
 const CAPTURE_REUSE_MILLISECONDS = 5_000;
 interface CapturedSettings {
-  readonly capturedAt: number;
+  /** Monotonic time taken before the capture's catalog read began. */
+  readonly startedAt: number;
   readonly operationId: string;
   readonly kind: "submit" | "steer";
   readonly read: OpenCodeObservedSettings;
@@ -75,8 +77,7 @@ export class OpenCodeExecutionSettings {
   }> {
     const captured = fresh ? this.#captures.get(fresh) : undefined;
     if (fresh) this.#captures.delete(fresh);
-    const reusable = captured && captured.operationId === operationId && captured.kind === kind &&
-      Date.now() - captured.capturedAt <= CAPTURE_REUSE_MILLISECONDS;
+    const reusable = captured && captured.operationId === operationId && captured.kind === kind && withinReuseWindow(captured);
     const { read, desired, snapshot } = reusable ? await this.#recheck(captured, signal) : await this.#capture(operationId, kind, signal);
     if (!sameOpenCodeSelection(read.observed.resolvedSelection, desired)) {
       if (kind === "steer") throw unavailable("The desired and active OpenCode settings differ. Steering cannot change the active model.");
@@ -87,15 +88,18 @@ export class OpenCodeExecutionSettings {
 
   /** Freeze request identity without issuing writes before an input receipt exists. */
   async capture(operationId: string, kind: "submit" | "steer", signal?: AbortSignal): Promise<OpenCodeSettingsCapture> {
+    const startedAt = performance.now();
     const captured = await this.#capture(operationId, kind, signal);
     const result: OpenCodeSettingsCapture = Object.freeze({ snapshot: captured.snapshot, catalog: captured.read.catalog });
-    this.#captures.set(result, { capturedAt: Date.now(), operationId, kind, ...captured });
+    this.#captures.set(result, { startedAt, operationId, kind, ...captured });
     return result;
   }
 
   /** Dispatch-time check for this invocation's capture. Desired settings, model
    * policy and catalog come from that capture; the native session is read again
-   * because another client can change its model without a Sedes settings write. */
+   * because another client can change its model without a Sedes settings write.
+   * A session without an explicit model inherits the location's current default,
+   * which only a fresh catalog read can show, so it takes the full check. */
   async #recheck(captured: CapturedSettings, signal?: AbortSignal) {
     signal = this.#signal(signal);
     const settings = this.context.settings.get(this.input.scope, this.input.binding.applicationThreadId);
@@ -107,6 +111,7 @@ export class OpenCodeExecutionSettings {
     const session = await this.#api.getSession(this.input.binding.backendConversationId, signal);
     this.#assertSession(session);
     await this.assertCurrent(signal);
+    if (!session.model || !withinReuseWindow(captured)) return this.#capture(captured.operationId, captured.kind, signal);
     const catalog = captured.read.catalog;
     const observed = classifyObserved({ selection: nativeSelection(session, catalog), catalog });
     this.#publishObserved(settings, observed, sequence);
@@ -189,6 +194,9 @@ function nativeSelection(session: OpenCodeNativeSession, catalog: OpenCodeModelC
   return model ? decodeOpenCodeModelId(model.id) : null;
 }
 function changed() { return openCodeConversationError("opencode_settings_changed", "The OpenCode settings changed while this operation was being prepared.", "invalid_state"); }
+function withinReuseWindow(captured: CapturedSettings): boolean {
+  return performance.now() - captured.startedAt <= CAPTURE_REUSE_MILLISECONDS;
+}
 function unrecognized() {
   return unavailable("OpenCode has custom or unavailable native settings. Choose a supported model or Default effort before sending input.");
 }

@@ -464,9 +464,12 @@ Each Submit/Steer snapshots desired settings and reserves an exact native input
 ID before dispatch. At dispatch, a fresh Submit/Steer reuses the model catalog
 and desired selection from its own capture but reads the native session again,
 because another client can change its model without a Sedes settings write.
-Only the invocation that made a capture can use it, once, within five seconds.
-An older capture, replay, desired settings change or new observation generation
-repeats the full check. The independent input observer subscribes before effects
+Only the invocation that made a capture can use it, once. Its five-second window
+is measured on a monotonic clock from before the capture's catalog read until
+after the dispatch-time session read and identity proof. A session without an
+explicit model inherits the location's current default, so it repeats the full
+check, as do an expired window, a replay, a desired settings change and a new
+observation generation. The independent input observer subscribes before effects
 and records native prepared-payload admission separately from consumption.
 Prepared native transformations are allowed; a conflicting later payload blocks
 correlation. HTTP admission alone leaves the Sedes operation pending. The

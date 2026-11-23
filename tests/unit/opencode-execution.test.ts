@@ -322,11 +322,76 @@ describe("OpenCode execution settings and explicit actions", () => {
     await instance.prepare("foreign-operation", "submit", undefined, foreign); expect(catalogReads()).toBe(++reads);
   });
 
-  it("uses the full check when a capture is older than its reuse window", async () => {
-    const f = fixture(), captured = await f.settings.capture("stale-operation", "submit"), reads = f.calls.filter(call => call.path === "/api/model").length;
-    const now = Date.now(); vi.spyOn(Date, "now").mockReturnValue(now + 5_001);
-    await expect(f.settings.prepare("stale-operation", "submit", undefined, captured)).resolves.toMatchObject({ snapshot: { selection: modelA } });
-    expect(f.calls.filter(call => call.path === "/api/model")).toHaveLength(reads + 1);
+  it.each(["submit", "steer"] as const)("re-reads an inherited location default at %s dispatch", async mode => {
+    const f = fixture(), capture = f.settings.capture.bind(f.settings);
+    delete (f.wire.session as { model?: OpenCodeSelection }).model;
+    // The session follows the location default, which changes from A to B after capture.
+    vi.spyOn(f.settings, "capture").mockImplementation(async (...args) => {
+      const captured = await capture(...args); f.state.models.reverse(); return captured;
+    });
+    if (mode === "submit") {
+      await expect(f.delivery.submit(f.submit("inherited-default"))).resolves.toMatchObject({ accepted: true });
+      expect(f.posts("/model").map(call => call.body)).toEqual([{ model: modelA }]);
+      const model = f.calls.findIndex(call => call.method === "POST" && call.path.endsWith("/model"));
+      const prompt = f.calls.findIndex(call => call.method === "POST" && call.path.endsWith("/prompt"));
+      expect(f.calls.slice(model + 1, prompt).some(call => call.method === "GET" && call.path === `/api/session/${f.wire.sessionID}`)).toBe(true);
+      expect(f.wire.session.model).toEqual(modelA);
+    } else {
+      await expect(f.delivery.steer(f.steer("inherited-default"))).rejects.toMatchObject({ crossedSubmissionBoundary: false });
+      expect(f.posts("/model")).toEqual([]); expect(f.posts("/prompt")).toEqual([]);
+    }
+    expect(f.calls.filter(call => call.path === "/api/model/default")).toHaveLength(2);
+  });
+
+  describe("capture reuse window", () => {
+    function monotonicClock() {
+      let now = 10_000;
+      vi.spyOn(performance, "now").mockImplementation(() => now);
+      return { advance: (milliseconds: number) => { now += milliseconds; } };
+    }
+    const disable = (f: ReturnType<typeof fixture>, selection: OpenCodeSelection) => {
+      f.state.models = f.state.models.map(model => model.id === selection.id ? { ...model, enabled: false } : model);
+    };
+
+    it("counts time spent inside the capture's catalog read", async () => {
+      const f = fixture(), clock = monotonicClock(), read = f.context.catalog.read.bind(f.context.catalog);
+      vi.spyOn(f.context.catalog, "read").mockImplementationOnce(async input => {
+        const result = await read(input); disable(f, modelA); clock.advance(5_200); return result;
+      });
+      await expect(f.delivery.submit(f.submit("slow-capture"))).rejects.toBeDefined();
+      expect(f.posts("/prompt")).toEqual([]);
+      expect(f.calls.filter(call => call.path === "/api/model")).toHaveLength(2);
+    });
+
+    it("checks the window again after the dispatch-time session read", async () => {
+      const f = fixture(), clock = monotonicClock(), capture = f.settings.capture.bind(f.settings), assertCurrent = f.settings.assertCurrent.bind(f.settings);
+      let captured = false;
+      vi.spyOn(f.settings, "capture").mockImplementation(async (...args) => { const result = await capture(...args); captured = true; return result; });
+      // The first identity proof after capture follows the dispatch-time session read.
+      vi.spyOn(f.settings, "assertCurrent").mockImplementation(async (...args) => {
+        await assertCurrent(...args);
+        if (captured) { captured = false; disable(f, modelA); clock.advance(5_200); }
+      });
+      await expect(f.delivery.submit(f.submit("slow-recheck"))).rejects.toBeDefined();
+      expect(f.posts("/prompt")).toEqual([]);
+      expect(f.calls.filter(call => call.path === "/api/model")).toHaveLength(2);
+    });
+
+    it("takes the full check when the window ends before dispatch", async () => {
+      const f = fixture(), clock = monotonicClock();
+      const captured = await f.settings.capture("stale-operation", "submit"), reads = f.calls.filter(call => call.path === "/api/model").length;
+      clock.advance(5_001);
+      await expect(f.settings.prepare("stale-operation", "submit", undefined, captured)).resolves.toMatchObject({ snapshot: { selection: modelA } });
+      expect(f.calls.filter(call => call.path === "/api/model")).toHaveLength(reads + 1);
+    });
+
+    it("keeps reusing the catalog for an explicit model inside the window", async () => {
+      const f = fixture(), clock = monotonicClock();
+      const captured = await f.settings.capture("fresh-operation", "submit"), reads = f.calls.filter(call => call.path === "/api/model").length;
+      clock.advance(4_999);
+      await expect(f.settings.prepare("fresh-operation", "submit", undefined, captured)).resolves.toMatchObject({ snapshot: { selection: modelA } });
+      expect(f.calls.filter(call => call.path === "/api/model")).toHaveLength(reads);
+    });
   });
 
   it("uses the full check when desired settings change after a capture", async () => {
