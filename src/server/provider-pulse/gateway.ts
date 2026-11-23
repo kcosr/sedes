@@ -7,7 +7,10 @@ import {
   providerPulseStatusSchema,
   type ProviderPulseStatus,
 } from "../../shared/protocol/provider-pulse.js";
-import type { BackendBrand } from "../../shared/protocol/conversation.js";
+import {
+  backendBrandSchema,
+  type BackendBrand,
+} from "../../shared/protocol/conversation.js";
 
 export const DEFAULT_PROVIDER_PULSE_URL = "http://127.0.0.1:4317";
 const STATUS_TIMEOUT_MS = 3_000;
@@ -517,15 +520,8 @@ function projectResetCredits(
 }
 
 function providerBrand(provider: string): { readonly brand?: BackendBrand } {
-  switch (provider) {
-    case "pi":
-    case "codex":
-    case "claude":
-    case "grok":
-      return { brand: provider };
-    default:
-      return {};
-  }
+  const brand = backendBrandSchema.safeParse(provider);
+  return brand.success ? { brand: brand.data } : {};
 }
 
 function normalizeHealth(value: string): ProviderPulseStatus["health"] {
