@@ -396,6 +396,9 @@ User-facing changes are collected here before release. See the
 
 ### Fixed
 
+- Copying highlighted chat text with the keyboard shortcut skips the quote
+  editor for that selection.
+
 - Antigravity tool errors no longer prematurely complete agent work or send
   empty failure callbacks while the agent is still working. Genuine failed and
   canceled executions still settle from native terminal evidence.

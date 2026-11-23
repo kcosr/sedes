@@ -154,6 +154,9 @@ describe("ConversationMessageSelectionSurface", () => {
     fireEvent.change(note, {
       target: { value: "Explain this." },
     });
+    selectText(source.firstChild!, 0, 6);
+    expect(fireEvent.copy(source)).toBe(true);
+    expect(screen.getByRole("toolbar")).toBe(toolbar);
     fireEvent.touchStart(source, { touches: [{ identifier: 1, target: source }] });
     fireEvent.touchEnd(source, { touches: [] });
     await delay(20);
@@ -589,6 +592,56 @@ describe("ConversationMessageSelectionSurface", () => {
     expect(secondTarget.stage).not.toHaveBeenCalled();
   });
 
+  it.each(["a new range", "changed boundaries"] as const)("skips the quote editor after native copy and opens it for %s", (selectionChange) => {
+    vi.useFakeTimers();
+    try {
+      render(
+        <ConversationMessageSelectionSurface
+          enabled
+          itemId="copy-item"
+          itemRevision={1}
+          selectionKind="plain_text"
+          selectionDebounceMilliseconds={50}
+          stagingTarget={stagingTarget()}
+        >
+          <span {...conversationMessageSelectableTextProps}>Copy exactly</span>
+        </ConversationMessageSelectionSurface>,
+      );
+      const source = screen.getByText("Copy exactly");
+      selectText(source.firstChild!);
+      fireEvent(document, new Event("selectionchange"));
+      expect(fireEvent.copy(source)).toBe(true);
+      fireEvent(document, new Event("selectionchange"));
+      act(() => vi.advanceTimersByTime(50));
+
+      expect(screen.queryByRole("toolbar")).toBeNull();
+      expect(document.getSelection()?.toString()).toBe("Copy exactly");
+
+      fireEvent.touchStart(document.body, {
+        touches: [{ identifier: 1, target: document.body }],
+      });
+      fireEvent.touchEnd(document.body, { touches: [] });
+      act(() => vi.advanceTimersByTime(50));
+      expect(screen.queryByRole("toolbar")).toBeNull();
+
+      fireEvent.pointerDown(source, { isPrimary: true, pointerType: "mouse", button: 0 });
+      if (selectionChange === "a new range") {
+        selectText(source.firstChild!);
+      } else {
+        document.getSelection()!.getRangeAt(0).setEnd(source.firstChild!, 4);
+      }
+      fireEvent(document, new Event("selectionchange"));
+      fireEvent.pointerUp(source, { isPrimary: true, pointerType: "mouse" });
+      act(() => vi.advanceTimersByTime(50));
+
+      expect(screen.getByRole("blockquote").textContent).toBe(
+        selectionChange === "a new range" ? "Copy exactly" : "Copy",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each(["cleared", "retained"] as const)("copies without staging when the native selection is %s", async (nativeSelection) => {
     const writeText = vi.fn(async () => undefined);
     setClipboard(writeText);
@@ -613,6 +666,7 @@ describe("ConversationMessageSelectionSurface", () => {
       selectText(source);
       fireEvent(document, new Event("selectionchange"));
       await delay(20);
+      expect(fireEvent.copy(within(editor).getByRole("textbox"))).toBe(true);
       expect(screen.getByRole("toolbar")).toBe(editor);
     }
     expect(document.getSelection()?.toString()).toBe(nativeSelection === "retained" ? "Copy exactly" : "");
