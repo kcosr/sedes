@@ -436,6 +436,7 @@ User-facing changes are collected here before release. See the
 
 - Native Pi threads can be renamed while a turn is running, matching the other
   backends. See [native Pi controls](docs/operator/backends/pi-native.md#conversation-controls-and-history).
+  ([#155](https://github.com/kcosr/sedes/pull/155))
 
 - Provider Pulse Antigravity accounts show the Antigravity icon in the sidebar
   usage menu instead of a generic letter.
