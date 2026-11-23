@@ -72,7 +72,8 @@ counts; the thread preview uses the same priority. Reduced-motion preferences
 keep the subagent ring static. Background work alone does not emphasize the
 title or change the thread's input controls.
 
-These observations are supplied by the backend, currently Claude. Sedes hides
+Claude, OpenCode, and Antigravity supply background observations, with different
+native evidence and coverage limits. Sedes hides
 background indicators when their live state is unknown, the runtime is unloaded,
 or the application is reconnecting; absence is not proof that external work
 has stopped.

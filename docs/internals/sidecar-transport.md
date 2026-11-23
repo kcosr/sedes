@@ -101,8 +101,9 @@ does not retire an owner, revoke a carrier, or restart a provider. Every normal
 and recovery attachment samples the latest principal-scoped value; an active
 carrier keeps its negotiated mode.
 
-Codex, Claude, and OpenCode remote runtime traffic benefits from this transport.
-Pi remains local while its remote workspace operations use it. Grok remains
+Native Pi, Codex, Claude, OpenCode, and Antigravity remote runtime traffic
+benefits from this transport. Pi SDK keeps its model loop local while its remote
+workspace operations use it. Grok remains
 local-only. Existing operating-system and capability restrictions remain
 authoritative. Browser response compression is a separate installation policy;
 provider-native connections do not use this codec.

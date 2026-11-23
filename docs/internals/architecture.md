@@ -200,8 +200,8 @@ runtime generation; callers must not infer support from a provider name,
 model ID, transport, or transcript wording.
 
 Provider process topology is also private. One long-lived module runtime is
-created for each tenant/principal/backend instance, but Pi, Codex, Claude, and
-Grok may own processes, clients, and native sessions differently inside that
+created for each tenant/principal/backend instance, but each backend may own
+processes, clients, and native sessions differently inside that
 boundary.
 
 ## Conversation lifecycle and projection
@@ -563,8 +563,7 @@ actor's atomic idle-close operation; a carrier disconnect or stale coordinator
 observation is not independent authority to stop a runtime.
 
 The single-user-oriented defaults retain idle runtimes for one hour and admit
-32 resident conversations per tenant/principal execution environment. Pi,
-Codex, Claude, and Grok all use this same shared actor-manager and coordinator
+32 resident conversations per tenant/principal execution environment. All compiled backends use this same shared actor-manager and coordinator
 policy; no backend receives a separate fallback or larger private product
 budget. Each tenant/principal application stream maintains its current inventory
 projection from normalized publications. Reconnects replay at most 32 events

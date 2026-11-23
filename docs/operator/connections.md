@@ -127,7 +127,8 @@ execution environment grants is the same for every backend that can run there:
 | Codex managed TUI | External UDS/TCP connection with PTY support | Negotiated `codex_managed_tui` operations on the sidecar |
 
 Combinations not listed above are unsupported: remote Grok, managed TUI over
-owned stdio, native Windows Claude or Pi, a remote Sedes CLI for Pi SDK, forks of
+owned stdio, native Windows Claude/Pi/Antigravity, OpenCode on non-Linux
+execution hosts, a remote Sedes CLI for Pi SDK, forks of
 isolated Pi SDK workspaces, and automatic fallback between transports.
 
 ## Recipes

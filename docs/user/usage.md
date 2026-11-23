@@ -72,7 +72,9 @@ for that view stay on screen with a warning.
   and reasoning is part of output, so those parts never add to the total.
 - **Estimated cost** comes from the provider or SDK. It is not an invoice and
   does not reflect subscription billing. Codex does not report cost, so Codex
-  tokens count as unpriced. Sedes does not calculate prices itself.
+  tokens count as unpriced. Antigravity records partial native-step token usage
+  without cost, model, or reasoning-effort attribution; its tokens are also
+  unpriced. Sedes does not calculate prices itself.
 - A dash or an **Unknown** row means the detail was not reported. It never
   means zero.
 - **Model** and **Reasoning effort** come from the source, or from the

@@ -33,7 +33,7 @@ npm --version
 git --version
 ```
 
-The default example uses Pi. The Pi SDK is already bundled as a Sedes
+The default example uses Pi SDK. The Pi SDK is already bundled as a Sedes
 dependency; you do not need a separate version-matched Pi executable or Pi RPC
 service. You do need at least one provider/model authenticated and configured
 in Pi's native environment for the same operating-system account and effective
@@ -44,10 +44,16 @@ Optional features have additional prerequisites:
 
 - Bubblewrap at `/usr/bin/bwrap` enables local isolated Pi workspaces on Linux;
   this optional isolation mode is unavailable on macOS.
+- Native Pi requires the separately installed stock Pi executable and its native
+  provider/model authentication; it is distinct from the bundled Pi SDK.
 - Claude requires the admitted authenticated Claude Code runtime.
 - Codex requires an admitted authenticated executable or external app-server.
 - Grok requires the admitted authenticated Linux x64 or macOS arm64/x64 Grok
   Build runtime.
+- OpenCode v2 requires an admitted stock `opencode2` installation on Linux,
+  with native provider authentication and an owned or external daemon.
+- Antigravity requires an admitted stock `agy` installation and native sign-in
+  on its Linux or macOS execution host.
 - SSH workspace operations require the configured remote and sidecar
   prerequisites.
 - Android and Electron packaging require their own SDK/toolchain setup.

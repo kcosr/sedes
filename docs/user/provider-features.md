@@ -141,7 +141,7 @@ Presentation has two controls:
 - **Surface** chooses Native tools or the generated CLI. This selector appears
   only when the target supports more than one surface: eligible local Pi SDK,
   Pi with an available CLI endpoint, and Codex and Claude threads, plus
-  qualified owned-local OpenCode roots and eligible Antigravity threads.
+  qualified owned OpenCode roots on local, SSH, or outbound Linux hosts and eligible Antigravity threads.
 - **Mode** chooses Progressive discovery or Individual named tools/commands.
   Progressive keeps the initial surface compact and describes operations on
   demand. Individual presents each granted operation directly with typed

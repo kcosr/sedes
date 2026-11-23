@@ -230,6 +230,17 @@ turn stop is never required to make the panel appear.
   kinds. Pi advertises no questionnaire capability and has no JSON or
   chained-dialog imitation.
 
+### Pi native
+
+- **Decisions:** managed mutating-tool approvals through the authenticated
+  companion. Native extension UI supplies choice, confirmation, text input, and
+  editor interactions; questionnaires and forms are unsupported.
+- **Force-reset cancellation:** uses the native cancellation path and exact
+  response evidence. Failed or uncertain cancellation cannot prove that a
+  pending native request disappeared.
+- **Private boundary:** RPC, companion request IDs, reply mappings, and retained
+  response receipts remain under `src/server/backends/pi/native`.
+
 ### Claude Agent SDK
 
 - **Decisions:** implemented for provider permission decisions, including
@@ -293,6 +304,19 @@ turn stop is never required to make the panel appear.
   forms, response encoding, and HTTP/SSE interpretation remain under
   `src/server/backends/opencode`. The shared interaction broker supplies the
   browser identities and response authority.
+
+### Antigravity ACP
+
+- **Decisions and choices:** exact native permission options become normalized
+  decisions or choices. Questionnaires, forms, and nonblocking questions are
+  unsupported.
+- **Force-reset cancellation:** sends the native cancelled permission outcome;
+  it does not fabricate a selected option or prove that queued prompts stopped.
+- **Recovery:** pending permissions retain their opening timestamp and exact
+  identity across resnapshot and sidecar reconnect. A selected answer requires
+  normal runtime authority; retained recovery authority permits cancellation.
+- **Private boundary:** ACP request IDs, option IDs, response encoding, and
+  callback ownership stay under `src/server/backends/antigravity`.
 
 ### In-memory conformance backend
 

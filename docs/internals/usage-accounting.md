@@ -34,10 +34,13 @@ tokens itself. Missing values are unknown, never zero.
 
 Provider-specific evidence and its caveats are summarized in
 [Backend dispositions](#backend-dispositions) and detailed in the operator
-guides for [Pi](../operator/backends/pi.md#recorded-usage),
+guides for [Pi SDK](../operator/backends/pi.md#recorded-usage),
+[native Pi](../operator/backends/pi-native.md),
 [Codex](../operator/backends/codex.md#recorded-usage),
-[Claude](../operator/backends/claude.md#recorded-usage), and
-[Grok](../operator/backends/grok.md#recorded-usage). Visible behavior is
+[Claude](../operator/backends/claude.md#recorded-usage),
+[Grok](../operator/backends/grok.md#recorded-usage),
+[OpenCode](../operator/backends/opencode.md), and
+[Antigravity](../operator/backends/antigravity.md). Visible behavior is
 described in [View recorded usage](../user/conversations.md#view-recorded-usage)
 and [Usage and spend](../user/usage.md). Cross-backend obligations are in the
 [backend integration contract rules](backend-integration-contract-rules.md).
@@ -313,7 +316,9 @@ clients; it advances atomically with changed reports.
 
 | Backend | Evidence captured | Session scope | Turn scope | Model and cost | Attribution |
 | --- | --- | --- | --- | --- | --- |
-| Pi | Each usage-bearing native entry: assistant messages (one request each), tool results, compaction and branch summaries, and built-in cache warming. Other extension usage entries are retained without being added. | Additive entries, including inactive branches and idle work | Sum of the turn's entries (`whole_turn`) | Reported per entry; SDK cost estimate per entry | Thinking level from the entry's native branch |
+| Pi SDK | Each usage-bearing native entry: assistant messages (one request each), tool results, compaction and branch summaries, and built-in cache warming. Other extension usage entries are retained without being added. | Additive entries, including inactive branches and idle work | Sum of the turn's entries (`whole_turn`) | Reported per entry; SDK cost estimate per entry | Thinking level from the entry's native branch |
+| Pi | Native usage-bearing entries keyed by entry identity, with verified copied fork entries excluded | Additive native entries | Native turn allocations (`whole_turn`) | Reported model and cost per entry | Thinking level from native branch ancestry |
+| Antigravity | Completed native steps with reported token usage | Additive root-session steps; inherited child baselines excluded | Mapped step contributions (`main_loop`) | No model or cost attribution | Partial coverage with `unknown_attribution`; no inferred effort |
 | Codex | Cumulative `thread/tokenUsage/updated` totals as a session checkpoint, the latest call as lower-scope evidence, and derived turn intervals | Latest valid checkpoint of one native counter series across reconnects | Differences between continuous, owned checkpoints (`main_loop`, or `partial_interval` without a proven baseline) | Not reported; no cost | Provider-confirmed effective model, provider, and effort for the current runtime generation, withheld while a tuple-changing `turn/start` awaits its receipt |
 | Codex subagents | Each child's cumulative lifetime counter under the root thread | Included once in the root session with a main/subagent breakdown | Never allocated to parent turns | Not reported; no cost | None |
 | Claude | Per-query cumulative `modelUsage` checkpoints and the query cost estimate; per-turn result usage; main-loop assistant messages | Sum of query epochs' latest checkpoints, each counted from its reported baseline | Result `usage` as `main_loop`; messages until the result arrives | Reported per model; SDK cumulative estimate | Applied effort for the confirmed model's row |
@@ -394,9 +399,11 @@ it does not turn unrelated native events into new ownership evidence. Cleanup
 releases only an attachment the coordinator actually acquired in the current
 connection generation. Idle historical children cause no remote cleanup work.
 
-This monitoring lifecycle is implemented by Codex. Pi retains its native-entry
-capture, Claude pipeline totals already include SDK subagent work without a
-separate child monitor, and Grok usage accounting remains unsupported.
+This child-monitoring lifecycle is implemented by Codex. Pi SDK and native Pi
+retain their native-entry capture; Claude pipeline totals include SDK subagent
+work without a separate child monitor. OpenCode and Antigravity capture their
+qualified main-session evidence without claiming complete child accounting.
+Grok usage accounting remains unsupported.
 
 ## Reads and live updates
 
@@ -645,6 +652,11 @@ reports and do not compute dashboard sections.
 
 **Backend evidence**
 
+- Antigravity reports completed native step tokens with unknown model, provider,
+  effort, and cost. Its main-loop totals remain partial; inherited child
+  baselines and unobserved child work do not become parent spend.
+- OpenCode reports partial main-session usage; surviving message allocations
+  do not establish complete child usage or reconstruct pruned per-turn detail.
 - Codex reports no cost. Its usage never appears in cost totals and is counted
   as unpriced; Sedes does not price tokens.
 - Codex notifications carry no model. Model and effort are known only for
@@ -711,8 +723,9 @@ Coverage lives in
 conflicts, scope, forks, subagents),
 [`usage-analytics.test.ts`](../../tests/unit/usage-analytics.test.ts) (timeline,
 placement, rebuilds, analytics, time zones), the backend adapter tests
-(`pi-usage-accounting`, `codex-usage-capture`, `codex-subagent-usage`,
-`claude-usage-accounting`), the HTTP contract in
+(`pi-usage-accounting`, `pi-native-driver`, `codex-usage-capture`,
+`codex-subagent-usage`, `claude-usage-accounting`, `opencode-usage-accounting`, and
+`antigravity-driver`), the HTTP contract in
 [`normalized-http-api.test.ts`](../../tests/integration/normalized-http-api.test.ts),
 the client under [`src/client/usage`](../../src/client/usage/UsageView.tsx), and
 [`usage-analytics.spec.ts`](../../tests/e2e/usage-analytics.spec.ts). Live

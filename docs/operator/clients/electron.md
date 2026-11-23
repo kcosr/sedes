@@ -100,7 +100,8 @@ retain their separate external-Node requirements; Electron addons are never
 substituted for them. Full retains the backend's served browser assets to
 preserve its HTTP behavior.
 
-Neither profile ships Codex CLI or Claude Code executables. Codex's build-time
+Neither profile ships provider CLI executables such as native Pi, Codex,
+Claude Code, Grok, OpenCode, or Antigravity. Codex's build-time
 package is retained in the development tree for protocol generation; desktop
 staging copies only its small protocol release metadata. Claude's SDK JavaScript
 and Pi provider libraries are included only in full. Executable paths and
@@ -126,7 +127,8 @@ system, architecture, and Electron ABI. It does not contain a standalone Node
 distribution, user configuration, application state, provider credentials,
 provider executables, provider-native conversation stores, or repository source
 and tests. The Claude Agent SDK and Pi runtime are application libraries rather
-than installed provider commands; Claude Code, Codex, Grok, authentication, and
+than installed provider commands; native Pi, Claude Code, Codex, Grok, OpenCode,
+Antigravity, authentication, and
 native stores remain separately installed for the desktop account. Direct and
 SSH connections continue to use the separately operated server's runtime and
 state.

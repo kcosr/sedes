@@ -178,7 +178,7 @@ recovery card, as for a typed first send; see
 
 ## Turn speed
 
-Completed Pi turns can show a small **tok/s** value at the left of the turn
+Completed Pi SDK and native Pi turns can show a small **tok/s** value at the left of the turn
 footer. It is the main agent's output tokens, including reasoning, divided by
 the combined time spent on its model requests. Request startup and network
 latency count; tool execution, approval waits, compaction, and gaps between
@@ -193,7 +193,8 @@ It works without enabling experimental usage accounting. Sedes keeps the most
 recent 100 measured turns in memory while that Pi session remains loaded;
 stopping or unloading the runtime, or restarting the server, discards them.
 Refreshing the browser can retain them while the same session is loaded.
-Codex, Claude, and Grok do not currently provide this measurement.
+Both Pi SDK and native Pi support this measurement when their required timing
+evidence is complete. Codex, Claude, Grok, OpenCode, and Antigravity do not.
 
 ## Account quota
 
@@ -214,8 +215,10 @@ and availability details.
 
 The composer context meter and **Thread actions → Session stats** show the
 provider's available context estimate and transcript counters without enabling
-experimental usage accounting. Pi, Claude and OpenCode provide both; Codex
-provides context, and Grok does not provide these statistics.
+experimental usage accounting. Pi SDK, native Pi, Claude, OpenCode, and
+Antigravity provide both when their live evidence is available; Codex provides
+context, and Grok does not provide these statistics. Detached Antigravity history
+provides transcript counters without inventing current context occupancy.
 
 Claude reports estimated current occupancy against its effective auto-compaction
 window. OpenCode reports the latest measured assistant request against that
@@ -455,6 +458,9 @@ OpenCode v2 also steers the conversation at its next native opportunity. Its
 input remains pending until exact native consumption is observed. Stop tries
 to withdraw each unconsumed native input; an uncertain outcome stays visible
 for review and is never resent automatically.
+Antigravity also steers the conversation. Writing the request alone does not
+confirm consumption: Sedes waits for exact native input evidence, and an
+unconfirmed outcome stays in recovery rather than being resent.
 Grok has no Steer, so active-turn input waits in Queue.
 
 The selector shows only modes the current backend supports; temporarily
@@ -573,10 +579,17 @@ Sedes never resends it.
 | Backend | How Stop handles a Steer the provider has not used |
 | --- | --- |
 | Claude | Stop asks Claude to withdraw it before interrupting. Claude's own queued work, such as a finished background task's notification, can still start a turn afterwards. |
-| Pi | Stop clears Pi's steering queue before interrupting. |
+| Pi SDK | Stop clears Pi's steering queue before interrupting; each unused input needs its own lost-input evidence. |
+| Pi | Managed Stop clears the native queue and aborts; signed per-input evidence identifies withdrawn Steers. |
 | Codex | Codex discards it when it interrupts the turn. Sedes reports it not sent once the stopped turn's history is final without it. |
 | Grok | Grok has no Steer; active-turn input waits in Queue. |
 | OpenCode v2 | Stop interrupts the session, then requests withdrawal of each exact Sedes-owned pending input within the same deadline. Only proven withdrawal marks it not sent. Failed or uncertain cleanup stays unconfirmed and may leave native work pending. |
+| Antigravity | Stop requests native cancellation. Only settled prompt callbacks plus fresh native evidence that work drained prove an unconsumed input cancelled. Unproven cleanup remains unconfirmed. |
+
+Antigravity can retain an unresolved queued Steer after a permission rejection.
+An explicit Stop may be needed to settle its cancellation; Force Reset does not
+prove that the provider withdrew it. See [Antigravity
+lifecycle](../operator/backends/antigravity.md#sessions-and-lifecycle).
 
 ### Mobile composer focus
 
@@ -669,6 +682,14 @@ finished. Subagent launches and observed completion, failure, or stop appear
 as separate blue activity rows in the transcript, without child conversations.
 This indicator does not provide individual task stop controls.
 
+OpenCode and Antigravity also publish observed background work. OpenCode
+reports observed child sessions and session-attributed commands; it cannot
+prove a complete background inventory. Antigravity tracks native commands,
+subagents, timers, and continuations separately from foreground readiness.
+A finished response alone does not mean that this work has stopped. See
+[OpenCode lifecycle](../operator/backends/opencode.md) and
+[Antigravity lifecycle](../operator/backends/antigravity.md#sessions-and-lifecycle).
+
 The sidebar and thread preview also show live background work: a slow grey
 spinner for subagents, or a solid grey dot when only commands or other tasks
 remain. An active main turn's blue spinner takes priority, followed by the blue
@@ -746,7 +767,7 @@ behavior.
 
 Provider capabilities determine when forking is available:
 
-- Pi and Codex can fork an explicitly selected completed turn while later
+- Pi SDK, native Pi, and Codex can fork an explicitly selected completed turn while later
   source work is active.
 - Claude forks require the source to be idle, with no background agents or
   commands still running in it. Some Claude turns cannot be forked at, such as
@@ -757,8 +778,8 @@ Provider capabilities determine when forking is available:
   uses the newest eligible completed turn.
 
 A child inherits eligible settings and records its source lineage. Detaching or
-reattaching its sidebar lineage changes organization, not history. Grok does
-not currently offer native fork support.
+reattaching its sidebar lineage changes organization, not history. Grok, OpenCode, and
+Antigravity do not currently offer Sedes native fork support.
 
 A Claude fork of an earlier turn can include background work that had not
 finished by that turn. That work keeps running only in the source. The child

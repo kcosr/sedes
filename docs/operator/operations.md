@@ -590,9 +590,11 @@ and their ordered output-journal suffixes are stored under `terminals/`. SQLite
 and all of these files are one quiescent backup unit, so a database-only copy
 is incomplete. Terminal output is sensitive application state; each retained
 resource keeps a bounded checkpoint plus the raw suffix after its checkpoint.
-Pi session/auth
-state, Codex native state/authentication, Claude config/session/authentication,
-and Grok native state/authentication remain provider-owned.
+Pi SDK/native Pi sessions and authentication, Codex native state, Claude
+configuration and sessions, Grok native state, OpenCode databases, and
+Antigravity SQLite conversations remain provider-owned, along with each
+provider's authentication. Follow the [backend guides](backends/index.md) for
+the actual native directories on each execution host.
 Keep the bootstrap, original pre-import JSON, and protected credential files
 with the installation backup. Remote sidecar state and provider-native stores
 are separate backup units on their hosts; main state alone cannot restore a
@@ -1075,7 +1077,7 @@ that boundary may have failed.
 
 An eligible provider process receives an opaque `htr2_` bearer reference for
 its exact Sedes source thread, HTTP or sidecar ingress, and presentation: the
-generated CLI or, for Native Codex and Claude tools, the `sedes mcp` server the
+generated CLI or, for Native Codex, Claude, and Antigravity tools, the `sedes mcp` server the
 provider starts. Callers cannot select that association by supplying a thread
 ID. The MCP reference reaches only the provider's environment and the server's
 own process environment, never process arguments. The encrypted reference

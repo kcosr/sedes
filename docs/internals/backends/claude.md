@@ -1133,7 +1133,7 @@ surface installs the generated `sedes` CLI in the query environment:
 Progressive uses bounded catalog discovery and generic invocation; Individual
 uses live help and named typed commands. The Native surface adds a per-query
 `sedes` MCP server; see
-[Native MCP presentation](../agent-tools.md#native-mcp-presentation-codex-and-claude). The same per-thread exact-ID policy and
+[Native MCP presentation](../agent-tools.md#native-mcp-presentation). The same per-thread exact-ID policy and
 invocation-time authority checks used by other backends apply. Claude does not
 implement Pi's shared `set_tool_access` action. Claude's permission mode
 decides whether Claude runs a `sedes` command or `mcp__sedes__*` tool; Sedes's

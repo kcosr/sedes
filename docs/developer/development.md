@@ -80,7 +80,8 @@ env -u NODE_ENV npm run test:e2e
 - `typecheck` checks repository-local documentation links, generated agent-tool
   contracts, and the E2E timing baseline before compiling the client and server
   TypeScript projects without emitting.
-- `test` first builds the sidecar, Pi sandbox, and Claude runtime artifacts, then runs
+- `test` first builds the sidecar, Pi sandbox, Claude runtime, and Antigravity
+  history-worker artifacts, then runs
   unit, component, and integration tests with disposable state. This keeps
   production-shaped fixtures runnable before a full build on a clean checkout.
   Use `npm test -- <file>` for focused runs so the worker prerequisites run too.
@@ -610,7 +611,7 @@ it up. Their safe use is documented in
 
 Before changing a backend-facing or cross-cutting contract, follow
 [Backend integration rules](../internals/backend-integration-contract-rules.md).
-Audit Pi,
-Codex, Claude, and Grok explicitly, preserve provider-private protocols, update
+Audit all seven compiled backends—Pi SDK, native Pi, Codex, Claude, Grok,
+OpenCode, and Antigravity—preserve provider-private protocols, update
 truthful capabilities, and test both implemented and intentionally unsupported
 paths.

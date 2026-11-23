@@ -191,8 +191,8 @@ retaining negotiated compression from version 15; OpenCode's private runtime
 capability is major 5. No browser contract
 or client protocol change follows from this private schema update.
 
-Runtime notice retention and dismissal are shared application behavior for Pi,
-Codex, Claude, Grok, and OpenCode. The principal-scoped thread publication hub
+Runtime notice retention and dismissal are shared application behavior for all
+compiled backends. The principal-scoped thread publication hub
 retains only the first notice with each exact tone and display text, discarding
 duplicates before stream publication. Dismissal removes the selected occurrence
 from process memory and publishes its removal; it does not persist suppression,
@@ -214,7 +214,7 @@ await actor-dependent publication from that callback. First-Send finalization
 requires its exact active operation/source/binding and original attempt phase;
 ordinary queue handling requires its exact uncertain head or pending Steer.
 
-Application inventory catch-up is implemented for Pi, Codex, Claude, Grok and OpenCode
+Application inventory catch-up is implemented for all compiled backends
 through the shared scoped publication boundary. Backend adapters continue to
 publish normalized changes; they must not create private inventory projections
 or replay policies. The boundary folds validated deltas before fanout and uses
@@ -226,7 +226,7 @@ facts; matching the client reducer alone cannot prove producer completeness.
 
 The principal-scoped application thread summary carries the durable binding's
 `backendSessionId` as an opaque copy-only value, absent before a binding exists.
-Pi, Codex, Claude, Grok and OpenCode implement this through the shared scoped binding
+All compiled backends implement this through the shared scoped binding
 projection. Bootstrap and thread-upsert publication must agree, without opening
 a provider session or loading history. The browser must not parse this value,
 use it as application identity or authority, or fall back to a loaded thread
@@ -234,15 +234,15 @@ snapshot for sidebar copying. Test unbound-to-bound publication and wrong-scope
 reads whenever changing this projection.
 
 The application thread summary's `nonArchivedWorkpadCount` is also shared by
-Pi, Codex, Claude, Grok, and OpenCode. It counts principal-owned, non-archived
+all compiled backends. It counts principal-owned, non-archived
 Workpads scoped directly to the application thread, without opening a provider
 session or loading history. Derive it alongside other durable summary counts;
 publish affected thread summaries after committed membership changes, including
 both ends of a scope move. Content and draft edits do not change membership.
 Keep snapshot, incremental publication, and reconnect projections equivalent.
 
-The thread summary's bounded `automations` aggregate is shared by Pi, Codex,
-Claude, Grok, and OpenCode and reads only application-owned definitions and
+The thread summary's bounded `automations` aggregate is shared by all compiled
+backends and reads only application-owned definitions and
 runs. Full named definitions and run histories use explicit automation resource
 IDs, independently of which threads the browser has loaded. See
 [Materialized application projection](application-projection.md#thread-automation-summary).
@@ -251,7 +251,7 @@ as the thread snapshot without loading the transcript. Versioned agent-tool
 contracts must reflect the aggregate and identity-based automation API; do not
 synthesize a singleton by choosing one sibling.
 
-Automation delivery bookkeeping for Pi, Codex, Claude, Grok, and OpenCode must
+Automation delivery bookkeeping for all compiled backends must
 observe committed queue receipts independently of runtime acquisition or UI
 publication. Reconcile the exact scoped receipt after parking a dispatch and
 at authoritative turn settlement, including Stop, to cover acceptance races.
@@ -360,7 +360,7 @@ classify identically. A positively returned cleanup failure permits a fresh
 explicit Stop to retry the same retained owner; it never proves process cleanup
 or permits a replacement owner. A transport loss or unrecognized response
 remains an unknown outcome and cannot silently reopen control admission.
-Native Pi, Codex, and Claude implement this boundary; Pi SDK and Grok have no
+Native Pi, Codex, Claude, OpenCode, and Antigravity implement this boundary; Pi SDK and Grok have no
 remote provider administration contract.
 
 When a pending environment revision outlives its carrier, remote backend
@@ -376,11 +376,14 @@ recovery contract and Grok remains local; neither receives backend recovery
 launch authority.
 
 Current runtime topology is explicit: Pi SDK runs its model loop on main Sedes
-with optional remote workspace operations; native Pi, Codex, and Claude support
-admitted local and persistent-sidecar runtimes; Grok executes locally only. SSH and
+with optional remote workspace operations; native Pi, Codex, Claude, OpenCode,
+and Antigravity support
+admitted local and persistent-sidecar runtimes (OpenCode on Linux, Antigravity
+on Linux/macOS); Grok executes locally only. SSH and
 approved outbound connectors use the same admitted sidecar operations:
 Pi SDK keeps its model loop and native store on main Sedes; native Pi, Codex,
-and Claude execute through the remote sidecar. Remote Grok admission fails closed for both
+Claude, OpenCode, and Antigravity execute through the remote sidecar. Remote
+Grok admission fails closed for both
 transports. Claude requires Node.js 24.18+ and POSIX process-group supervision;
 native Windows Claude is unsupported. Windows outbound definitions can retain
 disabled Claude bindings, but cannot enable them, and Windows sidecars omit the
@@ -391,7 +394,7 @@ connection; cached backend health never grants execution authority while it is
 disconnected. Carrier loss must retire attachment authority without changing
 operator intent; automatic recovery reports transient transport unavailability
 separately from a persisted disabled preference or explicit Disconnect. Native
-Pi, Codex, and Claude preserve remote sessions and pending decisions through
+Pi, Codex, Claude, OpenCode, and Antigravity preserve remote sessions and pending decisions through
 that loss; Pi SDK workspace operations become unavailable until connection returns, and Grok
 remains local. Optional native terminal support is a negotiated runtime fact.
 A terminal request may initiate the first lazy handshake; retain the last
@@ -499,7 +502,7 @@ remain application-owned when their meaning is identical across providers. Perfo
 an all-or-nothing principal-scoped database mutation with one replay receipt
 and publish only after commit. External execution-workspace deletion cannot be
 included in that atomic boundary; bulk archive keeps those workspaces. This
-path is implemented uniformly for Pi, Codex, Claude, Grok and OpenCode through shared
+path is implemented uniformly for all compiled backends through shared
 application composition without native identifiers, provider-name branches, or
 a fabricated browser capability. Archived threads are not
 members of a visible working stack, so stack bulk restore is a separate product
@@ -517,7 +520,7 @@ its count. Recheck the reviewed snapshot inside the inventory transaction and
 reject changed Tasks before any writes. Completion keeps Task ownership and
 publishes every changed Task after commit and on receipt replay. A caller without
 a reviewed-impact contract must not synthesize a fresh snapshot to authorize
-completion. Pi, Codex, Claude, Grok, and OpenCode share this application-level rule.
+completion. All compiled backends share this application-level rule.
 
 For a fresh archive, acquire the shared per-thread maintenance fences in a
 deterministic order and hold every affected fence through the all-or-nothing
@@ -531,7 +534,7 @@ under the acquisition fence;
 an outstanding read alone is not evidence of new provider work. Recheck idle,
 background activity, and provider cleanup blockers after draining. A borrower
 that remains held at the deadline still blocks retirement. This shared behavior
-is implemented for Pi, Codex, Claude, Grok and OpenCode. OpenCode releases only its client
+is implemented for all compiled backends. OpenCode releases only its client
 while the resident daemon remains alive; the other native close dispositions
 are unchanged. Explicit detach keeps its immediate borrowed-runtime rejection.
 Publish only after the commit and fence release. On receipt replay,
@@ -540,7 +543,7 @@ the receipted result. Release all generic fences before any
 execution-workspace deletion that takes its own retirement fence. Retirement
 closes only resident handles, processes, subscriptions, and leases; it never
 deletes provider-native durable conversation history. Audit this close
-disposition for Pi, Codex, Claude, Grok and OpenCode whenever archive or runtime
+disposition for all compiled backends whenever archive or runtime
 ownership changes.
 
 A completed failed retirement keeps ordinary acquisition fenced, but must not
@@ -656,8 +659,8 @@ applied, rather than one claiming the thread is active. An unreachable provider 
 and left to the provider's own residency limit. Missing runtime registrations
 are typed `runtime_unavailable` domain failures, so a retired backend does not
 prevent application-owned archival of its old threads. Strict policy refresh
-still propagates that failure. This shared resolution rule applies to Pi,
-Codex, Claude, Grok, and OpenCode. Claude implements residency release through
+still propagates that failure. This shared resolution rule applies to all
+compiled backends. Claude implements residency release through
 the persistent `retire` command, and its local worker owns no residency beyond
 the handle. Codex implements it by validating native idle state, unsubscribing,
 and invalidating persistent attach metadata. Its native thread may stay loaded
@@ -721,6 +724,7 @@ presentation may retain models while reporting unavailable skills.
 | Pi SDK | Retains its bounded resource-catalog freshness policy. An isolated skill rescan is unsupported; the picker does not force an extra SDK session or executable-extension reload. |
 | Pi | Awaits a coalesced fresh native model/command/skill snapshot for the picker. Passive reads retain the last successful snapshot during refresh or failure, with five-second freshness and owner/workspace generation fencing. Arbitrary extension reload is unsupported. |
 | Grok | Skills are unsupported and the catalog remains empty. |
+| Antigravity | Sedes skill selection is unsupported and the catalog remains empty; native workspace instructions remain provider-owned. |
 
 The shared application and browser may receive only:
 
@@ -757,7 +761,7 @@ snapshot. An explicit point-in-time snapshot read for bounded CLI or diagnostic
 consumers must not publish into, reset, or otherwise acquire authority over the
 application replay hub. A browser cursor is only a resume hint under
 server-derived tenant/principal scope. This is shared application composition
-for Pi, Codex, Claude, Grok and OpenCode; it adds no backend method, capability, native
+for all compiled backends; it adds no backend method, capability, native
 identifier, or provider-specific fallback.
 
 Thread catch-up uses the runtime hub's incrementally maintained normalized
@@ -775,7 +779,7 @@ binding ownership after asynchronous composition. Detaching a binding must
 release both preparation and composition waits. Archived snapshot preparation
 skips provider catalog refresh entirely; failed-restore disconnected snapshots
 also capture and publish inside this shared queue.
-Pi, Codex, Claude, Grok and OpenCode all use this shared application boundary;
+All compiled backends use this shared application boundary;
 their native protocols and browser wire shapes are unchanged.
 
 Client protocol 104 supports a
@@ -802,7 +806,7 @@ also wait for capabilities matching the current run state. Bound slow-client
 pending events independently of one checkpoint frame. Overflow recovery may
 capture another per-client checkpoint, but must not disturb other subscribers
 or repeatedly regenerate snapshots for an indefinitely slow client. This
-catch-up path is implemented for Pi, Codex, Claude, Grok and OpenCode through shared
+catch-up path is implemented for all compiled backends through shared
 normalized stream composition; provider transports and canonical history
 ownership remain unchanged.
 
@@ -950,7 +954,7 @@ request bodies or draft emptiness. Once accepted, composer alone owns submission
 and recovery through its ordinary APIs. Pending uploads may retain the combined
 draft without sending; refused adoption leaves native recovery intact. Other
 thread views and background voice retain direct-input submission and receipts.
-Pi, Codex, Claude, Grok, and OpenCode implement this through their existing
+All compiled backends implement this through their existing
 normalized composer/native input paths and attachment capabilities. Their
 provider protocols and private input mappings are unchanged; Grok remains
 intentionally unsupported for Steer, while existing capability and targeting
@@ -1059,7 +1063,8 @@ and principal. Global singletons must not accidentally combine separate
 targets or principals.
 
 Every compiled module declares a startup policy. `composition_only` startup
-composes Pi, Codex, Claude and Grok without connecting to their providers.
+composes Pi SDK, native Pi, Codex, Claude, Grok, and Antigravity without
+connecting to their providers.
 `connect_provider` startup is used by OpenCode to discover its effective native
 namespace. Production schedules those connections after HTTP and carrier
 listeners are ready, with a 90-second budget and a separate startup shutdown
@@ -1136,7 +1141,7 @@ withdrawing a healthy runtime. Withdrawn driver generations reject new work.
 A failed close retains its native namespace claim and leases until cleanup is
 proven; it must not release ownership and launch a replacement. Backend-local
 startup failure leaves unrelated runtimes available and records a per-backend
-failure. This shared composition applies to local Pi, Codex, Claude, Grok and OpenCode;
+failure. This shared composition applies to all local compiled backends;
 it neither grants remote topology support nor changes provider protocols.
 
 Remote provider modules bind their first acquired service incarnation. A newly
@@ -1465,7 +1470,7 @@ Quiet application reads and cache eviction cannot remove that owned hub:
 application events and actor projection events must reach the same stream.
 Release runtime ownership only after binding cleanup; browser subscriptions
 remain an independent reason to retain the hub. This shared lifecycle applies
-to Pi, Codex, Claude, Grok and OpenCode without changing their capabilities.
+to all compiled backends without changing their capabilities.
 
 A provider may announce a subordinate native session and immediately emit that
 child's frames on the same owned connection. Do not create a Sedes thread,
@@ -1702,7 +1707,7 @@ Equality checks that suppress redundant projection work must include
 server-private authority metadata such as turn completion correlations. Retain
 metadata-only changes before deciding whether the browser needs a delta; an
 unchanged visible transcript does not make its admission evidence unchanged.
-Pi, Codex, Claude, Grok, and OpenCode use this shared projector rule. Live
+All compiled backends use this shared projector rule. Live
 progress also requires explicit backend provenance; Grok has no producer.
 
 A validated provider notification with no transcript or authority effect may
@@ -1757,7 +1762,8 @@ Stop, newer input, unavailable/replaced owners, and disabling the account policy
 cancel pending admission. Recheck the exact failed head, current binding,
 available workspace, interactions, operations, and queue before committing the
 new input. Restart does not resurrect a delayed retry or restore its allowance.
-Pi, Codex, Claude, and OpenCode can publish failed turns; Grok's present protocol
+Pi SDK, native Pi, Codex, Claude, OpenCode, and Antigravity can publish failed
+turns; Grok's present protocol
 has no confirmed failed-turn outcome, so its uncertain submission outcomes do
 not authorize automatic input. Any future backend reporting confirmed failure
 uses this same application queue path unless it explicitly implements the
@@ -1794,7 +1800,8 @@ Recorded accounting is opt-in through the installation-owned
 `SEDES_EXPERIMENTAL_USAGE=1` main-server environment setting. A disabled
 `UsageSink.enabled` must prevent creation of usage normalizers, history scans,
 and usage-only runtime leases or subscriptions, not merely discard database
-writes. Pi, Codex, Claude, and OpenCode implement this gate; Grok remains
+writes. Pi SDK, native Pi, Codex, Claude, OpenCode, and Antigravity implement
+this gate; Grok remains
 explicitly unsupported. Provider delivery acknowledgements, normal conversation history,
 and live context occupancy must continue when accounting is off. Main-server
 recovery, report routes, and browser query subscriptions obey the same setting;
@@ -1818,6 +1825,7 @@ runtime solely for the meter, or depend on the recorded-accounting opt-in.
 | Claude | Bounded, coalesced summary reads against the current query plus transcript counters. |
 | OpenCode | Latest measured assistant occupancy and matching catalog window; counters cover the full retained active branch. |
 | Grok | Intentionally unsupported; no invented values. |
+| Antigravity | Attached sessions can report ACP context usage plus native transcript counters; passive history reports counters only. |
 
 Provider-billed work outside an assistant response must enter the normalized
 [`UsageSink`](../../src/server/usage/contracts.ts) without fabricating a message
@@ -1827,7 +1835,8 @@ connection aliases. A reconnect is not a new accounting epoch. Retain metric
 presence, normalization version, model/provider dimensions, and coverage; absent
 values are not zero and native correlations do not prove request cardinality.
 
-Pi, Codex, Claude, and OpenCode implement durable capture through this boundary.
+Pi SDK, native Pi, Codex, Claude, OpenCode, and Antigravity implement durable
+capture through this boundary.
 OpenCode currently reports partial main-session coverage; child usage and request
 counts are unproved. Grok explicitly declares `usageAccounting: "unsupported"`. Live `UsageSnapshot` and
 `usage_changed` contain only context occupancy and transcript counters; token,
@@ -1868,6 +1877,7 @@ The required backend capability `turnThroughput` has these dispositions:
 | Claude | Unsupported until request timing and matching output scope are established. |
 | Grok | Unsupported; no admitted main-agent token/timing pair. |
 | OpenCode | Unsupported; native message timestamps do not establish matching main-agent model-request duration. |
+| Antigravity | Unsupported; native step timestamps do not establish matching main-agent model-request duration. |
 
 The actor rejects measurement-bearing snapshots and history/seek results when
 the backend capability is unsupported. An unsupported live measurement or a
@@ -1903,6 +1913,7 @@ baseline and ignores one offered on reattachment. Audit per backend:
 | Claude | Each resumed, forked, or reattached query opens its series at its first result. The startup message's own zero-turn result is a proven start; any other first result is an unknown one. |
 | OpenCode v2 | One persisted lifetime counter per session across reconnects. Only an exact Sedes-created root has a proved zero baseline; imports begin at their first observed counter with unknown earlier coverage. |
 | Grok | Unsupported; no usage is captured. |
+| Antigravity | Not applicable: completed native steps supply additive facts; inherited child baselines are excluded when attribution is unproven. |
 
 Codex child capture uses native spawn ancestry under an admitted root binding,
 with independent lifetime counters and durable parent/root ownership. Children
@@ -1940,6 +1951,7 @@ Backends that cannot establish a value pass `null`. Audit per backend:
 | Claude | The effort applied and confirmed before the result arrives, for the confirmed model's `modelUsage` row only; helper and subagent models in the same delta keep none. |
 | OpenCode v2 | No inferred attribution on lifetime counters. Surviving assistant/compaction allocations use only the actual native message model; effort and unavailable model metadata remain unknown. |
 | Grok | Unsupported; no usage is captured. |
+| Antigravity | Native step tokens carry no proven model, provider, cost, or effort attribution. Keep those dimensions unknown and the capture partial. |
 
 Register visible normalized turn stubs with ordinary snapshot/page loading.
 Accounting failure must not retry submitted provider work or break an otherwise
@@ -1967,7 +1979,7 @@ or fail the retained projection and request resnapshot/recovery, rather than
 continue from partially mutated state. Grok retains a sticky recovery failure
 and clears its mutable projection and identity state before accepting another
 acquisition. Preview/reasoning/tool limits remain independent. This is
-implemented by Pi, Codex, Claude, Grok and OpenCode; provider-native acquisition bounds
+implemented by all compiled backends; provider-native acquisition bounds
 continue to apply before normalization.
 
 Retained native user messages may contain up to 10,000 content parts, subject to
@@ -2046,7 +2058,8 @@ channel, keep that command's admission, lifecycle, and result distinct from
 ordinary user submissions and their completion consumers. Reconciliation must
 use the exact action's retained evidence; a nearby automatic compaction cannot
 prove that a manual request ran. Pi, Codex, Claude, and OpenCode implement the
-normalized action; Grok intentionally omits it and rejects direct invocation.
+normalized action; Grok and Antigravity intentionally omit it and reject direct
+invocation.
 Exact terminal evidence may release a native execution fence while the action
 receipt remains uncertain. The application owns any bounded late reconciliation
 continuation and persists its scoped result without dispatching another effect.
@@ -2454,7 +2467,7 @@ last activity advance that revision and publish to both the application summary
 and any retained thread stream. If discovery overlaps initial thread snapshot
 composition, refresh the application overlay before granting stream authority;
 do not attach a dormant provider or make discovery wait for provider startup.
-Pi, Codex, Claude, Grok and OpenCode use this shared, principal-scoped inventory and
+All compiled backends use this shared, principal-scoped inventory and
 publication boundary; their private discovery protocols remain unchanged.
 
 Backends must honor the discovery abort signal. Provider operations that cannot
@@ -2554,7 +2567,7 @@ client actions. Keep script delivery independent. The wire revision is required
 for turn notices even when automatic-listen authority is absent; their optional
 recognition target must name the same source thread. Native validates it before
 playback and automatic microphone startup while retaining activity-token
-readiness. Pi, Codex, Claude, Grok, and OpenCode implement this through the shared
+readiness. All compiled backends implement this through the shared
 application admission and actor-observation paths. Pi/Codex use turn Steer,
 Claude/OpenCode use conversation Steer, and Grok keeps shared Submit/Queue with
 Steer unsupported. No provider-native correlation escapes into browser DTOs.
@@ -2566,7 +2579,7 @@ semantics; clients apply their own untitled presentation. Read it again after
 any awaited cached policy or runtime-replacement read so a rename returns the
 current title. Titles and ordinary thread revisions are not input-activity
 facts: a rename alone must preserve the activity token and capture eligibility.
-Pi, Codex, Claude, Grok, and OpenCode implement this through the shared scoped
+All compiled backends implement this through the shared scoped
 application projection, without provider attachment or title lookup. This
 required field advances the browser/client protocol to 148; missing titles are
 not a compatible input-context shape.
@@ -2593,7 +2606,7 @@ materialization blocks new input; queued Steers awaiting materialization do not
 invent that exclusive barrier. Ordinary input admission revalidates all policy
 and runtime authority before accepting the recording.
 
-Pi, Codex, Claude, Grok, and OpenCode all implement this shared capture preflight.
+All compiled backends implement this shared capture preflight.
 All support application Queue wherever their current normalized Submit
 capability is present. Claude's capability remains conditional on its current
 submission readiness; Grok requires no native Steer to support Queue. A known
@@ -2675,7 +2688,8 @@ must not overwrite an application waiting state while an interaction remains
 pending. Interaction open, resolution, capability refresh, and reconnect
 checkpoints must all agree; test producer output through the real client
 authority reducer rather than only constructing matching fixtures. This shared
-rule applies to provider interactions across Pi, Codex, Claude, and OpenCode. Grok intentionally has no provider blocking-interaction capability.
+rule applies to provider interactions across Pi SDK, native Pi, Codex, Claude, OpenCode, and
+Antigravity. Grok intentionally has no provider blocking-interaction capability.
 
 Optional invocation context belongs to the exact thread-scoped pending
 interaction and is read-only presentation, never response or execution
@@ -2749,12 +2763,13 @@ turn remains.
 Retain its internal records and threads. Dismissals name the observed outcome so
 a delayed request cannot acknowledge a newer failure. At startup it settles runs
 whose observation committed while no observer was bound and reconciles eligible
-retirement from retained history. Pi, Codex, Claude, and OpenCode consume this
+retirement from retained history. Pi SDK, native Pi, Codex, Claude, OpenCode,
+and Antigravity consume this
 same normalized lifecycle; Grok continues to reject automation admission.
 
 Passive external notifications consume finalized observations on this same rail,
 including enrichment after recovery first records an incomplete observation.
-Pi, Codex, Claude, Grok and OpenCode use this normalized path; none adds a private
+All compiled backends use this normalized path; none adds a private
 notification callback or exposes provider identifiers in a script payload.
 Each authoritative publication carries required `live` or `recovered`
 provenance. Initial history and replacement actors publish recovered completion;
@@ -2938,7 +2953,8 @@ reconnect replay, answers, and resolution are not notification sources. Emit onl
 application-owned request identity/kind and thread/workspace context; exclude
 prompt text, commands, options, answers, and secrets. The hook is independent of
 browser presence and failure must not interfere with interaction acceptance.
-Pi, Codex, Claude and OpenCode use their normalized interaction paths. Grok has
+Pi SDK, native Pi, Codex, Claude, OpenCode, and Antigravity use their normalized
+interaction paths. Grok has
 no provider blocking-interaction surface and does not synthesize one; shared
 application decisions remain eligible. Nonblocking questions are excluded from
 these blocking-interaction notifications.
@@ -2963,15 +2979,16 @@ are not evidence of dismissal: remembered, skipped, and legacy entries remain
 unknown. The principal/thread-scoped status lookup accepts at most 100 normalized
 source item identities per request and returns only those entries; do not append
 an unbounded ledger of resolved identities to question events or snapshots.
-This mechanism is backend-neutral: Codex supplies the normalized facet; Pi,
-Claude, and Grok currently declare nonblocking questions unsupported.
+This mechanism is backend-neutral: Codex supplies the normalized facet; Pi SDK,
+native Pi, Claude, Grok, OpenCode, and Antigravity declare nonblocking questions
+unsupported.
 
 Application summaries expose only the count of unanswered questions, aggregated
 from principal/thread-scoped durable requests. Creation, partial answers, and
 dismissal publish this summary independently of a browser's thread subscription.
 Archive impact includes pending counts for the root and descendants so every
 archive entry point can show the same confirmation. Archiving preserves pending
-requests. These application-owned rules apply across Pi, Codex, Claude, Grok and OpenCode;
+requests. These application-owned rules apply across all compiled backends;
 they require no new provider operation or inferred capability.
 
 Replies use the shared delivery gateway to resolve steering, idle submission,
@@ -3151,6 +3168,7 @@ is idle.
 | Codex | Implemented. The handle keeps one record per operation; each resolves on the exact `userMessage` item carrying its client identity, or by its own absence once its target turn is terminal. |
 | Grok | Intentionally unsupported: no Steer, so active-turn input waits in Queue. |
 | OpenCode | Implemented. Each native inbox ID has scoped immutable private input evidence; exact user/Delivered evidence materializes that input, exact Cancelled or gap-qualified Revert withdraws it, and pending admission alone remains unresolved. |
+| Antigravity | Implemented. Each signed input needs its own native consumption evidence. An ACP prompt write or pending callback is not acceptance; retained outcomes and fresh native history reconcile each operation separately. |
 | In-memory conformance | Its Steer is accepted at the provider boundary and never awaits materialization, so no unconfirmed set forms. |
 
 An uncertain queue entry must keep a persistent queue-paused explanation and
@@ -3165,8 +3183,7 @@ After reconciling uncertain input and routing Steer, dispatch must prove that
 the queue head is pending or its retry is due before acquiring a conversation
 or reading a provider retry anchor. Repeated settlement for an empty queue, a
 failed blocking head, or a future retry must not perform provider work. Keep
-the retry wake-up armed. Pi SDK, native Pi, Codex, Claude, Grok, and OpenCode
-share this application-owned dispatch rule.
+the retry wake-up armed. All compiled backends share this application-owned dispatch rule.
 
 For a Sedes-authored Send or Steer, every compiled backend must project the
 authenticated application delivery operation ID on the resulting normalized
@@ -3207,7 +3224,7 @@ identity. The browser uses exact operation identity for deduplication and
 retirement, fences stale reads, and bounds retained content and retries. Queue
 absence alone is ambiguous; acceptance keeps the provisional message until its
 exact user item arrives, while proven cancellation removes it. These shared
-application rules apply unchanged to Pi, Codex, Claude, Grok, and OpenCode and
+application rules apply unchanged to all compiled backends and
 introduce no new backend capability or provider-specific submission path.
 
 Codex and Pi implement this contract through their existing exact-target Steer
@@ -3396,6 +3413,7 @@ targeted turn ended without the input. It never authorizes a resend.
 | Codex | Dropped by Codex's interrupt, which clears the turn's pending input without an event; it can never start or join a later turn. The Steer stays pending until its exact `userMessage` appears. The evidence is its absence from final history once the target turn is terminal (complete legacy read) or the thread is settled (stable paginated cuts). Residual: a forced abort after Codex's 100 ms interrupt grace can leave a just-drained Steer in model history without its item. |
 | Grok | No Steer; active-turn input waits in Queue. |
 | OpenCode | Native interrupt leaves inbox entries intact. Within the same deadline, Sedes deletes each exact private pending input and requires its Cancelled event or a gap-qualified Revert proof; successful DELETE alone is insufficient. Consumed user/Delivered proof always wins. A healthy remaining pending input stays unresolved. Lost original tracking without replay or surviving input becomes failed_unknown, never automatic resend. The same evidence rules apply to uncertain ordinary Submit. |
+| Antigravity | Stop requires the exact prompt callback and fresh native cancellation/drain evidence, including tools, child work, and continuations. Permission rejection alone is not proof that a queued Steer was withdrawn. Missing proof remains unresolved; consumed input always wins. |
 
 A tool call Stop aborted normalizes as `interrupted` (item status and tool
 phase) only on exact provider evidence, kept inside the backend; otherwise the
@@ -3408,8 +3426,8 @@ have no cancelled value), so an aborted call keeps the provider's reported
 outcome. The in-memory conformance backend keeps the statuses it scripts.
 
 Up to 16 user-selected thread references are bounded canonical plain text (Sedes UUID
-and JSON-quoted display title) in the existing input text contract. Pi, Codex,
-Claude, Grok, and OpenCode preserve that text through the shared delivery path;
+and JSON-quoted display title) in the existing input text contract. All compiled
+backends preserve that text through the shared delivery path;
 it grants no tool or resource authority and includes no referenced transcript.
 Draft, stash, queue, retry, and immutable source snapshots retain the exact text.
 Only exact canonical blocks are rendered as chips; malformed, unknown, and
@@ -3433,7 +3451,7 @@ attachment or Task store, replay record, or security policy.
 Conversation excerpts may mark a quote captured through a highlighted-question
 shortcut. This presentation field is scoped to the thread's existing excerpt
 data, enters drafts and delivery snapshots, and reaches the browser in client
-protocol 176. Pi SDK, native Pi, Codex, Claude, and OpenCode use the same
+protocol 176. Pi SDK, native Pi, Codex, Claude, OpenCode, and Antigravity use the same
 normalized excerpt schema in their existing delivery paths. Grok does not
 accept context excerpts. OpenCode restores the excerpt from the shared
 immutable delivery snapshot, which preserves the presentation field without
@@ -3646,8 +3664,8 @@ identity or grant authority; only an explicit move or merge changes
 membership. Sidebar Scope, the Projects view, project stacks, and archive
 grouping key on project ID. Project scope is a viewer-local browsing
 preference, and creation must resolve it to an exact workspace and target,
-asking for a location when the project has several. All compiled backends (Pi,
-Codex, Claude, Grok, and OpenCode) continue to receive the existing exact-ID
+asking for a location when the project has several. All compiled backends
+continue to receive the existing exact-ID
 creation contract and never receive a project ID. Files and workspace and
 thread agent-tool authority retain their workspace and environment boundaries.
 Project-scoped Tasks and Workpads are shared by every location of the project,
@@ -3783,8 +3801,9 @@ Sidecar stream consumers may drain buffered data after receiving a validated
 terminal. Replenishing credit on that exact completed registration is a no-op;
 unregistering an unfinished stream still rejects later credit. A retired handle
 must neither credit nor unregister a replacement using the same stream ID.
-Preserve byte, sequence, and terminal validation. This shared transport rule applies to Pi,
-Codex, Claude, and OpenCode remote operations; Grok remains local-only.
+Preserve byte, sequence, and terminal validation. This shared transport rule
+applies to Pi SDK workspace, native Pi,
+Codex, Claude, OpenCode, and Antigravity remote operations; Grok remains local-only.
 
 A consumer that gives up on an unfinished stream whose producer may still send
 retires it instead of unregistering it. The peer then keeps the registration
@@ -3826,8 +3845,8 @@ paths use forward slashes; search-result paths become forward-slash relative
 protocol paths only at the host boundary. Keep caller-supplied canonical-path
 validation strict. Regular-file admission must reject final symbolic links on
 Windows as well as POSIX, with opened-file identity checked across the open.
-These shared workspace operations apply independently to Pi, Codex, Claude,
-Grok, and OpenCode. Native owned-executable lookup also serves Codex and Grok;
+These shared workspace operations apply independently to all compiled backends.
+Native owned-executable lookup also serves Codex and Grok;
 Windows suffix handling does not expand Grok's supported platforms. Pi and
 Claude SDK execution and OpenCode's service connection retain their existing
 startup contracts.
@@ -4131,7 +4150,7 @@ the current applied-set association across forks and same-settings copies.
 Auxiliary tool runtime availability must be read when building execution
 catalogs and admitting invocations, rather than copied at server startup.
 Enabling, disabling, or repairing research in Settings must update both paths
-without a restart. Pi, Codex, Claude, Grok, and OpenCode use the same canonical
+without a restart. All compiled backends use the same canonical
 availability check; an existing grant does not override an unavailable runtime.
 
 Model-visible tool media is a separate closed `modelContent` array on a
@@ -4189,9 +4208,9 @@ a pipe name alone provides neither privacy nor peer identity. Bound pending
 handshakes, admitted clients, and frame deadlines, and close all of them when
 the ingress retires. TLS admission must complete before an invocation reaches
 the potentially uncertain delivery boundary. This local transport leaves
-backend tool eligibility unchanged: admitted sidecar Codex and Claude use the
-relay over SSH or outbound connections; remote Pi CLI and remote Grok remain
-unsupported.
+backend tool eligibility unchanged: admitted native Pi, Codex, Claude, and
+Antigravity use the relay over SSH or outbound connections. OpenCode uses its
+qualified private tool relay. Pi SDK remote CLI and remote Grok remain unsupported.
 
 When adding canonical tools or catalog groups, validate the complete canonical
 catalog against the CLI transport schema and render individual root help from
@@ -4212,14 +4231,15 @@ surface or mode when admission fails.
 
 Each backend's Native surface has exactly one mechanism: Pi SDK tools in the
 Sedes process, managed-companion tools for native Pi, the stdio `sedes mcp`
-server for Codex and Claude, and the shared stdio `sedes opencode-mcp` bridge
+server for Codex, Claude, and Antigravity, and the shared stdio `sedes opencode-mcp` bridge
 on OpenCode's execution host; Grok has none.
 Admission maps the calling adapter against the thread's backend
 kind, so one backend's mechanism can never satisfy another's Native
 presentation. A provider-launched MCP server receives its reference only
 through a channel proven to expose it no more widely than the CLI environment
-does: Codex's per-thread server `env`, or Claude's query environment behind a
-placeholder in the argument-borne MCP config. Keep the provider's MCP permission
+does: Codex's per-thread server `env`, Claude's query environment behind a
+placeholder in the argument-borne MCP config, or Antigravity's per-session ACP
+MCP server environment. Keep the provider's MCP permission
 controls in force, derive tool hints only from declared effects, and never
 write operator provider configuration.
 
@@ -4289,7 +4309,7 @@ A bound thread's provider process or session may capture environment and tool
 presentation only at establishment. Therefore an idle presentation-policy
 change must prove the complete normalized thread runtime retired before the
 policy commit; the next attach reconstructs provider-private state from the
-new policy. Apply this invariant uniformly to Pi, Codex, Claude, Grok and OpenCode.
+new policy. Apply this invariant uniformly to all compiled backends.
 Never update durable presentation while retaining a provider runtime with the
 old mode, and never fall back to another surface when retirement is busy or
 cannot be proved.
@@ -4375,8 +4395,8 @@ scoped ID, revision, exact tools and access flags transactionally; custom tool
 or access edits clear its association, while presentation-only edits retain it.
 Saved names and revisions survive later set edits or deletion. Missing selected
 sets fail closed at creation; existing thread snapshots remain usable after set
-deletion. This shared application path applies to Pi, Codex, Claude, Grok and
-OpenCode without changing their provider protocols or tool admission.
+deletion. This shared application path applies to all compiled backends without
+changing their provider protocols or tool admission.
 
 Workpads are application-owned Markdown documents, revision history,
 attribution, and user drafts; providers receive only normalized canonical tools.
@@ -4413,8 +4433,8 @@ fork capabilities and `thread.messages` retain the native source revision,
 derived by subtracting referenced page items. Validate that relationship with
 the referenced items in snapshots, history pages, and incremental stores.
 
-Page responses are principal- and thread-owned input, implemented for Pi,
-Codex, Claude, Grok, and OpenCode through ordinary normalized text delivery and
+Page responses are principal- and thread-owned input, implemented for all
+compiled backends through ordinary normalized text delivery and
 an authenticated application snapshot. They do not require a provider app host
 or MCP Apps. Keep `page.publish` and `page.preview` source contracts unchanged;
 the trusted render bootstrap supplies `window.sedes.onSubmit(() => string)`.
@@ -4476,8 +4496,8 @@ string slicing and concatenation, without parsing or re-encoding its authored
 payload on each request. Thus security updates protect existing revisions
 without changing their authored content, digest, revision, or source text.
 
-HTML page downloads are shared application reads for Pi, Codex, Claude, Grok,
-and OpenCode. Authenticate and resolve the exact tenant, principal, owning
+HTML page downloads are shared application reads for all compiled backends.
+Authenticate and resolve the exact tenant, principal, owning
 thread, page, and immutable revision without acquiring a provider runtime or
 rereading workspace files. Export the captured authored HTML and embedded
 images with a UTF-8 byte-order mark; exclude trusted rendering code, viewport
@@ -4529,7 +4549,7 @@ replay commands cannot exceed native's response limit.
 Background Android recognition requires an existing ready native voice session.
 Capture its voice-only disposition at acceptance: visibility changes alone cannot
 turn it into deferred screen navigation or supersede the request.
-This is shared client behavior for Pi, Codex, Claude, Grok, and OpenCode; it does
+This is shared client behavior for all compiled backends; it does
 not change provider transports or completion authority.
 
 Navigation and default-thread writes authorize the exact destination through
@@ -4621,7 +4641,8 @@ Keep supported settings editable under the ordinary backend lifecycle rules;
 same-thread runs use current thread settings when preparing the operation, and
 recovery preserves any frozen operation snapshot. Preserve revision checks
 across settings edits and automation admission, as well as ordinary fork
-inheritance. Codex, Pi, Claude, and OpenCode implement this rule; Grok explicitly
+inheritance. Pi SDK, native Pi, Codex, Claude, OpenCode, and Antigravity
+implement this rule; Grok explicitly
 does not support automation. Preserve a backend's specific setting-unavailable
 reason when composing normalized capabilities.
 
@@ -4656,6 +4677,7 @@ them after deferral: shell commands cannot be assumed safe to replay.
 | Claude | Shared normal admission | Normal settings-copy creation | Native eligible checkpoint |
 | OpenCode | Shared normal admission | Normal settings-copy creation | Unsupported; no empty-copy fallback |
 | Grok | Automation unsupported | Automation unsupported | Unsupported |
+| Antigravity | Shared normal admission | Normal settings-copy creation | Unsupported; no empty-copy fallback |
 
 All paths retain backend-owned policy checks. Child threads inherit normal
 configuration, never automation definitions. Automation `clone` remains the
@@ -4799,7 +4821,7 @@ by the target IDs in the current principal-owned configuration. Removed profiles
 remain stored for historical thread bindings but are not runtime inputs. Keep
 explicitly configured disabled targets in those inputs; filtering on `enabled`
 alone does not preserve the configuration contract. Verify connection removal
-followed by backend Start and main restart for Pi, Codex, Claude, Grok, and OpenCode.
+followed by backend Start and main restart for all compiled backends.
 Do not add aliases,
 dual-shape parsers, or implicit migration paths unless a compatibility period
 is explicitly requested.
@@ -4834,8 +4856,11 @@ revisions cannot advance while their environment configuration remains pending;
 new driver admission rejects a stale backend configuration with a retryable
 runtime-unavailable result. Offer backend Disconnect only when the provider
 runtime persists independently of its main-side attachment. This excludes Pi
-SDK (including remote workspace operations) and local Codex, Claude, and Grok;
-persistent remote Codex and Claude retain their disconnect controls. Unchanged
+SDK (including remote workspace operations), local native Pi, Codex, Claude,
+Grok, and Antigravity, and owned local OpenCode;
+persistent remote native Pi, Codex, Claude, OpenCode, and Antigravity retain
+their disconnect controls. OpenCode also permits detaching a local external
+daemon without stopping it. Unchanged
 reconciliation must not republish application snapshots, replace advisory subscriptions, or
 invalidate target health.
 
@@ -4859,10 +4884,13 @@ operation finishes instead of retaining a creation-to-attachment lease.
 Codex holds one shared stdio process or external connection per principal/backend
 instance. Idle teardown stops only owned stdio; external UDS/TCP servers remain
 running. Claude evicts each query/CLI child separately and releases the shared
-worker/supervisor after its last query and semantic operation. Pi and Grok keep
-their existing per-conversation cleanup; they have no shared provider subprocess
-to retire. Persistent Codex and Claude hosts require explicit eviction from the
-current scoped controller: main/carrier detach alone never authorizes retirement
+worker/supervisor after its last query and semantic operation. Pi SDK and Grok
+keep their existing per-conversation cleanup. Native Pi and Antigravity retain
+execution-host owners with per-session processes and evidence-driven cleanup.
+OpenCode releases an attachment independently of its daemon, whose native
+background inventory cannot prove automatic retirement safe. Persistent hosts
+require explicit authority from the current scoped controller: main/carrier
+detach alone never authorizes retirement
 of retained queries, active work, pending interactions, or unacknowledged results.
 The remote runtime protocol must distinguish idle from failed or stopped and
 must fence older incompatible carriers when adding these release operations.
@@ -4887,8 +4915,9 @@ of provider history handoff: fence admission, interrupt owned execution or detac
 an external provider, retain bounded disposition evidence where possible, and
 report incomplete outcomes as unknown. Evidence retention failures must not veto
 intentional Stop; actual owned-process cleanup failures still block replacement.
-Codex and Claude persistent hosts implement this policy. Pi keeps its model loop
-on main and uses the shared actor shutdown plus remote workspace cleanup; Grok
+Native Pi, Codex, Claude, OpenCode, and Antigravity persistent hosts implement
+this policy. Pi SDK keeps its model loop on main and uses the shared actor
+shutdown plus remote workspace cleanup; Grok
 uses shared local actor shutdown and has no persistent provider host. Disconnect
 continues to preserve independently hosted work. Controller replacement must
 fence stale writers.
@@ -4922,7 +4951,7 @@ and it never reaches a browser or normalized backend contract.
 
 Removal is principal-owned lifecycle state (`removed_at` on a workspace or a
 project), independent of thread Active/Snoozed/Parked/Archived state and
-environment filesystem grants. Pi, Codex, Claude, Grok and OpenCode share its
+environment filesystem grants. All compiled backends share its
 application admission and retirement boundaries; no provider-specific delete
 operation is invoked. Preserve native bindings/history and all
 workspace-related application records. Every commit keeps the membership
@@ -5015,7 +5044,7 @@ surfaces that apply:
 | Persistence and tenancy            | Are all keys and caches scoped? Are migrations and wrong-scope denials tested?                                                                                                                                                                                                                                                                                       |
 | Browser-derived bulk collections   | Is exact visible membership explicit and bounded? Does the server rederive scope, revisions, eligibility, Tasks, stashes, and blockers; reject selector expansion; commit all-or-nothing; retain external workspaces; and give every backend an explicit shared-application or unsupported disposition?                                                              |
 | Shutdown and recovery              | Can admitted work outlive disposed dependencies? Are unresolved mutations reconciled safely?                                                                                                                                                                                                                                                                         |
-| Browser and documentation          | Is the UI capability-driven? Are user/operator claims current and provider-neutral?                                                                                                                                                                                                                                                                                  |
+| Browser and documentation          | Is the UI capability-driven? Do navigation, setup guidance, and shared feature tables cover every compiled backend, including explicit unsupported dispositions and the Pi SDK/native Pi distinction? Are user/operator claims current and provider-neutral?                                                                                                                                                                                                                                                                                  |
 
 “No code path exists” is not enough for required contributions: provide a typed
 unsupported implementation or a capability test that proves the request is
@@ -5038,8 +5067,7 @@ Speech formatting is device-owned presentation over normalized notification text
 Prepare complete notification parts independently before assembly and transport
 chunking, preserve original envelopes so queued speech can be rebuilt when settings
 change, and leave shared transcripts and backend event/history text unchanged.
-This boundary applies equally to Pi, Codex, Claude,
-Grok, and OpenCode.
+This boundary applies equally to all compiled backends.
 
 Client response compression belongs after normalization and applies equally to
 all seven backends. Select eligible JSON read routes explicitly; mutations, credentials, upload
@@ -5063,7 +5091,7 @@ routes. Registration approval, environment grants, and runtime tickets do not
 substitute for authentication. Preserve revocation across active carriers and
 fail closed on absent, expired, wrong-kind, or wrong-connector credentials.
 
-Pi, Codex, Claude, Grok and OpenCode use this shared ingress boundary; their provider
+All compiled backends use this shared ingress boundary; their provider
 protocols, native login credentials, capabilities, history, and runtime semantics
 are unchanged. Agent-tool source references and Tool-client credentials retain
 their dedicated admission and do not authenticate unrelated management APIs.

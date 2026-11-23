@@ -400,6 +400,11 @@ User-facing changes are collected here before release. See the
 
 ### Fixed
 
+- Complete shared backend documentation for Antigravity, OpenCode, and native
+  Pi, including history ownership, remote tools, setup, and feature limits.
+  Distinguish native Pi from Pi SDK throughout the affected guides.
+  ([#149](https://github.com/kcosr/sedes/pull/149))
+
 - Copying highlighted chat text with the keyboard shortcut skips the quote
   editor for that selection.
   ([#146](https://github.com/kcosr/sedes/pull/146))

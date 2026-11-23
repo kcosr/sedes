@@ -103,16 +103,18 @@ mark individual completed turns unforkable with a user-facing
 reason, and a fork that selects such a turn, including a latest-completed fork
 whose newest completed turn is marked, fails with it rather than falling back
 to an older turn. The agent
-`thread.fork` tool remains an exact completed-turn operation. Grok and OpenCode do not
+`thread.fork` tool remains an exact completed-turn operation. Grok, OpenCode, and Antigravity do not
 advertise fork capability, so both browser and agent-tool fork requests fail
 closed before any native operation.
 
 | Backend | Current native-fork disposition |
 | --- | --- |
-| Pi | Exact selected completed turn; idle-only latest-completed selection. |
+| Pi SDK | Exact selected completed turn; idle-only latest-completed selection; isolated workspaces cannot fork. |
+| Pi | Exact selected completed turn; idle-only latest-completed selection; the native child uses current execution-host instructions. |
 | Codex | Exact selected completed turn and atomic latest-provider snapshot. |
 | Claude | Exact selected completed turn while idle with no background work; idle-only latest-completed selection that fails on an unforkable newest turn. |
 | Grok | Intentionally unsupported. |
+| Antigravity | Intentionally unsupported; native ancestry does not establish a qualified exact Sedes fork boundary. |
 | OpenCode v2 | Intentionally unsupported. Native parent IDs can describe discovered ancestry, but do not authorize a fork or establish an exact Sedes turn boundary. |
 
 Cross-backend review requirements are defined in

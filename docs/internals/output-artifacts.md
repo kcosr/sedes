@@ -11,8 +11,9 @@ supports completed Codex `imageGeneration` items whose reviewed native result
 contains an in-band PNG, snapshots of files named by completed Codex
 `imageView` items, exact completed Grok `ImageGen` or `ImageEdit` tool
 results whose JPEG is available inside the owned local Grok session directory,
-and the in-band image that a Claude or Pi built-in read of an image file
-returned to the model. It does not add image-generation controls or make other
+validated native Pi assistant/tool-result raster bytes, the in-band image
+returned by a Claude or Pi SDK built-in read, and qualified OpenCode read
+images whose later vision work proves inclusion in model context. It does not add image-generation controls or make other
 provider-generated or generic tool-result images durable.
 
 For the surrounding ownership model, see [Architecture](architecture.md). For
@@ -51,12 +52,13 @@ history pages, and SSE carry the same descriptor-only representation.
 Every image item, retained or unavailable, also declares its `origin`:
 
 - `{ kind: "shown" }` for a retained source-file snapshot explicitly displayed
-  by `image.show`; these are standalone inline images, not provider image reads;
+  by `image.show`, or validated native Pi non-read tool-result images; these are
+  standalone inline images, not provider image reads;
 - `{ kind: "generated" }` for provider-generated output: Codex
-  `imageGeneration` and Grok `ImageGen` or `ImageEdit`;
+  `imageGeneration`, Grok `ImageGen` or `ImageEdit`, and native Pi assistant images;
 - `{ kind: "viewed", capture: "provider_input" }` for the exact in-band bytes
   the model received, after the provider's own resizing or conversion: Claude
-  and Pi reads; or
+  Pi SDK/native Pi, and qualified OpenCode reads; or
 - `{ kind: "viewed", capture: "file_snapshot" }` for the file as Sedes read it
   later: Codex `imageView`.
 
@@ -70,10 +72,10 @@ discloses its error message, which is always Sedes-written and path-free.
 Codex projects only completed views, so its rows are always `completed`.
 
 The normalized backend capability document reports
-`providerOutputArtifacts.nativeImage: true` for the reviewed Codex and local
-owned-Grok paths. Pi and Claude report `false`: the flag describes
-provider-generated output only, and input-image, bounded tool-result-image,
-and viewed-image behavior do not set it. It is also not evidence of Files
+`providerOutputArtifacts.nativeImage: true` for qualified native Pi in-band
+output, reviewed Codex output, and local owned-Grok paths. Pi SDK, Claude,
+OpenCode, and Antigravity report `false`. Composer input-image and viewed-image
+support alone do not set this flag. It is also not evidence of Files
 availability or native-executor attribution for viewed-image capture.
 
 The content route supports both methods:
@@ -130,8 +132,8 @@ Missing anchors are not guessed, and images have no Pages catalog or revisions.
 The tool returns JSON metadata only; no model-media content is generated.
 
 The canonical operation is shared by each backend's already supported Native or
-CLI surfaces: Pi Native/CLI (SSH Native only), Codex and Claude Native MCP/CLI,
-Grok local CLI, and OpenCode local Native Progressive/CLI. It does not enable
+CLI surfaces across all seven compiled backends, subject to the
+[agent-tool presentation and topology matrix](agent-tools.md#catalog-and-effects). It does not enable
 Grok Native, unsupported remote presentations, or provider-generated-image
 capabilities. Each thread must explicitly grant the newly added tool.
 
@@ -255,7 +257,11 @@ environments are unsupported for this feature.
 
 ## Claude and Pi viewed images
 
-Claude and Pi return the image their built-in read tool opened inside the tool
+In this section, Pi means the in-process Pi SDK integration. Native Pi uses
+its own validated in-band history path: assistant images are generated, native
+read images are viewed, and other tool-result images are shown.
+
+Claude and Pi SDK return the image their built-in read tool opened inside the tool
 result, as the exact bytes the model received after the provider's own
 resizing or conversion. Sedes decodes those in-band bytes strictly and
 publishes them through `OutputArtifactService` under a publication key derived
@@ -367,7 +373,9 @@ Any native output shape other than the exact completed `ImageGen` or
 | Codex | **Supported:** completed native `imageGeneration` with a valid in-band PNG, and snapshots of completed `imageView` paths readable through the thread's execution-environment Files provider. |
 | Grok | **Supported for owned-local sessions:** exact completed `ImageGen` or `ImageEdit` with a valid JPEG at the scoped session path. |
 | Claude | **Viewed images only:** the single in-band image block returned by a completed built-in `Read` of a PNG, JPEG, GIF, or WebP path, as Claude received it. |
-| Pi | **Viewed images only:** the first in-band image part returned by a completed built-in `read` of a PNG, JPEG, GIF, WebP, or BMP path, as Pi sent it to the model. |
+| Pi SDK | **Viewed images only:** the first in-band image part returned by a completed built-in `read` of a PNG, JPEG, GIF, WebP, or BMP path, as Pi sent it to the model. |
+| Pi | **Supported:** validated in-band raster bytes from qualified native message/tool results, with native read images classified separately as viewed images. |
+| Antigravity | **Intentionally unsupported:** composer image input does not imply generated or viewed-image output capture. |
 | OpenCode v2 | **Viewed images only:** retained in-band PNG, JPEG, GIF or WebP from the exact completed native `read`, when subsequent vision work proves inclusion within the qualified context bounds. |
 
 The boundaries outside that table remain important:
@@ -379,13 +387,15 @@ The boundaries outside that table remain important:
   controls, and a separate download flow are unsupported. Generic ACP image
   result parsing does not create an artifact implicitly. Grok image reads are
   intentionally not translated into viewed images; they stay tool cards.
-- Pi images from non-read tools, MCP servers, and extensions remain
+- Pi SDK images from non-read tools, MCP servers, and extensions remain
   metadata-only tool-result entries; the current tool card does not render
   their pixels.
 - Claude assistant image blocks remain an omitted notice. Tool-result image
   blocks from MCP and other non-read tools remain metadata-only entries, and
   subagent reads show no viewed image.
-- Claude and Pi have no provider-generated image path.
+- Claude and Pi SDK have no provider-generated image path. Native Pi has a
+  separate validated in-band output-image path; see [native Pi](backends/pi-native.md).
+- Antigravity does not capture provider-generated or provider-viewed images.
 - OpenCode generated images and images from unrelated tools/MCP results are
   unsupported. Viewed-image capture never rereads a path. It requires the exact
   built-in `read` contract, retained raster bytes, and a later vision response
@@ -395,11 +405,13 @@ The boundaries outside that table remain important:
   cryptographically attest that lineage. See the [native qualification and
   context bounds](backends/opencode.md#images-and-manual-compaction).
 
-Input image support is independent. Pi, Codex, and Grok may accept normalized
+Input image support is independent. Pi SDK, native Pi, Codex, and Grok may accept normalized
 composer images under their own model- and topology-sensitive input
 capabilities without gaining provider-output support. Claude also accepts
 verified native composer image bytes, but that input path likewise says nothing
 about its output contract.
+Antigravity accepts staged file manifests and, when ACP advertises image
+support, validated native image bytes. That does not grant output-image support.
 OpenCode accepts authenticated staged composer files and validated native raster
 input on models advertising vision. Input attachment identity comes from scoped
 Sedes evidence and its byte reader; native paths alone do not grant read
@@ -417,5 +429,7 @@ native generated-image support.
 - [Backend integration contract rules](backend-integration-contract-rules.md#provider-output-artifacts)
   — requirements for extending output support
 - [Codex internals](backends/codex.md), [Claude internals](backends/claude.md),
-  [Pi internals](backends/pi.md), and [Grok internals](backends/grok.md) —
+  [Pi SDK internals](backends/pi.md), [native Pi](backends/pi-native.md),
+  [Grok internals](backends/grok.md), [OpenCode](backends/opencode.md), and
+  [Antigravity](backends/antigravity.md) —
   provider-specific lifecycle and topology

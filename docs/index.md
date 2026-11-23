@@ -86,6 +86,7 @@ from top to bottom.
   - [Claude](operator/backends/claude.md)
   - [Grok](operator/backends/grok.md)
   - [OpenCode](operator/backends/opencode.md)
+  - [Antigravity](operator/backends/antigravity.md)
 - [Preview clients](operator/clients/index.md) — shared connection and release
   status for the source-build clients.
   - [Android](operator/clients/android.md)

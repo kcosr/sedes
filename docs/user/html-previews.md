@@ -105,8 +105,7 @@ multiple selections, free text, or changes made through controls and canvas.
 When the page supports responses, use Sedes's **Send** control to submit its text to the
 page's owning thread. Sedes captures the text once at that click. If the agent
 is busy, the response enters the thread's normal queue; it never interrupts
-the current turn with Steer. The same flow works with Pi, Codex, Claude, Grok,
-and OpenCode.
+the current turn with Steer. The same application flow works with all compiled backends.
 
 In an inline preview, tapping **Send** also turns off interaction mode so
 gestures scroll the conversation again. The page stays loaded.
