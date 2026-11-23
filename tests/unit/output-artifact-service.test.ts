@@ -111,7 +111,9 @@ describe("OutputArtifactService", () => {
       scope: current.scope, environmentId: environment.id, readWorkspaceRoots,
       readWorkspaceBinding: id => {
         const workspace = inventory.getWorkspace(current.scope, id);
-        return {authorityRootId: workspace.authorityRootId, authorityRevision: workspace.environmentConfigurationRevision};
+        return workspace.authorityRootId
+          ? {authorityRootId: workspace.authorityRootId, authorityRevision: workspace.environmentConfigurationRevision}
+          : undefined;
       },
     });
     const files = new WorkspaceFileService(inventory, new WorkspaceFileRootRepository(current.database),
