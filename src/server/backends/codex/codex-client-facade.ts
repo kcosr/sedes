@@ -1,4 +1,3 @@
-import { withAbort } from "../../runtime/with-abort.js";
 import { RetainedRuntimeLifecycle } from "../retained-runtime-lifecycle.js";
 import type { CodexThreadResumeResponse } from "./codex-c1-protocol.js";
 import type {
@@ -65,7 +64,8 @@ export class CodexSharedClientFacade {
   readonly persistentSessions: CodexPersistentSessionAccess | undefined;
   readonly residency: RetainedRuntimeLifecycle | undefined;
   readonly #current: () => CodexReadyClientGeneration | undefined;
-  readonly #pendingInitialization: (() => Promise<void> | undefined) | undefined;
+  /** A remote supervisor exposes its current attempt without launching a new one. */
+  readonly pendingInitialization: (() => Promise<void> | undefined) | undefined;
   readonly #latestGeneration: () => number;
   readonly #retireGeneration: (
     generation: number,
@@ -94,7 +94,7 @@ export class CodexSharedClientFacade {
     this.persistentSessions = input.persistentSessions;
     this.residency = input.residency;
     this.#current = input.current;
-    this.#pendingInitialization = input.pendingInitialization;
+    this.pendingInitialization = input.pendingInitialization;
     this.#latestGeneration = input.latestGeneration;
     this.#retireGeneration = input.retireGeneration;
     this.#onListenerError = input.onListenerError ?? (() => undefined);
@@ -214,14 +214,6 @@ export class CodexSharedClientFacade {
   dispatchContinuity(): string {
     const current = this.#current();
     return current?.dispatchContinuity ?? `local:${this.#lifecycle.generation}`;
-  }
-
-  /** Join an initialization already owned by the supervisor without starting or retrying it. */
-  async observeInitializedLifecycle(signal: AbortSignal): Promise<CodexClientLifecycleSnapshot> {
-    signal.throwIfAborted();
-    const pending = this.#pendingInitialization?.();
-    if (pending) await withAbort(pending, signal);
-    return this.#lifecycle;
   }
 
   lifecycleSnapshot(): CodexClientLifecycleSnapshot {

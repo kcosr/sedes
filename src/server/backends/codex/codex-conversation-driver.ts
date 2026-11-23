@@ -1,3 +1,4 @@
+import { withAbort } from "../../runtime/with-abort.js";
 import { CODEX_STEP_MODEL_SWITCHING_CONFIG } from "./codex-active-speed-protocol.js";
 import type { ConversationBinding } from "../contracts.js";
 import { CodexViewedImageCaptureCoordinator } from "./codex-viewed-image-capture.js";
@@ -366,7 +367,12 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
   }
 
   async health(options?: { readonly waitForInitialization: AbortSignal }): Promise<BackendHealth> {
-    const lifecycle = options ? await this.#client.observeInitializedLifecycle(options.waitForInitialization) : this.#client.lifecycleSnapshot();
+    if (options) {
+      options.waitForInitialization.throwIfAborted();
+      const pending = this.#client.pendingInitialization?.();
+      if (pending) await withAbort(pending, options.waitForInitialization);
+    }
+    const lifecycle = this.#client.lifecycleSnapshot();
     const available =
       this.instance.enabled &&
       this.connection.enabled &&
