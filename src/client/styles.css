@@ -6454,6 +6454,25 @@ textarea:disabled {
   vertical-align: -0.1em;
 }
 
+.markdown-file-reference {
+  display: inline-flex;
+  max-inline-size: 100%;
+  align-items: center;
+  gap: var(--space-0-5);
+}
+
+.markdown-file-reference-copy {
+  height: var(--icon-lg);
+  color: var(--muted-foreground-2);
+}
+
+@media (hover: none), (pointer: coarse) {
+  .markdown-file-reference-copy {
+    width: var(--control-touch);
+    height: var(--control-touch);
+  }
+}
+
 .markdown [data-assistant-question-text] {
   color: var(--chat-question);
   text-decoration: underline dotted;

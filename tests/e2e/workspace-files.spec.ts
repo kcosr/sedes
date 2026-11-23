@@ -904,9 +904,10 @@ test.describe.serial("workspace file browser and editor", () => {
       ? pathToFileURL(alphaExamplePath).href
       : alphaExamplePath;
     const linkOnlyHref = pathToFileURL(linkOnlyWorktreeFilePath).href;
+    const primaryReference = "src/example.ts:2";
     const composer = page.getByRole("textbox", { name: /Message/ });
     await composer.fill(
-      `[supplemental file link](${attachedHref}), [primary absolute link](${primaryHref}), [primary relative link](src/example.ts), and [link-only worktree file](${linkOnlyHref})`,
+      `Check these workspace references.\n\nSee the [workspace example](${primaryReference}) for the default value.\n\nI also checked the [supplemental file link](${attachedHref}), [primary absolute link](${primaryHref}), and [link-only worktree file](${linkOnlyHref}).`,
     );
     await page.getByRole("button", { name: "Send message" }).click();
     const assistant = page.locator(
@@ -915,6 +916,35 @@ test.describe.serial("workspace file browser and editor", () => {
     await expect(assistant).toContainText("supplemental file link", {
       timeout: 15_000,
     });
+
+    const relativeLink = assistant.getByRole("link", {
+      name: "workspace example",
+      exact: true,
+    });
+    const copyReference = relativeLink.locator("+ button").and(
+      assistant.getByRole("button", { name: "Copy file reference", exact: true }),
+    );
+    // Keep the screenshot centered on the rendered reply. Its link labels
+    // contain no absolute paths from the disposable workspace.
+    const screenshotName = "chat-file-reference-copy.png";
+    const screenshotPath = testInfo.outputPath(screenshotName);
+    await expect(copyReference).toBeVisible();
+    await assistant.locator(".markdown p")
+      .filter({ has: page.getByRole("link", { name: "workspace example", exact: true }) })
+      .screenshot({ path: screenshotPath, animations: "disabled" });
+    await testInfo.attach(screenshotName, {
+      path: screenshotPath,
+      contentType: "image/png",
+    });
+
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+    await copyReference.click();
+    await expect(
+      assistant.getByRole("button", { name: "File reference copied", exact: true }),
+    ).toBeVisible();
+    await expect
+      .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+      .toBe(primaryReference);
 
     // The normalized whole-file write opens through the same resolver and
     // seeks line 1 in the rendered Markdown preview without entering edit mode.
@@ -985,7 +1015,7 @@ test.describe.serial("workspace file browser and editor", () => {
     ).toHaveAttribute("aria-selected", "true");
     await expect(treeToggle).toHaveAttribute("aria-expanded", "false");
 
-    for (const linkName of ["primary absolute link", "primary relative link"]) {
+    for (const linkName of ["primary absolute link", "workspace example"]) {
       const primaryResolved = page.waitForResponse(
         (response) =>
           response.request().method() === "POST" &&

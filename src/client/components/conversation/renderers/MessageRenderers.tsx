@@ -324,6 +324,7 @@ function AssistantMessage({
       >
         <ProgressiveMarkdown
           copyCodeBlocks
+          copyFileReferences
           highlightQuestions={highlightQuestions}
           onPresentationActiveChange={presentationChanged}
           sourcePositionMetadata={item.status !== "streaming"}

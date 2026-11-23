@@ -15,6 +15,7 @@ import type {
 import { Button } from "../ui/button.js";
 import { ConfirmDialog } from "../ui/confirm-dialog.js";
 import { matchesTouchDensity } from "../../app/use-touch-density.js";
+import { useClipboardCopy } from "../../app/use-clipboard-copy.js";
 import { ChatViewVisibilityContext } from "./chat-view-visibility.js";
 import { openThreadRoute } from "../../workspace-panels/thread-panel-navigation.js";
 
@@ -111,14 +112,7 @@ export const TurnForkDivider = memo(function TurnForkDivider({
   useEffect(() => {
     if (forkConfirmation && !confirmationMatches) clearForkConfirmation();
   }, [forkConfirmation, confirmationMatches]);
-  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">(
-    "idle",
-  );
-  useEffect(() => {
-    if (copyState === "idle") return undefined;
-    const timer = window.setTimeout(() => setCopyState("idle"), 1800);
-    return () => window.clearTimeout(timer);
-  }, [copyState]);
+  const { copy, copyState } = useClipboardCopy();
   // Application updates can change fork authority for every completed turn.
   // Their timestamps still need formatting only when the label inputs change.
   const { completedAt, status } = turn;
@@ -134,15 +128,6 @@ export const TurnForkDivider = memo(function TurnForkDivider({
   const throughput = turn.throughput
     ? (turn.throughput.outputTokens / (turn.throughput.requestDurationMs / 1000)).toFixed(1)
     : undefined;
-  const copyResponse = async () => {
-    if (!copyText) return;
-    try {
-      await navigator.clipboard.writeText(copyText);
-      setCopyState("copied");
-    } catch {
-      setCopyState("failed");
-    }
-  };
   const unavailableReason =
     attempt?.phase === "request_failed" && !attempt.retryable
       ? attempt.diagnostic
@@ -232,7 +217,7 @@ export const TurnForkDivider = memo(function TurnForkDivider({
                     : "Copy response"
               }
               title={copyState === "failed" ? "Copy failed" : "Copy response"}
-              onClick={() => void copyResponse()}
+              onClick={() => void copy(copyText)}
             >
               {copyState === "copied" ? (
                 <Check size={16} aria-hidden="true" />
