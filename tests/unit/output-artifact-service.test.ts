@@ -3,6 +3,7 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { executionPolicyRoots } from "../../src/server/configuration-admin/configuration-execution-policy.js";
 import { OutputImageArtifactRepository } from "../../src/server/db/repositories/output-image-artifact-repository.js";
 import { ConversationBindingRepository } from "../../src/server/db/repositories/conversation-binding-repository.js";
 import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
@@ -43,9 +44,11 @@ async function fixture() {
     path.join(os.tmpdir(), "sedes-output-artifacts-"),
   );
   roots.push(root);
-  const { database, scope } = savedAgentDatabase();
+  const { database, scope } = savedAgentDatabase(undefined, [root]);
   const inventory = new InventoryRepository(database);
   const environment = inventory.getLocalEnvironment(scope);
+  const [grant] = executionPolicyRoots(database, scope, environment.id);
+  if (!grant) throw new Error("output_artifact_fixture_root_missing");
   const workspace = inventory.upsertWorkspace(scope, {
     environmentId: environment.id,
     canonicalPath: root,
@@ -53,7 +56,8 @@ async function fixture() {
     project: { kind: "new", name: "Output artifacts" },
     available: true,
     trustState: "trusted",
-    environmentConfigurationRevision: environment.configurationRevision,
+    authorityRootId: grant.id,
+    environmentConfigurationRevision: grant.generation,
     now: 10,
   });
   const profile = database
@@ -99,10 +103,17 @@ describe("OutputArtifactService", () => {
     const nativeBinding = bindings.bindDiscoveredConversation(current.scope, current.firstThreadId, {
       backendConversationId: "native-image-thread", now: 40,
     });
+    const readWorkspaceRoots = () => executionPolicyRoots(current.database, current.scope, environment.id);
     const execution = new LocalExecutionEnvironment({ scope: current.scope, environmentId: environment.id,
-      allowedRoots: [current.root], configurationRevision: environment.configurationRevision,
+      allowedRoots: [current.root], readWorkspaceRoots, configurationRevision: environment.configurationRevision,
       activeConfigurationRevision: () => inventory.getEnvironment(current.scope, environment.id).configurationRevision });
-    const provider = new LocalWorkspaceFileProvider({ scope: current.scope, environmentId: environment.id });
+    const provider = new LocalWorkspaceFileProvider({
+      scope: current.scope, environmentId: environment.id, readWorkspaceRoots,
+      readWorkspaceBinding: id => {
+        const workspace = inventory.getWorkspace(current.scope, id);
+        return {authorityRootId: workspace.authorityRootId, authorityRevision: workspace.environmentConfigurationRevision};
+      },
+    });
     const files = new WorkspaceFileService(inventory, new WorkspaceFileRootRepository(current.database),
       new WorkspaceFileLinkedWorktreeRepository(current.database), execution, provider,
       { publishApplicationThreadChanges: () => undefined });

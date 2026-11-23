@@ -1507,8 +1507,15 @@ export class WorkspaceFileService {
     const selectedMatch = mostSpecificWorkspaceFileRootMatch(matches);
     if (!this.inventory.workspaceAuthorityIsCurrent(scope, workspace)) return {status: "not_found"};
     if (selectedMatch) {
-      this.#captureSourceGrant(scope, workspace, {workspaceId, environmentId: workspace.environmentId, rootId: selectedMatch.rootId,
-        canonicalPath: selectedMatch.canonicalPath})();
+      try {
+        this.#captureSourceGrant(scope, workspace, {
+          workspaceId, environmentId: workspace.environmentId,
+          rootId: selectedMatch.rootId, canonicalPath: selectedMatch.canonicalPath,
+        })();
+      } catch (error) {
+        if (error instanceof DomainError && error.code === "conflict") return { status: "not_found" };
+        throw error;
+      }
       return {
         status: "resolved",
         rootId: selectedMatch.rootId,

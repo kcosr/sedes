@@ -150,6 +150,7 @@ function fixture(input?: {
     revision: number;
   }>;
   files?: WorkspaceFileProvider;
+  captureFileGrant?: WorkspaceFileService["captureFileGrant"];
   linkedWorktrees?: Array<{
     rootId: string;
     canonicalPath: string;
@@ -261,6 +262,7 @@ function fixture(input?: {
       execution as never,
       files,
       applicationThreads,
+      input?.captureFileGrant,
     ),
   };
 }
@@ -1292,6 +1294,25 @@ describe("WorkspaceFileService", () => {
       path: "notes.md",
       rootVisibility: "listed",
     });
+  });
+
+  it("returns not found if the selected listed root is revoked during link resolution", async () => {
+    let revoked = false;
+    const rootId = workspaceFileRootIdSchema.parse("root-1");
+    const current = fixture({
+      roots: [{ rootId, canonicalPath: "/workspaces/context", displayLabel: "Context", sortOrder: 0, availability: "available", revision: 1 }],
+      captureFileGrant: (_scope, _workspace, target) => () => {
+        if (target.rootId === rootId && revoked) throw new DomainError("conflict", "The Files grant changed.");
+      },
+    });
+    vi.mocked(current.files.resolveFileLink).mockImplementation(async () => {
+      revoked = true;
+      return "guide.md";
+    });
+    await expect(current.service.resolveThreadFileLink(owner, "thread-1", {
+      reference: { kind: "root_relative", rootId, path: "guide.md" },
+    })).resolves.toEqual({ status: "not_found" });
+    expect(current.roots.rememberLinkRoot).not.toHaveBeenCalled();
   });
 
   it("resolves workspace-relative links only against the primary root", async () => {

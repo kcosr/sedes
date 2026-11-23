@@ -11,8 +11,10 @@ import type { RequestScope } from "../identity/identity-provider.js";
 import { callRuntime } from "../runtime/runtime-errors.js";
 import { environmentAdmitsForegroundOperation } from "../domain/environment-operational-state.js";
 import {
+  assertResourceScope,
   grantProjectAccessCaller,
   projectScopeRefs,
+  requireAdmittedEnvironment,
   requireAdmittedResource,
   requireAdmittedResources,
   resourceWithinScope,
@@ -169,11 +171,24 @@ export class WorkspaceApplicationService {
       signal,
     );
     if (request.projectId === undefined) {
-      // Admission authorized only the environment, not any existing project.
       try {
         return this.#admit(scope, validated, {
           project: { kind: "new", name: validated.summary.displayName },
-          requireExistingProject: requireProject,
+          requireExistingProject: (projectId) => {
+            // The path selected this existing location. Check its live project
+            // membership inside the upsert against the caller's host boundary.
+            const project = this.input.inventory.getProject(scope, projectId);
+            for (const location of project.locations) {
+              if (location.removedAt !== null) continue;
+              requireAdmittedEnvironment(environmentAuthority, location.environmentId);
+              assertResourceScope([{
+                kind: "project",
+                id: projectId,
+                projectId,
+                environmentId: location.environmentId,
+              }], environmentAuthority);
+            }
+          },
         });
       } catch (error) {
         if (!(error instanceof RemovedLocationError)) throw error;

@@ -130,10 +130,22 @@ describe("resident OpenCode runtime registry", () => {
     let lookedUp = false;
     const lookup = f.hosts.lookup(configuration, f.epoch).then(value => { lookedUp = true; return value; });
     await Promise.resolve(); expect(lookedUp).toBe(false); f.controls.beforeLaunch.release();
-    expect(await second).toBe(await first); expect(await lookup).toBe(await first); expect(f.controls.launched).toHaveBeenCalledOnce();
+    const resident = await first;
+    expect(await second).toBe(resident); expect(await lookup).toBe(resident);
     const changed = { ...configuration, startupEnvironmentVariables: { HOST_VALUE: { kind: "literal" as const, value: "pending value" } } };
-    expect(await f.hosts.ensure(changed, f.epoch)).toBe(await first);
+    await expect(f.hosts.ensure(changed, f.epoch)).rejects.toMatchObject({ code: "opencode_runtime_configuration_restart_required" });
+    expect(await f.hosts.lookup(changed, f.epoch)).toBe(resident);
     expect(f.owners[0]!.input.environment.HOST_VALUE).toBe("host value");
+    expect(f.controls.launched).toHaveBeenCalledOnce();
+    expect(f.controls.signals).not.toHaveBeenCalled();
+
+    const inspection = await f.hosts.inspect(resident.runtimeId);
+    await f.hosts.stop(resident.runtimeId, inspection.revision, true);
+    expect(await f.hosts.lookup(changed, f.epoch)).toBeUndefined();
+    const replacement = await f.hosts.ensure(changed, f.epoch);
+    expect(replacement.runtimeId).not.toBe(resident.runtimeId);
+    expect(f.owners[1]!.input.environment.HOST_VALUE).toBe("pending value");
+    expect(f.controls.launched).toHaveBeenCalledTimes(2);
   });
 
   it("retains native identity and proof across controller detach and replacement", async () => {

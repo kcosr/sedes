@@ -65,6 +65,7 @@ function fixture(overrides?: {
   readonly discoverWorkspace?: ReturnType<typeof vi.fn>;
   readonly removed?: { readonly location: boolean; readonly project: boolean };
   readonly resolveProject?: ReturnType<typeof vi.fn>;
+  readonly memberEnvironmentIds?: readonly string[];
 }) {
   const getEnvironment =
     overrides?.getEnvironment ??
@@ -125,6 +126,7 @@ function fixture(overrides?: {
   const getProject = vi.fn(() => ({
     id: "project-a",
     removedAt: overrides?.removed?.project ? 100 : null,
+    locations: (overrides?.memberEnvironmentIds ?? ["environment-a"]).map(environmentId => ({environmentId, removedAt:null})),
   }));
   const handoffAuthoritativeReplacement = vi.fn();
   const discoverWorkspace =
@@ -395,7 +397,7 @@ describe("WorkspaceApplicationService", () => {
 
   it("rechecks an existing location's project before an omitted-project open can reuse it", async () => {
     const current = fixture({
-      resolveProject: vi.fn(() => ({id:"project-hidden", membershipRevision:1, memberEnvironmentIds:["environment-b"]})),
+      memberEnvironmentIds: ["environment-a", "environment-b"],
       upsertWorkspace: vi.fn((_scope, input) => { input.requireExistingProject("project-hidden"); throw new Error("should not write"); }),
     });
     await expect(current.service.openWorkspaceForAgent(scope, {environmentId:"environment-a", path:"/srv/projects/sedes"}, agentAuthority))

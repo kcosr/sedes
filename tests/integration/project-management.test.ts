@@ -441,6 +441,21 @@ describe("workspace.open restores a location only with its project's authority",
     expect(f.state(f.local)).toEqual({removed:false,members:[buildServer,f.environment.id].sort()});
   });
 
+  it("keeps an active cross-host project's identity private on implicit opens outside the caller's host boundary", async () => {
+    const f = crossHostFixture();
+    const shared = f.location("/srv/active-shared");
+    f.inventory.upsertWorkspace(f.scope, {environmentId:buildServer, canonicalPath:"/srv/active-shared", displayName:"shared",
+      project:{kind:"existing",projectId:shared.projectId}, available:true, trustState:"trusted", environmentConfigurationRevision:0, now:300});
+    const before = f.inventory.getWorkspace(f.scope, shared.id);
+    const local = threadAgent(f,true);
+    const denied = await local.open(shared.canonicalPath).catch((error:unknown) => error);
+    expect(denied).toMatchObject({toolError:{code:"permission_denied"}});
+    expect(JSON.stringify(denied)).not.toContain(shared.projectId);
+    expect(f.inventory.getWorkspace(f.scope,shared.id)).toEqual(before);
+    await expect(toolClient(f,[f.environment.id])(shared.canonicalPath)).rejects.toMatchObject({code:"permission_denied"});
+    await expect(threadAgent(f,true,true).open(shared.canonicalPath)).resolves.toMatchObject({output:{projectId:shared.projectId}});
+  });
+
   it("returns an active location unchanged and gives a new directory its own project without asking", async () => {
     const f=crossHostFixture();
     const agent=threadAgent(f,true);
