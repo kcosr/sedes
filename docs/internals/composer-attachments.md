@@ -139,7 +139,7 @@ operation fingerprints, normalized history, logs, or browser payloads.
 
 Backend dispositions are explicit:
 
-### Pi
+### Pi SDK and native Pi
 
 - **Ordinary files:** plain-text staged-path manifest on submit and steer.
 - **Native images:** when the selected model declares image input, Sedes reads
@@ -163,9 +163,25 @@ Backend dispositions are explicit:
 
 ### Claude
 
-- **Ordinary files:** plain-text staged-path manifest on submit.
+- **Ordinary files:** plain-text staged-path manifest on submit and steer.
 - **Native images:** Sedes reads exact verified canonical bytes and adds ordered
   Claude base64 image blocks. It never rereads `agentPath` locally.
+
+### OpenCode v2
+
+- **Ordinary files:** authenticated staged-path manifest on submit and steer.
+- **Native images:** model-dependent; verified canonical bytes become native
+  file parts with data URLs. Integrity and raster checks happen before sending.
+  Text-only delivery keeps images as staged files.
+
+### Antigravity
+
+- **Ordinary files:** staged-path descriptions in the authenticated prompt body
+  on submit and steer.
+- **Native images:** when ACP advertises image prompting, exact verified
+  canonical bytes become base64 image blocks. Each image is limited to 10 MiB;
+  the complete encoded prompt must also fit the provider frame limit. A staged
+  path does not authorize rereading a remote file on main.
 
 ### In-memory conformance backend
 
@@ -173,8 +189,10 @@ The test backend implements normalized supported and unavailable paths and
 exercises native-image capability projection without creating a production
 provider contract.
 
-Native image availability is model-sensitive and may change with the selected
-model. File staging availability is also execution-environment-sensitive. The
+Native image availability follows each backend's advertised evidence. It is
+model-sensitive where a native modality catalog exists; Antigravity uses the
+negotiated ACP image capability, and Claude uses its reviewed SDK contract. File
+staging availability is also execution-environment-sensitive. The
 composer follows the normalized capability document and fails closed if either
 authority changes before delivery. Grok's narrow reviewed-profile correction
 also requires the registered standard ACP image path and its admitted runtime
@@ -204,9 +222,11 @@ before it enters the SDK queue.
 
 ## Optional SSH staging sidecar
 
-Codex and Claude SSH or outbound targets use the same independently admitted remote staging
-provider. Claude reads native-image bytes through the canonical scoped reader;
-it never opens a remote `agentPath` on the main host.
+All supported SSH/outbound attachment paths use the independently admitted
+remote staging provider, including Pi SDK remote workspaces and native Pi,
+Codex, Claude, OpenCode, and Antigravity remote runtimes. Native-byte adapters
+read through the canonical scoped reader; none opens a remote `agentPath` on
+the main host.
 
 An SSH execution environment must opt into composer staging independently with
 `operations.enabledCapabilities`. Capabilities form a nonempty unique set on the persistent environment service.

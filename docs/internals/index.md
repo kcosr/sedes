@@ -25,12 +25,14 @@ native authority begins and ends.
 
 | Document | Scope |
 | --- | --- |
-| [Backend internals overview](backends/index.md) | Shared reading order and comparison of the five compiled backends. |
-| [Pi internals](backends/pi.md) | SDK runtime, session storage, projection, delivery, tools, and local/SSH workspace behavior. |
+| [Backend internals overview](backends/index.md) | Shared reading order and comparison of all seven compiled backends. |
+| [Pi SDK internals](backends/pi.md) | SDK runtime, session storage, projection, delivery, tools, and local/SSH workspace behavior. |
+| [Native Pi internals](backends/pi-native.md) | Owned RPC process, managed companion, native JSONL evidence, writer ownership, and local/remote recovery. |
 | [Codex internals](backends/codex.md) | App-server transport, thread history, mutations, provider features, and supported topologies. |
 | [Claude internals](backends/claude.md) | Managed Agent SDK worker lifecycle, session/history acquisition, permissions, delivery, and local/persistent SSH execution boundaries. |
 | [Grok internals](backends/grok.md) | ACP process/session lifecycle, native history, permissions, artifacts, and owned-local boundary. |
 | [OpenCode v2](backends/opencode.md) | Owned/external HTTP runtime, native history, delivery, Stop, settings, interactions and scoped mutation evidence. |
+| [Antigravity](backends/antigravity.md) | Owned ACP runtime, passive SQLite history worker, exact input/executor evidence, and background continuation recovery. |
 
 ## Conversation and provider contracts
 

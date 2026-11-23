@@ -58,6 +58,8 @@ Check the provider guide:
 - [Codex](../operator/backends/codex.md#troubleshooting)
 - [Claude](../operator/backends/claude.md#troubleshooting)
 - [Grok](../operator/backends/grok.md)
+- [OpenCode v2](../operator/backends/opencode.md)
+- [Antigravity](../operator/backends/antigravity.md)
 
 Do not copy provider credentials into browser settings or Sedes configuration.
 Authenticate the provider in the operating-system account that runs Sedes and

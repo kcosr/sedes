@@ -397,8 +397,8 @@ policy. The enabled targets for one backend may not span multiple
 execution environments in the current schema. A configured backend must have a target
 that fixes its environment; a selected default target must be enabled.
 
-Backend and target IDs are Sedes identifiers. They are not Pi session IDs or
-Codex/Claude/Grok native conversation IDs.
+Backend and target IDs are Sedes identifiers, not any provider's native
+conversation or session IDs.
 
 ### Backend model policy
 
@@ -465,8 +465,9 @@ A policy may contain at most 64 matchers and each dimension may contain at
 most 64 values. Provider and reasoning-effort identifiers are limited to 120
 characters; model IDs are limited to 240. Control characters are rejected.
 
-Pi has truthful native provider, model, and reasoning-effort dimensions and
-may use all three fields. Codex, Claude, and Grok have no reviewed native provider
+Pi SDK and native Pi have truthful native provider, model, and reasoning-effort
+dimensions and may use all three fields. Codex, Claude, Grok, and Antigravity
+have no reviewed native provider
 dimension, so their configuration rejects `providerIds`; use `modelIds`,
 `reasoningEfforts`, or both. A configured value need not be in the catalog at
 startup: a missing allowlist value grants nothing, while a missing denylist
@@ -833,8 +834,9 @@ another attempt; an unknown operation outcome is not permission to retry it
 with a new identity.
 
 Backend startup defaults apply only to provider processes launched by Sedes.
-Owned Codex, Claude and Grok accept them; external Codex UDS/TCP and in-process
-Pi do not. Saving new startup values does not change a running process or
+Native Pi, owned Codex, Claude, Grok, owned OpenCode, and Antigravity accept
+them; external Codex UDS/TCP, external OpenCode, and in-process Pi SDK do not.
+Saving new startup values does not change a running process or
 restart it. **Pending restart** marks unapplied startup definitions; use the
 backend's explicit restart action and review affected threads. A new process
 uses current definitions at its first launch.

@@ -10,8 +10,8 @@ caller classes:
 
 It is an application-management surface—not provider tools, general MCP
 server management, workspace shell access, or a general asynchronous job
-system. Sedes serves only its own tools over MCP, to Codex and Claude threads
-that use the Native surface.
+system. Sedes serves only its own tools over MCP, through admitted Codex, Claude,
+OpenCode, and Antigravity Native presentations.
 
 For user workflows, see [Provider features](../user/provider-features.md). For
 operator trust-boundary requirements, see
@@ -28,7 +28,7 @@ backends must also follow the
 - [Environment authority](#resource-scope)
 - [Workspaces and projects](#workspaces-and-projects)
 - [Catalog and backend presentations](#catalog-and-effects)
-- [Native MCP presentation](#native-mcp-presentation-codex-and-claude)
+- [Native MCP presentation](#native-mcp-presentation)
 - [CLI transport and invocation lifecycle](#cli-transports-and-admission)
 - [Trust boundary and verification](#http-adapter-and-trust-boundary)
 - [Limits](#limits)
@@ -78,15 +78,15 @@ target on any backend: enable or reconnect it before a Native/presentation
 edit. Sedes does not infer release support from a backend name or bypass a
 failed binding/configuration check. Same-surface CLI access edits still apply
 without resolving the provider. Native presentation keeps its tool list for
-the Pi turn or the Codex or Claude provider session; every invocation still
+the admitted provider turn or session; every invocation still
 rechecks policy.
 
 After retirement, open thread streams receive the saved policy revision through
 an application-state update even when no provider runtime remains attached.
 This publication reads principal-scoped policy only and preserves the retained
 provider projection; it does not restart a stopped or archived thread. The next
-runtime attachment constructs its tools from the saved policy. Pi, Codex,
-Claude, Grok, and OpenCode share this publication path.
+runtime attachment constructs its tools from the saved policy. All compiled
+backends share this publication path.
 
 Named policy management is a browser/API operation; ordinary tool callers
 select an existing policy through `thread.create@6` or Saved Agent contracts.
@@ -240,8 +240,9 @@ environments under [Resource scope](#resource-scope).
   description says to invoke it only at the user's request. Successful
   deletion uses the existing Task removal publication and retry path.
   The tool is available through the shared catalog on each supported agent
-  presentation: Pi Native/CLI, Codex and Claude Native MCP/CLI, Grok CLI, and
-  OpenCode Native/Progressive and eligible owned CLI runtimes. Existing
+  presentation: Pi SDK/native Pi Native/CLI, Codex/Claude/Antigravity Native
+  MCP/CLI, Grok CLI, and OpenCode Native/Progressive and eligible owned CLI
+  runtimes. Existing
   backend restrictions on presentations and topology still apply.
 - `thread.archive@2` names its open-Task dispositions `move_to_project`,
   `move_to_global`, and `keep`; `move_to_project` moves each archived thread's
@@ -277,8 +278,8 @@ The canonical catalog groups operations under:
 
 Automation recovery stays under user control: acknowledging failures and marking
 uncertain runs as failed are available in the UI and authenticated management
-API, but have no agent-tool operation. This applies to Pi, Codex, Claude,
-Grok, and OpenCode across all supported tool presentations.
+API, but have no agent-tool operation. This applies to all compiled backends
+across all supported tool presentations.
 `automation.update@2` and `automation.set_state@2` report `retired: true` when
 the change retired a finished one-time reminder, so the definition they return
 has left the collection; a replay of the same mutation returns the same result.
@@ -301,15 +302,15 @@ presentations. See [Show image files in chat](../user/images.md) and
 `client.list`, `client.end_interaction`, `client.switch_thread`,
 `client.settings.get`, `client.settings.update`, and `client.replay_turn` are
 thread-agent tools on
-Pi, Codex, Claude, Grok, and OpenCode through their supported native and CLI
+all compiled backends through their supported native and CLI
 surfaces. Standalone Tool clients cannot invoke them. Their group and individual
 controls use the existing agent-tool policy UI.
 
 The source facade captures the active normalized turn and starting client at
 Sedes invocation admission, before any asynchronous check or execution.
 Later Steer input does not retarget it. OpenCode additionally supplies a provider
-current-input lease, independent of resource-scope checks. Pi, Codex,
-Claude, and Grok use normalized turn/owner-generation revalidation and their
+current-input lease, independent of resource-scope checks. Pi SDK, native Pi, Codex,
+Claude, Grok, and Antigravity use normalized turn/owner-generation revalidation and their
 existing invocation cancellation. CLI/MCP source references identify a thread;
 they do not carry a historical issuing turn before Sedes receives the request.
 Unavailable or replaced admitted turn authority fails closed. Omit `clientId` for the
@@ -531,7 +532,8 @@ Presentation has two independent dimensions:
 - **Surface** selects the provider-facing mechanism: `native` tools or the
   generated `cli` in an admitted shell environment. Native tools are Pi SDK
   tools in the Sedes process for Pi SDK, the managed companion extension for
-  native Pi, and the stdio `sedes mcp` server for Codex and Claude.
+  native Pi, the stdio `sedes mcp` server for Codex, Claude, and Antigravity,
+  and the shared `sedes opencode-mcp` bridge for OpenCode.
 - **Mode** selects disclosure: `progressive` exposes compact discovery and
   generic invocation, while `individual` exposes every granted operation as a
   named tool or command with typed parameters.
@@ -540,9 +542,9 @@ The normalized policy stores the exact pair as
 `presentation: { surface, mode }`. Capability metadata groups supported modes
 under each surface so the UI can show separate selectors, hide a selector with
 only one choice, and never synthesize an unsupported pair. The first listed
-surface and its first mode are the default: new Pi policies default to
-Native/Progressive, new Codex and Claude policies to Native/Individual through
-`sedes mcp`, and new Grok policies to CLI/Progressive. Saved Agents without an
+surface and its first mode are the default: Pi SDK, native Pi, and OpenCode
+policies default to Native/Progressive; Codex, Claude, and Antigravity default
+to Native/Individual through `sedes mcp`; Grok defaults to CLI/Progressive. Saved Agents without an
 explicit policy use the same default, and the thread-creation trigger
 (migration 115) stores it for new threads. Existing thread policies keep
 their stored presentation.
@@ -557,7 +559,8 @@ their stored presentation.
 | Local Claude             | Progressive, Individual through MCP on eligible queries  | Progressive, Individual on eligible queries                     |
 | Claude over SSH/outbound | Progressive, Individual through MCP with sidecar support | Progressive, Individual with sidecar capability and admission   |
 | Local Grok               | None                                                     | Progressive, Individual on eligible Sedes-created sessions      |
-| Local OpenCode v2        | Progressive through the shared MCP bridge on Sedes-created roots | Progressive, Individual on owned Sedes-created roots |
+| OpenCode v2 on local/SSH/outbound Linux hosts | Progressive through the shared MCP bridge on Sedes-created roots | Progressive, Individual on owned Sedes-created roots |
+| Antigravity on local/SSH/outbound Linux or macOS hosts | Progressive, Individual through MCP | Progressive, Individual with host endpoint admission |
 | In-memory conformance    | None                                                     | Intentionally unavailable outside contract tests                |
 
 Codex and Claude Native presentation uses exactly the eligibility and runtime
@@ -571,9 +574,10 @@ native session metadata routes calls to the scoped thread and current policy.
 It is never a thread credential and never enters a session shell environment.
 The bridge survives actor eviction and is released with session/runtime
 residency. Imported sessions and native children cannot borrow an admission.
-Native Individual, managed remote CLI and remote execution are unsupported.
+Native Individual is unsupported. Native Progressive and owned-root CLI are
+available on qualified local, SSH, and outbound Linux execution hosts.
 
-OpenCode CLI uses the existing local per-thread source capability and requires
+OpenCode CLI uses the execution host's admitted per-thread source capability and requires
 an owned root with a frozen execution environment. Both surfaces obtain a
 server-owned current-input proof hook at ingress. Client-control tools require
 live consumption of an exact Sedes user input; native-only, automated,
@@ -582,7 +586,8 @@ Ordinary tools use the configured resource scope without requiring that proof.
 Native operator permission rules still govern gateway invocation independently.
 OpenCode's other configured tools and MCP servers do not grant Sedes authority.
 The shared CLI implements both CLI modes for every supported row: local Pi SDK,
-native Pi, Codex, Claude, Grok, and OpenCode, plus their admitted remote relays.
+native Pi, Codex, Claude, Grok, OpenCode, and Antigravity, plus their admitted
+remote relays.
 Pi SDK SSH and Grok SSH CLI topologies remain unsupported.
 The owner-only local CLI frame and managed relay capability use
 `agent_tools_cli@6`, which admits the closed Images catalog group and carries
@@ -610,9 +615,9 @@ continuations. Installation failure stops the turn instead of retaining stale
 definitions. Pi `read_only`, `ask`, and `full` policy continue to govern native
 tool use; `ask` routes protected operations through Sedes approval.
 
-### Native MCP presentation (Codex and Claude)
+### Native MCP presentation
 
-Codex and Claude load Native Sedes tools from a stdio MCP server that the
+Codex, Claude, and Antigravity load Native Sedes tools from a stdio MCP server that the
 provider starts for the thread:
 
 ```text
@@ -699,6 +704,16 @@ Injection is per thread and never changes operator configuration:
   exclusive with the CLI query environment. On SSH and outbound hosts the
   sidecar admits it only for its own `sedes` binary and live ingress, and a
   reattach must present the same entry.
+
+- **Antigravity** receives a per-session `mcpServers` entry on ACP `session/new`
+  or `session/load`, containing the execution host's `sedes` command, mode,
+  endpoint, and scoped source reference. Native permission decisions still
+  govern invocation. CLI presentation instead injects the admitted shell
+  environment and an exact executable/PATH instruction because `agy` may
+  rebuild its shell PATH. Neither path changes operator MCP configuration.
+
+OpenCode uses the separate shared bridge described in the presentation matrix;
+it does not receive this per-thread MCP configuration.
 
 On SSH and outbound hosts the server is the sidecar's own `sedes` binary,
 which sidecar runtime protocol 13 guarantees can serve it. Windows execution
@@ -907,7 +922,7 @@ the catalog:
 - [Progressive native tools](../../skills/sedes-native-progressive-tools/SKILL.md)
 - [Individual native tools](../../skills/sedes-native-individual-tools/SKILL.md)
 
-The native skills also cover Codex and Claude Native presentation, where the
+The native skills also cover Codex, Claude, and Antigravity Native presentation, where the
 MCP client prefixes the same tool names with its server namespace.
 
 All four skills default task creation and review to the calling thread; a
@@ -970,7 +985,8 @@ presentation; it is not caller identity or authorization.
 
 Eligible CLI runtimes receive their environment even when the master flag is
 off or no tool IDs are selected. This applies to local Pi SDK, local or
-persistent-sidecar native Pi, local and sidecar Codex/Claude, and local Grok.
+persistent-sidecar native Pi, local and sidecar Codex/Claude/Antigravity, and
+local Grok. OpenCode retains its explicit created-root and runtime admission.
 Unsupported topologies still fail closed.
 Enabling access during a turn therefore needs no new credential or environment
 injection; the next request uses live server policy. A Native Codex or Claude
@@ -1014,7 +1030,8 @@ builders strip ambient client tokens and presentation-mode hints before
 installing the server-resolved thread values so caller classes cannot collide
 and ambient process state cannot select the managed mode.
 
-Eligible local Codex, Claude, and Grok processes use the local management listener.
+Eligible local Codex, Claude, Grok, and Antigravity processes use the local
+management listener.
 Local Pi CLI presentation uses Pi's existing shell tool and never enables shell
 access by itself. Claude inherits its complete per-query environment before
 Sedes adds CLI variables, so injection cannot discard its normal `HOME`,
@@ -1039,6 +1056,10 @@ execution and agent-tool relay remain unsupported.
 Native Pi uses the eligible host CLI endpoint locally or the independently
 admitted sidecar relay over SSH/outbound. Its resident process retains scoped
 CLI credentials while every invocation rechecks current main-server authority.
+
+Antigravity uses the admitted host endpoint locally and the independently
+authorized `agent_tools_cli@6` relay on SSH/outbound hosts for both MCP and CLI.
+OpenCode uses its private tool relay on qualified remote Linux runtimes.
 
 A Pi SDK SSH target never receives the CLI in remote Bash. The Pi SDK model loop and
 native session stay on the Sedes host while only its seven built-in workspace
@@ -1119,11 +1140,12 @@ thread-policy and Tool-client revision conflicts, token rotation/disable/
 revocation, wrong-principal and wrong-environment denial, default resolution,
 project member, non-member, empty, and removed cases for both caller classes,
 cross-project/environment scope filtering and denial, source-runtime
-cancellation, and automation fail-closed behavior. Adapter tests must exercise both Native modes on
-Pi SDK and native Pi, both CLI modes for eligible local/remote native Pi and local Codex, Claude, and Grok, both Native MCP
-modes for Codex and Claude, the `sedes mcp` protocol subset against the MCP
-SDK client, presentation-bound references, remote
-Codex/Claude sidecar ingress, transport credential separation, cancellation,
+cancellation, and automation fail-closed behavior. Adapter tests must exercise
+every supported row in the presentation matrix: Pi SDK/native Pi Native tools,
+eligible CLI modes, both MCP modes for Codex/Claude/Antigravity, and OpenCode
+Native Progressive and owned-root CLI. Include the `sedes mcp` protocol subset
+against the MCP SDK client, presentation-bound references, admitted sidecar
+ingress, transport credential separation, cancellation,
 timeout and outcome-unknown semantics,
 and every unsupported presentation. Mutating operations must retain their
 domain revisions, receipts, recovery rules, and prohibition on automatic

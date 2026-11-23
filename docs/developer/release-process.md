@@ -157,6 +157,7 @@ env -u NODE_ENV npm run check:grok-profile
 env -u NODE_ENV npm run check:sidecar-build-repeatability
 env -u NODE_ENV npm run check:pi-sandbox-worker-build-repeatability
 env -u NODE_ENV npm run check:claude-runtime-worker-build-repeatability
+env -u NODE_ENV npm run check:antigravity-history-worker-build-repeatability
 ```
 
 `check:third-party-notices` fails when `THIRD-PARTY-NOTICES.md` no longer
@@ -332,10 +333,13 @@ Database migration range:
 Deterministic verification:
 E2E run directory and duration:
 Screenshot review:
-Pi live verification:
+Pi SDK live verification:
+Pi native offline/live verification:
 Codex live verification:
 Claude live verification:
 Grok live verification:
+OpenCode offline/live verification:
+Antigravity live verification (local/SSH):
 Android verification (if applicable):
 Electron verification (if applicable):
 Upgrade rehearsal:

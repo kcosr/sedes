@@ -176,9 +176,10 @@ input defaults to the caller's project. Agents access committed state, not human
 Listing and history are paginated. Caller-supplied filesystem paths are not
 interpreted as server-side content authority.
 
-All five backends share these Workpad limits. Pi Native invokes the canonical
-service directly; Codex, Claude, and OpenCode Native use MCP; Grok has no Native
-surface. Every backend's admitted CLI surface uses the same canonical tools.
+All seven compiled backends share these Workpad limits. Pi SDK invokes the
+canonical service in-process; native Pi uses its managed companion; Codex,
+Claude, OpenCode, and Antigravity use their admitted MCP presentations. Grok
+has no Native surface. Every backend's admitted CLI surface uses the same canonical tools.
 The tool transport's ordinary 65,536-unit string bound remains in force except
 for declared Workpad content/edit passages and fully validated Workpad result
 envelopes. Metadata and unrelated tool strings retain their existing bounds.

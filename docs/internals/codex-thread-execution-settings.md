@@ -315,8 +315,7 @@ Saved for future turns.” Touch layouts omit the tooltip, including on focus
 restoration after closing the menu. There is no persistent result text,
 explanatory help, receipt-check action, or pending/uncertain visual indicator. Exact receipt
 reconciliation remains internal; the control does not track individual steps
-or claim actual inference use. Pi, Claude, Grok, and OpenCode intentionally do
-not expose Speed; they explicitly retain their own mutation authorities.
+or claim actual inference use. The other compiled backends do not expose Speed; they explicitly retain their own mutation authorities.
 
 ## Goal
 
