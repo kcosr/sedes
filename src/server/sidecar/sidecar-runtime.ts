@@ -1,3 +1,4 @@
+import { withAbort } from "../runtime/with-abort.js";
 import { SidecarPolicyController, type PolicyConnection, type SidecarPolicyRecovery } from "./sidecar-policy-controller.js";
 import type { InstalledExecutionPolicy } from "../../internal/sidecar-protocol/execution-policy.js";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -285,18 +286,16 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
     return this.#canAttach() ? this.#policy.targetGeneration(backendId, targetId, true) : undefined;
   }
 
-  async confirmTargetSelection(backendId: string, targetId: string, signal?: AbortSignal): Promise<boolean> {
-    signal?.throwIfAborted();
+  async confirmTargetSelection(backendId: string, targetId: string, signal = AbortSignal.timeout(10_000)): Promise<boolean> {
+    signal.throwIfAborted();
     if (!this.#canAttach()) return false;
     const generation = this.#policy.targetGeneration(backendId, targetId, true);
     if (generation === undefined) return false;
     if (this.#policy.targetGeneration(backendId, targetId) === generation) return true;
     try {
-      const deadline = AbortSignal.timeout(10_000);
-      return await this.withTargetAuthorization(backendId, targetId, generation, () => true,
-        signal ? AbortSignal.any([signal, deadline]) : deadline);
+      return await this.withTargetAuthorization(backendId, targetId, generation, () => true, signal);
     } catch (error) {
-      signal?.throwIfAborted();
+      signal.throwIfAborted();
       if (error instanceof SidecarUnavailableError) return false;
       throw error;
     }
@@ -1076,21 +1075,4 @@ interface OwnedSession<Session extends SidecarRuntimeSession> {
   readonly serviceStatus: SidecarServiceStatus;
   readonly session: Session;
   readonly carrierGeneration: number;
-}
-
-async function withAbort<T>(promise: Promise<T>, signal: AbortSignal) {
-  if (signal.aborted) throw signal.reason;
-  return await new Promise<T>((resolve, reject) => {
-    const abort = () => finish(false, signal.reason);
-    const finish = (success: boolean, value: unknown) => {
-      signal.removeEventListener("abort", abort);
-      if (success) resolve(value as T);
-      else reject(value);
-    };
-    signal.addEventListener("abort", abort, { once: true });
-    void promise.then(
-      (value) => finish(true, value),
-      (error) => finish(false, error),
-    );
-  });
 }

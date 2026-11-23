@@ -5,6 +5,7 @@ import type { BackendConfigurationRepository } from "../db/repositories/backend-
 import type { ConnectionProfileRecord } from "../db/repositories/backend-configuration-repository.js";
 import type { RequestScope } from "../identity/identity-provider.js";
 import { boundDisplayText } from "../conversations/payload-policy.js";
+import { withAbort } from "../runtime/with-abort.js";
 import { DomainError } from "../domain/errors.js";
 import type { EnvironmentOperations } from "../execution/environment-operations.js";
 
@@ -275,8 +276,14 @@ export class DatabaseExecutionTargetReader implements ExecutionTargetReader {
     const now = this.input.now?.() ?? Date.now();
     const cached = this.#health.get(cacheKey);
     let available: boolean;
+    let selectionSignal: AbortSignal | undefined;
     if (admission?.confirmRemote && !useHealthCache) {
-      const confirmed = await admission.confirmRemote(signal ?? new AbortController().signal);
+      const deadline = AbortSignal.timeout(10_000);
+      selectionSignal = signal ? AbortSignal.any([signal, deadline]) : deadline;
+      const confirmed = await withAbort(admission.confirmRemote(selectionSignal), selectionSignal).catch(error => {
+        if (!selectionSignal?.aborted) throw error;
+        return false;
+      });
       signal?.throwIfAborted();
       if (!confirmed) return {...base, available: false, unavailableReason: boundDisplayText("Waiting for the execution target to become ready.")};
     }
@@ -289,7 +296,10 @@ export class DatabaseExecutionTargetReader implements ExecutionTargetReader {
       available = true;
     } else {
       try {
-        const health = await this.input.registry.driver(connection).health();
+        const driver = this.input.registry.driver(connection);
+        const health = selectionSignal
+          ? await withAbort(driver.health({waitForInitialization: selectionSignal}), selectionSignal)
+          : await driver.health();
         signal?.throwIfAborted();
         available = health.available;
       } catch (error) {

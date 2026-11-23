@@ -103,6 +103,7 @@ export class CodexRemoteRuntimeSupervisor {
           }
         },
       }),
+      pendingInitialization: () => this.#connecting,
       current: () => this.#current, latestGeneration: () => this.#generation,
       retireGeneration: async (generation, reason) => { await this.#remote?.client.retireGeneration(generation, reason); },
       persistentSessions: {

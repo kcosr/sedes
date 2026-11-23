@@ -21,7 +21,7 @@ export interface BackendDriverFactory {
   readonly creationIdentity?: ConversationCreationIdentity;
   readonly connectionGeneration?: (connection: AgentConnectionProfile) => number | undefined;
   /** Reacquire a live host grant before entering the driver or a held handle. */
-  readonly withConnectionAuthorization?: <T>(connection: AgentConnectionProfile, generation: number, operation: () => T) => T | Promise<T>;
+  readonly withConnectionAuthorization?: <T>(connection: AgentConnectionProfile, generation: number, operation: () => T, signal?: AbortSignal) => T | Promise<T>;
   create(connection: AgentConnectionProfile): ConversationBackendDriver;
 }
 
@@ -146,7 +146,7 @@ export class AgentBackendRegistry {
       );
     }
     const key = backendKey(factory.scope, factory.instance.id);
-    const authorized = (operation: () => unknown) => {
+    const authorized = (operation: () => unknown, signal?: AbortSignal) => {
       const invoke = () => {
         if (this.#suspensions.has(key))
           throw new DomainError("runtime_unavailable", "Configuration change pending for this backend.", true);
@@ -157,7 +157,7 @@ export class AgentBackendRegistry {
         return operation();
       };
       return factory.withConnectionAuthorization && generation !== undefined
-        ? factory.withConnectionAuthorization(connection, generation, invoke)
+        ? factory.withConnectionAuthorization(connection, generation, invoke, signal)
         : invoke();
     };
     return new Proxy(driver, {
@@ -165,7 +165,8 @@ export class AgentBackendRegistry {
         const value: unknown = Reflect.get(target, property, target);
         if (typeof value !== "function") return value;
         return (...args: unknown[]) => {
-          const result = authorized(() => Reflect.apply(value, target, args));
+          const healthOptions = property === "health" ? args[0] as Parameters<ConversationBackendDriver["health"]>[0] : undefined;
+          const result = authorized(() => Reflect.apply(value, target, args), healthOptions?.waitForInitialization);
           const pending = this.#inFlight.get(key) ?? new Set<Promise<void>>();
           this.#inFlight.set(key, pending);
           const settled = Promise.resolve(result)

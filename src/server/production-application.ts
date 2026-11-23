@@ -882,9 +882,9 @@ export async function startProductionApplication(
     };
     const runtimeModules = new PrincipalBackendRuntimeCollection({scope, registry,
       connectionGeneration: targetGeneration,
-      withConnectionAuthorization: (profile, generation, operation) => {
+      withConnectionAuthorization: (profile, generation, operation, signal) => {
         const owner = environmentRuntimes.get(profile.executionEnvironmentId)?.sidecarRuntime;
-        return owner ? owner.withTargetAuthorization(profile.backendInstanceId, profile.templateId, generation, operation) : operation();
+        return owner ? owner.withTargetAuthorization(profile.backendInstanceId, profile.templateId, generation, operation, signal) : operation();
       },
       desiredInstanceRevision: id => backendConfiguration.getBackend(scope, id).configurationRevision,
     });

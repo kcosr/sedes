@@ -365,8 +365,8 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
     });
   }
 
-  async health(): Promise<BackendHealth> {
-    const lifecycle = this.#client.lifecycleSnapshot();
+  async health(options?: { readonly waitForInitialization: AbortSignal }): Promise<BackendHealth> {
+    const lifecycle = options ? await this.#client.observeInitializedLifecycle(options.waitForInitialization) : this.#client.lifecycleSnapshot();
     const available =
       this.instance.enabled &&
       this.connection.enabled &&

@@ -70,7 +70,10 @@ watches stay on their original connection.
 Reading the target picker uses saved settings and available readiness and
 health observations. It performs no remote health probes and opens no SSH
 connections. Selecting a target or starting work confirms that host's grants
-on demand. A save after an idle disconnect can also initiate delivery on
+on demand. Explicit remote selection allows ten seconds for grant confirmation
+and provider health together. When Codex is already attaching to its native
+runtime, selection can wait for that attempt to finish. A save after an idle
+disconnect can also initiate delivery on
 the affected host. A known unsupported subject stays unavailable. After carrier loss, unchanged grants from the last
 confirmed incarnation keep targets and features selectable. A foreground driver call or
 new turn on a held handle reacquires the carrier and confirms the target on its

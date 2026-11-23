@@ -625,6 +625,7 @@ class RpcHarness {
   >();
   readonly retirements: number[] = [];
   readonly facade: CodexSharedClientFacade;
+  initialization?: Promise<void>;
   readonly serverRequests = new CodexServerRequestRouter();
   readonly readyClient: CodexReadyClientGeneration;
 
@@ -659,6 +660,7 @@ class RpcHarness {
       },
     };
     this.facade = new CodexSharedClientFacade({
+      pendingInitialization: () => this.initialization,
       ...(residency ? { residency } : {}),
       ...(persistentSessions ? { persistentSessions } : {}),
       current: () => this.readyClient,
@@ -1596,6 +1598,34 @@ describe("Codex handle Goal notifications and Speed defaults", () => {
 });
 
 describe("CodexConversationBackendDriver", () => {
+  it("joins native initialization only for an explicit selection and releases the wait on failure or cancellation", async () => {
+    const harness = new RpcHarness();
+    const backend = driver(harness);
+    const controller = new AbortController();
+    const select = () => backend.health({waitForInitialization: controller.signal});
+    harness.lifecycle("reconciling");
+    await expect(backend.health()).resolves.toMatchObject({available: false});
+    let finish!: () => void;
+    harness.initialization = new Promise(resolve => {finish = resolve;});
+    const pending = select();
+    harness.lifecycle("unavailable"); // Child client exists before its host snapshot arrives.
+    harness.lifecycle("ready");
+    finish();
+    await expect(pending).resolves.toMatchObject({available: true});
+
+    harness.lifecycle("circuit_open");
+    harness.initialization = undefined;
+    await expect(select()).resolves.toMatchObject({available: false});
+    harness.lifecycle("reconciling");
+    harness.initialization = Promise.reject(new Error("native initialization failed"));
+    await expect(select()).rejects.toThrow("native initialization failed");
+    harness.initialization = new Promise(resolve => {finish = resolve;});
+    const cancelled = select();
+    controller.abort(new Error("selection_cancelled"));
+    await expect(cancelled).rejects.toThrow("selection_cancelled");
+    finish();
+  });
+
   it.each([
     { model: "gpt-5.6", reasoningEffort: "low", suffix: "" },
     { model: "gpt-5.6", reasoningEffort: "ultra", suffix: " · gpt-5.6 · ultra" },

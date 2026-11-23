@@ -545,7 +545,7 @@ describe("execution-target catalog reader", () => {
     expect(current.health).not.toHaveBeenCalled();
     const signal = new AbortController().signal;
     await current.reader.requireAgentSelectable(scope, "profile-z", signal);
-    expect(confirm).toHaveBeenCalledWith("profile-z", signal);
+    expect(confirm).toHaveBeenCalledWith("profile-z", expect.any(AbortSignal));
     expect(current.health).toHaveBeenCalledTimes(1);
     current.health.mockResolvedValueOnce({available: false});
     await expect(current.reader.requireSelectable(scope, "profile-a")).rejects.toThrow();
@@ -557,6 +557,42 @@ describe("execution-target catalog reader", () => {
     expect((await current.reader.read(scope)).executionTargets.find(target => target.id === "profile-a")?.available).toBe(false);
     expect(confirm).toHaveBeenCalledTimes(2);
     expect(current.health).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["confirm", "health"] as const)("honors the selection deadline and caller cancellation during %s", async phase => {
+    const deadline = new AbortController();
+    const timer = vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
+    try {
+      for (const cancellation of ["caller", "deadline"] as const) {
+        const caller = new AbortController();
+        let markEntered!: () => void;
+        const entered = new Promise<void>(resolve => { markEntered = resolve; });
+        let release!: (value: boolean) => void;
+        const blocked = new Promise<boolean>(resolve => { release = resolve; });
+        const confirmRemote = async () => {
+          if (phase === "health") return true;
+          markEntered();
+          return blocked;
+        };
+        const current = fixture({targetAdmission: () => ({eligible: true, confirmRemote})});
+        if (phase === "health") current.health.mockImplementationOnce(async () => {
+          markEntered();
+          return {available: await blocked};
+        });
+        const selected = current.reader.requireAgentSelectable(scope, "profile-a", caller.signal);
+        await entered;
+        if (cancellation === "caller") {
+          caller.abort(new Error("caller left"));
+          await expect(selected).rejects.toBe(caller.signal.reason);
+        } else {
+          deadline.abort(new Error("selection timed out"));
+          await expect(selected).rejects.toMatchObject({code: "runtime_unavailable"});
+        }
+        release(true);
+      }
+    } finally {
+      timer.mockRestore();
+    }
   });
 
   it("offers a remote target again after a failed health observation expires", async () => {

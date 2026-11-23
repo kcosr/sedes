@@ -114,6 +114,27 @@ describe("AgentBackendRegistry", () => {
     expect(() => health()).toThrow("backend_registry_generation_changed");
   });
 
+  it("propagates a remote selection deadline through health authorization", async () => {
+    const registry = new AgentBackendRegistry();
+    const seen: (AbortSignal | undefined)[] = [];
+    const health = vi.fn(async () => ({available: true}));
+    registry.register({
+      scope, instance, connectionKinds: ["pi_sdk"], supportsConversationCreation: false,
+      connectionGeneration: () => 1,
+      withConnectionAuthorization: (_profile, _generation, operation, signal) => {
+        seen.push(signal);
+        return operation();
+      },
+      create: () => ({instance, connection, health}) as unknown as ConversationBackendDriver,
+    });
+    const driver = registry.driver(connection);
+    const signal = new AbortController().signal;
+    await driver.health({waitForInitialization: signal});
+    await driver.health();
+    expect(seen).toEqual([signal, undefined]);
+    expect(health.mock.calls).toEqual([[{waitForInitialization: signal}], []]);
+  });
+
   it("resolves a scoped configured connection through its factory", () => {
     const driver = { instance, connection } as ConversationBackendDriver;
     const create = vi.fn(() => driver);
