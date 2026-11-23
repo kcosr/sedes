@@ -171,6 +171,7 @@ function fixture(input?: {
   const workspace = input?.workspace ?? primary;
   const records = input?.roots ?? [];
   const inventory = {
+    workspaceAuthorityIsCurrent: vi.fn(() => true),
     assertWorkspaceActive: vi.fn(),
     getWorkspace: vi.fn((scope, workspaceId) => {
       if (scope !== owner || workspaceId !== workspace.id) {
@@ -265,6 +266,18 @@ function fixture(input?: {
 }
 
 describe("WorkspaceFileService", () => {
+  it("cannot acquire a linked Files root for a thread whose original workspace grant was withdrawn", async () => {
+    const current = fixture();
+    current.inventory.workspaceAuthorityIsCurrent.mockReturnValue(false);
+    const path = `${primary.canonicalPath}/README.md`;
+    await expect(current.service.readAbsoluteFile(owner, "thread-1", path, 100)).rejects.toThrow("unavailable");
+    await expect(current.service.readAbsoluteImage(owner, "thread-1", path)).resolves.toBeUndefined();
+    await expect(current.service.resolveWorkspaceFileLink(owner, primary.id, {reference:{kind:"absolute", path}}))
+      .resolves.toEqual({status:"not_found"});
+    expect(current.files.discoverFileLinkRoot).not.toHaveBeenCalled();
+    expect(current.roots.rememberLinkRoot).not.toHaveBeenCalled();
+  });
+
   it("captures bounded page source through the exact Files provider with a revision-fenced download", async () => {
     const current = fixture();
     const bytes = await current.service.readAbsoluteFile(owner, "thread-1", "/workspaces/one/README.md", 100);
@@ -1810,7 +1823,8 @@ describe("WorkspaceFileService", () => {
       fail = resolve;
     });
     const files = provider();
-    vi.mocked(files.watch).mockResolvedValue({ failed, close: vi.fn() });
+    const close = vi.fn();
+    vi.mocked(files.watch).mockResolvedValue({ failed, close });
     const current = fixture({ files });
     const listener = vi.fn();
     const subscription = await current.service.watch(
@@ -1821,6 +1835,7 @@ describe("WorkspaceFileService", () => {
     listener.mockClear();
     fail();
     await vi.waitFor(() => expect(listener).toHaveBeenCalledOnce());
+    expect(close).toHaveBeenCalledOnce();
     await expect(current.service.listRoots(owner, primary.id)).resolves.toEqual(
       {
         roots: [

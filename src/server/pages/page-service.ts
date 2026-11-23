@@ -15,7 +15,7 @@ export class PageService {
   constructor(readonly dependencies: {
     repository: PageRepository;
     files: Pick<WorkspaceFileService, "readAbsoluteFile">;
-    inventory: Pick<InventoryRepository, "getThread" | "getWorkspace" | "getEnvironment">;
+    inventory: Pick<InventoryRepository, "getThread" | "getWorkspace" | "getEnvironment" | "workspaceAuthorityIsCurrent">;
     onPublished?: (scope: RequestScope, page: PageRevision) => void | Promise<void>;
   }) {}
   get repository() { return this.dependencies.repository; }
@@ -27,7 +27,11 @@ export class PageService {
 
   async prepare(scope: RequestScope, threadId: string, source: PageSource, signal?: AbortSignal) {
     const assertCurrent = this.#captureAuthority(scope, threadId);
-    return this.#prepare(scope, threadId, pageSourceSchema.parse(source), assertCurrent, new Set(), signal);
+    const grants = new Set<() => void>();
+    const prepared = await this.#prepare(scope, threadId, pageSourceSchema.parse(source), assertCurrent, grants, signal);
+    assertCurrent();
+    for (const check of grants) check();
+    return prepared;
   }
 
   async publish(scope: RequestScope, threadId: string, input: PublishPageRequest, authority: PagePublicationAuthority, signal?: AbortSignal) {
@@ -87,7 +91,8 @@ export class PageService {
       const currentEnvironment = this.dependencies.inventory.getEnvironment(scope, workspace.environmentId);
       if (currentThread.thread.workspaceId !== workspaceId || currentWorkspace.canonicalPath !== workspace.canonicalPath ||
         currentWorkspace.environmentId !== workspace.environmentId || currentWorkspace.availability !== "available" || currentEnvironment.availability !== "available" ||
-        currentWorkspace.authorityRootId !== workspace.authorityRootId || currentWorkspace.environmentConfigurationRevision !== workspace.environmentConfigurationRevision) {
+        !this.dependencies.inventory.workspaceAuthorityIsCurrent(scope, currentWorkspace) ||
+          currentWorkspace.authorityRootId !== workspace.authorityRootId || currentWorkspace.environmentConfigurationRevision !== workspace.environmentConfigurationRevision) {
         throw new DomainError("conflict", "The page source environment changed. Retry against the current thread environment.");
       }
     };

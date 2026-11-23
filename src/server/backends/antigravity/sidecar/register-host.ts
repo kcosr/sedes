@@ -27,7 +27,7 @@ export function registerAntigravityHost(input: ProviderPolicyAttachment & { read
       const admission = command.action === "ensure" ? launchAdmission(input, "antigravity", command.configuration.backendInstanceId,
         runtimeLaunchDigest.antigravity(command.configuration, command.configuration.startupEnvironmentVariables)) : undefined;
       const host = command.action === "lookup_retained" ? await input.hosts.lookupRetained(command.backendInstanceId, input.controllerEpoch)
-        : command.action === "ensure" ? await input.hosts.ensure(command.configuration, input.controllerEpoch)
+        : command.action === "ensure" ? await input.hosts.ensure(command.configuration, input.controllerEpoch, admission)
         : await input.hosts.lookup(command.configuration, input.controllerEpoch);
       if (host) admission?.bind(host);
       assertCurrent(); if (!host) return null;

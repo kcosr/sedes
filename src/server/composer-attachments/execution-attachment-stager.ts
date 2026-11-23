@@ -14,6 +14,8 @@ export interface ExecutionAttachmentMaterializationRequest {
 }
 
 export interface MaterializedExecutionAttachment {
+  /** Recheck the captured feature grant before a new provider delivery uses the committed file. */
+  readonly assertDeliverable?: () => void;
   readonly agentPath: string;
   readonly sha256: string;
   readonly sizeBytes: number;

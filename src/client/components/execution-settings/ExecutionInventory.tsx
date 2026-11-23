@@ -28,7 +28,7 @@ export const emptyFilters: InventoryFilters = { search: "", environment: "", pro
 export function needsAttention(runtime?: ConfigurationRuntimeState, enabled = true): boolean {
   return Boolean(runtime && (runtime.lastError || runtime.lifecycleOperation?.state === "unknown"
     || (!enabled && runtime.connectionState === "connected")
-    || ["unreachable", "recovery_required"].includes(runtime.connectionState)
+    || ["unreachable", "recovery_required", "policy_conflict"].includes(runtime.connectionState)
     || runtime.applyState !== "applied" || ["pending", "required"].includes(runtime.upgradeState)));
 }
 

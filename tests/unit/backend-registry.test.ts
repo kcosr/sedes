@@ -127,11 +127,11 @@ describe("AgentBackendRegistry", () => {
       },
       create: () => ({instance, connection, health}) as unknown as ConversationBackendDriver,
     });
-    const driver = registry.driver(connection);
+    const grantSignal = new AbortController().signal;
     const signal = new AbortController().signal;
-    await driver.health({waitForInitialization: signal});
-    await driver.health();
-    expect(seen).toEqual([signal, undefined]);
+    await registry.driver(connection, grantSignal).health({waitForInitialization: signal});
+    await registry.driver(connection).health();
+    expect(seen).toEqual([grantSignal, undefined]);
     expect(health.mock.calls).toEqual([[{waitForInitialization: signal}], []]);
   });
 

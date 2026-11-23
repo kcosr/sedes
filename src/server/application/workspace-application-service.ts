@@ -173,6 +173,7 @@ export class WorkspaceApplicationService {
       try {
         return this.#admit(scope, validated, {
           project: { kind: "new", name: validated.summary.displayName },
+          requireExistingProject: requireProject,
         });
       } catch (error) {
         if (!(error instanceof RemovedLocationError)) throw error;
@@ -290,6 +291,7 @@ export class WorkspaceApplicationService {
       | {
           readonly project: InventoryProjectAssignment;
           readonly restoreRemoved?: true;
+          readonly requireExistingProject?: (projectId: string) => void;
         }
       | {
           readonly id: string;

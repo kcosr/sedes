@@ -214,8 +214,14 @@ change and is waiting for the host.
 **Retry apply** requests another attempt. **Unsupported on this host** applies
 to the named feature. A missing executable can also prevent its backend from
 starting. Check the reported reason before retrying. Labels are visible
-immediately. New thread defaults take effect on new threads, and connection
-compression takes effect on the next attachment.
+immediately. The next model picker read reflects saved model and reasoning-effort restrictions,
+including on an already running backend. New thread defaults take effect on new threads,
+and connection compression takes effect on the next attachment.
+
+If Settings shows **Execution policy conflict**, Sedes has identified a sidecar
+whose installed permissions conflict with the saved policy. New work is blocked.
+Choose **Restart sidecar** to review affected work and install the saved policy
+on a replacement. Choose **Stop** to leave the sidecar shut down.
 
 **Stop** remains available while a host is unreachable or requires recovery. It
 records that the service must not start automatically; host shutdown and cleanup

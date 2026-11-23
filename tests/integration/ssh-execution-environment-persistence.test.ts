@@ -268,6 +268,10 @@ describe("SSH execution environment persistence", () => {
       const otherPrincipal = { ...fixture.scope, principalId: randomUUID() };
       fixture.database.prepare("INSERT INTO principals(tenant_id, id, kind, created_at) VALUES (?, ?, 'local_human', 0)")
         .run(otherPrincipal.tenantId, otherPrincipal.principalId);
+      expect(() => fixture.administration!.repository.save(otherPrincipal, {
+        mutationId: randomUUID(), expectedRevision: 0, configuration: remoteDocument(),
+      }, document => fixture.administration!.projection.project(otherPrincipal, document))).toThrow(expect.objectContaining({code: "not_found"}));
+      expect(fixture.administration!.repository.get(otherPrincipal).revision).toBe(0);
       expect(fixture.inventory.listEnvironments(otherPrincipal)).toEqual([]);
       expect(() => fixture.inventory.getEnvironment(otherPrincipal, localEnvironmentId)).toThrow("not found");
       expect(fixture.database.pragma("foreign_key_check")).toEqual([]);

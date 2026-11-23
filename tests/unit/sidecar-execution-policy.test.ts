@@ -1,8 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
+import { SidecarOperationRegistry } from "../../src/internal/sidecar-protocol/operation-registry.js";
+import { workspaceContextReadOperation } from "../../src/internal/sidecar-protocol/workspace-context-v1.js";
+import { workspaceToolsWorkspaceOpenOperation } from "../../src/internal/sidecar-protocol/workspace-tools-v2.js";
+import { ExecutionPolicyRoutes } from "../../src/server/sidecar/execution-policy-routes.js";
+import { registerPersistentExecutionPolicy } from "../../src/server/sidecar/register-persistent-execution-policy.js";
 import { PersistentSidecarServiceRegistry } from "../../src/server/sidecar/persistent-sidecar-service-registry.js";
 import {
   ExecutionPolicyReadPages,
+  policyReadOperation,
   executionPolicyBytes,
   executionPolicyDigest,
   type ExecutionPolicySnapshot,
@@ -116,7 +122,46 @@ describe("live persistent execution policy", () => {
       }),
     ).toThrow("sidecar_policy_snapshot_invalid");
     expect(service.executionPolicy(epoch)).toEqual(empty);
+    const corrected = transfer(empty, 2);
+    corrected.stage();
+    service.applyPolicy(epoch, { ...corrected.fields, base: { revision: 1, digest: original.fields.digest }, configuration });
   });
+  it("reports a positively empty provider registry separately from an unscanned launch", () => {
+    const {service,epoch,transfer} = fixture();
+    const installed = transfer({roots:[],capabilities:[],backends:[{id:"provider",kind:"pi_native",generation:1,
+      launchDigest:"a".repeat(64),targets:[]}]}, 1);
+    installed.stage();
+    service.applyPolicy(epoch, {...installed.fields,configuration,base:null});
+    const read = (scan?: () => string | null | undefined) => service.readPolicy(epoch, () => "ready", scan).readiness[0];
+    expect(read()).not.toHaveProperty("observedLaunchDigest");
+    expect(read(() => undefined)).not.toHaveProperty("observedLaunchDigest");
+    expect(read(() => null)).toHaveProperty("observedLaunchDigest",null);
+    expect(read(() => "a".repeat(64))).toHaveProperty("observedLaunchDigest","a".repeat(64));
+  });
+  it.each(["normal", "recovery"] as const)("observes installed Pi support before a %s controller acquires admission", async mode => {
+    const { service, epoch, transfer } = fixture();
+    const installed = transfer({ roots: [], capabilities: ["workspace_context", "workspace_tools"].map(id => ({ id, generation: 1 })),
+      backends: [{ id: "pi", kind: "pi", launchDigest: "a".repeat(64), generation: 1, targets: [] }] }, 1);
+    installed.stage();
+    service.applyPolicy(epoch, { ...installed.fields, configuration, base: null });
+    const next = service.attach(configuration, mode);
+    expect(() => service.executionPolicy(next)).toThrow();
+    const registry = new SidecarOperationRegistry();
+    const unused = (): never => { throw new Error("inspection started work"); };
+    registry.register(workspaceContextReadOperation, unused);
+    registry.register(workspaceToolsWorkspaceOpenOperation, unused);
+    const routes = new ExecutionPolicyRoutes({ readPolicy: unused, start: unused, executableDirectory: "/bin",
+      inheritedPath: "/bin", endpointKey: "a".repeat(24), executableAvailable: async () => true });
+    try {
+      registerPersistentExecutionPolicy({ registry, controllerEpoch: next, serviceRegistry: service, policyRoutes: routes,
+        peer: { supportsOperation: () => true, supportsIncomingOperation: () => true } });
+      const report = await registry.resolve(policyReadOperation)!.handler({}, { requestId: randomUUID(), signal: new AbortController().signal });
+      expect(report).toMatchObject({ readiness: expect.arrayContaining([{ id: "backend:pi", state: "ready", generation: 1 }]) });
+    } finally {
+      await routes.close();
+    }
+  });
+
   it("keeps paged evidence coherent, scoped, bounded and invalidated on a new install", () => {
     vi.useFakeTimers();
     try {
@@ -262,6 +307,8 @@ describe("live persistent execution policy", () => {
         }),
       ).toThrow("digest_mismatch");
       expect(() => service.assertAdmission(epoch)).toThrow("unsynchronized");
+      f.stage();
+      service.applyPolicy(epoch, { ...f.fields, base: null, configuration });
     } finally {
       vi.useRealTimers();
     }

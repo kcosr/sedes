@@ -1,6 +1,6 @@
 import type { InstalledExecutionPolicy } from "../../internal/sidecar-protocol/execution-policy.js";
 import { validateConfigurationDocument } from "./configuration-validation.js";
-import { changedConfigurationEffects, observeProviderLaunch } from "./configuration-effects.js";
+import { changedConfigurationEffects, configurationEffectsPending, observeProviderLaunch } from "./configuration-effects.js";
 import { hostExecutionPolicy } from "./configuration-execution-policy.js";
 import { antigravityOwners, assertSingleAntigravityOwner, restoreMigratedTargets } from "./configuration-ownership.js";
 import { assertOutboundPairingReferences } from "./configuration-outbound-pairing.js";
@@ -158,14 +158,18 @@ export class ConfigurationRepository {
       }
       const effects = current.effects?.map(effect => {
         if (effect.component !== "provider_launch" || effect.providerLaunch?.owner === "host") return effect;
+        if (observation.connectionState === "stopped" && effect.providerLaunch) {
+          return { ...effect, state: "next_launch" as const, effectiveRevision: null,
+            providerLaunch: {...effect.providerLaunch, confirmedDigest: null} };
+        }
         if (observation.startupEnvironmentPending) return { ...effect, state: "restart_backend" as const };
         if (observation.applyState === "applied" && observation.connectionState === "connected") {
-          return { ...effect, state: "applied" as const, effectiveRevision: effect.desiredRevision };
+          return { ...effect, state: "applied" as const, effectiveRevision: effect.desiredRevision,
+            ...(effect.providerLaunch && { providerLaunch: {...effect.providerLaunch, confirmedDigest: effect.providerLaunch.desiredDigest} }) };
         }
         return effect;
       });
-      const pending = effects?.some(effect => ["awaiting_host", "restart_backend", "unsupported", "failed"].includes(effect.state) ||
-        (effect.providerLaunch?.owner === "host" && effect.state === "next_launch"));
+      const pending = configurationEffectsPending(effects ?? []);
       const observed = { ...observation, ...(effects ? { effects } : {}),
         ...(pending && observation.applyState === "applied" ? { applyState: "pending" as const, effectiveRevision: current.effectiveRevision === current.desiredRevision ? null : current.effectiveRevision } : {}) };
       this.#putRuntime(scope, observed);
@@ -176,16 +180,21 @@ export class ConfigurationRepository {
   /** Publish only evidence for the still-current complete snapshot. Background observations may arrive out of order. */
   observeHostPolicy(scope: RequestScope, environmentId: string, installed: InstalledExecutionPolicy,
     readiness: ReadonlyMap<string, "ready" | "unsupported" | "failed" | "preparing">,
-    confirmation?: {incarnation: string; epoch: number; launchDigests?: ReadonlyMap<string,string>}): void {
+    confirmation?: {incarnation: string; epoch: number; launchDigests?: ReadonlyMap<string,string | null>}): void {
     this.database.transaction(() => {
       const desired = hostExecutionPolicy(this.database, scope, environmentId);
       if (!desired || desired.revision !== installed.revision || desired.digest !== installed.digest) return;
       const stamp = confirmation && {revision: installed.revision, digest: installed.digest, incarnation: confirmation.incarnation, epoch: confirmation.epoch};
-      const { configuration, runtimes } = this.get(scope);
-      const bindings = configuration.targets.filter(target => target.executionEnvironmentId === environmentId);
-      const boundBackendIds = new Set(bindings.map(target => target.backendInstanceId));
-      for (const runtime of runtimes) {
-        if (runtime.resourceKind === "environment" ? runtime.resourceId !== environmentId : !boundBackendIds.has(runtime.resourceId)) continue;
+      // The immutable profile binding survives removal so an installed withdrawal also settles
+      // its retained runtime row before someone re-adds the same backend in a later generation.
+      const hostRuntimes = this.database.prepare(`SELECT state_json AS state FROM execution_configuration_runtime_state
+        WHERE tenant_id = ? AND owner_principal_id = ?
+          AND ((resource_kind = 'environment' AND resource_id = ?) OR (resource_kind = 'backend' AND resource_id IN (
+            SELECT backend_instance_id FROM agent_connection_profiles
+              WHERE tenant_id = ? AND owner_principal_id = ? AND execution_environment_id = ?
+          )))`).all(scope.tenantId, scope.principalId, environmentId, scope.tenantId, scope.principalId, environmentId) as {state: string}[];
+      for (const row of hostRuntimes) {
+        const runtime = configurationRuntimeStateSchema.parse(JSON.parse(row.state));
         const effects = (runtime.effects ?? []).map(effect => {
           if (effect.component !== "host_policy") return effect;
           const [kind, id] = effect.subjectId.split(":", 2);
@@ -201,7 +210,7 @@ export class ConfigurationRepository {
           const outcome: ConfigurationEffect["state"] = state === "ready"
             ? granted && kind === "managed_tui" ? "next_launch" : "applied"
             : state === "unsupported" || state === "failed" ? state : "awaiting_host";
-          return { ...effect, state: outcome, effectiveRevision: state === "ready" ? effect.desiredRevision : effect.effectiveRevision,
+          return { ...effect, state: outcome, effectiveRevision: state === "ready" ? effect.desiredRevision : effect.effectiveRevision === effect.desiredRevision ? null : effect.effectiveRevision,
             ...(stamp ? { lastHostConfirmation: stamp } : {}) };
         });
         const grant = runtime.resourceKind === "backend" && installed.snapshot.backends.find(b => b.id === runtime.resourceId);
@@ -209,8 +218,7 @@ export class ConfigurationRepository {
           observeProviderLaunch(runtime, effects, grant.launchDigest, confirmation?.launchDigests?.get(grant.id), stamp);
         }
         if (JSON.stringify(runtime.effects) === JSON.stringify(effects)) continue;
-        const launchPending = effects.some(effect => effect.providerLaunch?.owner === "host" && effect.state !== "applied");
-        this.#putRuntime(scope, { ...runtime, effects, ...(launchPending && runtime.applyState === "applied" ? {
+        this.#putRuntime(scope, { ...runtime, effects, ...(configurationEffectsPending(effects) && runtime.applyState === "applied" ? {
           applyState: "pending", effectiveRevision: runtime.effectiveRevision === runtime.desiredRevision ? null : runtime.effectiveRevision,
         } : {}) });
       }
@@ -221,6 +229,10 @@ export class ConfigurationRepository {
     const row = this.database.prepare(`SELECT backend_id AS backendId FROM execution_configuration_native_owners
       WHERE tenant_id = ? AND owner_principal_id = ? AND environment_id = ? AND namespace = ?`)
       .get(scope.tenantId, scope.principalId, environmentId, namespace) as {backendId: string | null} | undefined;
+    if (!row && namespace === "antigravity" && this.database.prepare(`SELECT 1 FROM execution_configuration_ownership_conflicts
+      WHERE tenant_id = ? AND owner_principal_id = ? AND environment_id = ? LIMIT 1`).get(scope.tenantId, scope.principalId, environmentId)) {
+      throw new DomainError("conflict", "Inspect the retained Antigravity runtime or confirm its retirement before enabling any owner.");
+    }
     if (row?.backendId && row.backendId !== backendId) {
       throw new DomainError("conflict", "Confirm retirement of the retained Antigravity backend before enabling another owner.");
     }
@@ -229,13 +241,25 @@ export class ConfigurationRepository {
   /** Trusted exact live inventory or confirmed retirement is the only source of namespace ownership evidence. */
   confirmNativeOwner(scope: RequestScope, environmentId: string, namespace: string, owner: string | null, expectedOwner?: string): void {
     this.assertPrincipal(scope);
-    const result = this.database.prepare(`INSERT INTO execution_configuration_native_owners
-      (tenant_id, owner_principal_id, environment_id, namespace, backend_id) VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT(tenant_id, owner_principal_id, environment_id, namespace) DO UPDATE SET backend_id = excluded.backend_id
-      WHERE (excluded.backend_id IS NOT NULL AND (backend_id IS NULL OR backend_id = excluded.backend_id))
-         OR (excluded.backend_id IS NULL AND (? IS NULL OR backend_id IS NULL OR backend_id = ?))`)
-      .run(scope.tenantId, scope.principalId, environmentId, namespace, owner, expectedOwner ?? null, expectedOwner ?? null);
-    if (!result.changes) throw new DomainError("conflict", "The reported native runtime ownership conflicts with the confirmed incumbent.");
+    this.database.transaction(() => {
+      const host = [scope.tenantId, scope.principalId, environmentId];
+      if (namespace === "antigravity" && owner === null && expectedOwner && !this.database.prepare(`SELECT 1
+        FROM execution_configuration_native_owners WHERE tenant_id = ? AND owner_principal_id = ? AND environment_id = ? AND namespace = ?`)
+        .get(...host, namespace)) {
+        // Inspecting one missing backend says nothing about a different candidate on this host.
+        this.database.prepare(`UPDATE execution_configuration_ownership_conflicts SET retirement_confirmed = 1
+          WHERE tenant_id = ? AND owner_principal_id = ? AND environment_id = ? AND backend_id = ?`).run(...host, expectedOwner);
+        if (this.database.prepare(`SELECT 1 FROM execution_configuration_ownership_conflicts
+          WHERE tenant_id = ? AND owner_principal_id = ? AND environment_id = ? AND retirement_confirmed = 0 LIMIT 1`).get(...host)) return;
+      }
+      const result = this.database.prepare(`INSERT INTO execution_configuration_native_owners
+        (tenant_id, owner_principal_id, environment_id, namespace, backend_id) VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(tenant_id, owner_principal_id, environment_id, namespace) DO UPDATE SET backend_id = excluded.backend_id
+        WHERE (excluded.backend_id IS NOT NULL AND (backend_id IS NULL OR backend_id = excluded.backend_id))
+           OR (excluded.backend_id IS NULL AND (? IS NULL OR backend_id IS NULL OR backend_id = ?))`)
+        .run(scope.tenantId, scope.principalId, environmentId, namespace, owner, expectedOwner ?? null, expectedOwner ?? null);
+      if (!result.changes) throw new DomainError("conflict", "The reported native runtime ownership conflicts with the confirmed incumbent.");
+    })();
   }
 
   replayLifecycle(scope: RequestScope, request: ConfigurationLifecycleRequest): ConfigurationLifecycleResult | undefined {
@@ -300,7 +324,9 @@ export class ConfigurationRepository {
       const current = this.runtime(scope, request.resourceKind, request.resourceId);
       // A settled old receipt remains queryable, but cannot replace a newer
       // configuration/runtime projection.
-      if (current.desiredRevision === result.runtime.desiredRevision && current.preference === result.runtime.preference) this.observe(scope, result.runtime);
+      if (current.desiredRevision === result.runtime.desiredRevision && current.preference === result.runtime.preference) {
+        result.runtime = this.observe(scope, result.runtime);
+      }
       this.database.prepare(`UPDATE execution_configuration_receipts SET result_json = ?
         WHERE tenant_id = ? AND owner_principal_id = ? AND mutation_id = ? AND operation = 'lifecycle'`)
         .run(JSON.stringify(result), scope.tenantId, scope.principalId, request.mutationId);
@@ -380,9 +406,7 @@ export class ConfigurationRepository {
       const current = existing ? configurationRuntimeStateSchema.parse(JSON.parse(existing.state)) : undefined;
       const effects = changedConfigurationEffects(scope, previous, next, resource.kind, resource.id, revision, current);
       if (!effects) continue;
-      const applied = current?.applyState === "applied" && !effects.some(effect =>
-        ["awaiting_host", "restart_backend", "unsupported", "failed"].includes(effect.state) ||
-        (effect.providerLaunch?.owner === "host" && effect.state === "next_launch"));
+      const applied = current?.applyState === "applied" && !configurationEffectsPending(effects);
       this.#putRuntime(scope, current ? { ...current, desiredRevision: revision, effects,
         effectiveRevision: applied ? revision : current.effectiveRevision, applyState: applied ? "applied" : "pending", lastError: null } : {
         resourceKind: resource.kind, resourceId: resource.id, desiredRevision: revision, effectiveRevision: null, effects,

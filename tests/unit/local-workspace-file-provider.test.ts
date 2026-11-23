@@ -111,6 +111,47 @@ describe("LocalWorkspaceFileProvider", () => {
     } finally { provider.close(); current.provider.close(); }
   });
 
+  it("closes the OS watch once when the bound root grant is withdrawn", async () => {
+    const current = await fixture();
+    const root = {id:"root", path:current.root, generation:1};
+    let granted = true;
+    const watchers = new LocalWorkspaceFileWatcherRegistry();
+    const close = vi.fn(), listener = vi.fn();
+    const subscribe = vi.spyOn(watchers,"subscribe").mockResolvedValue({ close, failed: new Promise<void>(() => {}) });
+    const provider = new LocalWorkspaceFileProvider({scope,environmentId,watchers,
+      readWorkspaceRoots:() => granted ? [root] : [], readWorkspaceBinding:() => ({authorityRootId:root.id,authorityRevision:root.generation})});
+    try {
+      const sub = await provider.watch(scope,current.workspace,listener);
+      granted = false;
+      subscribe.mock.calls[0]![2]();
+      await sub.failed;
+      await sub.close();
+      expect(close).toHaveBeenCalledOnce();
+      expect(listener).not.toHaveBeenCalled();
+    } finally { provider.close(); current.provider.close(); }
+  });
+
+  it("creates no temporary file for a queued write whose original grant was withdrawn", async () => {
+    const current = await fixture();
+    const root = { id: "root", path: current.root, generation: 1 };
+    let granted = true;
+    const provider = new LocalWorkspaceFileProvider({
+      scope, environmentId, readWorkspaceRoots: () => granted ? [root] : [],
+      readWorkspaceBinding: () => ({authorityRootId:root.id,authorityRevision:root.generation}),
+      testHooks: { beforeWriteCommit: () => { granted = false; } },
+    });
+    try {
+      await writeFile(path.join(current.root, "a.txt"), "before");
+      const content = await provider.read(scope,current.workspace,"a.txt");
+      if (!("revision" in content) || !content.revision) throw new Error("missing_revision");
+      const changes = {path:"a.txt", content:"changed", expectedRevision:content.revision};
+      const results = await Promise.allSettled([provider.write(scope,current.workspace,changes), provider.write(scope,current.workspace,changes)]);
+      for (const result of results) expect(result).toMatchObject({status:"rejected", reason: expect.any(WorkspaceFileRootUnavailableError)});
+      expect(vi.mocked(open).mock.calls.filter(([filename]) => String(filename).endsWith(".tmp"))).toHaveLength(1);
+      expect(await readFile(path.join(current.root,"a.txt"),"utf8")).toBe("before");
+    } finally { provider.close(); current.provider.close(); }
+  });
+
   it("rechecks the workspace's original root before committing a write despite an overlapping grant", async () => {
     const current = await fixture();
     const original = { id: "original", path: current.root, generation: 4 };
@@ -726,6 +767,7 @@ describe("LocalWorkspaceFileProvider", () => {
     await expect(
       current.provider.removeLinkedWorktree(scope, {
         primaryRoot: primary,
+        linkedRoot: {...primary, rootId:workspaceFileRootIdSchema.parse("linked"), canonicalPath:discovered.canonicalPath},
         canonicalCheckoutPath: discovered.canonicalCheckoutPath,
         canonicalGitDir: discovered.canonicalGitDir,
         identityToken: discovered.identityToken,
@@ -734,6 +776,7 @@ describe("LocalWorkspaceFileProvider", () => {
     await rm(dirtyPath);
     await current.provider.removeLinkedWorktree(scope, {
       primaryRoot: primary,
+      linkedRoot: {...primary, rootId:workspaceFileRootIdSchema.parse("linked"), canonicalPath:discovered.canonicalPath},
       canonicalCheckoutPath: discovered.canonicalCheckoutPath,
       canonicalGitDir: discovered.canonicalGitDir,
       identityToken: discovered.identityToken,
@@ -866,6 +909,7 @@ describe("LocalWorkspaceFileProvider", () => {
     await expect(
       current.provider.removeLinkedWorktree(scope, {
         primaryRoot: current.workspace,
+        linkedRoot: {...current.workspace, rootId:workspaceFileRootIdSchema.parse("linked"), canonicalPath:discovered.canonicalPath},
         canonicalCheckoutPath: discovered.canonicalCheckoutPath,
         canonicalGitDir: discovered.canonicalGitDir,
         identityToken: discovered.identityToken,

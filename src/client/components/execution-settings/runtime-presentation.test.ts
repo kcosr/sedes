@@ -22,6 +22,12 @@ describe("runtime presentation", () => {
     expect(presented.detail).toContain("after its next restart");
     expect(presented.primary?.label).toBe("Restart backend");
   });
+  it.each([true, false])("prioritizes outstanding live settings when a compatible upgrade is available (typed effects: %s)", typedEffects => {
+    const saved = runtime({ applyState: "pending", upgradeState: "pending",
+      effects: typedEffects ? [{ component: "host_policy", subjectId: "backend:claude", desiredRevision: 4, effectiveRevision: 3, state: "awaiting_host" }] : [] });
+    expect(summarize(saved)).toMatchObject({ qualifier: typedEffects ? "Awaiting host confirmation" : "Changes pending", primary: "Retry apply" });
+    expect(summarize(saved).secondary).toContain("Upgrade and restart");
+  });
   it("explains an unknown command without incorrectly asking the user to connect again", () => {
     const presentation = presentRuntime(runtime({ connectionState: "unknown", lifecycleOperation: {
       mutationId: "31000000-0000-4000-8000-000000000002", action: "upgrade", state: "unknown",

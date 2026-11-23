@@ -256,6 +256,21 @@ describe("ClaudeManagedRuntimeOwner", () => {
     })).toThrow("claude_managed_runtime_environment_invalid");
   });
 
+  it("keeps a live worker usable but refuses a new generation after its launch grant changes", async () => {
+    const harness = runtimeHarness();
+    let current = true;
+    const owner = harness.owner({ assertLaunchAdmission: () => { if (!current) throw new Error("backend_policy_denied"); } });
+    try {
+      await expect(listSessions(owner)).resolves.toEqual([]);
+      current = false;
+      await expect(listSessions(owner)).resolves.toEqual([]);
+      harness.generations[0]!.finish({ reason: "exit", exitCode: CLAUDE_RUNTIME_WORKER_CLEANUP_PROVEN_FAILURE_EXIT_CODE, signal: null });
+      await waitUntil(() => harness.backgroundErrors.length === 1);
+      await expect(listSessions(owner)).rejects.toThrow("backend_policy_denied");
+      expect(harness.open).toHaveBeenCalledOnce();
+    } finally { await owner.close(); }
+  });
+
   it("replaces a failed generation when the outer status proves cleanup", async () => {
     vi.stubEnv("SEDES_DEBUG_DELIVERY", "1");
     const log = vi.spyOn(console, "error").mockImplementation(() => {});

@@ -27,6 +27,7 @@ export async function launchLocalManagedWorker(input: {
   readonly artifact: ManagedWorkerArtifactRegistration;
   readonly workingDirectory: string;
   readonly identity: ManagedWorkerLaunchIdentity;
+  readonly assertLaunchAdmission?: () => void;
   readonly signal: AbortSignal;
   readonly cleanup?: EnvironmentOwnedProcessCleanupPolicy;
 }): Promise<SidecarByteStream> {
@@ -50,6 +51,7 @@ export async function launchLocalManagedWorker(input: {
     input.scope,
     {
       prepared,
+      ...(input.assertLaunchAdmission && { assertLaunchAdmission: input.assertLaunchAdmission }),
       arguments: arguments_,
       environment: { ...sanitizedLocalWorkerEnvironment(
         process.env,

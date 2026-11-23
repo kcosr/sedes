@@ -72,9 +72,7 @@ export class SidecarPolicyController {
     this.detach();
     if (renewable?.status.incarnation === service.serviceIncarnation) this.#renewable = renewable;
     this.#connection = { peer, service, controller: new AbortController() };
-    this.#conflict =
-      this.#conflictedIncarnation === service.serviceIncarnation ||
-      this.recovery?.blocked(service.serviceIncarnation) === true;
+    this.#conflict = this.requiresRecovery(service.serviceIncarnation);
   }
 
   detach(retainForAcquisition = false): void {
@@ -100,6 +98,10 @@ export class SidecarPolicyController {
   get status() {
     return this.#status;
   }
+  requiresRecovery(incarnation: string): boolean {
+    return this.#conflictedIncarnation === incarnation || this.recovery?.blocked(incarnation) === true;
+  }
+
   get conflict() {
     return this.#conflict;
   }
@@ -214,6 +216,8 @@ export class SidecarPolicyController {
     this.#invalidateRoutes();
     const desired = this.#readDesired();
     const key = `${desired.revision}:${desired.digest}`;
+    // Routine reconciliation keeps the scheduled backoff for an unchanged
+    // request. Completion here is not proof: admission reads confirmed grants.
     if (!force && key === this.#lastRequested)
       return this.#attempt ?? Promise.resolve();
     this.#lastRequested = key;

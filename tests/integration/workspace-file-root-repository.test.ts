@@ -97,8 +97,9 @@ describe("workspace file-root repository", () => {
       expect(refreshed.rootId).not.toBe(link.rootId);
       expect(binding(link.rootId)).toBeUndefined();
       expect(binding(refreshed.rootId)).toEqual({authorityRootId:"deeper", authorityRevision:2});
+      const incomplete = worktrees.reconcileDiscovery(value.scope, value.workspaceId, [], {complete:false, now:220});
+      expect(incomplete.tombstonedRootIds).toEqual([checkoutId]);
       const replacement = discover();
-      expect(replacement.tombstonedRootIds).toEqual([checkoutId]);
       expect(replacement.roots[0]!.rootId).not.toBe(checkoutId);
       expect(binding(replacement.roots[0]!.rootId)).toEqual({authorityRootId:"deeper", authorityRevision:2});
     } finally { value.database.close(); }

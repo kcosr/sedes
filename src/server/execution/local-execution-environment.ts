@@ -243,8 +243,9 @@ export class LocalExecutionEnvironment implements ExecutionEnvironmentProvider {
         throw new Error("directory_browse_cursor_invalid");
       }
       const offset = cursor?.offset ?? 0;
-      const entries = roots
-        .map((root) => ({ name: path.basename(root) || root, path: root }))
+      const visibleRoots = grants?.map(root => directoryBrowsePathSchema.safeParse(root.path).success ? root.path : root.declaredPath) ?? roots;
+      const entries = visibleRoots
+        .map((root) => ({ name: path.basename(root) || "Filesystem root", path: root }))
         .sort(
           (left, right) =>
             left.name.localeCompare(right.name) ||
@@ -276,12 +277,16 @@ export class LocalExecutionEnvironment implements ExecutionEnvironmentProvider {
     }
     let candidateStat;
     let canonicalPath: string;
+    // A configured alias can name a native directory that the browser path format cannot encode.
+    const requested = request.location.path;
+    const declaredRoot = grants?.find(root => root.declaredPath === requested && !directoryBrowsePathSchema.safeParse(root.path).success);
+    const nativePath = declaredRoot?.path ?? requested;
     try {
-      candidateStat = await lstat(request.location.path);
+      candidateStat = await lstat(nativePath);
       if (!candidateStat.isDirectory() || candidateStat.isSymbolicLink()) {
         throw new Error("directory_browse_not_allowed");
       }
-      canonicalPath = await realpath(request.location.path);
+      canonicalPath = await realpath(nativePath);
     } catch {
       throw new Error("directory_browse_not_allowed");
     }
@@ -293,6 +298,9 @@ export class LocalExecutionEnvironment implements ExecutionEnvironmentProvider {
       .filter((root) => pathIsWithin(root, canonicalPath))
       .sort((left, right) => right.length - left.length)[0];
     if (!containingRoot) throw new Error("directory_browse_not_allowed");
+    const selected = grants?.find(root => root.id === grant?.id);
+    const displayPath = selected && !directoryBrowsePathSchema.safeParse(selected.path).success
+      ? path.join(selected.declaredPath, path.relative(selected.path, canonicalPath)) : canonicalPath;
 
     let handle;
     try {
@@ -345,7 +353,7 @@ export class LocalExecutionEnvironment implements ExecutionEnvironmentProvider {
             continue;
           }
           const entryPath = path.join(canonicalPath, value.name);
-          const entry = { name: value.name, path: entryPath };
+          const entry = { name: value.name, path: path.join(displayPath, value.name) };
           if (!directoryBrowseEntrySchema.safeParse(entry).success) continue;
           try {
             const entryStat = await lstat(entryPath);
@@ -404,10 +412,10 @@ export class LocalExecutionEnvironment implements ExecutionEnvironmentProvider {
       return directoryBrowseResultSchema.parse({
         location: {
           kind: "directory",
-          path: canonicalPath,
+          path: displayPath,
           ...(canonicalPath !== containingRoot &&
           pathIsWithin(containingRoot, parent)
-            ? { parentPath: parent }
+            ? { parentPath: path.dirname(displayPath) }
             : {}),
         },
         entries: page,

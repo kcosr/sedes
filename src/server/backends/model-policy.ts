@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { BackendModelDescriptor } from "./contracts.js";
 import { deepFreeze } from "../../shared/json-guards.js";
 
 export type BackendModelPolicyMatcher = Readonly<{
@@ -138,6 +139,27 @@ export interface CompiledBackendModelPolicy {
     identity: BackendModelIdentity,
     reasoningEfforts: readonly string[],
   ): readonly string[];
+}
+
+/** Apply saved policy at delivery so a warm provider catalog reflects live edits. */
+export function filterCatalogModels(
+  models: readonly BackendModelDescriptor[],
+  policy: CompiledBackendModelPolicy,
+  dimension: BackendModelPolicyIdentityDisposition,
+): readonly BackendModelDescriptor[] {
+  return models.flatMap((model) => {
+    const identity = dimension === "provider_model_effort"
+      ? { providerId: model.provider, modelId: model.id } : { modelId: model.id };
+    if (model.supportedReasoningEfforts === undefined)
+      return policy.isModelWithoutReasoningEffortAllowed(identity) ? [model] : [];
+    const supportedReasoningEfforts = policy.filterReasoningEfforts(identity, model.supportedReasoningEfforts);
+    if (!supportedReasoningEfforts.length) return [];
+    if (model.defaultReasoningEffort !== undefined && !supportedReasoningEfforts.includes(model.defaultReasoningEffort)) {
+      const { defaultReasoningEffort, isDefault, ...descriptor } = model;
+      return [{ ...descriptor, supportedReasoningEfforts }];
+    }
+    return [{ ...model, supportedReasoningEfforts }];
+  });
 }
 
 export class BackendModelPolicyConfigurationError extends Error {

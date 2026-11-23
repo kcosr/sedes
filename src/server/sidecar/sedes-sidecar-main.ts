@@ -98,7 +98,7 @@ const compiledSidecarCapabilities = Object.freeze([
   Object.freeze({ capabilityId: "opencode_runtime", majorVersion: 5 }),
   Object.freeze({ capabilityId: "pi_native_runtime", majorVersion: 3 }),
   Object.freeze({ capabilityId: "antigravity_runtime", majorVersion: 4 }),
-  Object.freeze({ capabilityId: "claude_persistent_runtime", majorVersion: 5 }),
+  Object.freeze({ capabilityId: "claude_persistent_runtime", majorVersion: 6 }),
   Object.freeze({ capabilityId: "codex_managed_tui", majorVersion: 3 }),
 ]);
 const enabledSedesCapabilities = Object.freeze([
@@ -173,12 +173,13 @@ async function main(): Promise<void> {
     ...(launchLedger ? { beforeRuntimeOperation: key => recordUncoveredRuntimeOperation(launchLedger, key) } : {}),
     receipts: new PersistentSidecarManagementReceipts(path.join(paths.serviceDirectory, "management-receipts")),
     onStopped: async () => {
-      workspaceContext.close(); workspaceSkills.close(); directoryBrowser.close();
+      workspaceContext.close(); workspaceSkills.close();
       await policyRoutes.close();
       await environmentChannel.close();
       await recordPersistentSidecar(input.scope, serviceRegistry.serviceIncarnation, "stopped");
     },
-    onRuntimeAttachment: ({ registry, peer, controllerEpoch, assertAdmission, assertController }) => {
+    onRuntimeAttachment: ({ registry, peer, controllerEpoch, sessionNonce, assertAdmission, assertController }) => {
+      const directoryBrowser = new DirectoryBrowserSidecarHost({ policyGuard, sessionNonce });
       const runtimeChannel = new SidecarRuntimeChannel(peer, registry);
       const getExecutionPolicy = () => serviceRegistry.executionPolicy(controllerEpoch);
       const providerPolicy = {
@@ -217,7 +218,7 @@ async function main(): Promise<void> {
         hosts: antigravityHosts, services: serviceRegistry, controllerEpoch }) : () => undefined;
       const detachTui = nativePtyAvailable ? registerCodexManagedTuiHost({ ...providerPolicy, registry, channel: runtimeChannel, hosts: codexHosts.managedTui, services: serviceRegistry, controllerEpoch }) : () => undefined;
       const unsubscribe = attachment.subscribe((event) => {
-        if (event === "detached" && attachment.controllerEpoch === controllerEpoch) { detachTui(); detachCodex(); detachClaude(); detachOpenCode(); detachPi(); detachAntigravity(); runtimeChannel.close(); unsubscribe(); }
+        if (event === "detached" && attachment.controllerEpoch === controllerEpoch) { directoryBrowser.close(); detachTui(); detachCodex(); detachClaude(); detachOpenCode(); detachPi(); detachAntigravity(); runtimeChannel.close(); unsubscribe(); }
       });
   registerWorkspaceFilesV8Operations(registry, workspaceFiles.handlers);
   registerWorkspaceToolsV2Operations(registry, workspaceTools.handlers);
@@ -396,9 +397,6 @@ async function main(): Promise<void> {
     baseDirectory: path.join(paths.serviceDirectory, "composer-attachments"),
     sessionNonce: serviceRegistry.serviceIncarnation,
     captureAdmission,
-  });
-  const directoryBrowser = new DirectoryBrowserSidecarHost({policyGuard,
-    sessionNonce: serviceRegistry.serviceIncarnation,
   });
   const mutations = new CanonicalMutationSerializer();
   const workspaceFiles = new WorkspaceFilesSidecarHost({policyGuard,captureCleanup,

@@ -1,4 +1,4 @@
-import { observedLaunchDigest } from "../../../provider-policy-admission.js";
+import { observedLaunchDigest, type ProviderLaunchAdmission } from "../../../provider-policy-admission.js";
 import type { RequestScope } from "../../../../identity/identity-provider.js";
 import type { ExecutionEnvironmentChannelProvider } from "../../../../execution/environment-channel.js";
 import type { PersistentSidecarServiceRegistry } from "../../../../sidecar/persistent-sidecar-service-registry.js";
@@ -14,8 +14,10 @@ export class PiNativeHostRegistry {
   readonly #hosts = new Map<string, Entry>();
   readonly #starting = new Map<string, Promise<Entry>>();
   readonly #retiredHandles = new Map<string, ReadonlySet<string>>();
-  observedLaunchDigest(id: string): string | undefined {
-    return observedLaunchDigest(this.#hosts.get(id)?.host);
+  observedLaunchDigest(id: string): string | null | undefined {
+    const resident = this.#hosts.get(id);
+    if (resident) return observedLaunchDigest(resident.host);
+    return this.#starting.has(id) ? undefined : null;
   }
 
   constructor(readonly input: {
@@ -28,7 +30,7 @@ export class PiNativeHostRegistry {
     readonly createHost?: (configuration: PiNativeRuntimeConfiguration, key: Uint8Array) => PiNativeHost;
   }) {}
 
-  async ensure(raw: PiNativeRuntimeConfiguration, epoch: number, assertLaunch?: () => void): Promise<PiNativeHost> {
+  async ensure(raw: PiNativeRuntimeConfiguration, epoch: number, admission?: ProviderLaunchAdmission): Promise<PiNativeHost> {
     const configuration = this.#configuration(raw);
     this.input.services.assertController(epoch);
     let entry = this.#hosts.get(configuration.backendInstanceId);
@@ -36,8 +38,8 @@ export class PiNativeHostRegistry {
       this.input.services.assertAdmission(epoch);
       let starting = this.#starting.get(configuration.backendInstanceId);
       if (!starting) {
-        assertLaunch?.();
-        starting = this.#create(configuration, epoch, assertLaunch);
+        admission?.assertCurrent();
+        starting = this.#create(configuration, epoch, admission);
         this.#starting.set(configuration.backendInstanceId, starting);
       }
       try { entry = await starting; }
@@ -99,14 +101,15 @@ export class PiNativeHostRegistry {
       configuration.executionEnvironmentId !== this.input.executionEnvironmentId) throw new PiNativeError("pi_native_configuration_scope_denied");
     return configuration;
   }
-  async #create(configuration: PiNativeRuntimeConfiguration, epoch: number, assertLaunch?: () => void): Promise<Entry> {
+  async #create(configuration: PiNativeRuntimeConfiguration, epoch: number, admission?: ProviderLaunchAdmission): Promise<Entry> {
     const key = await loadPiNativeHostAuthenticationKey(this.input.serviceDirectory, configuration.backendInstanceId);
     this.input.services.assertAdmission(epoch);
-    assertLaunch?.();
+    admission?.assertCurrent();
     const host = this.input.createHost?.(configuration, key) ?? new PiNativeHost({ configuration, authenticationKey: key,
       channels: this.input.channels, environment: this.input.environment });
     let unregister = () => {};
     const entry: Entry = { host, fingerprint: identity(configuration), unregister: () => unregister() };
+    admission?.bind(host);
     unregister = this.input.services.register({ resourceId: host.runtimeId, kind: "provider",
       snapshot: () => {
         const { state, revision, blockers } = host.snapshot();
@@ -125,7 +128,5 @@ export class PiNativeHostRegistry {
 }
 
 function identity(configuration: PiNativeRuntimeConfiguration): string {
-  // Startup-only edits apply on explicit restart, preserving the applied owner.
-  const { startupEnvironmentVariables: _startup, ...rest } = configuration;
-  return configurationFingerprint(rest);
+  return configurationFingerprint({ ...configuration, startupEnvironmentVariables: configuration.startupEnvironmentVariables ?? {} });
 }

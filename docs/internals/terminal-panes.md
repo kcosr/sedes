@@ -200,6 +200,12 @@ automatically. If reattach cannot prove acceptance, the user can explicitly
 discard the unconfirmed input and its dependent suffix after acknowledging that
 the bytes may already have reached the terminal.
 
+The persistent sidecar can return a retained input or resize receipt after the
+terminal's workspace or feature grant is withdrawn. It checks the terminal
+incarnation, controller token, sequence and payload fingerprint. New input and
+resize requests require the terminal's original grants. A pre-dispatch denial
+leaves the control sequence available for the next request.
+
 ## Persistence and failure truth
 
 Local terminal process continuity ends with main Sedes. Startup marks reserved

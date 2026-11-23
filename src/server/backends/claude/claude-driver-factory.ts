@@ -1,3 +1,4 @@
+import { ConnectionDriverCache } from "../connection-driver-cache.js";
 import type { ThreadEnvironmentResolver } from "../../environment-variables/runtime-environment.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
 import {
@@ -55,7 +56,7 @@ export class ClaudeBackendDriverFactory implements BackendDriverFactory {
         source: ClaudeRuntimeVersionObservationSource,
       ) => ClaudeRuntimeVersionObservation)
     | undefined;
-  readonly #drivers = new Map<string, ClaudeConversationBackendDriver>();
+  readonly #drivers = new ConnectionDriverCache<ClaudeConversationBackendDriver>();
   readonly #activeSessions = new Set<string>();
   #closed = false;
 

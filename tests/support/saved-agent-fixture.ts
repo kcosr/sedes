@@ -48,6 +48,7 @@ const configuration = parseResolvedBackendConfiguration({
 
 export function savedAgentDatabase(
   latestVersion = latestBackendNormalizedVersion,
+  localWorkspaceRoots = ["/tmp"],
 ) {
   const database = openOverlayDatabase(":memory:");
   const scope = new SingleUserIdentityProvider(database).getScope();
@@ -64,12 +65,12 @@ export function savedAgentDatabase(
   );
   if (latestVersion === latestBackendNormalizedVersion) {
     importLegacyDatabaseConfigurationFixture(database, {
-      configuration, localWorkspaceRoots: ["/tmp"], sourceLabel: "saved-agent-fixture",
+      configuration, localWorkspaceRoots, sourceLabel: "saved-agent-fixture",
     }, 100);
   } else if (latestVersion >= 93) {
     // This fixture contains a single local Pi backend. Its historical desired document already existed
     // alongside the normalized rows, before the live-policy and workspace-grant projections were introduced.
-    const {document} = convertLegacyConfiguration({configuration, localWorkspaceRoots:["/tmp"], sourceLabel:"saved-agent-fixture"});
+    const {document} = convertLegacyConfiguration({configuration, localWorkspaceRoots, sourceLabel:"saved-agent-fixture"});
     database.prepare("INSERT INTO principal_execution_configuration (tenant_id,owner_principal_id,revision,configuration_json,updated_at) VALUES (?,?,0,?,100)")
       .run(scope.tenantId,scope.principalId,JSON.stringify(document));
     database.prepare("UPDATE agent_backend_instances SET owner_principal_id = ? WHERE tenant_id = ? AND owner_principal_id IS NULL")

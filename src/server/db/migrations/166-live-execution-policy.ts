@@ -25,6 +25,7 @@ CREATE TABLE execution_policy_recovery_fences (
 CREATE TABLE execution_configuration_ownership_conflicts (
   tenant_id TEXT NOT NULL, owner_principal_id TEXT NOT NULL, environment_id TEXT NOT NULL, backend_id TEXT NOT NULL,
   target_ids_json TEXT NOT NULL CHECK(json_valid(target_ids_json)),
+  retirement_confirmed INTEGER NOT NULL DEFAULT 0 CHECK(retirement_confirmed IN (0,1)),
   PRIMARY KEY(tenant_id, owner_principal_id, environment_id, backend_id),
   FOREIGN KEY (tenant_id, owner_principal_id) REFERENCES principals(tenant_id, id)
 ) STRICT;
@@ -56,7 +57,8 @@ UPDATE host_pairing_receipts SET result_json = json_set(result_json, '$.configur
           const backend = document.backends.find(b => b.id === id)!;
           backend.enabled = false;
           const enabledTargets = document.targets.filter(t => t.backendInstanceId === id && t.enabled);
-          database.prepare(`INSERT INTO execution_configuration_ownership_conflicts VALUES (?, ?, ?, ?, ?)`)
+          database.prepare(`INSERT INTO execution_configuration_ownership_conflicts
+            (tenant_id, owner_principal_id, environment_id, backend_id, target_ids_json) VALUES (?, ?, ?, ?, ?)`)
             .run(row.tenantId, row.principalId, environmentId, id, JSON.stringify(enabledTargets.map(t => t.id)));
           database.prepare(`UPDATE agent_backend_instances SET enabled = 0, configuration_revision = configuration_revision + 1
             WHERE tenant_id = ? AND owner_principal_id = ? AND id = ? AND enabled = 1`).run(row.tenantId, row.principalId, id);

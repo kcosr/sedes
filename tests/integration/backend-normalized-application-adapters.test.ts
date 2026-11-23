@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { WorkspaceApplicationService } from "../../src/server/application/workspace-application-service.js";
 import { ConfigurationProjection } from "../../src/server/configuration-admin/configuration-projection.js";
 import { executionPolicyRoots, writeExecutionPolicy } from "../../src/server/configuration-admin/configuration-execution-policy.js";
@@ -231,6 +234,32 @@ function captureFixture(current: ReturnType<typeof fixture>) {
 }
 
 describe("backend-normalized application adapters", () => {
+  it("withdraws thread presentation when a configured local symlink changes its destination", async () => {
+    const current = fixture();
+    const directory = realpathSync(mkdtempSync(join(tmpdir(), "sedes-presentation-root-")));
+    try {
+      const target = join(directory, "original");
+      const replacement = join(directory, "other");
+      const alias = join(directory, "alias");
+      mkdirSync(target); mkdirSync(replacement); symlinkSync(target, alias, "dir");
+      const document = new ConfigurationRepository(current.database).get(current.scope).configuration;
+      const root = current.database.transaction(() => writeExecutionPolicy(current.database, current.scope, current.environmentId, {
+        ...document, executionEnvironments: document.executionEnvironments.map(host =>
+          host.id === current.environmentId ? {...host, workspaceRoots:[alias]} : host),
+      }).roots[0]!)();
+      current.database.prepare("UPDATE workspaces SET canonical_path=?, authority_root_id=?, environment_configuration_revision=? WHERE id=?")
+        .run(target, root.id, root.generation, current.workspaceId);
+      const store = new DatabaseConversationTargetStore({database: current.database, bindings: new ConversationBindingRepository(current.database),
+        bindingDetails:new Map(), registry:{driver:()=>({})} as never, environments:{} as never});
+      const present = () => store.presentationForThread(current.scope, current.threadId);
+      await expect(present()).resolves.toMatchObject({workspace:{authorityRootId:root.id}});
+      unlinkSync(alias); symlinkSync(replacement, alias, "dir");
+      expect(await present()).not.toHaveProperty("workspace");
+      unlinkSync(alias);
+      expect(await present()).not.toHaveProperty("driver");
+    } finally { current.database.close(); rmSync(directory, {recursive:true,force:true}); }
+  });
+
   it("publishes durable copy-only backend IDs without runtime attachment", async () => {
     const current = fixture();
     const { summaries, application, boundary } = captureFixture(current);

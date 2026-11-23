@@ -1,7 +1,8 @@
 import { launchAdmission } from "../../src/server/backends/provider-policy-admission.js";
 import { runtimeLaunchDigest } from "../../src/server/backends/provider-launch-digest.js";
-import {attachFixturePolicy} from "../helpers/execution-policy-fixture.js";
+import { attachFixturePolicy, installFixturePolicy } from "../helpers/execution-policy-fixture.js";
 import { createSidecarFramedCarrier } from "../helpers/persistent-sidecar-framed-fixture.js";
+import { createCodexRuntimeTransport } from "../../src/server/backends/codex/runtime/codex-runtime-transport.js";
 import { CodexRemoteRuntimeSupervisor } from "../../src/server/backends/codex/runtime/codex-remote-runtime-supervisor.js";
 import { CodexServerRequestRouter } from "../../src/server/backends/codex/codex-server-request-router.js";
 import { codexRuntimeMethod } from "../../src/server/backends/codex/runtime/codex-runtime-protocol.js";
@@ -15,13 +16,13 @@ import { sidecarAbandonmentEvidenceCarriesWork } from "../../src/server/sidecar/
 import type { ExecutionEnvironmentChannelProvider } from "../../src/server/execution/environment-channel.js";
 import { CodexSidecarRuntimeConnection, registerCodexRuntimeHost } from "../../src/server/backends/codex/runtime/codex-sidecar-runtime.js";
 
-const native = vi.hoisted(() => ({ launches: 0, closes: 0, cleanupFailure: false }));
+const native = vi.hoisted(() => ({ launches: 0, closes: 0, cleanupFailure: false, beforeReady: undefined as (() => Promise<void>) | undefined }));
 vi.mock("../../src/server/backends/codex/codex-runtime-config.js", () => ({
   resolveCodexRuntimeConfiguration: async (input: { startupEnvironmentVariables?: { PATH?: { kind: string; value?: string } }; connection: { ownership: string; channel: { codexHome?: string } } }) => ({ ...input,
     ...(input.connection.ownership === "owned" ? { childEnvironment: input.startupEnvironmentVariables?.PATH?.kind === "literal" ? { PATH: input.startupEnvironmentVariables.PATH.value } : {}, codexHome: input.connection.channel.codexHome } : {}),
   }),
 }));
-vi.mock("../../src/server/backends/codex/runtime/codex-runtime-transport.js", () => ({ createCodexRuntimeTransport: () => ({}) }));
+vi.mock("../../src/server/backends/codex/runtime/codex-runtime-transport.js", () => ({ createCodexRuntimeTransport: vi.fn(() => ({})) }));
 vi.mock("../../src/server/backends/codex/codex-daemon-supervisor.js", async () => {
   const { CodexSharedClientFacade } = await import("../../src/server/backends/codex/codex-client-facade.js");
   return { CodexDaemonSupervisor: class {
@@ -31,7 +32,7 @@ vi.mock("../../src/server/backends/codex/codex-daemon-supervisor.js", async () =
       latestGeneration: () => 1, retireGeneration: async () => {},
     });
     constructor() { native.launches++; }
-    async start() { this.client.updateLifecycle({ state: "ready", generation: 1 }); }
+    async start() { await native.beforeReady?.(); this.client.updateLifecycle({ state: "ready", generation: 1 }); }
     snapshot() { return { state: "ready", ...(native.cleanupFailure ? { cleanupUncertainty: {} } : {}) }; }
     async close() { native.closes++; if (native.cleanupFailure) throw new Error("native_cleanup_unproven"); }
   } };
@@ -55,7 +56,7 @@ function fixture(config: Parameters<CodexRuntimeHostRegistry["ensure"]>[0] = con
   const hosts = new CodexRuntimeHostRegistry({ scope, executionEnvironmentId: "remote", environment: {}, environmentChannel: {} as ExecutionEnvironmentChannelProvider, services });
   return { services, hosts, epoch, archive };
 }
-beforeEach(() => { native.launches = 0; native.closes = 0; native.cleanupFailure = false; });
+beforeEach(() => { native.launches = 0; native.closes = 0; native.cleanupFailure = false; native.beforeReady = undefined; });
 
 it("reports native-store refusals over runtime.ensure before launch and keeps private failures off the wire", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "codex-ensure-lock-"));
@@ -191,6 +192,7 @@ it("reports forced cleanup failure over the carrier and retries only the retaine
   const authority = { scope: { ...scope, executionEnvironmentId: "remote", backendInstanceId: "backend" }, runtimeId: host.runtimeId, controllerId: String(f.epoch) };
   try {
     await carrier.start();
+    expect(await connection.lookup(configuration)).toBe(host.runtimeId);
     const close = vi.spyOn(f.hosts.getRuntime(host.runtimeId).supervisor, "close").mockRejectedValueOnce(new Error("unexpected_shutdown_error"));
     await expect(connection.stop(authority, (await connection.inspect(authority)).revision, true)).rejects.toMatchObject({
       name: "SidecarOperationError", code: "sidecar_operation_failed",
@@ -230,11 +232,48 @@ it("looks up retained runtimes and permits receipt recovery while new admission 
   await f.hosts.stop(host.runtimeId, (await f.hosts.inspect(host.runtimeId)).revision, false);
 });
 
+it("binds the original launch before initialize and fences later replacements against installed policy", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "codex-launch-stamp-"));
+  const owned = { ...configuration, connection: { ownership: "owned" as const, channel: { type: "process_stdio" as const, executablePath: "/usr/bin/false", workingDirectory: directory, codexHome: directory } } };
+  const changed = { ...owned, startupEnvironmentVariables: { TEST: { kind: "literal" as const, value: "new" } } };
+  const f = fixture(owned);
+  const carrier = await createSidecarFramedCarrier();
+  const detach = registerCodexRuntimeHost({ getExecutionPolicy: () => f.services.executionPolicy(f.epoch), registry: carrier.hostRegistry,
+    channel: carrier.hostChannel, hosts: f.hosts, services: f.services, controllerEpoch: f.epoch, onDetach: () => f.services.detach(f.epoch) });
+  let initializing!: () => void, release!: () => void;
+  const entered = new Promise<void>(resolve => { initializing = resolve; });
+  const hold = new Promise<void>(resolve => { release = resolve; });
+  native.beforeReady = () => { initializing(); return hold; };
+  const remote = new CodexSidecarRuntimeConnection(carrier.mainChannel);
+  try {
+    await carrier.start();
+    const launching = remote.ensure(owned);
+    await entered;
+    const original = codexGrant(owned);
+    const digest = original.backends[0]!.launchDigest;
+    expect(f.hosts.observedLaunchDigest("backend")).toBe(digest);
+    const spawn = vi.mocked(createCodexRuntimeTransport).mock.calls.at(-1)![0].assertLaunchAdmission!;
+    expect(spawn).not.toThrow();
+    installFixturePolicy(f.services, f.epoch, serviceConfiguration, codexGrant(changed));
+    expect(spawn).toThrow("backend_policy_denied");
+    release();
+    await expect(launching).rejects.toMatchObject({ code: "backend_policy_denied" });
+    await expect(remote.ensure(changed)).rejects.toMatchObject({ code: "codex_runtime_configuration_restart_required" });
+    expect(f.hosts.observedLaunchDigest("backend")).toBe(digest);
+    installFixturePolicy(f.services, f.epoch, serviceConfiguration, { ...original, backends: original.backends.map(grant => ({ ...grant, generation: 2 })) });
+    expect(spawn).toThrow("backend_policy_denied");
+    const host = await f.hosts.lookup(owned, f.epoch);
+    expect(host).toBeDefined();
+    expect(native.launches).toBe(1);
+    await f.hosts.stop(host!.runtimeId, (await f.hosts.inspect(host!.runtimeId)).revision, false);
+  } finally { release(); remote.close(); detach(); await carrier.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
 it("reattaches across pending startup edits while preserving native identity", async () => {
   const f = fixture();
   const host = await f.hosts.ensure(configuration, f.epoch);
   const desired = { ...configuration, startupEnvironmentVariables: { TEST_START: { kind: "literal" as const, value: "new" } } };
-  await expect(f.hosts.ensure(desired, f.epoch)).resolves.toBe(host);
+  await expect(f.hosts.ensure(desired, f.epoch)).rejects.toThrow("codex_runtime_configuration_restart_required");
   await expect(f.hosts.lookup(desired, f.epoch)).resolves.toBe(host);
   await expect(f.hosts.lookup({ ...desired, connection: { ...desired.connection, channel: { type: "unix_websocket", socketPath: "/changed" } } }, f.epoch)).rejects.toThrow("restart_required");
   await expect(f.hosts.lookup({ ...desired, connections: [{ ...desired.connections[0]!, ownerPrincipalId: "intruder" }] }, f.epoch)).rejects.toThrow("scope_denied");
@@ -258,10 +297,13 @@ it("reads the applied owned PATH across pending startup edits and changes it onl
   launchAdmission({ getExecutionPolicy }, "codex_app_server", "backend", codexGrant(owned).backends[0]!.launchDigest).bind(host);
   const authority = () => ({ scope: { ...scope, executionEnvironmentId: "remote", backendInstanceId: "backend" }, runtimeId: host.runtimeId, controllerId: String(f.epoch) });
   try {
-    await carrier.start(); await connection.attach(authority(), () => {});
+    await carrier.start();
+    await expect(connection.attach(authority(), () => {})).rejects.toMatchObject({ code: "codex_runtime_not_attached" });
+    expect(await connection.lookup(owned)).toBe(host.runtimeId);
+    await connection.attach(authority(), () => {});
     expect(await connection.appliedOwnedPath(authority())).toBe("/applied/bin");
     const appliedFingerprint = (await f.hosts.inspect(host.runtimeId)).startupEnvironmentFingerprint;
-    await expect(f.hosts.ensure(desired, f.epoch)).resolves.toBe(host);
+    await expect(f.hosts.ensure(desired, f.epoch)).rejects.toThrow("codex_runtime_configuration_restart_required");
     expect(await f.hosts.lookup(desired, f.epoch)).toBe(host);
     expect(await connection.appliedOwnedPath(authority())).toBe("/applied/bin");
     // A new main-server supervisor knows only desired configuration. It must

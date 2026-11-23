@@ -1,6 +1,7 @@
 import { environmentVariableOverridesSchema } from "../../../../shared/protocol/environment-variables.js";
 import { resolvedEnvironmentVariablesSchema } from "../../../../internal/sidecar-protocol/environment-variables-v1.js";
 import { normalizedAbsolutePath } from "../../../../shared/absolute-path.js";
+import { boundedAgentToolPath, MAX_AGENT_TOOL_PATH_BYTES } from "../../../../internal/agent-tool-cli-protocol/path-limits.js";
 import { isAgentToolCliEndpoint } from "../../../../internal/agent-tool-cli-protocol/local-endpoint.js";
 import { z } from "zod";
 import type { BoundedJsonValue } from "../../../provider-protocol/json/bounded-json-snapshot.js";
@@ -110,8 +111,7 @@ export const claudeRuntimeQueryEnvironmentSchema = z.union([
     SEDES_AGENT_TOOL_CLI_MODE: z.enum(["progressive", "individual"]),
     PATH: z
       .string()
-      .max(16_384)
-      .refine((value) => !/[\u0000\r\n]/u.test(value)),
+      .refine((value) => boundedAgentToolPath(value, MAX_AGENT_TOOL_PATH_BYTES)),
   }),
 ]);
 

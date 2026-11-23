@@ -2731,6 +2731,28 @@ describe("CodexConversationBackendDriver", () => {
     ).toHaveLength(1);
   });
 
+  it("applies a tightened and then relaxed policy to the same warm model catalog", async () => {
+    const harness = new RpcHarness();
+    harness.enqueue("model/list", { data: [nativeModel()], nextCursor: null });
+    let allowed = ["low", "high"];
+    const policy: CompiledBackendModelPolicy = { ...catalogModelPolicy,
+      filterReasoningEfforts: (_model, efforts) => efforts.filter(effort => allowed.includes(effort)),
+    };
+    const target = driver(harness, connection, undefined, policy);
+    const models = async () => (await target.catalog({ scope, workspace })).models;
+    expect((await models())[0]).toMatchObject({ isDefault: true, defaultReasoningEffort: "low" });
+    allowed = ["high"];
+    const restricted = (await models())[0];
+    expect(restricted?.supportedReasoningEfforts).toEqual(["high"]);
+    expect(restricted).not.toHaveProperty("defaultReasoningEffort");
+    expect(restricted).not.toHaveProperty("isDefault");
+    allowed = [];
+    expect(await models()).toEqual([]);
+    allowed = ["low", "high"];
+    expect((await models())[0]).toMatchObject({ isDefault: true, supportedReasoningEfforts: ["low", "high"] });
+    expect(harness.calls.filter(call => call.method === "model/list")).toHaveLength(1);
+  });
+
   it("refetches the model catalog when the daemon lifecycle generation changes", async () => {
     const harness = new RpcHarness();
     harness.enqueue("model/list", {

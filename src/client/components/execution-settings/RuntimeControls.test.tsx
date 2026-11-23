@@ -305,6 +305,32 @@ describe("runtime administration controls", () => {
     expect((await screen.findAllByRole("menuitem")).map((item) => item.textContent)).toEqual(["Disconnect", "Stop"]);
   });
 
+  it("offers an impact-confirmed restart for a known sidecar policy conflict", async () => {
+    const api = controls();
+    api.configurationLifecycleImpact.mockResolvedValue({ ...impact, action: "restart", expiresAt: new Date(Date.now() + 120_000).toISOString() });
+    render(<RuntimeControls controls={api} revision={7} resourceKind="environment" resourceId={runtime.resourceId} label="Build host"
+      runtime={{ ...runtime, connectionState: "policy_conflict", supportedActions: ["restart", "stop", "disconnect"] }}
+      disabled={false} onRuntime={vi.fn()} onRefresh={vi.fn(async () => true)} />);
+    expect(screen.getByLabelText("Header status")).toHaveTextContent("Execution policy conflict");
+    expect(await availableMenuItems()).toEqual(["Disconnect", "Stop"]);
+    fireEvent.click(within(headerActions()).getByRole("button", { name: "Restart sidecar" }));
+    const confirmation = await screen.findByRole("dialog", { name: "Restart Build host?" });
+    expect(confirmation).toHaveTextContent("Terminal shell will end");
+    expect(api.configurationLifecycle).not.toHaveBeenCalled();
+    fireEvent.click(within(confirmation).getByRole("button", { name: "Confirm restart" }));
+    await waitFor(() => expect(api.configurationLifecycle).toHaveBeenCalledWith(expect.objectContaining({
+      action: "restart", expectedRevision: 7, expectedIncarnation: impact.incarnation, impactToken: impact.token,
+    })));
+  });
+
+  it("shows the host-confirmed provider restart requirement in Activity", () => {
+    render(<RuntimeControls controls={controls()} revision={7} resourceKind="backend" resourceId="claude" label="Claude"
+      runtime={{ ...runtime, resourceKind: "backend", resourceId: "claude", effects: [
+        { component: "provider_launch", subjectId: "backend:claude", desiredRevision: 7, effectiveRevision: 6, state: "restart_backend" },
+      ] }} disabled={false} onRuntime={vi.fn()} onRefresh={vi.fn(async () => true)} />);
+    expect(screen.getByLabelText("Technical details")).toHaveTextContent("ConfigurationRestart backend required");
+  });
+
   it("explains paused controls and lists technical details as facts", async () => {
     render(<RuntimeControls controls={controls()} revision={7} resourceKind="environment" resourceId={runtime.resourceId} label="Build host"
       runtime={runtime} disabled disabledReason="Refresh the configuration before issuing runtime commands." onRuntime={vi.fn()} onRefresh={vi.fn()} />);

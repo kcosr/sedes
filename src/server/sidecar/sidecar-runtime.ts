@@ -1,3 +1,4 @@
+import { workspaceRootGrant } from "../execution/workspace-root-grant.js";
 import { withAbort } from "../runtime/with-abort.js";
 import { SidecarPolicyController, type PolicyConnection, type SidecarPolicyRecovery } from "./sidecar-policy-controller.js";
 import type { InstalledExecutionPolicy } from "../../internal/sidecar-protocol/execution-policy.js";
@@ -280,7 +281,7 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
   }
 
   policyStatus() { return this.#policy.status; }
-  conflictsWithDesiredPolicy(): boolean { return this.#policy.conflict === true; }
+  conflictsWithDesiredPolicy(incarnation: string): boolean { return this.#policy.requiresRecovery(incarnation); }
   policyBackendGeneration(id: string): number | undefined { return this.#policy.backendGeneration(id); }
   acquirableTargetGeneration(backendId: string, targetId: string): number | undefined {
     return this.#canAttach() ? this.#policy.targetGeneration(backendId, targetId, true) : undefined;
@@ -302,8 +303,12 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
   }
 
   async withTargetAuthorization<T>(backendId: string, targetId: string, generation: number, operation: () => T, signal?: AbortSignal): Promise<T> {
+    signal?.throwIfAborted();
     if (this.acquirableTargetGeneration(backendId, targetId) !== generation) throw new SidecarUnavailableError();
-    const lease = await this.acquireOperation(this.#scope, this.#executionEnvironmentId, signal ?? this.#attachmentController.signal);
+    const lease = await this.acquireOperation(this.#scope, this.#executionEnvironmentId, signal ?? this.#attachmentController.signal).catch(error => {
+      signal?.throwIfAborted();
+      throw error;
+    });
     try {
       if (this.#current?.session !== lease.session || this.#policy.targetGeneration(backendId, targetId) !== generation)
         throw new SidecarUnavailableError();
@@ -324,9 +329,26 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
       this.policyBackendGeneration(backendId) !== backendGeneration) throw new SidecarUnavailableError();
     return this.#policy.leaseRoute(capabilityGeneration, backendId);
   }
-  async confirmWorkspacePolicy(): Promise<void> {
-    if (this.#current && this.#canAttach() && this.#policy.status?.installed && !this.#policy.conflict) return;
-    const lease = await this.acquireOperation(this.#scope, this.#executionEnvironmentId, this.#attachmentController.signal);
+  async confirmWorkspacePolicy(
+    path?: string,
+    binding?: {readonly authorityRootId?: string; readonly authorityRevision: number},
+    signal = this.#attachmentController.signal,
+  ): Promise<void> {
+    if (!this.#canAttach() || this.#policy.conflict) throw new SidecarUnavailableError();
+    const desired = this.#readDesiredPolicy();
+    const grant = path === undefined ? undefined : workspaceRootGrant(desired.snapshot.roots, path, binding);
+    if (path !== undefined && !grant) return;
+    const current = this.#policy.status?.installed;
+    if (this.#current && current) {
+      if (current.revision === desired.revision && current.digest === desired.digest) return;
+      const confirmed = this.#policy.workspaceRoots();
+      const relevant = grant ? [grant] : desired.snapshot.roots;
+      if (relevant.every(root => confirmed.some(entry => entry.id === root.id && entry.generation === root.generation))) return;
+    }
+    // Explicitly opening a new root may retry its pending policy during
+    // backoff. An already-confirmed root has returned above.
+    if (this.#current) await this.synchronizePolicy(signal, true);
+    const lease = await this.acquireOperation(this.#scope, this.#executionEnvironmentId, signal);
     lease.release();
   }
   acquirableWorkspaceRoots() { return this.#canAttach() ? this.#policy.workspaceRoots(true) : []; }

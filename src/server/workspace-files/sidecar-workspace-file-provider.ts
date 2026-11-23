@@ -83,7 +83,10 @@ function combineAbortSignals(
 
 import { recoverSidecarOperation } from "../sidecar/sidecar-operation-recovery.js";
 
-type SelectFilePolicyRoot = (path: string, workspaceId?: string, rootId?: string) => {path: string; key: string} | undefined;
+type CapturedFileRoot = { readonly path: string; readonly key: string; readonly assertCurrent: () => void };
+
+type FileRootBinding = {readonly authorityRootId: string; readonly authorityRevision: number};
+type SelectFilePolicyRoot = (path: string, workspaceId?: string, rootId?: string, expected?: FileRootBinding) => {path: string; key: string} | undefined;
 
 export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
   readonly #scope: RequestScope;
@@ -255,17 +258,23 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
     if (primaryRoot.rootId !== "primary") {
       throw new Error("workspace_file_linked_worktree_primary_required");
     }
-    return await this.#operation(
-      scope,
-      primaryRoot,
-      async (session, rootHandle, operationSignal) =>
-        await session.call(
-          workspaceFilesDiscoverLinkedWorktreesOperation,
-          { rootHandle, policyRootPaths: [...this.#policyRoots()] },
-          ...sidecarCallOptions(operationSignal),
-        ),
-      signal,
-    );
+    const candidates = this.#policyRoots().flatMap(path => {
+      const selection = this.#captureRoot(path);
+      return selection ? [selection] : [];
+    });
+    const deepestFirst = [...candidates].sort((a, b) => b.path.length - a.path.length);
+    const authorized = (path: string) => {
+      const original = deepestFirst.find(candidate => isWithin(candidate.path, path));
+      if (!original) return false;
+      try { original.assertCurrent(); return true; } catch { return false; }
+    };
+    return this.#operation(scope, primaryRoot, async (session, rootHandle, operationSignal) => {
+      const result = await session.call(workspaceFilesDiscoverLinkedWorktreesOperation, {
+        rootHandle, policyRootPaths: candidates.map(candidate => candidate.path),
+      }, ...sidecarCallOptions(operationSignal));
+      return { ...result, worktrees: result.worktrees.filter(worktree =>
+        authorized(worktree.canonicalPath)) };
+    }, signal);
   }
 
   async removeLinkedWorktree(
@@ -274,8 +283,10 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
     signal?: AbortSignal,
   ): Promise<void> {
     this.#assert(scope, target.primaryRoot.environmentId);
-    const selection = this.#captureRoot(target.canonicalCheckoutPath);
-    if (!selection) throw new WorkspaceFileRootUnavailableError();
+    const primary = this.#captureTarget(target.primaryRoot);
+    const linked = this.#captureTarget(target.linkedRoot);
+    const selection = this.#captureRoot(target.canonicalCheckoutPath, undefined, undefined, target.checkoutAuthority);
+    if (!selection || !target.checkoutAuthority) throw new WorkspaceFileRootUnavailableError();
     let lease: Awaited<
       ReturnType<
         SidecarRuntimeOwner<SidecarClientSession>["acquireOperation"]
@@ -291,28 +302,34 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
       throw classifyError(error);
     }
     let rootHandle: string;
+    let linkedRootHandle: string;
     try {
       rootHandle = await this.#rootHandle(
         lease,
         target.primaryRoot.workspaceId,
         target.primaryRoot.rootId,
         this.#rootKind(target.primaryRoot),
-        target.primaryRoot.canonicalPath,
+        target.primaryRoot.canonicalPath, primary,
         signal,
       );
+      linkedRootHandle = await this.#rootHandle(lease, target.linkedRoot.workspaceId, target.linkedRoot.rootId,
+        "linked_worktree", target.linkedRoot.canonicalPath, linked, signal);
     } catch (error) {
       lease.release();
       throw classifyError(error);
     }
     const operationId = randomUUID();
     try {
+      primary.assertCurrent();
+      linked.assertCurrent();
       selection.assertCurrent();
       await lease.session
         .call(
           workspaceFilesRemoveLinkedWorktreeOperation,
           {
             operationId,
-            rootHandle,
+            rootHandle, linkedRootHandle,
+            checkoutAuthority: target.checkoutAuthority,
             canonicalCheckoutPath: target.canonicalCheckoutPath,
             policyRootPath: selection.path,
             canonicalGitDir: target.canonicalGitDir,
@@ -467,6 +484,7 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
     signal?: AbortSignal,
   ): Promise<T> {
     this.#assert(scope, root.environmentId);
+    const primary = this.#captureTarget(root);
     const operationSignal = signal ?? new AbortController().signal;
     let lease: Awaited<
       ReturnType<
@@ -503,9 +521,10 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
         root.workspaceId,
         root.rootId,
         this.#rootKind(root),
-        root.canonicalPath,
+        root.canonicalPath, primary,
         signal,
       );
+      primary.assertCurrent();
       registration = lease.session.registerIncomingWorkspaceFileDownload({
         streamId,
         initialCreditBytes,
@@ -524,6 +543,7 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
         },
         ...sidecarCallOptions(signal),
       );
+      primary.assertCurrent();
       let streamClaimed = false;
       const source: WorkspaceFileDownloadSource = Object.freeze({
         ...metadata,
@@ -537,11 +557,13 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
           let deliveredBytes = 0;
           const effectiveSignal = combineAbortSignals(signal, streamSignal);
           for (;;) {
+            primary.assertCurrent();
             effectiveSignal?.throwIfAborted();
             const item = await queue.take(
               effectiveSignal,
               WORKSPACE_FILE_DOWNLOAD_IDLE_MILLISECONDS,
             );
+            primary.assertCurrent();
             if (item.kind === "terminal") {
               if (
                 item.terminal.outcome !== "complete" ||
@@ -562,11 +584,14 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
             if (deliveredBytes > metadata.sizeBytes) {
               throw new WorkspaceFileProviderUnavailableError();
             }
+            primary.assertCurrent();
             await registration!.addCredit(item.record.bytes.byteLength);
           }
         },
       });
-      return await operation(source);
+      const result = await operation(source);
+      primary.assertCurrent();
+      return result;
     } catch (error) {
       if (signal?.aborted) throw signal.reason ?? error;
       throw classifyError(error);
@@ -588,6 +613,7 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
     input: WorkspaceFileRootWriteRequest,
   ) {
     this.#assert(scope, root.environmentId);
+    const primary = this.#captureTarget(root);
     let lease: Awaited<
       ReturnType<
         SidecarRuntimeOwner<SidecarClientSession>["acquireOperation"]
@@ -609,8 +635,9 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
         root.workspaceId,
         root.rootId,
         this.#rootKind(root),
-        root.canonicalPath,
+        root.canonicalPath, primary,
       );
+      primary.assertCurrent();
     } catch (error) {
       lease.release();
       // Root admission is idempotent setup, not the user's write. Losing its
@@ -902,6 +929,7 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
     listener: () => void,
   ): Promise<WorkspaceFileWatchSubscription> {
     this.#assert(scope, root.environmentId);
+    const primary = this.#captureTarget(root);
     const controller = new AbortController();
     const failure = deferred<void>();
     let closed = false;
@@ -914,7 +942,22 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
       active.removeFailure();
       active.lease.release();
     };
+    const close = () => {
+      if (closed) return;
+      closed = true;
+      controller.abort();
+      const active = current;
+      releaseCurrent();
+      if (active) void active.lease.session.call(workspaceFilesWatchCloseOperation, {
+        subscriptionHandle: active.subscriptionHandle,
+      }).catch(() => undefined);
+    };
+    const notify = () => {
+      try { primary.assertCurrent(); } catch { close(); failure.resolve(); return; }
+      listener();
+    };
     const open = async (conservativeInvalidation: boolean): Promise<void> => {
+      primary.assertCurrent();
       const lease = await this.#runtime.acquireWatch(
         scope,
         root.environmentId,
@@ -926,8 +969,9 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
           root.workspaceId,
           root.rootId,
           this.#rootKind(root),
-          root.canonicalPath,
+          root.canonicalPath, primary, controller.signal,
         );
+        primary.assertCurrent();
         const closeRemote = (subscriptionHandle: string) => {
           lease.session.retireWatch(subscriptionHandle);
           void lease.session
@@ -944,19 +988,13 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
             onLateSuccess: (opened) => closeRemote(opened.subscriptionHandle),
           },
         );
-        if (closed || this.#closed) {
-          // The subscription closed while this open was in flight: close the
-          // remote watcher it created and drop its in-flight events.
-          closeRemote(subscriptionHandle);
-          throw new WorkspaceFileProviderUnavailableError();
-        }
-        const removeInvalidation = lease.session.registerInvalidation(
-          subscriptionHandle,
-          listener,
-        );
+        let removeInvalidation: (() => void) | undefined;
         let remote!: RemoteWatch;
         let removeFailure: () => void;
         try {
+          if (closed || this.#closed) throw new WorkspaceFileProviderUnavailableError();
+          primary.assertCurrent();
+          removeInvalidation = lease.session.registerInvalidation(subscriptionHandle, notify);
           removeFailure = lease.session.registerWatchFailure(
             subscriptionHandle,
             () => {
@@ -966,7 +1004,8 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
             },
           );
         } catch (error) {
-          removeInvalidation();
+          removeInvalidation?.();
+          closeRemote(subscriptionHandle);
           throw error;
         }
         remote = {
@@ -981,7 +1020,7 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
           releaseCurrent();
           void recover();
         });
-        if (conservativeInvalidation) listener();
+        if (conservativeInvalidation) notify();
       } catch (error) {
         lease.release();
         throw error;
@@ -1015,20 +1054,7 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
     }
     return {
       failed: failure.promise,
-      close: () => {
-        if (closed) return;
-        closed = true;
-        controller.abort();
-        const active = current;
-        releaseCurrent();
-        if (active) {
-          void active.lease.session
-            .call(workspaceFilesWatchCloseOperation, {
-              subscriptionHandle: active.subscriptionHandle,
-            })
-            .catch(() => undefined);
-        }
-      },
+      close,
     };
   }
 
@@ -1052,6 +1078,7 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
     signal?: AbortSignal,
   ): Promise<T> {
     this.#assert(scope, root.environmentId);
+    const primary = this.#captureTarget(root);
     let lease: Awaited<
       ReturnType<
         SidecarRuntimeOwner<SidecarClientSession>["acquireOperation"]
@@ -1068,11 +1095,10 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
       throw classifyError(error);
     }
     const rootKind = this.#rootKind(root);
-    const selected = this.#selectRoot(root.canonicalPath, root.workspaceId, root.rootId);
-    const policyRootPath = selected?.path;
+    const policyRootPath = primary.path;
     const candidateKey = root.rootId === WORKSPACE_FILE_LINK_CANDIDATE_ROOT_ID
       ? rootHandleKey(root.workspaceId, root.rootId, rootKind, root.canonicalPath,
-        selected?.key)
+        primary.key)
       : undefined;
     if (candidateKey) {
       this.#candidateRootUsers.set(candidateKey, (this.#candidateRootUsers.get(candidateKey) ?? 0) + 1);
@@ -1084,10 +1110,13 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
         root.workspaceId,
         root.rootId,
         rootKind,
-        root.canonicalPath,
+        root.canonicalPath, primary,
         signal,
       );
-      return await operation(lease.session, rootHandle, signal);
+      primary.assertCurrent();
+      const result = await operation(lease.session, rootHandle, signal);
+      primary.assertCurrent();
+      return result;
     } catch (error) {
       outcomeUnknown = signal?.aborted === true || isUncertainSidecarMutationError(error);
       if (signal?.aborted) throw signal.reason ?? error;
@@ -1099,6 +1128,7 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
           rootKind,
           declaredPath: root.canonicalPath,
           policyRootPath,
+          assertCurrent: primary.assertCurrent,
         });
       }
       lease.release();
@@ -1119,6 +1149,7 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
       readonly rootKind: "primary" | "supplemental" | "linked_worktree" | "link_only";
       readonly declaredPath: string;
       readonly policyRootPath: string | undefined;
+      readonly assertCurrent: () => void;
     },
   ): void {
     const users = (this.#candidateRootUsers.get(key) ?? 1) - 1;
@@ -1142,6 +1173,7 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
     // An interrupted open may still be admitted. Reopening the same admission
     // joins or returns it, so the root closes without waiting for another read.
     if (!outcomeUnknown || !admissionId || !open.policyRootPath) return;
+    try { open.assertCurrent(); } catch { return; }
     void lease.session
       .call(workspaceFilesRootOpenOperation, {
         admissionId,
@@ -1163,11 +1195,11 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
     rootId: WorkspaceFileRootId,
     rootKind: "primary" | "supplemental" | "linked_worktree" | "link_only",
     canonicalPath: string,
+    selected: CapturedFileRoot,
     signal?: AbortSignal,
   ): Promise<string> {
-    const selected = this.#selectRoot(canonicalPath, workspaceId, rootId);
-    const policyRootPath = selected?.path;
-    if (!selected || !policyRootPath) throw new WorkspaceFileRootUnavailableError();
+    selected.assertCurrent();
+    const policyRootPath = selected.path;
     const key = rootHandleKey(workspaceId, rootId, rootKind, canonicalPath, selected.key);
     let generation = this.#handles.get(lease.carrierGeneration);
     if (!generation) {
@@ -1195,6 +1227,11 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
       },
       ...sidecarCallOptions(signal),
     );
+    try { selected.assertCurrent(); } catch (error) {
+      this.#admissionIds.delete(key);
+      void lease.session.call(workspaceFilesRootCloseOperation, { rootHandle }).catch(() => undefined);
+      throw error;
+    }
     generation.set(key, rootHandle);
     return rootHandle;
   }
@@ -1206,16 +1243,22 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
     );
   }
 
-  #captureRoot(candidate: string, workspaceId?: string, rootId?: string) {
-    const selected = this.#selectRoot(candidate, workspaceId, rootId);
+  #captureTarget(root: WorkspaceFileRootTarget): CapturedFileRoot {
+    const selected = this.#captureRoot(root.canonicalPath, root.workspaceId, root.rootId);
+    if (!selected) throw new WorkspaceFileRootUnavailableError();
+    return selected;
+  }
+
+  #captureRoot(candidate: string, workspaceId?: string, rootId?: string, expected?: FileRootBinding) {
+    const selected = this.#selectRoot(candidate, workspaceId, rootId, expected);
     if (!selected) return undefined;
-    return {path: selected.path, assertCurrent: () => {
-      if (!this.#enabled() || this.#selectRoot(candidate, workspaceId, rootId)?.key !== selected.key)
+    return {...selected, assertCurrent: () => {
+      if (this.#closed || !this.#enabled() || this.#selectRoot(candidate, workspaceId, rootId, expected)?.key !== selected.key)
         throw new WorkspaceFileRootUnavailableError();
     }};
   }
-  #selectRoot(candidate: string, workspaceId?: string, rootId?: string) {
-    if (this.#selectPolicyRoot) return this.#selectPolicyRoot(candidate, rootId === WORKSPACE_FILE_LINK_CANDIDATE_ROOT_ID ? undefined : workspaceId, rootId);
+  #selectRoot(candidate: string, workspaceId?: string, rootId?: string, expected?: FileRootBinding) {
+    if (this.#selectPolicyRoot) return this.#selectPolicyRoot(candidate, rootId === WORKSPACE_FILE_LINK_CANDIDATE_ROOT_ID ? undefined : workspaceId, rootId, expected);
     const path = this.#policyRoots()
       .filter((root) => isWithin(root, candidate))
       .sort((left, right) => right.length - left.length)[0];

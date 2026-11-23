@@ -20,7 +20,10 @@ A validated workspace carries its authority root ID and generation. Files
 handles also depend on the Files capability generation and the carrier that
 issued them. Adding a narrower allowed directory leaves an existing workspace
 bound to its original root. Withdrawing and regranting a root invalidates
-handles issued under the former grant.
+handles issued under the former grant. Absolute file links and image and HTML
+captures require the thread workspace's original grant. Publication checks that
+grant again after asynchronous preparation, together with the grant for each
+file it read. An inline page requires the workspace grant alone.
 
 ## Contents
 
@@ -77,7 +80,11 @@ and prunable entries, and returns at most 32 candidates. The server repeats
 execution-environment admission and persists an opaque root ID tied to the
 live Git worktree identity; paths never become browser selector authority.
 Linked worktrees may be siblings of or directories beneath Primary and may
-overlap an explicitly attached broader supplemental root.
+overlap an explicitly attached broader supplemental root. Browsing a mapped
+subdirectory requires its Files grant. Removing the enclosing checkout also
+requires the original Primary and linked-root handles and the checkout grant
+validated for that removal. An incomplete scan retains missing candidates with
+current grants and clears selections whose grants have been withdrawn.
 
 Discovery is lazy and its admitted topology is cached. Application startup does
 no Git work. Opening the thread worktree selector, opening or returning to a

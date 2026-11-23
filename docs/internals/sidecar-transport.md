@@ -70,17 +70,26 @@ watches stay on their original connection.
 Reading the target picker uses saved settings and available readiness and
 health observations. It performs no remote health probes and opens no SSH
 connections. Selecting a target or starting work confirms that host's grants
-on demand. Explicit remote selection allows ten seconds for grant confirmation
-and provider health together. When Codex is already attaching to its native
-runtime, selection can wait for that attempt to finish. A save after an idle
-disconnect can also initiate delivery on
-the affected host. A known unsupported subject stays unavailable. After carrier loss, unchanged grants from the last
-confirmed incarnation keep targets and features selectable. A foreground driver call or
+on demand. Explicit remote selection allows ten seconds to confirm the grant and
+reacquire the carrier. Once admitted, provider health uses the provider’s own
+startup limit. When Codex is already attaching to its native runtime,
+selection can wait for that attempt to finish. Opening a newly saved workspace
+root can retry a pending application. An unchanged, confirmed root remains
+usable. A save after an idle disconnect can also initiate delivery on the
+affected host. A known unsupported subject stays unavailable. After carrier
+loss, unchanged grants from the last confirmed incarnation keep targets and
+features selectable. A foreground driver call or
 new turn on a held handle reacquires the carrier and confirms the target on its
 current controller before entering the provider. Discovery of a different
 incarnation discards the previous selection evidence. Exact settlement, such
 as download cancellation and shell result acknowledgement, uses controller
 authority even while policy synchronization or service draining is in progress.
+
+For a hosted backend, readiness can report the retained provider's launch
+digest, an explicitly empty registry entry, or no inventory observation. A
+confirmed exit clears the old digest so Settings shows the edit will apply on
+the next launch. Missing observations preserve evidence for the same service
+incarnation. A replacement service has to establish its own evidence.
 
 Main polls preparing subjects every two seconds and refreshes settled readiness
 every 30 seconds. Failed delivery is retried after 1, 2, 4, 8, 16 and 30

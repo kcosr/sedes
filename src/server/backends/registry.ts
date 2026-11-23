@@ -132,7 +132,7 @@ export class AgentBackendRegistry {
     this.factories.delete(key);
   }
 
-  driver(connection: AgentConnectionProfile): ConversationBackendDriver {
+  driver(connection: AgentConnectionProfile, authorizationSignal?: AbortSignal): ConversationBackendDriver {
     const factory = this.#factory(connection);
     const generation = factory.connectionGeneration?.(connection);
     if (factory.connectionGeneration && generation === undefined) throw new DomainError("runtime_unavailable", "The target is no longer available.", true);
@@ -146,7 +146,7 @@ export class AgentBackendRegistry {
       );
     }
     const key = backendKey(factory.scope, factory.instance.id);
-    const authorized = (operation: () => unknown, signal?: AbortSignal) => {
+    const authorized = (operation: () => unknown) => {
       const invoke = () => {
         if (this.#suspensions.has(key))
           throw new DomainError("runtime_unavailable", "Configuration change pending for this backend.", true);
@@ -157,7 +157,7 @@ export class AgentBackendRegistry {
         return operation();
       };
       return factory.withConnectionAuthorization && generation !== undefined
-        ? factory.withConnectionAuthorization(connection, generation, invoke, signal)
+        ? factory.withConnectionAuthorization(connection, generation, invoke, authorizationSignal)
         : invoke();
     };
     return new Proxy(driver, {
@@ -165,8 +165,7 @@ export class AgentBackendRegistry {
         const value: unknown = Reflect.get(target, property, target);
         if (typeof value !== "function") return value;
         return (...args: unknown[]) => {
-          const healthOptions = property === "health" ? args[0] as Parameters<ConversationBackendDriver["health"]>[0] : undefined;
-          const result = authorized(() => Reflect.apply(value, target, args), healthOptions?.waitForInitialization);
+          const result = authorized(() => Reflect.apply(value, target, args));
           const pending = this.#inFlight.get(key) ?? new Set<Promise<void>>();
           this.#inFlight.set(key, pending);
           const settled = Promise.resolve(result)

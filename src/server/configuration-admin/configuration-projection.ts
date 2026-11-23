@@ -68,11 +68,12 @@ export class ConfigurationProjection {
     for (const environment of document.executionEnvironments) {
       const snapshot = writeExecutionPolicy(this.database, scope, environment.id, document);
       const { fingerprint, operationsFingerprint } = environmentFingerprints(environment, snapshot);
-      const current = this.database.prepare(`SELECT kind, label, diagnostic_code AS diagnosticCode, configuration_fingerprint AS fingerprint,
+      const current = this.database.prepare(`SELECT owner_principal_id AS principalId, kind, label, diagnostic_code AS diagnosticCode, configuration_fingerprint AS fingerprint,
         operations_configuration_fingerprint AS operationsFingerprint FROM execution_environments
-        WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?`)
-        .get(scope.tenantId, scope.principalId, environment.id) as { kind: string; label: string; diagnosticCode: string | null; fingerprint: string; operationsFingerprint: string } | undefined;
+        WHERE tenant_id = ? AND id = ?`)
+        .get(scope.tenantId, environment.id) as { principalId: string; kind: string; label: string; diagnosticCode: string | null; fingerprint: string; operationsFingerprint: string } | undefined;
       if (current) {
+        if (current.principalId !== scope.principalId) throw new DomainError("not_found", "The environment identity is unavailable in this scope.");
         if (current.kind !== environment.kind) throw new DomainError("conflict", "The environment kind is immutable.");
         const authorityChanged = current.fingerprint !== fingerprint;
         const operationsChanged = current.operationsFingerprint !== operationsFingerprint;

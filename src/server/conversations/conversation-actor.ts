@@ -1063,7 +1063,11 @@ export class ConversationActor {
   submit(input: ApplicationSubmitTurnInput): Promise<SubmitTurnResult> {
     return this.#runStartingMutation(() =>
       this.#deliverPreparedInput(input, (prepared) =>
-        this.#nativeEffects.run(() => { this.#assertWorkspaceCurrent(); return this.#handle.submit(prepared); }),
+        this.#nativeEffects.run(() => {
+          this.#assertWorkspaceCurrent();
+          input.attachmentEvidence?.assertDeliverable?.();
+          return this.#handle.submit(prepared);
+        }),
       ),
     );
   }
@@ -1142,7 +1146,11 @@ export class ConversationActor {
       }
       const result = await this.#deliverPreparedInput(
         { ...input, target },
-        (prepared) => this.#nativeEffects.run(() => { this.#assertWorkspaceCurrent(); return this.#handle.steer(prepared); }),
+        (prepared) => this.#nativeEffects.run(() => {
+          this.#assertWorkspaceCurrent();
+          input.attachmentEvidence?.assertDeliverable?.();
+          return this.#handle.steer(prepared);
+        }),
       );
       if (target.kind === "turn" && result.backendTurnId !== target.turnId) {
         throw new BackendError({

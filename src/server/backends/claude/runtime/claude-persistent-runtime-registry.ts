@@ -1,4 +1,5 @@
-import { observedLaunchDigest } from "../../provider-policy-admission.js";
+import { SidecarOperationError } from "../../../../internal/sidecar-protocol/operation-registry.js";
+import { observedLaunchDigest, type ProviderLaunchAdmission } from "../../provider-policy-admission.js";
 import { configurationFingerprint } from "../../../config/configuration-fingerprint.js";
 import type { RequestScope } from "../../../identity/identity-provider.js";
 import type { ExecutionEnvironmentChannelProvider } from "../../../execution/environment-channel.js";
@@ -12,8 +13,10 @@ import { claudePersistentConfigurationSchema, type ClaudePersistentConfiguration
 
 export class ClaudePersistentRuntimeRegistry {
   readonly #hosts = new Map<string, { host: ClaudePersistentRuntimeHost; fingerprint: string; retire(force?: boolean, reason?: string): Promise<void> }>();
-  observedLaunchDigest(id: string): string | undefined {
-    return observedLaunchDigest(this.#hosts.get(id)?.host);
+  observedLaunchDigest(id: string): string | null | undefined {
+    const resident = this.#hosts.get(id);
+    if (resident) return observedLaunchDigest(resident.host);
+    return null;
   }
 
   constructor(readonly input: {
@@ -32,7 +35,7 @@ export class ClaudePersistentRuntimeRegistry {
     maximumJournaledOperations?: number;
   }) {}
 
-  ensure(raw: ClaudePersistentConfiguration, epoch: number): ClaudePersistentRuntimeHost {
+  ensure(raw: ClaudePersistentConfiguration, epoch: number, admission?: ProviderLaunchAdmission): ClaudePersistentRuntimeHost {
     const configuration = claudePersistentConfigurationSchema.parse(raw);
     this.input.services.assertController(epoch);
     if (configuration.tenantId !== this.input.scope.tenantId || configuration.principalId !== this.input.scope.principalId ||
@@ -40,16 +43,15 @@ export class ClaudePersistentRuntimeRegistry {
     const fingerprint = runtimeIdentityFingerprint(configuration);
     const existing = this.#hosts.get(configuration.backendInstanceId);
     if (existing) {
-      // Reuse the applied owner across startup-only edits, including after
-      // main-server restart. Only explicit retirement applies desired startup.
-      if (existing.fingerprint !== fingerprint) throw new Error("claude_persistent_configuration_restart_required");
+      // Existing-only lookup can reattach independently of this launch comparison.
+      if (existing.fingerprint !== fingerprint) throw new SidecarOperationError("claude_persistent_configuration_restart_required");
       return existing.host;
     }
     this.input.services.assertAdmission(epoch);
     const [major = 0, minor = 0] = process.versions.node.split(".").map(Number);
     if (!this.input.createRuntime && (major < 24 || (major === 24 && minor < 18))) throw new Error("claude_persistent_node_version_unsupported");
     const client = this.input.createRuntime?.(configuration) ?? new ClaudeManagedRuntimeOwner({
-      scope: configuration, environmentKind: "local", channels: this.input.environmentChannel,
+      assertLaunchAdmission: admission && (() => admission.assertInstalled(this.input.services)), scope: configuration, environmentKind: "local", channels: this.input.environmentChannel,
       artifact: this.input.artifact(), workingDirectory: configuration.configDirectory ?? "/",
       executablePath: configuration.executablePath, configDirectory: configuration.configDirectory,
       initializationTimeoutMs: configuration.initializationTimeoutMs,
@@ -123,6 +125,5 @@ export class ClaudePersistentRuntimeRegistry {
 }
 
 function runtimeIdentityFingerprint(configuration: ClaudePersistentConfiguration): string {
-  const { startupEnvironmentVariables: _startup, ...identity } = configuration;
-  return configurationFingerprint(identity);
+  return configurationFingerprint({ ...configuration, startupEnvironmentVariables: configuration.startupEnvironmentVariables ?? {} });
 }

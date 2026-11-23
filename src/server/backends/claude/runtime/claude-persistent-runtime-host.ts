@@ -289,7 +289,7 @@ export class ClaudePersistentRuntimeHost {
     const compactReplay = command.action === "compact" && !!this.#matchingCompactRecord(command.request);
     const permissionSettlement = command.action === "respond_permission" &&
       (this.#sessions.get(command.request.sessionId)?.permissionResponses.has(permissionKey(command.request)) ||
-        ((!this.#runtimeStopped && !this.#frozen || command.request.response.behavior === "deny") &&
+        (command.request.response.behavior === "deny" &&
           this.#sessions.get(command.request.sessionId)?.permissions.has(permissionKey(command.request))));
     try {
       if (!existingOpen && !retainedProbe && !retainedHistory && !permissionSettlement && !compactReplay &&

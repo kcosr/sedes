@@ -10,6 +10,7 @@ export function createCodexRuntimeTransport(input: {
   readonly scope: ProviderTransportScope;
   readonly configuration: ResolvedCodexRuntimeConfiguration;
   readonly environmentChannel: ExecutionEnvironmentChannelProvider;
+  readonly assertLaunchAdmission?: () => void;
 }): FramedTransportFactory {
     if (
       input.configuration.connection.ownership === "external" &&
@@ -46,6 +47,7 @@ export function createCodexRuntimeTransport(input: {
       scope: input.scope,
       channels: input.environmentChannel,
       process: configuration.connection.channel.process,
+    assertLaunchAdmission: input.assertLaunchAdmission,
       environment: configuration.childEnvironment,
       sqliteHome: configuration.nativeStoreHome,
       sensitiveValues: [

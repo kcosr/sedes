@@ -44,7 +44,11 @@ const retainedOperations: Readonly<Record<string, readonly string[]>> = {
   ],
 };
 export function retainedPolicyOperation(key: SidecarOperationKey): boolean {
-  return retainedOperations[key.capabilityId]?.includes(key.operation) === true;
+  return terminalReceiptOperation(key) || retainedOperations[key.capabilityId]?.includes(key.operation) === true;
+}
+/** These handlers distinguish an exact receipt replay from a new PTY effect. */
+export function terminalReceiptOperation(key: SidecarOperationKey): boolean {
+  return key.capabilityId === "interactive_terminal" && (key.operation === "terminal.input" || key.operation === "terminal.resize");
 }
 /** Normal observers need the live terminal grant. Recovery can inspect the exact retained terminal. */
 export function grantIndependentSettlement(key: SidecarOperationKey): boolean {
@@ -58,7 +62,7 @@ export function grantIndependentSettlement(key: SidecarOperationKey): boolean {
     ].includes(key.operation)
   )
     return false;
-  return retainedPolicyOperation(key);
+  return !terminalReceiptOperation(key) && retainedPolicyOperation(key);
 }
 export function providerPolicyOperation(key: SidecarOperationKey): boolean {
   return (

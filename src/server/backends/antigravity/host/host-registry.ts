@@ -1,4 +1,4 @@
-import { observedLaunchDigest } from "../../provider-policy-admission.js";
+import { observedLaunchDigest, type ProviderLaunchAdmission } from "../../provider-policy-admission.js";
 import type { RequestScope } from "../../../identity/identity-provider.js";
 import type { ExecutionEnvironmentChannelProvider } from "../../../execution/environment-channel.js";
 import type { PersistentSidecarServiceRegistry } from "../../../sidecar/persistent-sidecar-service-registry.js";
@@ -12,8 +12,10 @@ type Entry = { readonly host: AntigravityHost; readonly fingerprint: string; rea
 export class AntigravityHostRegistry {
   readonly #hosts = new Map<string, Entry>();
   readonly #retired = new Map<string, ReadonlySet<string>>();
-  observedLaunchDigest(id: string): string | undefined {
-    return observedLaunchDigest(this.#hosts.get(id)?.host);
+  observedLaunchDigest(id: string): string | null | undefined {
+    const resident = this.#hosts.get(id);
+    if (resident) return observedLaunchDigest(resident.host);
+    return null;
   }
 
   constructor(readonly input: {
@@ -24,7 +26,7 @@ export class AntigravityHostRegistry {
     readonly services: PersistentSidecarServiceRegistry;
     readonly createHost?: (configuration: AntigravityRuntimeConfiguration) => AntigravityHost;
   }) {}
-  async ensure(raw: AntigravityRuntimeConfiguration, epoch: number): Promise<AntigravityHost> {
+  async ensure(raw: AntigravityRuntimeConfiguration, epoch: number, admission?: ProviderLaunchAdmission): Promise<AntigravityHost> {
     const configuration = this.#configuration(raw); this.input.services.assertController(epoch);
     const existing = this.#hosts.get(configuration.backendInstanceId);
     if (existing) { if (existing.fingerprint !== identity(configuration)) throw new AntigravityError("antigravity_configuration_restart_required"); return existing.host; }
@@ -35,6 +37,7 @@ export class AntigravityHostRegistry {
       history: createAntigravityNativeHistoryReader(configuration),
       removeProbe: session => removeAntigravityProbeSession(configuration, session),
     });
+    admission?.bind(host);
     let unregister = () => {};
     unregister = this.input.services.register({ resourceId: host.runtimeId, kind: "provider", snapshot: () => {
       const { state, revision, blockers } = host.snapshot();
@@ -86,5 +89,5 @@ export class AntigravityHostRegistry {
   }
 }
 function identity(configuration: AntigravityRuntimeConfiguration) {
-  const { startupEnvironmentVariables: _startup, ...rest } = configuration; return configurationFingerprint(rest);
+  return configurationFingerprint({ ...configuration, startupEnvironmentVariables: configuration.startupEnvironmentVariables ?? {} });
 }

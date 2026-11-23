@@ -1,5 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { chmod, mkdtemp, readFile, rm } from "node:fs/promises";
+import { SidecarProtocolDeliveryError } from "../../src/internal/sidecar-protocol/contracts.js";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -156,6 +157,30 @@ describe("ExecutionAttachmentStager", () => {
     } finally {
       await local.close();
       await remote.close();
+    }
+  });
+
+  it("retries cleanup against the original materialization generation", async () => {
+    const { stager: local, lease } = await fixture();
+    let generation = 1;
+    const call = vi.fn(async (_op: unknown, payload: { workspaceAuthority: { featureGeneration: number } }) => {
+      if (generation === 1) {
+        generation++;
+        throw new SidecarProtocolDeliveryError("lost_reply", "sent_outcome_unknown");
+      }
+      expect(payload.workspaceAuthority.featureGeneration).toBe(1);
+    });
+    const runtime = { acquireOperation: async () => ({ session: { call }, release() {} }) } as unknown as
+      ConstructorParameters<typeof SidecarExecutionAttachmentStager>[0]["runtime"];
+    const remote = new SidecarExecutionAttachmentStager({ scope, environmentId, runtime, installationKey: randomBytes(32),
+      readAttachmentGeneration: () => generation });
+    try {
+      await remote.release(scope, { lease: { ...lease, workspace: { ...lease.workspace, authorityRootId: "root" } },
+        applicationThreadId: randomUUID(), attachmentId: randomUUID(), expectedSha256: "a".repeat(64) });
+      expect(call).toHaveBeenCalledTimes(2);
+    } finally {
+      await local.close();
+      remote.close();
     }
   });
 

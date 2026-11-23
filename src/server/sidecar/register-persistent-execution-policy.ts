@@ -40,7 +40,7 @@ export function registerPersistentExecutionPolicy({
   readonly serviceRegistry: PersistentSidecarServiceRegistry;
   readonly controllerEpoch: number;
   readonly policyRoutes: ExecutionPolicyRoutes;
-  readonly observeBackend?: (id: string, kind: string) => string | undefined;
+  readonly observeBackend?: (id: string, kind: string) => string | null | undefined;
 }): void {
   const getExecutionPolicy = () =>
     serviceRegistry.executionPolicy(controllerEpoch);
@@ -73,21 +73,15 @@ export function registerPersistentExecutionPolicy({
   const readStatus = () =>
     serviceRegistry.readPolicy(
       controllerEpoch,
-      (category, id, kind) => {
+      (category, id, kind, snapshot) => {
         if (category === "root")
           return kind && path.isAbsolute(kind) && path.normalize(kind) === kind
             ? "ready"
             : "unsupported";
         if (category === "backend" && kind === "pi") {
-          let current;
-          try {
-            current = getExecutionPolicy();
-          } catch {
-            return "unsupported";
-          }
           return ["workspace_tools", "workspace_context"].every(
             (cap) =>
-              supports(cap) && current.capabilities.some((c) => c.id === cap),
+              supports(cap) && snapshot.capabilities.some((c) => c.id === cap),
           )
             ? "ready"
             : "unsupported";

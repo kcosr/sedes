@@ -33,7 +33,7 @@ export class RemoteExecutionEnvironment implements ExecutionEnvironmentProvider 
   readonly #platform: RemotePlatform;
   readonly #isExecutionAvailable: () => boolean;
   readonly #scope: RequestScope;
-  readonly #confirmWorkspacePolicy?: () => Promise<void>;
+  readonly #confirmWorkspacePolicy?: (path: string, binding?: ValidatedWorkspace) => Promise<void>;
   readonly #readWorkspaceRoots?: () => readonly WorkspaceRootGrant[];
   readonly #roots: readonly string[];
   readonly #configurationRevision: number;
@@ -57,7 +57,7 @@ export class RemoteExecutionEnvironment implements ExecutionEnvironmentProvider 
       readonly platform: RemotePlatform;
       readonly environmentId: string;
       readonly scope: RequestScope;
-      readonly confirmWorkspacePolicy?: () => Promise<void>;
+      readonly confirmWorkspacePolicy?: (path: string, binding?: ValidatedWorkspace) => Promise<void>;
       readonly readWorkspaceRoots?: () => readonly WorkspaceRootGrant[];
       readonly allowedRoots: readonly string[];
       readonly label?: string;
@@ -174,7 +174,7 @@ export class RemoteExecutionEnvironment implements ExecutionEnvironmentProvider 
     original?: ValidatedWorkspace,
   ): Promise<ValidatedWorkspace> {
     await this.#assertActive(scope, environmentId);
-    await this.#confirmWorkspacePolicy?.();
+    await this.#confirmWorkspacePolicy?.(candidatePath, original);
     const grants = this.#readWorkspaceRoots?.();
     const grant = grants && workspaceRootGrant(grants, candidatePath, original);
     if (grants && original && !grant) throw new Error("workspace_authority_stale");

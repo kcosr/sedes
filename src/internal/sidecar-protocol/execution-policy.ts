@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
-import { defineSidecarOperation } from "./operation-registry.js";
+import { defineSidecarOperation, SidecarOperationError } from "./operation-registry.js";
 import {
   sidecarServiceConfigurationSchema,
   type SidecarServiceConfiguration,
@@ -107,7 +107,8 @@ const status = controller.extend({
         id: z.string().min(1).max(280),
         generation,
         state: z.enum(["ready", "preparing", "failed", "unsupported"]),
-        observedLaunchDigest: digest.optional(),
+        // A scanned empty registry confirms absence; an unobserved or starting resident has no evidence.
+        observedLaunchDigest: digest.nullable().optional(),
       }),
     )
     .max(240)
@@ -148,7 +149,7 @@ export class ExecutionPolicyReadPages {
     const read = this.#reads.get(id!);
     if (!read || read.expires <= Date.now()) {
       this.#reads.delete(id!);
-      throw new Error("sidecar_policy_cursor_stale");
+      throw new SidecarOperationError("sidecar_policy_cursor_stale");
     }
     const status = read.status;
     const offset = Number(rawOffset);
@@ -159,7 +160,7 @@ export class ExecutionPolicyReadPages {
       offset >= status.readiness.length ||
       cursor !== `${id}/${offset}`
     )
-      throw new Error("sidecar_policy_cursor_stale");
+      throw new SidecarOperationError("sidecar_policy_cursor_stale");
     return this.#slice(id!, status, offset);
   }
   #slice(

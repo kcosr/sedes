@@ -360,17 +360,22 @@ it("keeps another runtime and acknowledgements responsive while preserving same-
   native.updateLifecycle({ state: "ready", generation: 1 });
   const host = new CodexRuntimeHost({ scope, runtimeId: "busy" });
   host.bind(native);
-  const other = new CodexRuntimeHost({ scope, runtimeId: "other" });
+  const otherScope = { ...scope, backendInstanceId: "sibling" };
+  const other = new CodexRuntimeHost({ scope: otherScope, runtimeId: "other" });
   other.bind(new CodexSharedClientFacade({ current: () => undefined, latestGeneration: () => 1, retireGeneration: async () => {} }));
   const services = new PersistentSidecarServiceRegistry({ scope: { tenantId: scope.tenantId, principalId: scope.principalId, executionEnvironmentId: scope.executionEnvironmentId, installationId: "installation" }, buildId: "test", artifactSha256: "a".repeat(64), runtimeWireVersion: 1, configuration });
   const f = await attachment(host, services, { get: id => id === host.runtimeId ? host : other,
+    lookup: async config => config.instance.id === otherScope.backendInstanceId ? other : host,
     inspect: async id => ({ state: "idle", startupEnvironmentFingerprint: "a".repeat(64), incarnation: id, revision: "revision", blockers: [] }) });
   let release!: () => void;
   const held = new Promise<void>(resolve => { release = resolve; });
   const authority = { scope, runtimeId: host.runtimeId, controllerId: String(f.epoch) };
-  const otherAuthority = { ...authority, runtimeId: other.runtimeId };
+  const otherAuthority = { ...authority, scope: otherScope, runtimeId: other.runtimeId };
   try {
     await f.connection.attach(authority, () => {});
+    await expect(f.connection.attach(otherAuthority, () => {})).rejects.toMatchObject({ code: "codex_runtime_not_attached" });
+    expect(await f.connection.lookup({ ...runtimeConfiguration, instance: { ...runtimeConfiguration.instance, id: otherScope.backendInstanceId },
+      connections: runtimeConfiguration.connections.map(connection => ({ ...connection, backendInstanceId: otherScope.backendInstanceId })) })).toBe(other.runtimeId);
     await f.connection.attach(otherAuthority, () => {});
     const encode = f.hostChannel.encodeBody.bind(f.hostChannel);
     let entered = false;
@@ -699,6 +704,12 @@ async function diagnosticAttachment() {
   return { ...await attachment(host, services), native, host };
 }
 
+const runtimeConfiguration = {
+    instance: { id: scope.backendInstanceId, tenantId: scope.tenantId, kind: "codex_app_server" as const, label: "Codex", enabled: false, configurationRevision: 0, protocolRelease: "0.169.0" as const },
+    connections: [{ id: "connection", tenantId: scope.tenantId, ownerPrincipalId: scope.principalId, templateId: "template", kind: "codex_app_server" as const, backendInstanceId: scope.backendInstanceId, executionEnvironmentId: scope.executionEnvironmentId, label: "Codex", enabled: false, configurationRevision: 0 }],
+    connection: { ownership: "external" as const, channel: { type: "unix_websocket" as const, socketPath: "/provider/codex.sock" } },
+  };
+
 async function attachment(host: CodexRuntimeHost, services: PersistentSidecarServiceRegistry, overrides: Partial<CodexRuntimeHostRegistry> = {}, mode: "normal" | "recovery" = "normal") {
   const pair = transportPair();
   const digest = "a".repeat(64);
@@ -713,12 +724,14 @@ async function attachment(host: CodexRuntimeHost, services: PersistentSidecarSer
   const sidecar = new SidecarProtocolPeer({ role: "sidecar", transport: pair.right, sessionNonce: "n".repeat(48), registry: rightRegistry });
   const left = new SidecarRuntimeChannel(sedes, leftRegistry);
   const right = new SidecarRuntimeChannel(sidecar, rightRegistry);
-  const detach = registerCodexRuntimeHost({ getExecutionPolicy, registry: rightRegistry, channel: right, hosts: { get: (id: string) => { if (id !== host.runtimeId) throw new Error("unknown"); return host; }, ...overrides } as CodexRuntimeHostRegistry, services, controllerEpoch: epoch, onDetach: () => {} });
+  const detach = registerCodexRuntimeHost({ getExecutionPolicy, registry: rightRegistry, channel: right, hosts: { lookup: async config => config.instance.id === scope.backendInstanceId ? host : undefined, get: (id: string) => { if (id !== host.runtimeId) throw new Error("unknown"); return host; }, ...overrides } as CodexRuntimeHostRegistry, services, controllerEpoch: epoch, onDetach: () => {} });
   const capabilities = rightRegistry.capabilities().map(({ capabilityId, majorVersion }) => ({ capabilityId, majorVersion }));
   registerControlV3Operations(rightRegistry, { buildId: "test", artifactSha256: "a".repeat(64), enabledSidecarCapabilities: capabilities, enabledSedesCapabilities: leftRegistry.capabilities() });
   sedes.start(); sidecar.start();
   await sedes.call(controlHelloOperation, { compression: "none", expectedBuildId: "test", expectedArtifactSha256: "a".repeat(64), supportedSidecarCapabilities: capabilities, offeredSedesCapabilities: leftRegistry.capabilities() });
-  return { detach, epoch, hostChannel: right, channel: left, closed: pair.left.closed, connection: new CodexSidecarRuntimeConnection(left), close: async () => { detach(); services.detach(epoch); left.close(); right.close(); await sedes.close("test_complete"); } };
+  const connection = new CodexSidecarRuntimeConnection(left);
+  await connection.lookup(runtimeConfiguration);
+  return { detach, epoch, hostChannel: right, channel: left, closed: pair.left.closed, connection, close: async () => { detach(); services.detach(epoch); left.close(); right.close(); await sedes.close("test_complete"); } };
 }
 
 it("recovers administration after proxy close without ensuring a provider, and distinguishes absent from unavailable", async () => {
@@ -743,11 +756,6 @@ it("recovers administration after proxy close without ensuring a provider, and d
     inspect: async () => ({ state: "idle", startupEnvironmentFingerprint: "a".repeat(64), incarnation: host.runtimeId, revision: "confirmed", blockers: [] }),
     stop,
   });
-  const runtimeConfiguration = {
-    instance: { id: scope.backendInstanceId, tenantId: scope.tenantId, kind: "codex_app_server" as const, label: "Codex", enabled: false, configurationRevision: 0, protocolRelease: "0.169.0" as const },
-    connections: [{ id: "connection", tenantId: scope.tenantId, ownerPrincipalId: scope.principalId, templateId: "template", kind: "codex_app_server" as const, backendInstanceId: scope.backendInstanceId, executionEnvironmentId: scope.executionEnvironmentId, label: "Codex", enabled: false, configurationRevision: 0 }],
-    connection: { ownership: "external" as const, channel: { type: "unix_websocket" as const, socketPath: "/provider/codex.sock" } },
-  };
   const context = { database, scope: { tenantId: scope.tenantId, principalId: scope.principalId }, instance: runtimeConfiguration.instance, connections: runtimeConfiguration.connections,
     sidecarRuntime: { acquireRecovery: vi.fn(async () => ({ channel: f.channel, closed: f.closed, controllerEpoch: f.epoch, serviceIncarnation: services.serviceIncarnation, release: () => {} })) },
   };
@@ -903,7 +911,17 @@ it("permits existing Codex reads and exact pending replies during recovery while
     const params = decodeCodexServerRequestParams("item/tool/requestUserInput", { threadId: "retained", turnId: "turn", itemId: "item", questions: [], isBlocking: false });
     const response = Promise.resolve(host.serverRequests.handlersForGeneration(1)["item/tool/requestUserInput"]!({ generation: 1, sequence: 1,
       id: "question", method: "item/tool/requestUserInput", params, signal: new AbortController().signal }));
+    await expect(f.connection.respond(authority, { generation: 1, requestId: "question", result: { answers: { prompt: { answers: ["go"] } } } })).rejects.toThrow();
     await f.connection.respond(authority, { generation: 1, requestId: "question", result: { answers: {} } });
+    const approvalMethod = "item/commandExecution/requestApproval";
+    const approval = Promise.resolve(host.serverRequests.handlersForGeneration(1)[approvalMethod]!({
+      generation: 1, sequence: 2, id: "approval", method: approvalMethod, signal: new AbortController().signal,
+      params: decodeCodexServerRequestParams(approvalMethod, { threadId: "retained", turnId: "turn", itemId: "item", kind: "command",
+        startedAtMs: 1, command: "pwd", cwd: "/workspace", availableDecisions: ["accept", "decline"] }),
+    }));
+    await expect(f.connection.respond(authority, { generation: 1, requestId: "approval", result: { decision: "accept" } })).rejects.toThrow();
+    await f.connection.respond(authority, { generation: 1, requestId: "approval", result: { decision: "decline" } });
+    await expect(approval).resolves.toEqual({ decision: "decline" });
     await expect(response).resolves.toEqual({ answers: {} });
     await expect(f.connection.respond(authority, { generation: 1, requestId: "unknown", result: { answers: {} } })).rejects.toThrow();
     expect(calls.every(method => method === "thread/start" || method === "thread/read")).toBe(true);

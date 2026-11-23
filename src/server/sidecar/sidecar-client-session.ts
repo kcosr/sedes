@@ -20,6 +20,7 @@ import {
 } from "../../internal/sidecar-protocol/execution-policy.js";
 import {
   requiresCapabilityGrant,
+  terminalReceiptOperation,
   providerPolicyOperation,
   requirePolicyCapability,
   retainedPolicyOperation,
@@ -247,9 +248,14 @@ export class SidecarClientSession implements SidecarRuntimeSession {
         } catch { /* A quarantined or missing desired snapshot permits recovery only. */ }
         return "recovery";
       }
-      const desired = input.readDesiredPolicy?.();
-      if (!desired || !policy.confirmed) throw new Error("sidecar_policy_unsynchronized");
-      requirePolicyCapability(desired.snapshot, key, request, policy.confirmed.snapshot);
+      try {
+        const desired = input.readDesiredPolicy?.();
+        if (!desired || !policy.confirmed) throw new Error("sidecar_policy_unsynchronized");
+        requirePolicyCapability(desired.snapshot, key, request, policy.confirmed.snapshot);
+      } catch (error) {
+        if (terminalReceiptOperation(key)) return "recovery";
+        throw error;
+      }
     };
 
     const registry = input.sedesOperations.fork(guard);

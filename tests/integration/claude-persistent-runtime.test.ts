@@ -1,4 +1,4 @@
-import { attachFixturePolicy } from "../helpers/execution-policy-fixture.js";
+import { attachFixturePolicy, installFixturePolicy } from "../helpers/execution-policy-fixture.js";
 import { runtimeLaunchDigest } from "../../src/server/backends/provider-launch-digest.js";
 import { createSidecarFramedCarrier } from "../helpers/persistent-sidecar-framed-fixture.js";
 import { ClaudeConversationBackendDriver } from "../../src/server/backends/claude/claude-conversation-driver.js";
@@ -89,7 +89,7 @@ async function fixture(options: {
     current = lease;
     const attached = {
       ...carrier, lease,
-      connection: new ClaudeSidecarRuntimeConnection(carrier.mainChannel),
+      connection: new ClaudeSidecarRuntimeConnection(carrier.mainChannel, scope.backendInstanceId),
       async close() {
         if (current === lease) current = undefined;
         detach();
@@ -613,6 +613,11 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     const open = (threadId: string, mcp?: typeof agentToolMcp, cwd = request.cwd) =>
       current.connection.execute({ action: "open", runtimeId, controllerEpoch: current.lease.controllerEpoch,
         applicationThreadId: threadId, replay: "full", request: { ...request, cwd, agentToolMcp: mcp } });
+    await expect(open(applicationThreadId)).rejects.toThrow("claude_persistent_runtime_not_attached");
+    expect(await current.connection.lookup(configuration, current.lease.controllerEpoch)).toBe(runtimeId);
+    const sibling = new ClaudeSidecarRuntimeConnection(current.mainChannel, "sibling-backend");
+    await expect(sibling.execute({ runtimeId, controllerEpoch: current.lease.controllerEpoch, action: "attach", replay: "full", request: { sessionId } }))
+      .rejects.toMatchObject({ code: "claude_persistent_runtime_not_attached" });
     await expect(open(applicationThreadId)).resolves.toMatchObject({ reattached: true });
     await expect(open(applicationThreadId, { ...agentToolMcp, endpoint: "unix:///run/user/1000/sedes/new.sock" }))
       .resolves.toMatchObject({ reattached: true });
@@ -684,6 +689,7 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     expect(f.runtime.close).not.toHaveBeenCalled();
 
     const secondCarrier = await f.attach(desired);
+    await expect(secondCarrier.connection.ensure({ ...configuration, startupEnvironmentVariables: desired })).rejects.toMatchObject({ code: "claude_persistent_configuration_restart_required" });
     const replacement = f.client(desired);
     await replacement.createSession(sessionOptions(sessionId, { launch: "resume" })).start();
     await expect(replacement.listSessions({ dir: "/workspace" }, {})).resolves.toEqual([]);
@@ -1624,6 +1630,8 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     const replacement = await f.attach();
     replacement.connection.onEvent(runtimeId, () => {});
     const current = { runtimeId, controllerEpoch: replacement.lease.controllerEpoch };
+    expect(await replacement.connection.lookup(configuration, current.controllerEpoch)).toBe(runtimeId);
+    installFixturePolicy(f.services, current.controllerEpoch, serviceConfiguration, { roots: [], backends: [], capabilities: [] });
     const answered = claudePersistentAttachmentSchema.parse(await replacement.connection.execute({ ...current, action: "attach", replay: "full", request: { sessionId } }));
     expect(answered.events).toEqual([]);
     await native.options.onPermissionResponseDelivered!({ requestId: "ask", toolUseID: "tool" });
@@ -1657,7 +1665,7 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     expect(f.services.status()).toMatchObject({ state: "stopped", resources: [] });
   });
 
-  it("allows denial but never a new permission grant after admission has frozen", async () => {
+  it.each(["frozen", "withdrawn"])("allows denial but never a new permission grant after admission is %s", async reason => {
     const f = await fixture();
     const attached = await f.attach();
     const runtimeId = await attached.connection.ensure(configuration);
@@ -1669,10 +1677,11 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     } });
     const native = f.sessions[0]!;
     const pending = native.options.canUseTool!("Read", {}, { requestId: "ask", toolUseID: "tool", signal: new AbortController().signal });
-    f.hosts.get(runtimeId).freezeAdmission();
+    if (reason === "frozen") f.hosts.get(runtimeId).freezeAdmission();
+    else installFixturePolicy(f.services, attached.lease.controllerEpoch, serviceConfiguration, { roots: [], backends: [], capabilities: [] });
     await expect(attached.connection.execute({ ...authority, action: "respond_permission", request: {
       sessionId, requestId: "ask", toolUseID: "tool", response: { behavior: "allow", updatedInput: {} },
-    } })).rejects.toThrow("sidecar_operation_failed");
+    } })).rejects.toThrow(reason === "frozen" ? "sidecar_operation_failed" : "backend_policy_denied");
     const response = { behavior: "deny" as const, message: "Stopping this runtime." };
     await attached.connection.execute({ ...authority, action: "respond_permission", request: { sessionId, requestId: "ask", toolUseID: "tool", response } });
     await expect(pending).resolves.toEqual(response);

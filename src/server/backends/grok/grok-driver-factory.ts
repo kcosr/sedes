@@ -1,3 +1,4 @@
+import { ConnectionDriverCache } from "../connection-driver-cache.js";
 import type { EnvironmentVariableOverrides } from "../../../shared/protocol/environment-variables.js";
 import type { ThreadEnvironmentResolver } from "../../environment-variables/runtime-environment.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
@@ -36,7 +37,7 @@ export class GrokBackendDriverFactory implements BackendDriverFactory {
   readonly #settings: GrokThreadRepository;
   readonly #outputArtifacts: OutputArtifactPublisher;
   readonly #beginRuntimeAssessmentObservation: () => GrokRuntimeAssessmentObservation;
-  readonly #drivers = new Map<string, GrokConversationBackendDriver>();
+  readonly #drivers = new ConnectionDriverCache<GrokConversationBackendDriver>();
   #closed = false;
 
   constructor(input: {

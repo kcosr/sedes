@@ -162,19 +162,21 @@ export class PersistentTerminalHost {
       if (request.offset > snapshot.bytes.byteLength || request.offset % TERMINAL_REMOTE_CHUNK_BYTES !== 0) throw failure("terminal_snapshot_offset_invalid");
       return { data: Buffer.from(snapshot.bytes.subarray(request.offset, request.offset + TERMINAL_REMOTE_CHUNK_BYTES)).toString("base64url") };
     }));
-    registry.register(terminalInputOperation, (request) => run(async () => {
+    registry.register(terminalInputOperation, (request) => inspect(async () => {
       const terminal = this.#controlled(request);
-      return await this.#control(terminal, request.controlSeq, { kind: "input", data: request.data, producer: request.producer }, async () => {
-        terminal.assertCurrent?.();
+      const bytes = Buffer.from(request.data, "base64url");
+      const producer = request.producer;
+      const prior = producer && terminal.producers.get(producer.producerId)?.receipts.get(producer.inputSeq);
+      const replay = prior && prior.fingerprint === createHash("sha256").update(bytes).digest("hex") ? prior.result : undefined;
+      return this.#control(terminal, request.controlSeq, { kind: "input", data: request.data, producer }, admit, async () => {
         if (terminal.exit) return { outcome: "not_sent" as const, diagnosticCode: "terminal_exited" };
-        return await this.#write(terminal, Buffer.from(request.data, "base64url"), request.producer);
-      });
+        return this.#write(terminal, bytes, producer);
+      }, replay);
     }));
     registry.register(terminalProducerOperation, (request) => inspect(() => ({ highWater: read(this.#controlled(request)).producers.get(request.producerId)?.highWater ?? 0 })));
-    registry.register(terminalResizeOperation, (request) => run(async () => {
+    registry.register(terminalResizeOperation, (request) => inspect(async () => {
       const terminal = this.#controlled(request);
-      return await this.#control(terminal, request.controlSeq, { kind: "resize", rows: request.rows, columns: request.columns }, async () => {
-        terminal.assertCurrent?.();
+      return await this.#control(terminal, request.controlSeq, { kind: "resize", rows: request.rows, columns: request.columns }, admit, async () => {
         if (terminal.exit) throw failure("terminal_exited");
         await terminal.process.resize(request);
         terminal.emulator.resize(request.rows, request.columns);
@@ -384,7 +386,7 @@ export class PersistentTerminalHost {
     return metadata;
   }
 
-  async #control<T>(terminal: Terminal, seq: number, payload: unknown, perform: () => Promise<T>): Promise<T> {
+  async #control<T>(terminal: Terminal, seq: number, payload: unknown, admit: () => void, perform: () => Promise<T>, settled?: T): Promise<T> {
     const fingerprint = createHash("sha256").update(JSON.stringify(payload)).digest("hex");
     if (seq <= terminal.controlSeq) {
       const receipt = terminal.receipts.get(seq);
@@ -393,11 +395,19 @@ export class PersistentTerminalHost {
       return receipt.result as T;
     }
     if (seq !== terminal.controlSeq + 1) throw failure("terminal_control_sequence_gap");
-    // Admission advances first. A thrown write/resize may already have taken effect.
-    terminal.controlSeq = seq;
-    let result: T;
-    try { result = await perform(); }
-    catch (error) { throw new SidecarOperationError("terminal_control_outcome_unknown", false, { cause: error }); }
+    let result = settled;
+    if (result === undefined) {
+      if (this.input.isRecovery?.()) throw failure("terminal_admission_closed");
+      try { admit(); } catch (cause) { throw new SidecarOperationError("terminal_admission_closed", false, { cause }); }
+      terminal.assertCurrent?.();
+      // Only advance after admission. A thrown PTY operation may have taken effect.
+      terminal.controlSeq = seq;
+      try { result = await perform(); }
+      catch (error) { throw new SidecarOperationError("terminal_control_outcome_unknown", false, { cause: error }); }
+    } else {
+      // A new upstream controller can join the producer receipt without sending bytes.
+      terminal.controlSeq = seq;
+    }
     terminal.receipts.set(seq, { fingerprint, result });
     while (terminal.receipts.size > 256) terminal.receipts.delete(terminal.receipts.keys().next().value!);
     return result;

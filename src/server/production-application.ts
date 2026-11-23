@@ -2557,11 +2557,16 @@ export async function startProductionApplication(
         const observed = observedServices.has(id);
         const disconnected = record.preference === "disconnected" && observed && !service?.attached && !observationFailures.has(key);
         const stopped = record.preference === "stopped" && observed && (!service || service.state === "stopped") && !observationFailures.has(key);
-        const installedPolicy = owner?.policyStatus()?.installed;
+        const policyStatus = owner?.policyStatus();
+        const installedPolicy = policyStatus?.installed;
         const desiredPolicy = remote && definition ? configurationProjection.hostPolicy(scope, id) : undefined;
-        const policyConflict = owner?.conflictsWithDesiredPolicy();
-        const policyConfirmed = desiredPolicy && installedPolicy?.revision === desiredPolicy.revision &&
-          installedPolicy.digest === desiredPolicy.digest && !policyConflict;
+        // Only a successfully identified, quarantined incarnation is eligible for
+        // policy recovery. Cached inventory must never override an ownership failure.
+        const incarnation = service?.serviceIncarnation ?? policyStatus?.incarnation;
+        const quarantined = incarnation && owner?.conflictsWithDesiredPolicy(incarnation);
+        const policyConflict = quarantined && service && service.state !== "stopped" && !outboundOffline && !recoveryRequired && !observationFailures.has(key);
+        const policyConfirmed = desiredPolicy && installedPolicy?.revision === desiredPolicy.revision && installedPolicy.digest === desiredPolicy.digest &&
+          policyStatus?.incarnation === incarnation && !quarantined;
         const prepared = appliedEnvironmentFingerprints.get(id) === environmentRuntimeFingerprint(id) && appliedEnvironmentRevisions.get(id) === record.desiredRevision;
         const applied = definition === undefined
           ? !environmentRuntimes.has(id)
@@ -2570,13 +2575,13 @@ export async function startProductionApplication(
             : prepared;
         runtime = {...record,
           effectiveRevision: applied ? record.desiredRevision : record.effectiveRevision,
-          applyState: outboundOffline || observationFailures.has(key) || environmentPreparationFailures.has(id) ? "unavailable" : applied ? "applied" : "pending",
-          connectionState: outboundOffline ? "unreachable" : policyConflict ? "recovery_required" : replacementReady ? "disconnected" : recoveryRequired ? "recovery_required" : stopped ? "stopped" : disconnected ? "disconnected" : observationFailures.has(key) ? "unreachable" : remote ? service?.attached ? "connected" : observed ? "disconnected" : "unknown" : environmentRuntimes.has(id) ? "connected" : "stopped",
+          applyState: policyConflict || outboundOffline || observationFailures.has(key) || environmentPreparationFailures.has(id) ? "unavailable" : applied ? "applied" : "pending",
+          connectionState: outboundOffline ? "unreachable" : policyConflict ? "policy_conflict" : replacementReady ? "disconnected" : recoveryRequired ? "recovery_required" : stopped ? "stopped" : disconnected ? "disconnected" : observationFailures.has(key) ? "unreachable" : remote ? service?.attached ? "connected" : observed ? "disconnected" : "unknown" : environmentRuntimes.has(id) ? "connected" : "stopped",
           incarnation: service?.serviceIncarnation ?? (remote ? null : environmentRuntimes.has(id) ? `local:${sidecarInstallationId}:${id}` : null),
           softwareVersion: service?.buildId ?? null,
           upgradeState: !remote ? "current" : !service || !owner ? "unknown" : service.artifactSha256 === owner.artifact.artifactSha256 ? "current" : service.runtimeWireVersion === SIDECAR_WIRE_VERSION ? "pending" : "required",
           activeResources: Math.max(blockers.length, terminalImpact.liveCount + terminalImpact.unknownCount),
-          supportedActions: owner && definition && !outboundOffline ? replacementReady ? ["connect", "disconnect", "start"] : ["connect", "disconnect", "start", "stop", "restart", "upgrade"] : [],
+          supportedActions: owner && definition && !outboundOffline ? policyConflict ? ["restart", "stop", "disconnect"] : replacementReady ? ["connect", "disconnect", "start"] : ["connect", "disconnect", "start", "stop", "restart", "upgrade"] : [],
           lastError: policyConflict ? "The running service has a conflicting execution policy. Inspect its active work before restarting the service to recover." : outboundOffline ? "The host connector is offline. Start it on the host or wait for it to reconnect; retained work has not been discarded." : recoveryRequired ? sidecarOwnershipRecoveryMessage(recoveryRequired) : observationFailures.has(key) ? "The execution host is unreachable; retained work has not been discarded." : environmentPreparationFailures.has(id) ? "The environment could not apply its configuration. Check its settings and installed sidecar artifacts." : service?.state === "handoff_pending" ? "Final terminal history or operation outcomes must be recovered before this service can stop." : service?.state === "cleanup_unproven" ? "Resource cleanup is unconfirmed; replacement is blocked. Stop the service to retry its cleanup." : attachmentBlocks.has(id) && !service?.attached ? attachmentBlockMessage(attachmentBlocks.get(id)!) : null,
         };
       } else {
@@ -2636,7 +2641,7 @@ export async function startProductionApplication(
         const providerHost = remote ? backendHost(id) : undefined;
         const observedLaunch = providerHost ? environmentRuntimes.get(providerHost)?.sidecarRuntime?.policyStatus()
           ?.readiness.find(item => item.id === `backend:${id}`)?.observedLaunchDigest : undefined;
-        const appliedLaunchDiffers = observedLaunch !== undefined && observedLaunch !== desiredBackendPolicy(id)?.launchDigest;
+        const appliedLaunchDiffers = typeof observedLaunch === "string" && observedLaunch !== desiredBackendPolicy(id)?.launchDigest;
         const launchPending = appliedLaunchDiffers || startupEnvironmentPending(id) ||
           (appliedBackendFingerprints.has(id) && appliedBackendFingerprints.get(id) !== backendRuntimeFingerprint(id));
         const applied = intentionallyAbsent ? !owned && (record.preference !== "stopped" || !remote || backendPresence.get(id) === false) : appliedBackendRevisions.get(id) === record.desiredRevision && Boolean(owned) && !launchPending &&
@@ -2645,7 +2650,7 @@ export async function startProductionApplication(
         runtime = {...record,
           effectiveRevision: applied ? record.desiredRevision : record.effectiveRevision,
           applyState: starting ? "pending" : diagnostic || backendPreparationFailures.has(id) || observationFailures.has(key) ? "unavailable" : applied ? "applied" : "pending",
-          startupEnvironmentPending: (Boolean(owned) || Boolean(backendObservation)) && launchPending,
+          startupEnvironmentPending: observedLaunch !== null && (Boolean(owned) || Boolean(backendObservation)) && launchPending,
           connectionState: starting ? "reconciling" : recoveryRequired ? "recovery_required" : diagnostic?.connectionState ?? (observationFailures.has(key) ? "unreachable" : record.preference === "disconnected" && !owned ? "disconnected" : !owned ? remote && backendPresence.get(id) !== false ? backendPresence.get(id) === true ? "disconnected" : "unknown" : "stopped" : owned.administration && !backendObservation ? "unknown" : "connected"),
           incarnation: backendObservation?.incarnation ?? (remote ? null : backendIncarnations.get(id) ?? null),
           softwareVersion: null,
@@ -2656,7 +2661,7 @@ export async function startProductionApplication(
         };
       }
       return {runtime, service, backendObservation, administration, recoveryAction, interruptions: interruptions.length > 128 ? [...interruptions.slice(0, 127), `${interruptions.length - 127} additional affected resources.`] : interruptions,
-        fence: configurationFingerprint({resourceKind: record.resourceKind, id, incarnation: runtime.incarnation,
+        fence: configurationFingerprint({resourceKind: record.resourceKind, id, incarnation: runtime.incarnation, policyConflict: runtime.connectionState === "policy_conflict",
           service: service ? {epoch: service.controllerEpoch, state: service.state, resources: service.resourcesFingerprint, configuration: service.desiredConfiguration} : null,
           backend: backendObservation?.revision ?? null,
           loaded: record.resourceKind === "backend" ? await backendThreads(id) : null}),
@@ -2748,12 +2753,13 @@ export async function startProductionApplication(
       else await owner.synchronizePolicy(signal);
       const observed = owner.policyStatus();
       const desired = configurationProjection.hostPolicy(scope, id);
-      if (desired && observed?.installed?.digest === desired.digest && observed.installed.revision === desired.revision) {
+      if (desired && observed?.installed?.digest === desired.digest && observed.installed.revision === desired.revision &&
+          !owner.conflictsWithDesiredPolicy(observed.incarnation)) {
         configurationRepository.observeHostPolicy(scope, id, desired,
           new Map(observed.readiness.map(item => [item.id, item.state])),
           {incarnation: observed.incarnation, epoch: observed.controllerEpoch,
             launchDigests: new Map(observed.readiness.flatMap(item =>
-              item.id.startsWith("backend:") && item.observedLaunchDigest
+              item.id.startsWith("backend:") && item.observedLaunchDigest !== undefined
                 ? [[item.id.slice("backend:".length), item.observedLaunchDigest] as const] : []))});
       }
     };
@@ -3188,6 +3194,7 @@ export async function startProductionApplication(
               (failedBackend?.cleanupPending === false && !cleanupRecovery && (request.action === "connect" || request.action === "start") ||
                failedBackend?.cleanupPending === true && request.action === "stop"));
           if (cleanupRecovery && ["connect", "start", "restart"].includes(request.action)) return result("unavailable");
+          if (evidence.runtime.connectionState === "policy_conflict" && !evidence.runtime.supportedActions.includes(request.action)) return result("unavailable");
           if (evidence.runtime.connectionState === "recovery_required" && request.action !== "disconnect" &&
               !retryFailedBackend) return result("unavailable");
           if (["stop", "restart", "upgrade"].includes(request.action) && observationFailures.has(key)) return result("unavailable");

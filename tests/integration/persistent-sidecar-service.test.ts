@@ -124,15 +124,14 @@ async function fixture(nativeAssets = false, selectedArtifact = artifact) {
       sessionNonce, carrierGeneration: 1, configuration, mode });
     const response = await readSidecarManagementRecord(stream, sidecarManagementResponseSchema, signal);
     if (response.value.outcome !== "ok") throw new Error(JSON.stringify(response.value));
+    const snapshot={roots:[{id:"primary",path:home,generation:1}],capabilities:[{id:"workspace_files",generation:1},{id:"interactive_terminal",generation:1}],backends:[]};
+    const desired = {snapshot,revision:1,digest:executionPolicyDigest(snapshot),configuration};
     const session=await SidecarClientSession.start({ connectionCompression: true, transportKind: "ssh_stdio", stream: response.stream, sessionNonce, carrierGeneration: 1, artifact: selectedArtifact,
       installation: { accountHome: home, stateRoot: paths.stateRoot, nodeExecutable: process.execPath,
         environment: { HOME: home }, executableDirectory: home, executablePath: executable },
       authorizedCapabilities: [{ capabilityId: "workspace_files", majorVersion: 8 }, ...(nativeAssets ? [{ capabilityId: "interactive_terminal" as const, majorVersion: 2 as const }] : [])], authorizedRuntimeCapabilities: [],
-      sedesOperations: new SidecarOperationRegistry(), signal });
-    if(mode==="normal") {
-      const snapshot={roots:[{id:"primary",path:home,generation:1}],capabilities:[{id:"workspace_files",generation:1},{id:"interactive_terminal",generation:1}],backends:[]};
-      await session.applyPolicy({snapshot,revision:1,digest:executionPolicyDigest(snapshot),configuration});
-    }
+      policyAttachment:mode, readDesiredPolicy:() => desired, sedesOperations: new SidecarOperationRegistry(), signal });
+    if(mode==="normal") await session.applyPolicy(desired);
     return session;
   };
   return { home, scope, paths, request, status, stop, launch, attach };
@@ -253,8 +252,12 @@ describe("bundled persistent sidecar service", () => {
       await first.runtimeChannel.call(terminalCreateOperation, prepared);
       created = true;
       const attached = await first.runtimeChannel.call(terminalAttachOperation, identity);
-      expect(await first.runtimeChannel.call(terminalInputOperation, { ...identity, controllerToken: attached.controllerToken, controlSeq: 1,
-        data: Buffer.from("printf 'persistent-pty-marker\\n'\n").toString("base64url") })).toEqual({ outcome: "sent" });
+      const input = { ...identity, controllerToken: attached.controllerToken, controlSeq: 1,
+        data: Buffer.from("printf 'persistent-pty-marker\\n'\n").toString("base64url") };
+      expect(await first.runtimeChannel.call(terminalInputOperation, input)).toEqual({ outcome: "sent" });
+      const recovery = first.recoveryView();
+      await expect(recovery.call(terminalInputOperation, input)).resolves.toEqual({ outcome: "sent" });
+      await expect(recovery.call(terminalInputOperation, { ...input, controlSeq: 2 })).rejects.toThrow("terminal_admission_closed");
       await first.close("main_process_stopped");
       expect((await service.status()).resources.some(resource => resource.blockers.includes("live_terminal"))).toBe(true);
       const second = await service.attach();

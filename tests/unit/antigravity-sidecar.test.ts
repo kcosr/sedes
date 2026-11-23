@@ -242,6 +242,14 @@ describe("Antigravity persistent sidecar", () => {
     await vi.waitFor(async () => expect(await resumed.port.outcome({ handleId: original.handleId, operationId: "send" })).toMatchObject({ status: "completed" }));
     expect(resumed.runtime.acquire).toHaveBeenCalledOnce(); expect(recovery.release).toHaveBeenCalledOnce(); expect(f.createHost).toHaveBeenCalledOnce();
   });
+  it("distinguishes a changed startup contract from exact retained lookup", async () => {
+    const f = await fixture(), connected = await attachment(f);
+    const host = await f.hosts.ensure(f.configuration, connected.epoch);
+    const changed = { ...f.configuration, startupEnvironmentVariables: { NOTE: { kind: "literal" as const, value: "changed" } } };
+    await expect(f.hosts.ensure(changed, connected.epoch)).rejects.toMatchObject({ code: "antigravity_configuration_restart_required" });
+    await expect(f.hosts.lookup(changed, connected.epoch)).resolves.toBe(host);
+    expect(f.createHost).toHaveBeenCalledOnce();
+  });
   it("denies wrong scope, unavailable runtime capability, and stale controllers before execution", async () => {
     const f = await fixture(), connected = await attachment(f);
     await expect(f.hosts.ensure({ ...f.configuration, principalId: "wrong" }, connected.epoch)).rejects.toMatchObject({ code: "antigravity_configuration_scope_denied" });

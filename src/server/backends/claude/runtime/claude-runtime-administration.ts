@@ -23,7 +23,7 @@ export async function recoverClaudeRuntimeAdministration(input: {
     connection: ClaudeSidecarRuntimeConnection, runtimeId: string | undefined, controllerEpoch: number,
   ) => Promise<T>, initialDiscovery = false): Promise<T> => {
     const lease = await context.sidecarRuntime.acquireRecovery();
-    const connection = new ClaudeSidecarRuntimeConnection(lease.channel);
+    const connection = new ClaudeSidecarRuntimeConnection(lease.channel, configuration.backendInstanceId);
     try {
       // Keep liveness and inventory checks synchronous: a closed or pre-hello
       // channel cannot establish absence even when every operation is false.

@@ -242,7 +242,6 @@ const ALLOWED_REPOSITORY_SOURCES = new Set([
   "src/server/sidecar/sidecar-darwin-platform.ts",
   "src/server/sidecar/sidecar-windows-platform.ts",
   "src/server/sidecar/sidecar-windows-ipc.ts",
-  "src/server/sidecar/persistent-sidecar-service-registry.ts",
   "src/server/sidecar/installed-execution-policy.ts",
   "src/server/sidecar/execution-policy-routes.ts",
   "src/server/sidecar/register-persistent-execution-policy.ts",

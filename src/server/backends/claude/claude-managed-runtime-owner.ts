@@ -3,6 +3,7 @@ import { attachmentDiagnostic } from "../../diagnostics/attachment-diagnostics.j
 import type { EnvironmentVariableOverrides } from "../../../shared/protocol/environment-variables.js";
 import { RetainedRuntimeLifecycle } from "../retained-runtime-lifecycle.js";
 import { normalizedAbsolutePath } from "../../../shared/absolute-path.js";
+import { boundedAgentToolPath, MAX_AGENT_TOOL_PATH_BYTES } from "../../../internal/agent-tool-cli-protocol/path-limits.js";
 import { isAgentToolCliEndpoint } from "../../../internal/agent-tool-cli-protocol/local-endpoint.js";
 import { randomBytes } from "node:crypto";
 import { SidecarOperationError } from "../../../internal/sidecar-protocol/operation-registry.js";
@@ -65,6 +66,7 @@ export interface ClaudeManagedRuntimeOwnerOptions {
   readonly executablePath: string;
   readonly configDirectory?: string;
   readonly startupEnvironmentVariables?: EnvironmentVariableOverrides;
+  readonly assertLaunchAdmission?: () => void;
   readonly initializationTimeoutMs: number;
   readonly onBackgroundError?: (error: unknown) => void;
 }
@@ -80,6 +82,7 @@ export class ClaudeManagedRuntimeOwner implements ClaudeOwnedRuntimeClient {
   readonly #workingDirectory: string;
   readonly #executablePath: string;
   readonly #startupEnvironmentVariables: EnvironmentVariableOverrides;
+  readonly #assertLaunchAdmission?: () => void;
   readonly #configDirectory: string | undefined;
   readonly #initializationTimeoutMs: number;
   readonly #onBackgroundError: (error: unknown) => void;
@@ -142,6 +145,7 @@ export class ClaudeManagedRuntimeOwner implements ClaudeOwnedRuntimeClient {
     }
     this.#scope = Object.freeze({ ...options.scope });
     this.#artifact = Promise.resolve(options.artifact);
+    this.#assertLaunchAdmission = options.assertLaunchAdmission;
     this.#channels = options.channels;
     this.#workingDirectory = options.workingDirectory;
     this.#executablePath = options.executablePath;
@@ -320,6 +324,7 @@ export class ClaudeManagedRuntimeOwner implements ClaudeOwnedRuntimeClient {
     try {
       const artifact = await this.#artifact;
       this.#assertOpen();
+      this.#assertLaunchAdmission?.();
       this.#releaseDirectoryReservation ??= reserveNativeDirectorySelector(this.#scope, this.#configDirectory);
       const carrierGeneration = ++this.#generation;
       const sessionNonce = randomBytes(32).toString("base64url");
@@ -329,6 +334,7 @@ export class ClaudeManagedRuntimeOwner implements ClaudeOwnedRuntimeClient {
         artifact,
         workingDirectory: this.#workingDirectory,
         identity: { carrierGeneration, sessionNonce },
+        ...(this.#assertLaunchAdmission && { assertLaunchAdmission: this.#assertLaunchAdmission }),
       }, this.#closeController.signal);
       this.#assertOpen();
       const transport = new LengthPrefixedSidecarFrameTransport({
@@ -680,7 +686,7 @@ function assertQueryEnvironment(
       (value.SEDES_AGENT_TOOL_CLI_MODE !== "progressive" &&
         value.SEDES_AGENT_TOOL_CLI_MODE !== "individual") ||
       !/^[A-Za-z0-9_-]{32,256}$/u.test(value.SEDES_AGENT_TOOL_SOURCE_CAPABILITY!) ||
-      value.PATH!.length > 16_384 || /[\u0000\r\n]/u.test(value.PATH!)) {
+      !boundedAgentToolPath(value.PATH!, MAX_AGENT_TOOL_PATH_BYTES)) {
     throw new Error("claude_managed_runtime_environment_invalid");
   }
 }

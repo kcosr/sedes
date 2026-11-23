@@ -205,6 +205,24 @@ describe("LocalExecutionEnvironment", () => {
     });
   });
 
+  it.skipIf(process.platform === "win32")("preserves an admitted alias whose native POSIX destination contains a literal backslash", async () => {
+    const {root} = await fixture();
+    const directory = path.join(root, "project\\archive");
+    await mkdir(directory);
+    const alias = path.join(root, "alias");
+    await symlink(directory, alias, "dir");
+    const provider = new LocalExecutionEnvironment({ scope, environmentId: "local", allowedRoots: [alias],
+      configurationRevision: 0, activeConfigurationRevision: () => 0, readWorkspaceRoots: () => [{id:"local", path:alias, generation:1}] });
+    const workspace = await provider.validateWorkspace(scope, "local", alias);
+    await mkdir(path.join(directory, "child"));
+    await expect(provider.browseDirectories(scope, {environmentId:"local", location:{kind:"roots"}, pageSize:20}))
+      .resolves.toMatchObject({entries:[{name:"alias",path:alias}]});
+    await expect(provider.browseDirectories(scope, {environmentId:"local", location:{kind:"directory",path:alias}, pageSize:20}))
+      .resolves.toMatchObject({entries:[{name:"child",path:path.join(alias,"child")}], location:{kind:"directory",path:alias}});
+    expect(workspace).toMatchObject({authorityRootId:"local", canonicalPath:directory});
+    await expect(provider.revalidateWorkspace(scope, workspace)).resolves.toMatchObject({authorityRevision:1});
+  });
+
   it("validates canonical workspaces within configured roots", async () => {
     const { provider, root, workspacePath } = await fixture();
     const workspace = await provider.validateWorkspace(

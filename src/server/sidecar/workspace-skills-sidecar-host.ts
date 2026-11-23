@@ -83,6 +83,7 @@ export class WorkspaceSkillsSidecarHost {
       if (signal.aborted) {
         throw new SidecarOperationError("workspace_skills_cancelled");
       }
+      if (error instanceof SidecarOperationError) throw error;
       if (error instanceof WorkspaceSkillsScannerError) {
         const code =
           error.code === "workspace_skills_limit_exceeded"

@@ -1,7 +1,6 @@
-import { canonicalLocalWorkspaceRoots } from "../execution/local-workspace-roots.js";
+import { canonicalLocalWorkspaceRoots, isWithinLocalWorkspaceRoot } from "../execution/local-workspace-roots.js";
 import { WorkspaceFileRootUnavailableError, WORKSPACE_FILE_LINK_CANDIDATE_ROOT_ID } from "./contracts.js";
 import { workspaceRootGrant, type WorkspaceRootGrant } from "../execution/workspace-root-grant.js";
-import { isWithinRemoteRoot } from "../execution/remote-path.js";
 import { realpath } from "node:fs/promises";
 import path from "node:path";
 import type { WorkspaceFileLinkReference } from "../../shared/protocol/workspace-files.js";
@@ -142,7 +141,7 @@ export class LocalWorkspaceFileProvider implements WorkspaceFileProvider {
     const readRoots = this.input.readWorkspaceRoots;
     if (readRoots) {
       const candidates = canonicalLocalWorkspaceRoots(readRoots()).filter(root =>
-        isWithinRemoteRoot(absolutePath, root.path) || isWithinRemoteRoot(absolutePath, root.declaredPath));
+        isWithinLocalWorkspaceRoot(absolutePath, root.path) || isWithinLocalWorkspaceRoot(absolutePath, root.declaredPath));
       if (!candidates.length) return undefined;
       const canonicalFile = await realpath(absolutePath).catch(() => undefined);
       signal?.throwIfAborted();
@@ -153,7 +152,7 @@ export class LocalWorkspaceFileProvider implements WorkspaceFileProvider {
     }
     const result = await this.#engine.discoverFileLinkRoot(absolutePath, signal);
     authority?.check();
-    if (authority && result && !isWithinRemoteRoot(result.canonicalPath, authority.root.path)) return undefined;
+    if (authority && result && !isWithinLocalWorkspaceRoot(result.canonicalPath, authority.root.path)) return undefined;
     signal?.throwIfAborted();
     return result;
   }
@@ -172,7 +171,7 @@ export class LocalWorkspaceFileProvider implements WorkspaceFileProvider {
     primary.assertCurrent?.();
     const current = this.input.readWorkspaceRoots && canonicalLocalWorkspaceRoots(this.input.readWorkspaceRoots());
     return candidates ? { ...result, worktrees: result.worktrees.filter(worktree => {
-      const old = workspaceRootGrant(candidates, worktree.canonicalCheckoutPath);
+      const old = workspaceRootGrant(candidates, worktree.canonicalPath);
       return old && current?.some(root => root.id === old.id && root.generation === old.generation && root.path === old.path);
     }) } : result;
   }
@@ -182,10 +181,14 @@ export class LocalWorkspaceFileProvider implements WorkspaceFileProvider {
     target: Parameters<WorkspaceFileProvider["removeLinkedWorktree"]>[1],
     signal?: AbortSignal,
   ): Promise<void> {
+    if ((this.input.readWorkspaceRoots && !target.checkoutAuthority) ||
+        target.linkedRoot.workspaceId !== target.primaryRoot.workspaceId ||
+        !isWithinLocalWorkspaceRoot(target.linkedRoot.canonicalPath, target.canonicalCheckoutPath)) throw new WorkspaceFileRootUnavailableError();
     const primary = this.#root(scope, target.primaryRoot);
-    const authority = this.#capture(target.canonicalCheckoutPath);
+    const linked = this.#root(scope, target.linkedRoot);
+    const checkout = this.#capture(target.canonicalCheckoutPath, undefined, undefined, target.checkoutAuthority);
     await this.#engine.removeLinkedWorktree(
-      authority ? { ...primary, assertCurrent: () => { primary.assertCurrent?.(); authority.check(); } } : primary,
+      { ...primary, assertCurrent: () => { primary.assertCurrent?.(); linked.assertCurrent?.(); checkout?.check(); } },
       target,
       signal,
     );
@@ -415,25 +418,34 @@ export class LocalWorkspaceFileProvider implements WorkspaceFileProvider {
     listener: () => void,
   ): Promise<WorkspaceFileWatchSubscription> {
     const bound = this.#root(scope, root);
-    let revoked!: () => void;
-    const failed = new Promise<void>(resolve => { revoked = resolve; });
-    const subscription = await this.#engine.watch(bound, () => {
-      try { bound.assertCurrent?.(); } catch { revoked(); return; }
+    let revoke!: () => void;
+    const failed = new Promise<void>(resolve => { revoke = resolve; });
+    let subscription: WorkspaceFileWatchSubscription | undefined;
+    const close = async () => {
+      const active = subscription;
+      subscription = undefined;
+      await active?.close();
+    };
+    subscription = await this.#engine.watch(bound, () => {
+      try { bound.assertCurrent?.(); } catch {
+        void close().then(revoke, revoke);
+        return;
+      }
       listener();
     });
-    try { bound.assertCurrent?.(); } catch (error) { await subscription.close(); throw error; }
-    return { failed: Promise.race([subscription.failed, failed]), close: () => subscription.close() };
+    try { bound.assertCurrent?.(); } catch (error) { await close(); throw error; }
+    return { failed: Promise.race([subscription.failed, failed]), close };
   }
 
   close(): void {
     this.#engine.close();
   }
 
-  #capture(path: string, workspaceId?: string, rootId?: string) {
+  #capture(path: string, workspaceId?: string, rootId?: string, expected?: {authorityRootId: string; authorityRevision: number}) {
     const roots = this.input.readWorkspaceRoots;
     if (!roots) return undefined;
     const requiresBinding = workspaceId !== undefined && rootId !== WORKSPACE_FILE_LINK_CANDIDATE_ROOT_ID;
-    const binding = requiresBinding ? this.input.readWorkspaceBinding?.(workspaceId, rootId) : undefined;
+    const binding = requiresBinding ? this.input.readWorkspaceBinding?.(workspaceId, rootId) : expected;
     const root = workspaceRootGrant(canonicalLocalWorkspaceRoots(roots()), path, binding);
     if (!root || (requiresBinding && !binding)) throw new WorkspaceFileRootUnavailableError();
     return captureGrant(root, roots);

@@ -81,6 +81,8 @@ export interface WorkspaceFileLinkedWorktreeDiscoveryResult {
 
 export interface WorkspaceLinkedWorktreeRemovalTarget {
   readonly primaryRoot: WorkspaceFileRootTarget;
+  readonly linkedRoot: WorkspaceFileRootTarget;
+  readonly checkoutAuthority?: {readonly authorityRootId: string; readonly authorityRevision: number};
   readonly canonicalCheckoutPath: string;
   readonly canonicalGitDir: string;
   readonly identityToken: string;

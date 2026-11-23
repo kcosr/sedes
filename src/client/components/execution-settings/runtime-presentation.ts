@@ -53,8 +53,12 @@ export function effectSubject(effect: ConfigurationEffect, resource: { resourceI
   }
 }
 const connectionLabels: Record<ConfigurationRuntimeState["connectionState"], string> = {
-  unknown: "Status unknown", connected: "Connected", disconnected: "Disconnected", unreachable: "Unreachable", stopped: "Confirmed stopped", reconciling: "Reconciling", recovery_required: "Recovery required",
+  unknown: "Status unknown", connected: "Connected", disconnected: "Disconnected", unreachable: "Unreachable", stopped: "Confirmed stopped", reconciling: "Reconciling", recovery_required: "Recovery required", policy_conflict: "Execution policy conflict",
 };
+
+export function needsBackendRestart(runtime: ConfigurationRuntimeState): boolean {
+  return runtime.resourceKind === "backend" && (runtime.startupEnvironmentPending === true || runtime.effects?.some(effect => effect.state === "restart_backend") === true);
+}
 
 export function runtimeConnectionLabel(runtime?: ConfigurationRuntimeState): string {
   if (!runtime) return "Status not reported";
@@ -155,7 +159,7 @@ export function presentRuntime(runtime: ConfigurationRuntimeState | undefined, o
   let detail: string;
   let tone: Tone = "neutral";
   const effects = runtime.effects ?? [];
-  const restartBackend = !environment && (runtime.startupEnvironmentPending || effects.some(effect => effect.state === "restart_backend"));
+  const restartBackend = needsBackendRestart(runtime);
   const failed = effects.some(effect => effect.state === "failed");
   const unsupported = effects.some(effect => effect.state === "unsupported");
   const awaitingHost = effects.some(effect => effect.state === "awaiting_host");
@@ -166,6 +170,12 @@ export function presentRuntime(runtime: ConfigurationRuntimeState | undefined, o
   let primary: RuntimeActionPresentation | undefined;
   let secondary: RuntimeActionPresentation[] = [];
   switch (runtime.connectionState) {
+    case "policy_conflict":
+      tone = "danger";
+      detail = `The sidecar's execution policy conflicts with the saved settings. New work is blocked. Restart the sidecar to install the saved policy, or stop it to keep the host offline.${interruption}`;
+      primary = act("restart");
+      secondary = [act("stop", undefined, "destructive"), act("disconnect")];
+      break;
     case "recovery_required":
       tone = "danger";
       detail = (environment
@@ -250,12 +260,6 @@ export function presentRuntime(runtime: ConfigurationRuntimeState | undefined, o
           : "This backend is disabled but its runtime is still running. Stop it to release it.";
         primary = act("stop", undefined, "destructive");
         secondary = [act("disconnect")];
-      } else if (upgrade === "pending") {
-        qualifier = "Upgrade available";
-        qualifierTone = "info";
-        detail = `A newer sidecar is available. It installs automatically when the host is idle, or upgrade now to restart the sidecar.${interruption}`;
-        primary = act("upgrade");
-        secondary = [act("stop", undefined, "destructive"), act("disconnect")];
       } else if (runtime.applyState === "pending" || restartBackend || awaitingHost) {
         pending();
         detail = restartBackend
@@ -263,6 +267,12 @@ export function presentRuntime(runtime: ConfigurationRuntimeState | undefined, o
           : `Saved revision ${runtime.desiredRevision} is awaiting confirmation. ${runtime.effectiveRevision === null ? "No applied revision has been confirmed." : `The last applied revision was ${runtime.effectiveRevision}.`}`;
         primary = restartBackend ? act("restart") : act("connect", "Retry apply");
         secondary = [act("restart"), act("stop", undefined, "destructive"), act("disconnect")];
+      } else if (upgrade === "pending") {
+        qualifier = "Upgrade available";
+        qualifierTone = "info";
+        detail = `A newer sidecar is available. It installs automatically when the host is idle, or upgrade now to restart the sidecar.${interruption}`;
+        primary = act("upgrade");
+        secondary = [act("stop", undefined, "destructive"), act("disconnect")];
       } else {
         detail = environment
           ? `Sidecar ${version} is up to date.${active > 0 ? ` ${active} active or unconfirmed resource${active === 1 ? "" : "s"}.` : ""}`
@@ -271,6 +281,7 @@ export function presentRuntime(runtime: ConfigurationRuntimeState | undefined, o
       }
       break;
   }
+  if (runtime.connectionState === "connected" && upgrade === "pending") secondary.push(act("upgrade"));
   const supported = new Set(runtime.supportedActions);
   if (primary && !supported.has(primary.action)) primary = undefined;
   const offered = new Set(primary ? [primary.action] : []);
@@ -280,7 +291,7 @@ export function presentRuntime(runtime: ConfigurationRuntimeState | undefined, o
     if (runtime.lifecycleOperation.state === "unknown") { qualifier = "Outcome unknown"; qualifierTone = "warning"; }
     else if (!qualifier) { qualifier = "Checking outcome"; qualifierTone = "info"; }
   }
-  const recoveryEmphasis = runtime.connectionState === "recovery_required" || /recover/iu.test(runtime.lastError ?? "");
+  const recoveryEmphasis = runtime.connectionState === "recovery_required" || runtime.connectionState === "policy_conflict" || /recover/iu.test(runtime.lastError ?? "");
   const headlineStatus = { label: headline, tone };
   const pill = worstStatus(headlineStatus, qualifier ? { label: qualifier, tone: qualifierTone } : undefined);
   return {

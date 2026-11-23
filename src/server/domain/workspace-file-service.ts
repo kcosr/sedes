@@ -198,7 +198,7 @@ export class WorkspaceFileService {
   constructor(
     readonly inventory: Pick<
       InventoryRepository,
-      "getWorkspace" | "listWorkspaces" | "getThread" | "assertWorkspaceActive"
+      "getWorkspace" | "listWorkspaces" | "getThread" | "assertWorkspaceActive" | "workspaceAuthorityIsCurrent"
     >,
     readonly roots: WorkspaceFileRootRepository,
     readonly linkedWorktrees: WorkspaceFileLinkedWorktreeRepository,
@@ -581,6 +581,10 @@ export class WorkspaceFileService {
           try {
             await this.providers.removeLinkedWorktree(scope, {
               primaryRoot,
+              linkedRoot: {workspaceId, environmentId: workspace.environmentId, rootId, canonicalPath: root.canonicalPath},
+              ...(admittedCheckout.authorityRootId && {checkoutAuthority: {
+                authorityRootId: admittedCheckout.authorityRootId, authorityRevision: admittedCheckout.authorityRevision,
+              }}),
               canonicalCheckoutPath: root.canonicalCheckoutPath,
               canonicalGitDir: root.canonicalGitDir,
               identityToken: root.identityToken,
@@ -836,18 +840,17 @@ export class WorkspaceFileService {
     const operationSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
     return this.#withWorkspaceOperation(scope, workspace.id, async () => {
       operationSignal.throwIfAborted();
-      if (workspace.availability !== "available") throw new DomainError("not_found", "The source file is unavailable.");
+      if (workspace.availability !== "available" || !this.inventory.workspaceAuthorityIsCurrent(scope, workspace)) throw new DomainError("not_found", "The source file is unavailable.");
       const located = await this.#primaryCaptureTarget(scope, workspace, absolutePath, operationSignal) ??
         await this.#linkedCaptureTarget(scope, workspace, absolutePath, operationSignal);
       if (!located) throw new DomainError("not_found", "The source file is unavailable through Files.");
       const { target } = located;
-      const grant = this.captureFileGrant?.(scope, workspace, target);
-      if (grant) {
-        grant();
-        retainGrant?.(grant);
-      }
+      const grant = this.#captureSourceGrant(scope, workspace, target);
+      grant();
+      retainGrant?.(grant);
       return this.#withRootOperation(scope, workspace.id, target.rootId, async () => {
         const metadata = await this.providers.read(scope, target, located.path, operationSignal);
+        grant();
         if (metadata.availability !== "available") throw new DomainError("not_found", "The source file is unavailable.");
         if (metadata.sizeBytes < 1 || metadata.sizeBytes > maximumBytes) throw new DomainError("bad_request", "The source file exceeds the capture limit or is empty.");
         return this.providers.withDownload(scope, target, { path: located.path, expectedRevision: metadata.revision }, async source => {
@@ -861,6 +864,7 @@ export class WorkspaceFileService {
             chunks.push(Buffer.from(chunk));
           }, operationSignal);
           operationSignal.throwIfAborted();
+          grant();
           if (size !== source.sizeBytes) throw new DomainError("conflict", "The source file changed during capture.");
           return Buffer.concat(chunks);
         }, operationSignal);
@@ -886,26 +890,37 @@ export class WorkspaceFileService {
     const operationSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
     return this.#withWorkspaceOperation(scope, workspace.id, async () => {
       operationSignal.throwIfAborted();
-      if (workspace.availability !== "available") return undefined;
+      if (workspace.availability !== "available" || !this.inventory.workspaceAuthorityIsCurrent(scope, workspace)) return undefined;
       const located = await this.#primaryCaptureTarget(scope, workspace, absolutePath, operationSignal) ??
         await this.#linkedCaptureTarget(scope, workspace, absolutePath, operationSignal);
       operationSignal.throwIfAborted();
       if (!located) return undefined;
       const { target } = located;
-      const grant = this.captureFileGrant?.(scope, workspace, target);
-      if (grant) {
-        grant();
-        retainGrant?.(grant);
-      }
+      const grant = this.#captureSourceGrant(scope, workspace, target);
+      grant();
+      retainGrant?.(grant);
       return this.#withRootOperation(scope, workspace.id, target.rootId, async () => {
         operationSignal.throwIfAborted();
         const result = this.#providerResult(target.rootId,
           await this.providers.read(scope, target, located.path, operationSignal));
         operationSignal.throwIfAborted();
+        grant();
         return result.availability === "available" && result.contentKind === "image" &&
           result.previewState === "available" ? result : undefined;
       }, () => controller.abort(new Error("viewed_image_root_retired")));
     });
+  }
+
+  #captureSourceGrant(scope: RequestScope, workspace: InventoryWorkspaceRecord, target: WorkspaceFileRootTarget) {
+    const source = this.captureFileGrant?.(scope, workspace, target);
+    const primary = target.rootId !== WORKSPACE_FILE_PRIMARY_ROOT_ID && this.captureFileGrant?.(scope, workspace, {
+      workspaceId: workspace.id, environmentId: workspace.environmentId, rootId: WORKSPACE_FILE_PRIMARY_ROOT_ID, canonicalPath: workspace.canonicalPath,
+    });
+    return () => {
+      if (!this.inventory.workspaceAuthorityIsCurrent(scope, workspace)) throw new DomainError("conflict", "The project workspace root changed during capture.");
+      source?.();
+      if (primary) primary();
+    };
   }
 
   /** An image inside Primary reads through it, like a listed link match, without a hidden root. */
@@ -1411,6 +1426,7 @@ export class WorkspaceFileService {
     preferredRootId: WorkspaceFileLinkedWorktreeRootId | null,
   ): Promise<WorkspaceFileLinkResolveResult> {
     const workspace = this.inventory.getWorkspace(scope, workspaceId);
+    if (!this.inventory.workspaceAuthorityIsCurrent(scope, workspace)) return {status: "not_found"};
     const roots = await this.#resolvedRoots(
       scope,
       workspace,
@@ -1489,7 +1505,10 @@ export class WorkspaceFileService {
       }
     }
     const selectedMatch = mostSpecificWorkspaceFileRootMatch(matches);
+    if (!this.inventory.workspaceAuthorityIsCurrent(scope, workspace)) return {status: "not_found"};
     if (selectedMatch) {
+      this.#captureSourceGrant(scope, workspace, {workspaceId, environmentId: workspace.environmentId, rootId: selectedMatch.rootId,
+        canonicalPath: selectedMatch.canonicalPath})();
       return {
         status: "resolved",
         rootId: selectedMatch.rootId,
@@ -1518,9 +1537,10 @@ export class WorkspaceFileService {
     absolutePath: string,
   ): Promise<WorkspaceFileLinkResolveResult> {
     const candidate = await this.#absoluteFileCandidate(scope, workspace, absolutePath);
-    if (!candidate) return { status: "not_found" };
+    if (!candidate || !this.inventory.workspaceAuthorityIsCurrent(scope, workspace)) return { status: "not_found" };
     let remembered;
     try {
+      this.#captureSourceGrant(scope, workspace, candidate.target)();
       remembered = this.roots.rememberLinkRoot(
         scope,
         workspace.id,
@@ -1550,6 +1570,8 @@ export class WorkspaceFileService {
     signal?: AbortSignal,
   ): Promise<{ readonly target: WorkspaceFileRootTarget; readonly path: string; readonly authority?: FileRootAdmission } | undefined> {
     signal?.throwIfAborted();
+    // A failed lookup within the primary cannot acquire a hidden overlapping grant.
+    if (isWithinRemoteRoot(absolutePath, workspace.canonicalPath)) return undefined;
     if (!normalizedAbsolutePath(absolutePath) ||
         Buffer.byteLength(absolutePath, "utf8") > WORKSPACE_FILE_MAX_PATH_BYTES) {
       return undefined;
@@ -1717,6 +1739,7 @@ export class WorkspaceFileService {
                 const current = subscriptions.get(target.rootId);
                 if (closed || current?.subscription !== subscription) return;
                 subscriptions.delete(target.rootId);
+                void Promise.resolve().then(() => subscription.close()).catch(() => undefined);
                 const failedKey = this.#watchabilityKey(scope, target);
                 if (this.#watchability.get(failedKey) !== false) {
                   this.#watchability.set(failedKey, false);

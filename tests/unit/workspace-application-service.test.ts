@@ -393,6 +393,16 @@ describe("WorkspaceApplicationService", () => {
     expect(current.upsertWorkspace).toHaveBeenCalledOnce();
   });
 
+  it("rechecks an existing location's project before an omitted-project open can reuse it", async () => {
+    const current = fixture({
+      resolveProject: vi.fn(() => ({id:"project-hidden", membershipRevision:1, memberEnvironmentIds:["environment-b"]})),
+      upsertWorkspace: vi.fn((_scope, input) => { input.requireExistingProject("project-hidden"); throw new Error("should not write"); }),
+    });
+    await expect(current.service.openWorkspaceForAgent(scope, {environmentId:"environment-a", path:"/srv/projects/sedes"}, agentAuthority))
+      .rejects.toMatchObject({code:"permission_denied"});
+    expect(current.handoffAuthoritativeReplacement).not.toHaveBeenCalled();
+  });
+
   it("authorizes a named project against its current membership and binds the commit to it", async () => {
     let membershipRevision = 4;
     const resolveProject = vi.fn(() => ({

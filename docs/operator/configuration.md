@@ -841,6 +841,12 @@ each changed setting on **Overview**. Inspect a feature marked **Unsupported
 on this host** or **Could not apply** for its specific prerequisite. A
 disconnected host retains the desired revision until reconnection. Use
 **Retry apply** to request another attempt on a connected host.
+A compatible software upgrade remains available separately in the actions menu.
+**Execution policy conflict** means a known sidecar has a newer or divergent
+policy, as can happen after a database restore. Inspect active work and select
+**Restart sidecar** to replace that incarnation and install the saved policy.
+**Stop** leaves the sidecar shut down. Sedes verifies ownership and checks the
+current resource inventory before either action.
 
 Labels update immediately. Thread and execution defaults apply to new work.
 Connection compression is sampled on the next normal or recovery attachment.

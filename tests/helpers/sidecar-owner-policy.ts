@@ -54,6 +54,7 @@ export function ownerPolicyPeer(
     configuration: installed?.configuration ?? service.effectiveConfiguration,
     readiness: installed
       ? [
+          ...installed.snapshot.roots.map(entry => ({id: `root:${entry.id}`, generation: entry.generation, state: "ready" as const})),
           ...installed.snapshot.capabilities.map((entry) => ({
             ...entry,
             id: `capability:${entry.id}`,

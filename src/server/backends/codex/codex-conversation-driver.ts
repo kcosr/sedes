@@ -109,7 +109,7 @@ import {
   parseCodexBindingDetail,
   serializeCodexBindingDetail,
 } from "./codex-binding-codec.js";
-import type { CompiledBackendModelPolicy } from "../model-policy.js";
+import { filterCatalogModels, type CompiledBackendModelPolicy } from "../model-policy.js";
 import {
   CodexRpcDeliveryError,
   CodexRpcProtocolError,
@@ -429,10 +429,11 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
         throw mapCodexReadError(error);
       }
     }
-    const models = await this.#cachedModels(lifecycle.generation, modelProvider);
+    const rawModels = await this.#cachedModels(lifecycle.generation, modelProvider);
+    let skills: CodexSkillCatalog;
     const preferences = this.#composerSkillPreferences.read(context.scope);
     try {
-      const skills = await this.#readSkillCatalog(
+      skills = await this.#readSkillCatalog(
         lifecycle.generation,
         context.workspace.canonicalPath,
         preferences,
@@ -448,20 +449,18 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
       ) {
         return this.catalog(context);
       }
-      return { models, commands: [], ...skills };
     } catch (error) {
       this.#assertCatalogGeneration(lifecycle.generation, lifecycle.generation);
       // Explicit picker reads surface a failure for Retry. Passive reads keep
       // settings available even when additive skill discovery is unavailable.
       if (context.purpose === "skill_picker") throw mapCodexReadError(error);
       this.#onError(error);
-      return {
-        models,
-        commands: [],
+      skills = {
         skills: [],
         notices: [boundDisplayText("Codex skills are temporarily unavailable.")],
       };
     }
+    return { models: filterCatalogModels(rawModels, this.#modelPolicy, "model_effort"), commands: [], ...skills };
   }
 
   #cachedModels(generation: number, modelProvider?: string): Promise<BackendCatalog["models"]> {
@@ -511,7 +510,8 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
     modelProvider?: string,
   ): Promise<BackendCatalog["models"]> {
     const lifecycle = this.#catalogLifecycle(context);
-    return this.#fetchModels(lifecycle.generation, modelProvider);
+    return this.#fetchModels(lifecycle.generation, modelProvider)
+      .then(models => filterCatalogModels(models, this.#modelPolicy, "model_effort"));
   }
 
   #readSkillCatalog(
@@ -671,7 +671,7 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
       if (!label) {
         throw invalidModelCatalog("codex_model_catalog_label_invalid");
       }
-      const advertisedReasoningEfforts = model.supportedReasoningEfforts.map(
+      const supportedReasoningEfforts = model.supportedReasoningEfforts.map(
         ({ reasoningEffort }) => reasoningEffort,
       );
       if (
@@ -683,25 +683,19 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
         );
       }
       if (
-        advertisedReasoningEfforts.length === 0 ||
-        new Set(advertisedReasoningEfforts).size !==
-          advertisedReasoningEfforts.length ||
-        advertisedReasoningEfforts.some(
+        supportedReasoningEfforts.length === 0 ||
+        new Set(supportedReasoningEfforts).size !==
+          supportedReasoningEfforts.length ||
+        supportedReasoningEfforts.some(
           (effort) => effort.trim().length === 0 || effort.length > 120,
         ) ||
         model.defaultReasoningEffort.length > 120 ||
-        !advertisedReasoningEfforts.includes(model.defaultReasoningEffort)
+        !supportedReasoningEfforts.includes(model.defaultReasoningEffort)
       ) {
         throw invalidModelCatalog(
           "codex_model_catalog_reasoning_efforts_invalid",
         );
       }
-      const supportedReasoningEfforts =
-        this.#modelPolicy.filterReasoningEfforts(
-          { modelId: model.id },
-          advertisedReasoningEfforts,
-        );
-      if (supportedReasoningEfforts.length === 0) continue;
       const serviceTierIds = model.serviceTiers.map(({ id }) => id);
       // The account-scoped catalog is the only availability authority for
       // accelerated tiers. Unknown native tiers fail closed.
@@ -749,14 +743,9 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
           (modality): modality is "text" | "image" =>
             modality === "text" || modality === "image",
         ),
-        ...(model.isDefault &&
-        supportedReasoningEfforts.includes(model.defaultReasoningEffort)
-          ? { isDefault: true as const }
-          : {}),
+        ...(model.isDefault ? { isDefault: true as const } : {}),
         supportedReasoningEfforts,
-        ...(supportedReasoningEfforts.includes(model.defaultReasoningEffort)
-          ? { defaultReasoningEffort: model.defaultReasoningEffort }
-          : {}),
+        defaultReasoningEffort: model.defaultReasoningEffort,
         ...(offeredServiceTiers.length > 0
           ? {
               serviceTiers: {

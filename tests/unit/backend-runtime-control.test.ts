@@ -13,7 +13,7 @@ it.each(["codex", "claude"] as const)("%s control preserves delivery uncertainty
   const channel = { call, encodeBody: async () => ({}) } as unknown as SidecarRuntimeChannel;
   const stop = provider === "codex"
     ? () => new CodexSidecarRuntimeConnection(channel).stop({ scope, runtimeId: "runtime", controllerId: "1" }, "revision", true)
-    : () => new ClaudeSidecarRuntimeConnection(channel).stop({ configuration: {
+    : () => new ClaudeSidecarRuntimeConnection(channel, scope.backendInstanceId).stop({ configuration: {
       ...scope, executablePath: "/claude", configDirectory: "/config", initializationTimeoutMs: 1000,
     }, runtimeId: "11111111-1111-4111-8111-111111111111", controllerEpoch: 1, expectedRevision: "revision", force: true });
   for (const error of [

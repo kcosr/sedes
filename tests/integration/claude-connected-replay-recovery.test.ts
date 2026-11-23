@@ -76,7 +76,7 @@ async function fixture() {
     current = lease;
     const attached = {
       ...carrier, lease,
-      connection: new ClaudeSidecarRuntimeConnection(carrier.mainChannel),
+      connection: new ClaudeSidecarRuntimeConnection(carrier.mainChannel, scope.backendInstanceId),
       async close() {
         if (current === lease) current = undefined;
         detach();
@@ -257,6 +257,7 @@ describe("connected Claude replay reclamation recovery", () => {
     expect(native.closed).toBe(false);
 
     const secondCarrier = await f.attach();
+    expect(await secondCarrier.connection.lookup(configuration, secondCarrier.lease.controllerEpoch)).toBe(runtimeId);
     const attachment = claudePersistentAttachmentSchema.parse(await secondCarrier.connection.execute({
       runtimeId, controllerEpoch: secondCarrier.lease.controllerEpoch, action: "attach", replay: "full", request: { sessionId },
     }));

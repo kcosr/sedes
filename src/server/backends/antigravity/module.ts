@@ -1,3 +1,4 @@
+import { ConnectionDriverCache } from "../connection-driver-cache.js";
 import { createHash, createHmac } from "node:crypto";
 import { ManagedTerminalCarrierError } from "../../terminal/managed-terminal-carrier.js";
 import { NO_BACKEND_ACCOUNT_USAGE } from "../backend-account-usage.js";
@@ -148,7 +149,7 @@ function createRuntime(
 ): BackendModuleRuntime {
   const { scope, instance } = context;
   const profileFor = (id: string) => context.connections.find(connection => connection.id === id);
-  const drivers = new Map<string, AntigravityDriver>();
+  const drivers = new ConnectionDriverCache<AntigravityDriver>();
   const settings = new AntigravityThreadRepository(context.database);
   const operations = new ConversationOperationRepository(context.database);
   const modeCatalog = new AntigravityModeCatalog();

@@ -1,4 +1,5 @@
-import { observedLaunchDigest } from "../../provider-policy-admission.js";
+import { SidecarOperationError } from "../../../../internal/sidecar-protocol/operation-registry.js";
+import { observedLaunchDigest, type ProviderLaunchAdmission } from "../../provider-policy-admission.js";
 import { configurationFingerprint } from "../../../config/configuration-fingerprint.js";
 import type { EnvironmentVariableOverrides } from "../../../../shared/protocol/environment-variables.js";
 import type { SidecarUpgradeBlocker } from "../../../../internal/sidecar-protocol/service-management-v1.js";
@@ -36,8 +37,10 @@ export class CodexRuntimeHostRegistry {
   readonly #runtimes = new Map<string, CodexHostedRuntime>();
   readonly #starting = new Map<string, Promise<CodexHostedRuntime>>();
   readonly managedTui: CodexRuntimeManagedTuiHosts;
-  observedLaunchDigest(id: string): string | undefined {
-    return observedLaunchDigest(this.#runtimes.get(id)?.host);
+  observedLaunchDigest(id: string): string | null | undefined {
+    const resident = this.#runtimes.get(id);
+    if (resident) return observedLaunchDigest(resident.host);
+    return this.#starting.has(id) ? undefined : null;
   }
 
   constructor(readonly input: {
@@ -50,24 +53,23 @@ export class CodexRuntimeHostRegistry {
     this.managedTui = new CodexRuntimeManagedTuiHosts({ getRuntime: runtimeId => this.getRuntime(runtimeId), services: input.services });
   }
 
-  async ensure(configuration: CodexRuntimeConfiguration, controllerEpoch: number, assertLaunch?: () => void): Promise<CodexRuntimeHost> {
+  async ensure(configuration: CodexRuntimeConfiguration, controllerEpoch: number, admission?: ProviderLaunchAdmission): Promise<CodexRuntimeHost> {
     this.input.services.assertController(controllerEpoch);
     this.#assertConfigurationScope(configuration);
     if (!configuration.instance.enabled) throw new Error("codex_runtime_configuration_disabled");
-    const fingerprint = configurationFingerprint(configuration.connection);
+    const fingerprint = configurationFingerprint([configuration.connection, configuration.startupEnvironmentVariables ?? {}]);
     const key = configuration.instance.id;
     const pending = this.#starting.get(key);
     const existing = this.#runtimes.get(key) ?? (pending ? await pending : undefined);
     this.input.services.assertController(controllerEpoch);
     if (existing) {
-      // Startup edits remain pending until explicit retirement. Reattachment
-      // must keep using the retained owner and its applied startup environment.
-      if (existing.fingerprint !== fingerprint) throw new Error("codex_runtime_configuration_restart_required");
+      // Existing-only lookup can reattach independently of this launch comparison.
+      if (existing.fingerprint !== fingerprint) throw new SidecarOperationError("codex_runtime_configuration_restart_required");
       return existing.host;
     }
     this.input.services.assertAdmission(controllerEpoch);
-    assertLaunch?.();
-    const starting = this.#start(configuration, fingerprint, controllerEpoch, assertLaunch);
+    admission?.assertCurrent();
+    const starting = this.#start(configuration, fingerprint, controllerEpoch, admission);
     this.#starting.set(key, starting);
     try { return (await starting).host; }
     finally { if (this.#starting.get(key) === starting) this.#starting.delete(key); }
@@ -146,7 +148,7 @@ export class CodexRuntimeHostRegistry {
     return { state, incarnation: runtime.host.runtimeId, revision, blockers, startupEnvironmentFingerprint: runtime.startupEnvironmentFingerprint };
   }
 
-  async #start(configuration: CodexRuntimeConfiguration, fingerprint: string, controllerEpoch: number, assertLaunch?: () => void): Promise<CodexHostedRuntime> {
+  async #start(configuration: CodexRuntimeConfiguration, fingerprint: string, controllerEpoch: number, admission?: ProviderLaunchAdmission): Promise<CodexHostedRuntime> {
     const ownership = configuration.connection.ownership === "owned" ? new CodexNativeStoreOwnershipGate() : undefined;
     const configuredHome = configuration.connection.ownership === "owned" ? configuration.connection.channel.codexHome : undefined;
     const nativeHome = ownership
@@ -162,7 +164,7 @@ export class CodexRuntimeHostRegistry {
     try {
       resolved = await resolveCodexRuntimeConfiguration({ ...configuration, scope: this.input.scope, environmentChannel: this.input.environmentChannel, environment: this.input.environment });
       this.input.services.assertAdmission(controllerEpoch);
-      assertLaunch?.();
+      admission?.assertCurrent();
     } catch (error) {
       await lease?.release();
       throw error;
@@ -171,7 +173,7 @@ export class CodexRuntimeHostRegistry {
     const host = new CodexRuntimeHost({ scope, runtimeId: randomUUID() });
     let registered = () => {};
     const supervisor = new CodexDaemonSupervisor({
-      scope, transportFactory: createCodexRuntimeTransport({ scope, configuration: resolved, environmentChannel: this.input.environmentChannel }),
+      scope, transportFactory: createCodexRuntimeTransport({ scope, configuration: resolved, environmentChannel: this.input.environmentChannel, assertLaunchAdmission: admission && (() => admission.assertInstalled(this.input.services)) }),
       serverRequestRouter: host.serverRequests,
       onRuntimeVersionAssessment: assessment => host.observeRuntimeVersion(assessment),
       ...(ownership ? {
@@ -212,7 +214,8 @@ export class CodexRuntimeHostRegistry {
     } };
     try {
       this.input.services.assertAdmission(controllerEpoch);
-      assertLaunch?.();
+      admission?.assertCurrent();
+      admission?.bind(host);
       registered = this.input.services.register({
         resourceId: host.runtimeId, kind: "provider",
         snapshot: () => {

@@ -85,7 +85,7 @@ runtime/host used locally; SSH and outbound
 carriers share typed operations and the bounded runtime body channel. Carrier
 detach releases ports and subscribers, preserving the native owner and evidence.
 Existing-only recovery can reopen exact retained thread authority after a
-configuration change, but cannot create scopes or submit new work. Backend
+configuration change. Recovery can reject a pending permission, cancel a form, and replay an exact original write receipt. A fresh approval or form answer requires the current backend grant. Backend
 administration can inspect and explicitly retire the original owner even after
 desired native paths change. Ordinary lookups use the immutable native store and
 scope. A fresh launch must match the currently installed backend generation and

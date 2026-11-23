@@ -4,6 +4,8 @@ export type WorkspaceRootGrant = {
   readonly id: string;
   readonly path: string;
   readonly generation: number;
+  /** Local grants use native path semantics, including literal POSIX backslashes. */
+  readonly contains?: (canonicalPath: string) => boolean;
 };
 
 export function workspaceRootGrant(
@@ -15,7 +17,7 @@ export function workspaceRootGrant(
   let selected: WorkspaceRootGrant | undefined;
   for (const root of roots) {
     if (binding && (root.id !== binding.authorityRootId || root.generation !== binding.authorityRevision)) continue;
-    if (!isWithinRemoteRoot(canonicalPath, root.path)) continue;
+    if (!(root.contains?.(canonicalPath) ?? isWithinRemoteRoot(canonicalPath, root.path))) continue;
     if (!selected || root.path.length > selected.path.length ||
         (root.path.length === selected.path.length && root.id < selected.id)) selected = root;
   }

@@ -202,7 +202,7 @@ export class WorkspaceFileLinkedWorktreeRepository {
         const discoveries = new Map(discovered.map(candidate => [candidate.identityToken, candidate]));
         const tombstoned = active.filter(root => {
           const candidate = discoveries.get(root.identityToken);
-          return candidate ? !authority.stillAdmitted(root.rootId, candidate.canonicalPath) : input.complete;
+          return !authority.stillAdmitted(root.rootId, candidate?.canonicalPath ?? root.canonicalPath) || (!candidate && input.complete);
         });
         const tombstonedRootIds = tombstoned.map(({ rootId }) => rootId);
         const clearedThreadIds: string[] = [];

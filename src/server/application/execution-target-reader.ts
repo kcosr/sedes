@@ -275,17 +275,30 @@ export class DatabaseExecutionTargetReader implements ExecutionTargetReader {
     ].join("\0");
     const now = this.input.now?.() ?? Date.now();
     const cached = this.#health.get(cacheKey);
+    const recordAvailability = (available: boolean, generation: number) => {
+      if (generation === this.#healthGeneration) this.#health.set(cacheKey, {
+        available,
+        expiresAt: (this.input.now?.() ?? Date.now()) + (this.input.healthCacheMilliseconds ?? 5_000),
+      });
+    };
     let available: boolean;
-    let selectionSignal: AbortSignal | undefined;
+    let grantSignal: AbortSignal | undefined;
+    const waitingForTarget = () => ({
+      ...base, available: false, unavailableReason: boundDisplayText("Waiting for the execution target to become ready."),
+    });
     if (admission?.confirmRemote && !useHealthCache) {
       const deadline = AbortSignal.timeout(10_000);
-      selectionSignal = signal ? AbortSignal.any([signal, deadline]) : deadline;
-      const confirmed = await withAbort(admission.confirmRemote(selectionSignal), selectionSignal).catch(error => {
-        if (!selectionSignal?.aborted) throw error;
+      grantSignal = signal ? AbortSignal.any([signal, deadline]) : deadline;
+      const generation = this.#healthGeneration;
+      const confirmed = await withAbort(admission.confirmRemote(grantSignal), grantSignal).catch(error => {
+        if (!grantSignal?.aborted) throw error;
         return false;
       });
       signal?.throwIfAborted();
-      if (!confirmed) return {...base, available: false, unavailableReason: boundDisplayText("Waiting for the execution target to become ready.")};
+      if (!confirmed) {
+        if (!grantSignal.aborted) recordAvailability(false, generation);
+        return waitingForTarget();
+      }
     }
     const generation = this.#healthGeneration;
     if (useHealthCache && cached && cached.expiresAt > now) {
@@ -296,23 +309,20 @@ export class DatabaseExecutionTargetReader implements ExecutionTargetReader {
       available = true;
     } else {
       try {
-        const driver = this.input.registry.driver(connection);
-        const health = selectionSignal
-          ? await withAbort(driver.health({waitForInitialization: selectionSignal}), selectionSignal)
+        const driver = this.input.registry.driver(connection, grantSignal);
+        const providerSignal = grantSignal ? signal ?? new AbortController().signal : undefined;
+        const health = providerSignal
+          ? await withAbort(driver.health({waitForInitialization: providerSignal}), providerSignal)
           : await driver.health();
         signal?.throwIfAborted();
         available = health.available;
       } catch (error) {
         signal?.throwIfAborted();
+        if (grantSignal?.aborted && error === grantSignal.reason) return waitingForTarget();
         this.input.onHealthError?.(error, profile);
         available = false;
       }
-      if ((useHealthCache || admission?.confirmRemote) && generation === this.#healthGeneration) {
-        this.#health.set(cacheKey, {
-          available,
-          expiresAt: (this.input.now?.() ?? Date.now()) + (this.input.healthCacheMilliseconds ?? 5_000),
-        });
-      }
+      recordAvailability(available, generation);
     }
     if (generation !== this.#healthGeneration) available = false;
     return available

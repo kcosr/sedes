@@ -1,3 +1,4 @@
+import type { PersistentSidecarServiceRegistry } from "../sidecar/persistent-sidecar-service-registry.js";
 import { SidecarOperationError } from "../../internal/sidecar-protocol/operation-registry.js";
 
 interface BackendGrant {
@@ -23,6 +24,8 @@ type Stamp = { id: string; kind: string; generation: number; launchDigest: strin
  * be renewed by another lookup, even if the saved ID has since been re-added. */
 const admitted = new WeakMap<object, Stamp>();
 
+export type ProviderLaunchAdmission = ReturnType<typeof launchAdmission>;
+
 export function launchAdmission(attachment: ProviderPolicyAttachment, kind: string, id: string, digest: string,
   enabledTargets?: readonly { readonly enabled: boolean; readonly templateId: string }[]) {
   const read = () => {
@@ -36,6 +39,9 @@ export function launchAdmission(attachment: ProviderPolicyAttachment, kind: stri
   const assertCurrent = () => { if (read().generation !== grant.generation) throw denied(); };
   return {
     assertCurrent,
+    assertInstalled(services: PersistentSidecarServiceRegistry) {
+      if (!services.hasInstalledBackend(id, kind, grant.generation, digest)) throw denied();
+    },
     bind(host: object) {
       assertCurrent();
       const prior = admitted.get(host);

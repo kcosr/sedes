@@ -3329,7 +3329,7 @@ exact-target interrupt. An authoritative idle observation accepts a no-op.
 A stale native target is nonapplication; old-turn disappearance alone never
 proves command acceptance. Drivers record operation/generation evidence before
 effects. Persistent Claude owner evidence survives main-client replacement;
-`claude_runtime@4` and `claude_persistent_runtime@5` are required, without
+`claude_runtime@4` and `claude_persistent_runtime@6` are required, without
 older-contract parsers.
 
 The deadline includes pending-input withdrawal and carrier/SDK acknowledgement.

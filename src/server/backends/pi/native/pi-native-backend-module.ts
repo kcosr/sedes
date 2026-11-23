@@ -1,3 +1,4 @@
+import { ConnectionDriverCache } from "../../connection-driver-cache.js";
 import { NO_BACKEND_ACCOUNT_USAGE } from "../../backend-account-usage.js";
 import { PiInstallationAdvisorySource } from "./installation-advisories.js";
 import type { VerifiedPiRuntimeVersion } from "./runtime-release.js";
@@ -100,7 +101,7 @@ class PiNativeModuleRuntime implements BackendModuleRuntime {
   readonly accountUsage = NO_BACKEND_ACCOUNT_USAGE;
   readonly installationAdvisories;
   readonly managedProviderTerminals = managedProviderTerminals;
-  readonly #drivers = new Map<string, PiNativeConversationDriver>();
+  readonly #drivers = new ConnectionDriverCache<PiNativeConversationDriver>();
   readonly #agentTools;
   #closed = false;
   #closeComplete = false;

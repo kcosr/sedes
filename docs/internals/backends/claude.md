@@ -40,7 +40,7 @@ enabled. One
 principal/backend runtime owns the SDK queries admitted by the shared Sedes
 conversation-runtime budget for that execution environment. A live Sedes thread
 has at most one warm query. The strict worker and persistent sidecar capabilities
-are `claude_runtime@4` and `claude_persistent_runtime@5`. Worker operations are
+are `claude_runtime@4` and `claude_persistent_runtime@6`. Worker operations are
 defined in `src/server/backends/claude/worker/claude-runtime-v4.ts`; older majors
 are not accepted.
 Closing a handle does not delete its Claude session, and attaching the same
@@ -51,6 +51,8 @@ two Claude processes never write one transcript. Unproven cleanup keeps the
 session reserved and fences the worker generation. The worker's fixed maximum
 of 32 simultaneous queries is a last-resort execution-environment safety guard,
 not a backend configuration surface.
+
+Each persistent command carries the backend instance ID and addresses a runtime discovered by the current controller. A recovery controller can deny a pending permission or replay an already recorded response. Recording a new approval requires the active instance grant. The host checks the original launch digest and grant generation again before it starts a replacement worker.
 
 The persistent service owns remote queries and their bounded retained events;
 SSH stdio or an outbound connection carries the current main-side attachment. Detach does not interrupt
@@ -259,7 +261,7 @@ late responses cannot restore them. Missing telemetry leaves context unknown
 without failing the conversation. Persistent reads bind the current service,
 controller and startup identity and never launch or reconnect a runtime for the
 meter. The worker requires `query.context_usage` in its exact operation inventory;
-the persistent closed command union requires `claude_persistent_runtime@5`.
+the persistent closed command union requires `claude_persistent_runtime@6`.
 
 Counters continue to come from the transcript projection. Every `usage_changed`
 event replaces the complete context-and-counters snapshot. Neither the context
@@ -1121,7 +1123,7 @@ The alias list is bounded to 128 names of at most 160 characters per skill.
 The catalog exposes at most 512 skills. Client protocol 132 carries the
 optional normalized field; Pi, Codex, Grok, and OpenCode omit it and retain
 their existing behavior. Native `builtin` classification stays private and
-is preserved by `claude_runtime@4` / `claude_persistent_runtime@5` catalogs.
+is preserved by `claude_runtime@4` / `claude_persistent_runtime@6` catalogs.
 Stale selections, terminal-only commands, unclassified builtins, malformed
 commands, and reset-producing forms fail before provider submission.
 
@@ -1323,7 +1325,7 @@ action only on exact native evidence. A lost reply or runtime authority keeps
 the operation uncertain; recovery consults its retained receipt and never
 resends a command whose outcome cannot be proven. Persistent sidecars carry
 the same command, result, and scoped receipt behavior. This operation requires
-the current `claude_runtime@4` / `claude_persistent_runtime@5` capability majors;
+the current `claude_runtime@4` / `claude_persistent_runtime@6` capability majors;
 the shared sidecar wire protocol is 18.
 
 Full accounting receipts are limited to 256 per native query and persistent

@@ -1,3 +1,4 @@
+import { ConnectionDriverCache } from "../connection-driver-cache.js";
 import type { ThreadEnvironmentResolver } from "../../environment-variables/runtime-environment.js";
 import type {
   AgentBackendInstance,
@@ -50,7 +51,7 @@ export class PiBackendDriverFactory implements BackendDriverFactory {
   readonly #resolveRemoteWorkspace?: PiDriverOptions["resolveRemoteWorkspace"];
   readonly #isolatedWorkspaces?: PiIsolatedWorkspaceResolver;
   readonly #discoverySnapshots = new PiDiscoverySnapshotStore();
-  readonly #drivers = new Map<string, PiConversationBackendDriver>();
+  readonly #drivers = new ConnectionDriverCache<PiConversationBackendDriver>();
   readonly #claimNativeSession: PiDriverOptions["claimNativeSession"];
   readonly #modelPolicy: CompiledBackendModelPolicy;
   readonly #outputArtifacts: OutputArtifactPublisher;

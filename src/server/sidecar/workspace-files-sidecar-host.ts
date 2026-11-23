@@ -265,7 +265,7 @@ export class WorkspaceFilesSidecarHost {
             this.#guard(async () => {
               const assertAdmission = this.#admission();
               assertAdmission();
-              const check = this.input.policyGuard?.capture("workspace_files", request.policyRootPath);
+              const check = this.input.policyGuard?.capture("workspace_files", request.policyRootPath, request.checkoutAuthority);
               const policyRoot = await canonicalDirectory(
                 request.policyRootPath,
               );
@@ -277,9 +277,12 @@ export class WorkspaceFilesSidecarHost {
                 throw new WorkspaceFileRootUnavailableError();
               }
               check?.();
-              const root = this.#root(request.rootHandle);
+              const root = this.#admittedRoot(request.rootHandle);
+              const linked = this.#admittedRoot(request.linkedRootHandle);
+              if (root.rootKind !== "primary" || linked.rootKind !== "linked_worktree" ||
+                  !isWithin(request.canonicalCheckoutPath, linked.engineRoot.canonicalPath)) throw new WorkspaceFileRootUnavailableError();
               await this.#engine.removeLinkedWorktree(
-                check ? { ...root, assertCurrent: () => { root.assertCurrent?.(); check(); } } : root,
+                { ...root.engineRoot, assertCurrent: () => { root.assertCurrent?.(); linked.assertCurrent?.(); check?.(); } },
                 request,
                 context.signal,
               );
@@ -287,7 +290,7 @@ export class WorkspaceFilesSidecarHost {
             }, "mutation"),
         ),
       watchOpen: (request, context) =>
-        this.#guard(() => this.#watchOpen(request.rootHandle, context.signal)),
+        this.#guard(() => this.#watchOpen(request.rootHandle, context.signal), "mutation"),
       watchClose: (request) =>
         this.#guard(() => this.#watchClose(request.subscriptionHandle), "cleanup"),
       diffRepositories: (request, context) =>
@@ -744,6 +747,7 @@ export class WorkspaceFilesSidecarHost {
       // A cancelled open's response is discarded, so Sedes could never close
       // a watcher registered now.
       signal.throwIfAborted();
+      this.#admittedRoot(rootHandle);
       if (this.#watches.size >= 256)
         throw new SidecarOperationError("sidecar_watch_capacity", true);
     } catch (error) {

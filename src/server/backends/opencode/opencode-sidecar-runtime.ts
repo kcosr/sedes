@@ -7,7 +7,6 @@ import type { PersistentSidecarServiceRegistry } from "../../sidecar/persistent-
 import type { OpenCodeRuntimeHostRegistry } from "./opencode-runtime-host-registry.js";
 import type { OpenCodeNativeHost } from "./opencode-native-host.js";
 import type { OpenCodeNativePort, OpenCodeObservationEnd, OpenCodePortObservation } from "./opencode-native-port.js";
-import { OPENCODE_CONTROL_MUTATIONS } from "./opencode-native-port.js";
 import { OpenCodeNativeMutationDeliveryError, encodeOpenCodeNativeFailure, OPENCODE_OBSERVATION_WIRE_BYTES, parseOpenCodeReadInput, parseOpenCodeMutationInput } from "./opencode-native-codecs.js";
 import { OpenCodeRuntimeError } from "./opencode-release.js";
 import { openCodeRuntimeCommandSchema, openCodeRuntimeCommandLane, openCodeRuntimeOperations,
@@ -180,8 +179,10 @@ export function registerOpenCodeRuntimeHost(input: ProviderPolicyAttachment & {
       case "mutate": {
         // The journal compares the immutable fingerprint first. A retry joins
         // its admitted write or reads its recorded outcome across revocation.
+        const mutation = parseOpenCodeMutationInput(command.method, command.input);
         const admit = () => {
-          if (OPENCODE_CONTROL_MUTATIONS.has(command.method)) return;
+          if (command.method === "interruptSession" || command.method === "cancelInput" || command.method === "cancelForm" ||
+              (command.method === "replyPermission" && "decision" in mutation && mutation.decision === "reject")) return;
           // Recovery has no authority to infer a previously forgotten outcome.
           if (recovery) throw denied();
           try {
@@ -195,7 +196,7 @@ export function registerOpenCodeRuntimeHost(input: ProviderPolicyAttachment & {
             throw new OpenCodeNativeMutationDeliveryError("not_sent", "opencode_request_authority_mismatch");
           }
         };
-        return host.mutate(port.authority, command.method, parseOpenCodeMutationInput(command.method, command.input),
+        return host.mutate(port.authority, command.method, mutation,
           command.control, undefined, admit);
       }
       case "outcome": return port.outcome(command.method, command.identity);

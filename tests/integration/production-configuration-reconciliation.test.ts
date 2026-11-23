@@ -9,6 +9,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ConfigurationProjection } from "../../src/server/configuration-admin/configuration-projection.js";
 import { ConfigurationAdminService } from "../../src/server/configuration-admin/configuration-admin-service.js";
 import { ApplicationSnapshotPublicationBoundary } from "../../src/server/application/application-snapshot-service.js";
 import { DatabaseExecutionTargetReader } from "../../src/server/application/execution-target-reader.js";
@@ -1308,6 +1309,54 @@ describe("production configuration reconciliation", () => {
     expect(control).toHaveBeenCalledWith(expect.objectContaining({ operation: action, force: true,
       expectedServiceIncarnation: status.serviceIncarnation }), expect.any(AbortSignal), expect.any(Function));
     expect(service.repository.pendingLifecycle(scope)).toEqual([]);
+  });
+
+  it.each(["restart", "stop", "ownership lost"] as const)("requires current impact and proved ownership for policy conflict recovery: %s", async scenario => {
+    const { service, scope, snapshot } = await fixture();
+    const environmentId = randomUUID();
+    const configuration = structuredClone(snapshot.configuration);
+    configuration.executionEnvironments.push({ id: environmentId, kind: "ssh", label: "Build host", hostAlias: "test-target", connectionCompression: true, workspaceRoots: ["/workspace"], operations: { kind: "none" } });
+    const status: SidecarServiceStatus = { scope: { ...scope, installationId: "installation", executionEnvironmentId: environmentId },
+      serviceIncarnation: "restored-policy-service", buildId: "current", artifactSha256: "a".repeat(64), runtimeWireVersion: SIDECAR_WIRE_VERSION,
+      controllerEpoch: 3, attached: true, attachmentMode: "normal", state: "ready", configurationState: "applied",
+      desiredConfiguration: { environmentRevision: 5, operationsRevision: 5 }, effectiveConfiguration: { environmentRevision: 5, operationsRevision: 5 },
+      resources: [{ resourceId: "dev-shell", kind: "terminal", state: "active", revision: "1", blockers: ["live_terminal"] }], resourcesFingerprint: "b".repeat(64) };
+    const replacement = { ...status, serviceIncarnation: "replacement", resources: [], resourcesFingerprint: "c".repeat(64) };
+    const inspect = vi.spyOn(SidecarRuntimeOwner.prototype, "inspectService").mockResolvedValue(status);
+    const connect = vi.spyOn(SidecarRuntimeOwner.prototype, "connect").mockResolvedValue(replacement);
+    const control = vi.spyOn(SidecarRuntimeOwner.prototype, "controlService").mockImplementation(async ({ operation }) => {
+      inspect.mockResolvedValue(operation === "stop" ? undefined : replacement);
+      return undefined;
+    });
+    const saved = await service.save(scope, { mutationId: randomUUID(), expectedRevision: snapshot.revision, configuration });
+    const projection = new ConfigurationProjection(service.repository.database, {});
+    projection.policyRecovery(scope, environmentId).requireRecovery(status.serviceIncarnation,
+      { revision: 4, digest: "a".repeat(64) }, { revision: 5, digest: "b".repeat(64) });
+    const action = scenario === "stop" ? "stop" : "restart";
+    const request = { resourceKind: "environment", resourceId: environmentId, action, expectedRevision: saved.revision } as const;
+    const impact = await service.impact(scope, request);
+    expect(impact.interruptions).toContain("terminal dev-shell (active): live_terminal");
+    expect(impact.incarnation).toBe(status.serviceIncarnation);
+    expect((await service.get(scope)).runtimes.find(item => item.resourceId === environmentId))
+      .toMatchObject({ connectionState: "policy_conflict", applyState: "unavailable", supportedActions: ["restart", "stop", "disconnect"] });
+    await expect(service.impact(scope, { ...request, action: "start" })).rejects.toMatchObject({ code: "bad_request" });
+    const command = { ...request, mutationId: randomUUID(), expectedIncarnation: impact.incarnation };
+    await expect(service.lifecycle(scope, { ...command, impactToken: null })).rejects.toMatchObject({ code: "conflict" });
+    if (scenario === "ownership lost") inspect.mockRejectedValue(new SidecarServiceManagementError("sidecar_service_target_identity_unavailable"));
+    const result = await service.lifecycle(scope, { ...command, impactToken: impact.token });
+    if (scenario === "ownership lost") {
+      expect(result).toMatchObject({ state: "rejected", runtime: { connectionState: "recovery_required" } });
+      const next = await service.impact(scope, { ...request, expectedRevision: (await service.get(scope)).revision });
+      expect(await service.lifecycle(scope, { ...command, expectedRevision: next.configurationRevision, impactToken: next.token, mutationId: randomUUID() }))
+        .toMatchObject({ state: "unavailable", runtime: { connectionState: "recovery_required" } });
+      expect(control).not.toHaveBeenCalled();
+      expect(connect).not.toHaveBeenCalled();
+    } else {
+      expect(result).toMatchObject({ state: "applied", runtime: { connectionState: action === "stop" ? "stopped" : "connected" } });
+      expect(control).toHaveBeenCalledWith(expect.objectContaining({ operation: action, force: true,
+        expectedServiceIncarnation: status.serviceIncarnation, controllerEpoch: status.controllerEpoch, expectedResourcesFingerprint: status.resourcesFingerprint }), expect.any(AbortSignal), expect.any(Function));
+      expect(projection.policyRecovery(scope, environmentId).blocked(status.serviceIncarnation)).toBe(true);
+    }
   });
 
   it("distinguishes stale sidecar ownership from host connectivity and blocks duplicate startup", async () => {

@@ -72,7 +72,10 @@ describe("WorkspaceFilesSidecarHost", () => {
     const workspace = path.join(policy, "workspace");
     const linked = path.join(policy, "linked");
     await Promise.all([mkdir(workspace), mkdir(linked)]);
-    const removeLinkedWorktree = vi.fn(async () => undefined);
+    const rootGrant = {id:"policy", path:policy, generation:1};
+    const linkedGrant = {id:"linked", path:linked, generation:2};
+    let grants = [rootGrant, linkedGrant];
+    const removeLinkedWorktree = vi.fn(async (target: {assertCurrent:()=>void}) => target.assertCurrent());
     const engine = {
       validateRoot: async () => undefined,
       removeLinkedWorktree,
@@ -80,6 +83,7 @@ describe("WorkspaceFilesSidecarHost", () => {
     } as unknown as WorkspaceFilesEngine;
     const host = new WorkspaceFilesSidecarHost({
       sessionNonce: "n".repeat(32),
+      policyGuard: createWorkspacePolicyGuard(() => ({roots:grants, capabilities:[{id:"workspace_files",generation:3}], backends:[]})),
       engine,
       sendInvalidation: async () => undefined,
       sendWatchFailure: async () => undefined,
@@ -99,9 +103,14 @@ describe("WorkspaceFilesSidecarHost", () => {
         },
         context(),
       );
+      const linkedRoot = await host.handlers.rootOpen({
+        admissionId: randomUUID(), rootId: "linked", rootKind: "linked_worktree", declaredPath: linked, policyRootPath: linked,
+      }, context());
       const request = {
         operationId: randomUUID(),
         rootHandle: primary.rootHandle,
+        linkedRootHandle: linkedRoot.rootHandle,
+        checkoutAuthority: {authorityRootId:"policy",authorityRevision:1},
         canonicalCheckoutPath: linked,
         policyRootPath: policy,
         canonicalGitDir: path.join(workspace, ".git", "worktrees", "linked"),
@@ -127,6 +136,12 @@ describe("WorkspaceFilesSidecarHost", () => {
         ),
       ).rejects.toMatchObject({ code: "workspace_file_root_unavailable" });
       expect(removeLinkedWorktree).toHaveBeenCalledTimes(1);
+      removeLinkedWorktree.mockImplementationOnce(async target => {
+        grants = [rootGrant, {...linkedGrant, generation:4}];
+        target.assertCurrent();
+      });
+      await expect(host.handlers.removeLinkedWorktree({...request, operationId:randomUUID()}, context()))
+        .rejects.toMatchObject({code:"workspace_policy_revoked"});
     } finally {
       host.close();
     }
@@ -888,7 +903,7 @@ describe("WorkspaceFilesSidecarHost", () => {
     }
   });
 
-  it("closes the watcher of an open cancelled while the watcher was starting", async () => {
+  it.each(["cancelled", "revoked"])("closes the watcher of an open %s while the watcher was starting", async reason => {
     const policy = await mkdtemp(path.join(tmpdir(), "h-sidecar-watch-"));
     roots.push(policy);
     const workspace = path.join(policy, "workspace");
@@ -904,7 +919,10 @@ describe("WorkspaceFilesSidecarHost", () => {
       },
       close: vi.fn(),
     } as unknown as WorkspaceFilesEngine;
+    let generation = 1;
     const host = new WorkspaceFilesSidecarHost({
+      policyGuard: createWorkspacePolicyGuard(() => ({ roots: [{ id: "root", path: policy, generation }],
+        capabilities: [{ id: "workspace_files", generation: 1 }], backends: [] })),
       sessionNonce: "n".repeat(32),
       engine,
       sendInvalidation: async () => undefined,
@@ -931,9 +949,10 @@ describe("WorkspaceFilesSidecarHost", () => {
         { ...context(), signal: controller.signal },
       );
       await started.promise;
-      controller.abort(new Error("caller_cancelled"));
+      if (reason === "cancelled") controller.abort(new Error("caller_cancelled"));
+      else generation++;
       watchReady.resolve(subscription);
-      await expect(pending).rejects.toThrow("caller_cancelled");
+      await expect(pending).rejects.toThrow(reason === "cancelled" ? "caller_cancelled" : "workspace_policy_revoked");
       expect(subscription.close).toHaveBeenCalledOnce();
     } finally {
       host.close();

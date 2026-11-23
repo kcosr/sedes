@@ -186,7 +186,7 @@ export const configurationRuntimeStateSchema = z.strictObject({
   startupEnvironmentPending: z.boolean().optional(),
   effects: z.array(configurationEffectSchema).max(512).optional(),
   preference: z.enum(["automatic", "disconnected", "stopped"]),
-  connectionState: z.enum(["unknown", "connected", "disconnected", "unreachable", "recovery_required", "stopped", "reconciling"]),
+  connectionState: z.enum(["unknown", "connected", "disconnected", "unreachable", "recovery_required", "policy_conflict", "stopped", "reconciling"]),
   incarnation: z.string().min(1).max(256).nullable(),
   softwareVersion: z.string().min(1).max(128).nullable(),
   upgradeState: z.enum(["unknown", "current", "pending", "required"]),

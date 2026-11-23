@@ -35,9 +35,10 @@ export class InstalledExecutionPolicyStore {
     return this.#installed.snapshot;
   }
 
-  hasInstalledBackend(id: string, kind: string, generation: number): boolean {
+  hasInstalledBackend(id: string, kind: string, generation: number, launchDigest?: string): boolean {
     return this.#installed?.snapshot.backends.some(backend =>
-      backend.id === id && backend.kind === kind && backend.generation === generation && backend.targets.length > 0,
+      backend.id === id && backend.kind === kind && backend.generation === generation && backend.targets.length > 0 &&
+      (launchDigest === undefined || launchDigest === backend.launchDigest),
     ) ?? false;
   }
 
@@ -57,9 +58,10 @@ export class InstalledExecutionPolicyStore {
     ready: (
       category: "backend" | "capability" | "root" | "route" | "managed_tui",
       id: string,
-      kind?: string,
+      kind: string | undefined,
+      snapshot: ExecutionPolicySnapshot,
     ) => "ready" | "preparing" | "failed" | "unsupported",
-    observeBackend?: (id: string, kind: string) => string | undefined,
+    observeBackend?: (id: string, kind: string) => string | null | undefined,
   ): ExecutionPolicyStatus {
     const p = this.#installed;
     return {
@@ -74,8 +76,8 @@ export class InstalledExecutionPolicyStore {
               return {
                 id: `backend:${b.id}`,
                 generation: b.generation,
-                state: ready("backend", b.id, b.kind),
-                ...(observedLaunchDigest ? { observedLaunchDigest } : {}),
+                state: ready("backend", b.id, b.kind, p.snapshot),
+                ...(observedLaunchDigest !== undefined ? { observedLaunchDigest } : {}),
               };
             }),
             ...p.snapshot.backends
@@ -83,12 +85,12 @@ export class InstalledExecutionPolicyStore {
               .map((b) => ({
                 id: `managed_tui:${b.id}`,
                 generation: b.generation,
-                state: ready("managed_tui", b.id),
+                state: ready("managed_tui", b.id, undefined, p.snapshot),
               })),
             ...p.snapshot.capabilities.map((c) => ({
               id: `capability:${c.id}`,
               generation: c.generation,
-              state: ready("capability", c.id),
+              state: ready("capability", c.id, undefined, p.snapshot),
             })),
             ...p.snapshot.capabilities
               .filter((c) => c.id === "agent_tools_cli")
@@ -98,13 +100,13 @@ export class InstalledExecutionPolicyStore {
                   .map((b) => ({
                     id: `route:${b.id}`,
                     generation: c.generation,
-                    state: ready("route", b.id),
+                    state: ready("route", b.id, undefined, p.snapshot),
                   })),
               ),
             ...p.snapshot.roots.map((r) => ({
               id: `root:${r.id}`,
               generation: r.generation,
-              state: ready("root", r.id, r.path),
+              state: ready("root", r.id, r.path, p.snapshot),
             })),
           ]
         : [],
@@ -238,12 +240,15 @@ export class InstalledExecutionPolicyStore {
       Date.now() - t.progressed >= 60_000
     )
       throw new SidecarOperationError("sidecar_policy_stage_incomplete");
-    if (createHash("sha256").update(t.bytes).digest("hex") !== request.digest)
+    if (createHash("sha256").update(t.bytes).digest("hex") !== request.digest) {
+      this.#discard();
       throw new SidecarOperationError("sidecar_policy_digest_mismatch");
+    }
     let snapshot: ExecutionPolicySnapshot;
     try {
       snapshot = decodeExecutionPolicy(t.bytes);
     } catch (error) {
+      this.#discard();
       throw new SidecarOperationError(
         "sidecar_policy_snapshot_invalid",
         false,

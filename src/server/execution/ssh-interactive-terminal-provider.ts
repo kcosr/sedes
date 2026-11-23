@@ -1,3 +1,4 @@
+import { terminalReceiptOperation } from "../../internal/sidecar-protocol/execution-policy-admission.js";
 import { type WorkspaceRootGrant, workspaceRootGrant } from "./workspace-root-grant.js";
 import type { EnvironmentVariableOverrides } from "../../shared/protocol/environment-variables.js";
 import { createHash } from "node:crypto";
@@ -139,11 +140,21 @@ export class SshInteractiveTerminalProvider implements InteractiveTerminalEnviro
     return {
       call: async <Request, Response>(definition: SidecarOperationDefinition<Request, Response>, request: Request): Promise<Response> => {
         const controller = new AbortController();
-        const lease = await this.#runtime.acquireOperation(this.#scope, this.#environmentId, controller.signal);
+        const control = terminalReceiptOperation(definition);
+        const lease = await this.#runtime.acquireOperation(this.#scope, this.#environmentId, controller.signal).catch(cause => {
+          if (control) throw new SidecarOperationError("terminal_admission_closed", true, { cause });
+          throw cause;
+        });
         try {
-          if ([terminalPrepareOperation.operation, terminalCreateOperation.operation, terminalInputOperation.operation, terminalResizeOperation.operation].some(operation => operation === definition.operation)) check();
-          if (!lease.session.negotiatedCapabilities.some(capability => capability.capabilityId === definition.capabilityId && capability.majorVersion === definition.majorVersion && capability.operations.includes(definition.operation))) throw new SidecarUnavailableError();
-          return await lease.session.call(definition, request, { signal: controller.signal });
+          let session = lease.session;
+          if (control) {
+            try { check(); } catch { session = session.recoveryView(); }
+          } else if (definition.operation === terminalPrepareOperation.operation || definition.operation === terminalCreateOperation.operation) check();
+          if (!session.negotiatedCapabilities.some(capability => capability.capabilityId === definition.capabilityId && capability.majorVersion === definition.majorVersion && capability.operations.includes(definition.operation))) {
+            if (control) throw new SidecarOperationError("terminal_admission_closed");
+            throw new SidecarUnavailableError();
+          }
+          return await session.call(definition, request, { signal: controller.signal });
         }
         finally { lease.release(); }
       },

@@ -29,8 +29,10 @@ export class OpenCodeRuntimeHostRegistry {
   readonly #runtimes = new Map<string, Resident>();
   readonly #byId = new Map<string, Resident>();
   readonly #starting = new Map<string, Promise<Resident>>();
-  observedLaunchDigest(id: string): string | undefined {
-    return observedLaunchDigest(this.#runtimes.get(id)?.runtime);
+  observedLaunchDigest(id: string): string | null | undefined {
+    const resident = this.#runtimes.get(id);
+    if (resident) return observedLaunchDigest(resident.runtime);
+    return this.#starting.has(id) ? undefined : null;
   }
 
   constructor(readonly input: {
@@ -129,7 +131,7 @@ export class OpenCodeRuntimeHostRegistry {
   }
   #fingerprint(configuration: OpenCodeRuntimeConfiguration): string {
     return configurationFingerprint({ nativeStorePath: configuration.nativeStorePath ?? null,
-      configDirectory: configuration.configDirectory ?? null, connection: configuration.connection });
+      configDirectory: configuration.configDirectory ?? null, connection: configuration.connection, startup: configuration.startupEnvironmentVariables ?? {} });
   }
   #sameConfiguration(resident: Resident, configuration: OpenCodeRuntimeConfiguration): void {
     if (resident.fingerprint !== this.#fingerprint(configuration)) throw error("configuration_restart_required");

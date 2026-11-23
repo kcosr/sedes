@@ -45,6 +45,7 @@ interface DirectorySnapshot {
 export class DirectoryBrowserSidecarHost {
   readonly handlers: DirectoryBrowserV1Handlers;
   readonly #cursorKey: Buffer;
+  #closed = false;
   readonly #snapshots = new Map<string, DirectorySnapshot>();
 
   constructor(readonly input: { readonly sessionNonce: string; readonly policyGuard?: WorkspacePolicyGuard }) {
@@ -61,12 +62,9 @@ export class DirectoryBrowserSidecarHost {
   }
 
   close(): void {
+    this.#closed = true;
     this.#snapshots.clear();
     this.#cursorKey.fill(0);
-  }
-
-  detach(): void {
-    this.#snapshots.clear();
   }
 
   async #listImmediate(
@@ -94,6 +92,7 @@ export class DirectoryBrowserSidecarHost {
     }
     const assertCurrent = this.input.policyGuard?.capture("directory_browser", request.rootPath);
     const projection = await this.#enumerate(request, signal);
+    this.#throwIfAborted(signal);
     assertCurrent?.();
     const snapshot: DirectorySnapshot = Object.freeze({
       ...(assertCurrent && { assertCurrent }),
@@ -224,7 +223,7 @@ export class DirectoryBrowserSidecarHost {
   }
 
   #throwIfAborted(signal: AbortSignal): void {
-    if (signal.aborted) {
+    if (this.#closed || signal.aborted) {
       throw new SidecarOperationError("directory_browser_cancelled", true, {
         cause: signal.reason,
       });

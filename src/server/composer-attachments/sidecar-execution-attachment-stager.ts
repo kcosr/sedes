@@ -83,6 +83,7 @@ export class SidecarExecutionAttachmentStager implements ExecutionAttachmentStag
       request.lease.assertCurrent?.();
       if (workspaceAuthority && workspaceAuthority.featureGeneration !== this.input.readAttachmentGeneration?.()) throw unavailable(new Error("composer_attachment_authority_stale"));
     };
+    const deliveryAuthority = workspaceAuthority ? { assertDeliverable: check } : {};
     check();
     const admissionId = randomUUID();
     let uncertain: unknown;
@@ -119,7 +120,7 @@ export class SidecarExecutionAttachmentStager implements ExecutionAttachmentStag
           },
           request.signal ? { signal: request.signal } : undefined,
         );
-        if (opened.state === "ready") return withoutState(opened);
+        if (opened.state === "ready") return { ...withoutState(opened), ...deliveryAuthority };
         uploadHandle = opened.uploadHandle;
         check();
         let offset = opened.nextOffset;
@@ -143,11 +144,12 @@ export class SidecarExecutionAttachmentStager implements ExecutionAttachmentStag
           offset = appended.nextOffset;
         }
         check();
-        return await lease.session.call(
+        const committed = await lease.session.call(
           composerAttachmentsMaterializationCommitOperation,
           { uploadHandle },
           request.signal ? { signal: request.signal } : undefined,
         );
+        return { ...committed, ...deliveryAuthority };
       } catch (error) {
         if (isOutcomeUnknown(error)) {
           uncertain = error;
@@ -173,6 +175,7 @@ export class SidecarExecutionAttachmentStager implements ExecutionAttachmentStag
     request: ExecutionAttachmentReleaseRequest,
   ): Promise<void> {
     this.#assert(scope, request);
+    const workspaceAuthority = this.#authority(request);
     let uncertain: unknown;
     for (
       let attempt = 0;
@@ -194,7 +197,7 @@ export class SidecarExecutionAttachmentStager implements ExecutionAttachmentStag
           composerAttachmentsMaterializationReleaseOperation,
           {
             scopeKey: this.#scopeKey,
-            workspaceAuthority: this.#authority(request),
+            workspaceAuthority,
             threadId: request.applicationThreadId,
             attachmentId: request.attachmentId,
             expectedSha256: request.expectedSha256,

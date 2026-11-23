@@ -3,12 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
 import { expect, it } from "vitest";
+import { workspaceFileRootGrantsMigration } from "../../src/server/db/migrations/168-workspace-file-root-grants.js";
 import { workspaceRootAuthorityMigration } from "../../src/server/db/migrations/167-workspace-root-authority.js";
 
 it("binds only previously current workspaces to their deepest scoped grant and preserves unproven rows", () => {
   const database = new Database(":memory:");
   const directory = realpathSync(mkdtempSync(join(tmpdir(), "sedes-root-migration-")));
-  const localRoot = join(directory, "real");
+  const localRoot = join(directory, process.platform === "win32" ? "real" : "real\\path");
   const alias = join(directory, "long-root-alias");
   const innerAlias = join(directory, "b");
   mkdirSync(join(localRoot, "inner", "repo"), {recursive: true});
@@ -51,5 +52,55 @@ it("binds only previously current workspaces to their deepest scoped grant and p
   } finally {
     database.close();
     rmSync(directory, {recursive: true, force: true});
+  }
+});
+
+it("binds supplemental file roots only for records available under an active workspace's exact primary grant", () => {
+  const database = new Database(":memory:");
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), "sedes-root-grants-")));
+  const literalPath = join(directory, "literal\\backslash");
+  mkdirSync(literalPath);
+  const tables = ["workspace_file_roots", "workspace_file_link_roots", "workspace_file_linked_worktree_roots"];
+  try {
+    database.exec(`
+      CREATE TABLE workspaces(tenant_id TEXT,owner_principal_id TEXT,id TEXT,environment_id TEXT,canonical_path TEXT,
+        availability TEXT,removed_at INTEGER,authority_root_id TEXT,environment_configuration_revision INTEGER);
+      CREATE TABLE execution_environments(tenant_id TEXT,owner_principal_id TEXT,id TEXT,kind TEXT);
+      CREATE TABLE live_execution_policies(tenant_id TEXT,owner_principal_id TEXT,environment_id TEXT,snapshot_json TEXT);
+      INSERT INTO execution_environments VALUES('t','owner','host','ssh');
+      INSERT INTO workspaces VALUES
+        ('t','owner','active','host','/primary/repo','available',NULL,'primary',5),
+        ('t','owner','removed','host','/primary/repo','available',11,'primary',5),
+        ('t','owner','unbound','host','/primary/repo','available',NULL,NULL,5),
+        ('t','owner','stale','host','/primary/repo','available',NULL,'primary',4),
+        ('t','owner','unavailable','host','/primary/repo','unavailable',NULL,'primary',5),
+        ('t','owner','moved','host','/elsewhere','available',NULL,'primary',5);
+    `);
+    database.prepare("INSERT INTO live_execution_policies VALUES('t','owner','host',?)").run(JSON.stringify({roots:[
+      {id:"primary",generation:5,path:"/primary"},{id:"supplemental",generation:8,path:"/files"},
+    ]}));
+    database.exec("INSERT INTO execution_environments VALUES('t','owner','local','local')");
+    database.prepare("INSERT INTO live_execution_policies VALUES('t','owner','local',?)").run(JSON.stringify({roots:[
+      {id:"local-root",generation:11,path:literalPath},
+    ]}));
+    database.prepare("INSERT INTO workspaces VALUES('t','owner','local','local',?,'available',NULL,'local-root',11)").run(literalPath);
+    for (const table of tables) {
+      const linkOnly = table === "workspace_file_link_roots";
+      database.exec(`CREATE TABLE ${table}(tenant_id TEXT,owner_principal_id TEXT,workspace_id TEXT,canonical_path TEXT${linkOnly ? "" : ",availability TEXT"});
+        INSERT INTO ${table} SELECT tenant_id,owner_principal_id,id,'/files/valid' ${linkOnly ? "" : ",'available'"} FROM workspaces;`);
+      database.prepare(`UPDATE ${table} SET canonical_path = ? WHERE workspace_id = 'local'`).run(literalPath);
+      if (!linkOnly) database.exec(`INSERT INTO ${table} VALUES('t','owner','active','/files/inactive','unavailable')`);
+    }
+    workspaceFileRootGrantsMigration.preflight!(database);
+    database.exec(workspaceFileRootGrantsMigration.sql);
+    for (const table of tables) {
+      expect(database.prepare(`SELECT workspace_id,canonical_path,authority_root_id,authority_root_generation FROM ${table}
+        WHERE authority_root_id IS NOT NULL OR authority_root_generation IS NOT NULL ORDER BY workspace_id`).raw().all()).toEqual([
+        ["active","/files/valid","supplemental",8], ["local",literalPath,"local-root",11],
+      ]);
+    }
+  } finally {
+    database.close();
+    rmSync(directory, {recursive:true,force:true});
   }
 });

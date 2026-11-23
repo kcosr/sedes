@@ -1,3 +1,4 @@
+import { executionPolicyRoots } from "../../src/server/configuration-admin/configuration-execution-policy.js";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -44,16 +45,17 @@ async function fixture(kind: "local" | "ssh" | "outbound",
   await Promise.all([mkdir(project), mkdir(captures), mkdir(path.join(root, "state"), { mode: 0o700 })]);
   const source = path.join(captures, "viewed.png");
   await writeFile(source, image);
-  const { database, scope } = savedAgentDatabase();
+  const { database, scope } = savedAgentDatabase(undefined, [root]);
   cleanups.push(() => { if (database.open) database.close(); });
   const inventory = new InventoryRepository(database);
   const environment = inventory.getLocalEnvironment(scope);
   // This fixture changes only repository identity metadata; execution providers below
   // perform the same kind-specific policy admission as production composition.
   database.prepare("UPDATE execution_environments SET kind = ? WHERE id = ?").run(kind, environment.id);
+  const grant = executionPolicyRoots(database, scope, environment.id)[0]!;
   const workspace = inventory.upsertWorkspace(scope, { environmentId: environment.id,
     canonicalPath: project, displayName: "Capture", project: { kind: "new", name: "Capture" }, available: true, trustState: "trusted",
-    environmentConfigurationRevision: environment.configurationRevision, now: 10 });
+    authorityRootId: grant.id, environmentConfigurationRevision: grant.generation, now: 10 });
   const profile = database.prepare("SELECT id FROM agent_connection_profiles LIMIT 1").get() as { id: string };
   const bindings = new ConversationBindingRepository(database);
   const thread = bindings.createUnboundThread(scope, { workspaceId: workspace.id,

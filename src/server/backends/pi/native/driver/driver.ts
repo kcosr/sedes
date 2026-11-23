@@ -13,7 +13,7 @@ import { BackendError, type AgentBackendInstance, type AgentConnectionProfile, t
   type Unsubscribe } from "../../../contracts.js";
 import { BackendAgentToolRequestError, type BackendAgentToolAccessDecisionAuthority } from "../../../../agent-tools/adapters/backend-facade.js";
 import type { ExecutionScope } from "../../../../execution/contracts.js";
-import type { CompiledBackendModelPolicy } from "../../../model-policy.js";
+import { filterCatalogModels, type CompiledBackendModelPolicy } from "../../../model-policy.js";
 import type { ThreadEnvironmentResolver } from "../../../../environment-variables/runtime-environment.js";
 import { backendConversationEventSchema, type BackendConversationEvent, type BackendEffectiveSettings, type BackendCapabilityDocument,
   type BackendItem, type DriverInteraction } from "../../../../../shared/protocol/backend.js";
@@ -223,10 +223,10 @@ export class PiNativeConversationDriver implements ConversationBackendDriver {
     const catalog = await this.#catalogs.read(workspace, async () => {
       const loaded = await nativeCall(() => this.options.port.catalog({ cwd: workspace.canonicalPath }));
       assertCurrent();
-      return nativeCatalog(loaded, this.options.modelPolicy);
+      return readNativeCatalog(loaded);
     }, { refresh: context.purpose === "skill_picker" });
     assertCurrent();
-    return catalog;
+    return { ...catalog, models: filterCatalogModels(catalog.models, this.options.modelPolicy, "provider_model_effort") };
   }
   async discover(input: DiscoverConversationsInput): Promise<DiscoveredConversationPage> {
     this.assertScope(input.scope, input.workspace.summary.environmentId); input.signal.throwIfAborted();
@@ -552,15 +552,19 @@ function activeToolNames(tools: unknown, mode: PiNativeSettings["toolMode"], age
 }
 
 function nativeCatalog(value: unknown, policy: CompiledBackendModelPolicy): BackendCatalog {
+  const catalog = readNativeCatalog(value);
+  return { ...catalog, models: filterCatalogModels(catalog.models, policy, "provider_model_effort") };
+}
+
+function readNativeCatalog(value: unknown): BackendCatalog {
   const catalog = object(value);
   const models = (Array.isArray(catalog.models) ? catalog.models : []).flatMap(candidate => {
     const model = object(candidate);
     if (typeof model.provider !== "string" || typeof model.id !== "string") return [];
     const mapping = object(model.thinkingLevelMap);
-    const allEfforts = model.reasoning === true
+    const efforts = model.reasoning === true
       ? ["off", "minimal", "low", "medium", "high", ...(mapping.xhigh !== undefined && mapping.xhigh !== null ? ["xhigh"] : []), ...(mapping.max !== undefined && mapping.max !== null ? ["max"] : [])]
         .filter(level => mapping[level] !== null) : ["off"];
-    const efforts = policy.filterReasoningEfforts({ providerId: model.provider, modelId: model.id }, allEfforts);
     if (!efforts.length) return [];
     return [{ provider: model.provider, id: model.id, label: typeof model.name === "string" ? model.name : model.id,
       inputModalities: (Array.isArray(model.input) && model.input.includes("image") ? ["text", "image"] : ["text"]) as ("text" | "image")[],

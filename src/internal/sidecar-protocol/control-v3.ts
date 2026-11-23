@@ -1,5 +1,6 @@
 import { z } from "zod";
 import path from "node:path";
+import { boundedAgentToolPath, MAX_AGENT_TOOL_EXECUTABLE_DIRECTORY_BYTES, MAX_AGENT_TOOL_INHERITED_PATH_BYTES } from "../agent-tool-cli-protocol/path-limits.js";
 import { isAgentToolCliEndpoint } from "../agent-tool-cli-protocol/local-endpoint.js";
 import {
   SidecarOperationError,
@@ -221,7 +222,7 @@ export const sidecarAgentToolCliMetadataSchema = z.strictObject({
     .string()
     .refine(
       (value) =>
-        !containsControl(value) && Buffer.byteLength(value, "utf8") <= 16_384,
+        boundedAgentToolPath(value, MAX_AGENT_TOOL_INHERITED_PATH_BYTES),
       "A bounded PATH without control characters is required.",
     ),
 });
@@ -583,11 +584,6 @@ function validExecutableDirectory(value: string): boolean {
   return (
     ((path.posix.isAbsolute(value) && path.posix.normalize(value) === value && !value.includes("\\")) ||
       (/^[A-Za-z]:\\/u.test(value) && path.win32.normalize(value) === value)) &&
-    !containsControl(value) &&
-    Buffer.byteLength(value, "utf8") <= 4_096
+    boundedAgentToolPath(value, MAX_AGENT_TOOL_EXECUTABLE_DIRECTORY_BYTES)
   );
-}
-
-function containsControl(value: string): boolean {
-  return /[\u0000-\u001f\u007f]/u.test(value);
 }

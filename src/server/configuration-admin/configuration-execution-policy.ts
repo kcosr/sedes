@@ -1,5 +1,6 @@
+import { createHash } from "node:crypto";
 import type Database from "better-sqlite3";
-import { executionPolicyDigest, type ExecutionPolicySnapshot, type InstalledExecutionPolicy } from "../../internal/sidecar-protocol/execution-policy.js";
+import { executionPolicyBytes, type ExecutionPolicySnapshot, type InstalledExecutionPolicy } from "../../internal/sidecar-protocol/execution-policy.js";
 import type { ConfigurationDocument, ConfigurationEnvironment } from "../../shared/protocol/configuration-admin.js";
 import { providerLaunchDigest } from "../backends/provider-launch-digest.js";
 import { configurationFingerprint } from "../config/configuration-fingerprint.js";
@@ -94,7 +95,7 @@ export function writeExecutionPolicy(database: Database.Database, scope: Request
   const roots = [...environment?.workspaceRoots ?? []].sort().map(path => {
     const id = rootGrantId(scope, environmentId, path);
     return { ...subject(id, before.roots), path };
-  });
+  }).sort(compareIds);
   const capabilities = environment && environment.kind !== "local" && environment.operations.kind === "sidecar"
     ? [...environment.operations.enabledCapabilities].sort().map(id => subject(id, before.capabilities)) : [];
   const bindings = document.targets.filter(target => target.executionEnvironmentId === environmentId);
@@ -108,15 +109,14 @@ export function writeExecutionPolicy(database: Database.Database, scope: Request
           .map(target => subject(target.id, incumbent?.targets ?? [])) };
     });
   const snapshot = { roots, capabilities, backends } satisfies ExecutionPolicySnapshot;
-  const digest = executionPolicyDigest(snapshot);
+  const bytes = executionPolicyBytes(snapshot);
+  const digest = createHash("sha256").update(bytes).digest("hex");
   if (previous?.digest === digest) return snapshot;
-  const json = JSON.stringify(snapshot);
-  if (Buffer.byteLength(json) > 512 * 1024) throw new Error("execution_policy_snapshot_too_large");
   database.prepare(`INSERT INTO live_execution_policies
     (tenant_id, owner_principal_id, environment_id, revision, snapshot_json, digest, last_generation) VALUES (?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(tenant_id, owner_principal_id, environment_id) DO UPDATE SET revision = excluded.revision,
       snapshot_json = excluded.snapshot_json, digest = excluded.digest, last_generation = excluded.last_generation`)
-    .run(scope.tenantId, scope.principalId, environmentId, (previous?.revision ?? 0) + 1, json, digest, generation);
+    .run(scope.tenantId, scope.principalId, environmentId, (previous?.revision ?? 0) + 1, bytes.toString("utf8"), digest, generation);
   return snapshot;
 }
 

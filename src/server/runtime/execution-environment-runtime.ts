@@ -290,7 +290,7 @@ export async function createExecutionEnvironmentRuntime(
       environmentId: record.id,
       scope,
       allowedRoots: configured.workspaceRoots,
-      confirmWorkspacePolicy: () => runtime.confirmWorkspacePolicy(),
+      confirmWorkspacePolicy: (path, binding) => runtime.confirmWorkspacePolicy(path, binding),
       readWorkspaceRoots,
       label: configured.label,
       availability: outbound ? "unavailable" : record.availability,
@@ -483,7 +483,7 @@ export async function createExecutionEnvironmentRuntime(
         confirmed: () => runtime.canAcquireCapability("directory_browser", 1),
         readWorkspaceRoots,
         readFeatureGeneration: () => runtime.policyCapabilityGeneration("directory_browser"),
-        confirmWorkspacePolicy: () => runtime.confirmWorkspacePolicy(),
+        confirmWorkspacePolicy: (path, signal) => runtime.confirmWorkspacePolicy(path, undefined, signal),
         runtime,
       });
     const workspaceFiles = new SidecarWorkspaceFileProvider({
@@ -491,8 +491,8 @@ export async function createExecutionEnvironmentRuntime(
           environmentId: record.id,
           policyRoots: configured.workspaceRoots,
           readPolicyRoots: readRootPaths, enabled: () => runtime.canAcquireCapability("workspace_files", 8),
-            selectPolicyRoot: (candidate, workspaceId, rootId) => {
-              const binding = workspaceId ? input.readWorkspaceBinding?.(workspaceId, rootId) : undefined;
+            selectPolicyRoot: (candidate, workspaceId, rootId, expected) => {
+              const binding = workspaceId ? input.readWorkspaceBinding?.(workspaceId, rootId) : expected;
               if (workspaceId && !binding) return undefined;
               const grant = workspaceRootGrant(readWorkspaceRoots(), candidate, binding);
               const featureGeneration = runtime.acquirableCapabilityGeneration("workspace_files");

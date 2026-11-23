@@ -49,7 +49,7 @@ export class ViewedImageCaptureService implements ViewedImageCapture {
     artifacts: Pick<OutputArtifactService, "findImage" | "publishCapturedImage">;
     files: Pick<WorkspaceFileService, "readAbsoluteImage">;
     bindings: Pick<ConversationBindingRepository, "getBinding">;
-    inventory: Pick<InventoryRepository, "getThread" | "getWorkspace" | "getEnvironment">;
+    inventory: Pick<InventoryRepository, "getThread" | "getWorkspace" | "getEnvironment" | "workspaceAuthorityIsCurrent">;
   }) {}
 
   async capture(input: ViewedImageCaptureInput): Promise<OutputImageArtifactDescriptor | undefined> {
@@ -151,6 +151,7 @@ export class ViewedImageCaptureService implements ViewedImageCapture {
           currentWorkspace.canonicalPath !== canonicalPath ||
           currentWorkspace.availability !== "available" ||
           currentEnvironment.availability !== "available" ||
+          !this.dependencies.inventory.workspaceAuthorityIsCurrent(scope, currentWorkspace) ||
           currentWorkspace.authorityRootId !== workspace.authorityRootId ||
           currentWorkspace.environmentConfigurationRevision !== workspace.environmentConfigurationRevision) {
         throw new Error("viewed_image_authority_changed");

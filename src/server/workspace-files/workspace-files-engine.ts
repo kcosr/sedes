@@ -1299,6 +1299,7 @@ export class WorkspaceFilesEngine {
     // destination rather than root ID so one CAS winner remains authoritative.
     const key = path.join(admittedParent, basename);
     return this.#mutations.run(key, async () => {
+      rootTarget.assertCurrent?.();
       const root = await this.#root(rootTarget);
       const canonicalParent = await realpath(requestedParent).catch(() => {
         throw new WorkspaceFileRevisionConflictError();
@@ -1367,6 +1368,7 @@ export class WorkspaceFilesEngine {
         );
         let temporaryCreated = false;
         try {
+          rootTarget.assertCurrent?.();
           const temporary = await open(
             temporaryPath,
             fileConstants.O_WRONLY |
@@ -1388,6 +1390,7 @@ export class WorkspaceFilesEngine {
             ) {
               throw new WorkspaceFileRevisionConflictError();
             }
+            rootTarget.assertCurrent?.();
             await temporary.writeFile(bytes);
             await temporary.chmod(Number(original.mode & 0o777n));
             await temporary.sync();

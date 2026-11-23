@@ -1,3 +1,4 @@
+import { executionPolicyRoots } from "../../src/server/configuration-admin/configuration-execution-policy.js";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -33,12 +34,13 @@ function deferred() { let resolve!: () => void; const promise = new Promise<void
 async function fixture() {
   const root = await mkdtemp(path.join(os.tmpdir(), "sedes-image-show-"));
   cleanup.push(() => rm(root, { recursive: true, force: true }));
-  const { database, scope } = savedAgentDatabase();
+  const { database, scope } = savedAgentDatabase(undefined, [root]);
   cleanup.push(async () => database.close());
   const inventory = new InventoryRepository(database);
   const environment = inventory.getLocalEnvironment(scope);
+  const grant = executionPolicyRoots(database, scope, environment.id)[0]!;
   const workspace = inventory.upsertWorkspace(scope, { environmentId: environment.id, canonicalPath: root, displayName: "Images",
-    project: { kind: "new", name: "Images" }, available: true, trustState: "trusted", environmentConfigurationRevision: environment.configurationRevision, now: 10 });
+    project: { kind: "new", name: "Images" }, available: true, trustState: "trusted", authorityRootId: grant.id, environmentConfigurationRevision: grant.generation, now: 10 });
   const profile = database.prepare("SELECT id FROM agent_connection_profiles WHERE tenant_id=? AND owner_principal_id=? LIMIT 1")
     .get(scope.tenantId, scope.principalId) as { id: string };
   const bindings = new ConversationBindingRepository(database);
@@ -210,6 +212,17 @@ describe("ImageShowService", () => {
     const read = vi.spyOn(f.files, "readAbsoluteFile");
     await expect(f.show()).rejects.toMatchObject({ reason: "inactive_turn" });
     expect(read).not.toHaveBeenCalled();
+  });
+
+  it("fences publication when the primary grant is withdrawn but the saved workspace row is unchanged", async () => {
+    const f = await fixture();
+    vi.spyOn(f.files, "readAbsoluteFile").mockImplementation(async () => {
+      f.database.prepare("UPDATE live_execution_policies SET revision=revision+1, snapshot_json=json_set(snapshot_json,'$.roots',json('[]')), digest=?")
+        .run("a".repeat(64));
+      return png();
+    });
+    await expect(f.show()).rejects.toMatchObject({reason:"changed"});
+    expect(f.repository.publications(f.scope, f.thread.id)).toEqual([]);
   });
 
   it("fences changed environment authority after asynchronous source reads", async () => {

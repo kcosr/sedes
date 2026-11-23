@@ -27,6 +27,62 @@ import type { SidecarRuntimeChannel } from "../../src/server/sidecar/runtime-cha
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
+it("exposes only the in-flight initialization until the ready lifecycle is published", async () => {
+  vi.useFakeTimers();
+  let finishAttach!: () => void;
+  const delayedAttach = new Promise<void>(resolve => { finishAttach = resolve; });
+  vi.spyOn(CodexSidecarRuntimeConnection.prototype, "lookup").mockResolvedValue("runtime");
+  const attach = vi.spyOn(CodexSidecarRuntimeConnection.prototype, "attach").mockImplementation(async () => {
+    await delayedAttach;
+    return { protocolVersion: CODEX_RUNTIME_PROTOCOL_VERSION, runtimeId: "runtime",
+      lifecycle: { state: "ready", generation: 1 }, runtimeAssessment: null, outcomes: [], pendingRequests: [] };
+  });
+  vi.spyOn(CodexSidecarRuntimeConnection.prototype, "detach").mockResolvedValue();
+  const acquire = vi.fn(async () => ({ channel: { supportsOperation: () => false } as unknown as SidecarRuntimeChannel,
+    serviceIncarnation: "service", controllerEpoch: 1, closed: new Promise<void>(() => {}), release: vi.fn() }))
+    .mockRejectedValueOnce(new Error("sidecar_unavailable"));
+  const supervisor = new CodexRemoteRuntimeSupervisor({
+    scope: { tenantId: "tenant", principalId: "principal", executionEnvironmentId: "remote", backendInstanceId: "backend" },
+    provider: { acquire, acquireExisting: vi.fn() }, configuration: {} as CodexRuntimeConfiguration,
+    serverRequests: new CodexServerRequestRouter(),
+    receipts: { reserve: () => { throw new Error("unused"); }, recordOutcome: () => "untracked", pending: () => [],
+      reconcileRecordedApplicationState: () => 0, compactRetiredRuntime: () => 0, releaseRejected: () => false },
+  });
+  const { client } = supervisor;
+  const observedAtReady = vi.fn();
+  const unsubscribe = client.subscribeLifecycle(snapshot => {
+    if (snapshot.state === "ready") observedAtReady(client.pendingInitialization?.());
+  });
+  try {
+    await supervisor.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(client.lifecycleSnapshot()).toEqual({ state: "reconciling", generation: 0 });
+    expect(client.pendingInitialization?.()).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(999);
+    expect(client.pendingInitialization?.()).toBeUndefined();
+    expect(acquire).toHaveBeenCalledOnce();
+    expect(attach).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(acquire).toHaveBeenCalledTimes(2);
+    expect(attach).toHaveBeenCalledOnce();
+    expect(client.lifecycleSnapshot()).toEqual({ state: "unavailable", generation: 0 });
+    const initialization = client.pendingInitialization?.();
+    expect(initialization).toBeInstanceOf(Promise);
+    expect(client.pendingInitialization?.()).toBe(initialization);
+    const settled = vi.fn(() => client.lifecycleSnapshot());
+    const settledSnapshot = initialization?.then(settled);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).not.toHaveBeenCalled();
+    finishAttach();
+    await expect(settledSnapshot).resolves.toEqual({ state: "ready", generation: 1 });
+    expect(observedAtReady).toHaveBeenCalledExactlyOnceWith(initialization);
+    expect(client.lifecycleSnapshot()).toEqual({ state: "ready", generation: 1 });
+    expect(client.pendingInitialization?.()).toBeUndefined();
+    expect(acquire).toHaveBeenCalledTimes(2);
+  } finally { finishAttach(); unsubscribe(); await supervisor.close(); vi.useRealTimers(); }
+});
+
 it("replaces the detached main presentation after a rejected Stop and reattaches without replaying work", async () => {
   vi.spyOn(CodexSidecarRuntimeConnection.prototype, "lookup").mockResolvedValueOnce(undefined).mockResolvedValue("runtime");
   const ensure = vi.spyOn(CodexSidecarRuntimeConnection.prototype, "ensure").mockResolvedValue("runtime");

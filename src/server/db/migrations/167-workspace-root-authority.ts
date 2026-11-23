@@ -1,4 +1,4 @@
-import { canonicalLocalRootPath } from "../../execution/local-workspace-roots.js";
+import { canonicalLocalRootPath, isWithinLocalWorkspaceRoot } from "../../execution/local-workspace-roots.js";
 import type { DatabaseMigration } from "../migrate.js";
 import { isWithinRemoteRoot } from "../../execution/remote-path.js";
 
@@ -8,13 +8,14 @@ export const workspaceRootAuthorityMigration: DatabaseMigration = {
   preflight(database) {
     database.function("sedes_root_path_167", (kind, path) =>
       typeof path !== "string" ? null : kind === "local" ? canonicalLocalRootPath(path) ?? null : path);
-    database.function("sedes_path_within_root_167", { deterministic: true }, (candidate, root) =>
-      Number(typeof candidate === "string" && typeof root === "string" && isWithinRemoteRoot(candidate, root)));
+    database.function("sedes_path_within_root_167", { deterministic: true }, (kind, candidate, root) =>
+      Number(typeof candidate === "string" && typeof root === "string" &&
+        (kind === "local" ? isWithinLocalWorkspaceRoot(candidate, root) : isWithinRemoteRoot(candidate, root))));
   },
   sql: `
 ALTER TABLE workspaces ADD COLUMN authority_root_id TEXT;
 WITH roots AS MATERIALIZED (
-  SELECT p.tenant_id, p.owner_principal_id, p.environment_id, e.configuration_revision,
+  SELECT p.tenant_id, p.owner_principal_id, p.environment_id, e.configuration_revision, e.kind,
     json_extract(root.value, '$.id') AS root_id, json_extract(root.value, '$.generation') AS generation,
     sedes_root_path_167(e.kind, json_extract(root.value, '$.path')) AS root_path
   FROM live_execution_policies AS p JOIN execution_environments AS e
@@ -26,7 +27,7 @@ WITH roots AS MATERIALIZED (
   FROM workspaces AS w JOIN roots AS r
     ON r.tenant_id = w.tenant_id AND r.owner_principal_id = w.owner_principal_id AND r.environment_id = w.environment_id
   WHERE w.removed_at IS NULL AND w.environment_configuration_revision = r.configuration_revision
-    AND sedes_path_within_root_167(w.canonical_path, r.root_path)
+    AND sedes_path_within_root_167(r.kind, w.canonical_path, r.root_path)
 )
 UPDATE workspaces AS w SET authority_root_id = m.root_id, environment_configuration_revision = m.generation
 FROM matches AS m WHERE m.workspace_rowid = w.rowid AND m.priority = 1;

@@ -39,7 +39,7 @@ export class ImageShowService {
     repository: ImageShowRepository;
     artifacts: Pick<OutputArtifactService, "publishCapturedImage">;
     files: Pick<WorkspaceFileService, "readAbsoluteFile">;
-    inventory: Pick<InventoryRepository, "getThread" | "getWorkspace" | "getEnvironment">;
+    inventory: Pick<InventoryRepository, "getThread" | "getWorkspace" | "getEnvironment" | "workspaceAuthorityIsCurrent">;
     bindings: Pick<ConversationBindingRepository, "getBinding">;
     onShown?: (scope: RequestScope, threadId: string) => void | Promise<void>;
   }) {}
@@ -105,7 +105,8 @@ export class ImageShowService {
       const currentEnvironment = this.dependencies.inventory.getEnvironment(scope, workspace.environmentId);
       if (currentThread.thread.workspaceId !== workspaceId || currentWorkspace.canonicalPath !== workspace.canonicalPath ||
         currentWorkspace.environmentId !== workspace.environmentId || currentWorkspace.availability !== "available" ||
-        currentEnvironment.availability !== "available" || currentWorkspace.authorityRootId !== workspace.authorityRootId ||
+        currentEnvironment.availability !== "available" || !this.dependencies.inventory.workspaceAuthorityIsCurrent(scope, currentWorkspace) ||
+          currentWorkspace.authorityRootId !== workspace.authorityRootId ||
         currentWorkspace.environmentConfigurationRevision !== workspace.environmentConfigurationRevision) throw new ImageShowError("changed");
     };
     check(); return check;

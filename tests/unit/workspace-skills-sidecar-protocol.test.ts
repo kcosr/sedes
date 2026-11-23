@@ -1,7 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
+import { WorkspaceSkillsSidecarHost } from "../../src/server/sidecar/workspace-skills-sidecar-host.js";
 import { describe, expect, it, vi } from "vitest";
 import {
   SidecarOperationRegistry,
+  SidecarOperationError,
   WORKSPACE_SKILLS_MAXIMUM_FILE_BYTES,
   registerWorkspaceSkillsV1Operations,
   workspaceSkillsCatalogReadOperation,
@@ -28,6 +30,13 @@ describe("workspace skills sidecar protocol", () => {
         operations: ["catalog.read", "skill.resolve"],
       },
     ]);
+  });
+
+  it("preserves the policy error and its retryability during a skills read", async () => {
+    const failure = new SidecarOperationError("workspace_policy_unavailable", true);
+    const host = new WorkspaceSkillsSidecarHost({ policyGuard: { capture() { throw failure; } } });
+    await expect(host.handlers.readCatalog({ declaredPath: "/workspace", policyRootPath: "/workspace", admissionId: randomUUID() },
+      { signal: new AbortController().signal, requestId: randomUUID() })).rejects.toBe(failure);
   });
 
   it("requires canonical authority and bounded, internally consistent content", () => {

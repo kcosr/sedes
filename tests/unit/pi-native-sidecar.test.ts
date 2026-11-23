@@ -848,6 +848,27 @@ setInterval(() => {}, 1000);
     expect(await f.hosts.lookupRetained(configuration.backendInstanceId, f.services.controllerEpoch)).toBe(host);
   });
 
+  it("retains the original launch digest when policy changes before ensure returns", async () => {
+    const f = await fixture(), carrier = await attachment(f), { port } = proxy(carrier.lease);
+    const original = runtimeLaunchDigest.pi_native(configuration);
+    const changed = { ...configuration, startupEnvironmentVariables: { NOTE: { kind: "literal" as const, value: "changed" } } };
+    const ensure = f.hosts.ensure.bind(f.hosts);
+    const seen = vi.fn();
+    vi.spyOn(f.hosts, "ensure").mockImplementationOnce(async (...args) => {
+      const host = await ensure(...args);
+      seen(f.hosts.observedLaunchDigest(configuration.backendInstanceId));
+      const previous = f.services.executionPolicy(carrier.epoch);
+      installFixturePolicy(f.services, carrier.epoch, serviceConfiguration, { ...previous,
+        backends: previous.backends.map(grant => ({ ...grant, launchDigest: runtimeLaunchDigest.pi_native(changed, changed.startupEnvironmentVariables) })) });
+      return host;
+    });
+    await expect(port.attach(identity)).rejects.toThrow();
+    expect(seen).toHaveBeenCalledExactlyOnceWith(original);
+    await expect(f.hosts.ensure(changed, carrier.epoch)).rejects.toMatchObject({ code: "pi_native_configuration_restart_required" });
+    expect(f.hosts.observedLaunchDigest(configuration.backendInstanceId)).toBe(original);
+    expect(f.launches).not.toHaveBeenCalled();
+  });
+
   it("scope-checks registry creation and requires restart for identity edits", async () => {
     const f = await fixture(), connection = await attachment(f);
     await expect(f.hosts.ensure({ ...configuration, principalId: "other" }, connection.epoch)).rejects.toThrow("pi_native_configuration_scope_denied");
@@ -855,6 +876,9 @@ setInterval(() => {}, 1000);
     expect(first).toBe(second); expect(f.createHost).toHaveBeenCalledTimes(1);
     await expect(f.hosts.ensure({ ...configuration, executablePath: "/other/pi" }, connection.epoch)).rejects.toThrow("pi_native_configuration_restart_required");
     await expect(f.hosts.ensure({ ...configuration, startupEnvironmentVariables: {} }, connection.epoch)).resolves.toBe(first);
+    const changed = { ...configuration, startupEnvironmentVariables: { NOTE: { kind: "literal" as const, value: "changed" } } };
+    await expect(f.hosts.ensure(changed, connection.epoch)).rejects.toMatchObject({ code: "pi_native_configuration_restart_required" });
+    await expect(f.hosts.lookup(changed, connection.epoch)).resolves.toBe(first);
   });
 });
 

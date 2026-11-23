@@ -199,7 +199,7 @@ export class ClaudePersistentRuntimeClient implements ClaudeRuntimeClient {
       if (!claudePersistentRuntimeOperations.every(operation => lease.channel.supportsOperation(operation))) {
         throw new Error("claude_remote_runtime_unsupported");
       }
-      connection = new ClaudeSidecarRuntimeConnection(lease.channel);
+      connection = new ClaudeSidecarRuntimeConnection(lease.channel, this.input.scope.backendInstanceId);
       const configuration = { ...this.input.scope, executablePath: this.input.executablePath, configDirectory: this.input.configDirectory, startupEnvironmentVariables: this.input.startupEnvironmentVariables, initializationTimeoutMs: this.input.initializationTimeoutMs };
       const existing = await connection.lookup(configuration, lease.controllerEpoch);
       const runtimeId = existing ?? (existingOnly || this.#retainedIdentity ? null : await connection.ensure(configuration));

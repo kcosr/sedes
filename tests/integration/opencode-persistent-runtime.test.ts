@@ -1,3 +1,5 @@
+import { installFixturePolicy } from "../helpers/execution-policy-fixture.js";
+import { runtimeLaunchDigest } from "../../src/server/backends/provider-launch-digest.js";
 import Database from "better-sqlite3";
 import { sidecarRuntimeBodySchema } from "../../src/server/sidecar/runtime-body-channel.js";
 import { openCodeRuntimeDiagnostic } from "../../src/server/backends/opencode/opencode-runtime-diagnostic.js";
@@ -41,6 +43,18 @@ describe("OpenCode resident runtime over shared sidecar framing", () => {
     const lease = client.acquire(f.target);
     await expect(lease.client.read("getSession", { sessionID: f.wire.sessionID })).resolves.toMatchObject({ id: f.wire.sessionID });
     lease.release();
+  });
+
+  it("reports a backend restart for a changed startup environment and preserves retained lookup", async () => {
+    const f = fixture(), carrier = await f.attach();
+    const ensured = await callOpenCodeRemoteRuntime(carrier.lease, { action: "ensure", configuration: f.configuration });
+    const changed = { ...f.configuration, startupEnvironmentVariables: { NOTE: { kind: "literal" as const, value: "changed" } } };
+    const installed = f.services.executionPolicy(carrier.lease.controllerEpoch);
+    installFixturePolicy(f.services, carrier.lease.controllerEpoch, f.desired.configuration, { ...installed,
+      backends: installed.backends.map(backend => ({ ...backend, launchDigest: runtimeLaunchDigest.opencode(changed, changed.startupEnvironmentVariables) })) });
+    await expect(callOpenCodeRemoteRuntime(carrier.lease, { action: "ensure", configuration: changed })).rejects.toThrow("opencode_runtime_configuration_restart_required");
+    await expect(callOpenCodeRemoteRuntime(carrier.lease, { action: "lookup", configuration: changed })).resolves.toEqual(ensured);
+    expect(f.owners).toHaveLength(1);
   });
 
   it("rejects a remote namespace inconsistent with the observed database identity", async () => {
@@ -171,6 +185,16 @@ describe("OpenCode resident runtime over shared sidecar framing", () => {
     await evidence.close();
     await expect(retained.client.mutate("prompt", { sessionID: f.wire.sessionID, id: "msg_fresh", text: "new", delivery: "queue", resume: true }, control("new")))
       .rejects.toMatchObject({ delivery: "sent_outcome_unknown" });
+    const nativeMutation = vi.spyOn(f.adapter, "mutate").mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({ ok: true });
+    const permission = { sessionID: f.wire.sessionID, requestID: "per_owned" };
+    const form = { sessionID: f.wire.sessionID, formID: "frm_owned" };
+    await expect(retained.client.mutate("replyPermission", { ...permission, decision: "once" }, control("allow"))).rejects.toBeDefined();
+    await expect(retained.client.mutate("replyForm", { ...form, answer: { name: "accepted" } }, control("answer"))).rejects.toBeDefined();
+    expect(nativeMutation).not.toHaveBeenCalled();
+    await retained.client.mutate("replyPermission", { ...permission, decision: "reject" }, control("deny"));
+    await retained.client.mutate("cancelForm", form, control("cancel-form"));
+    expect(nativeMutation).toHaveBeenCalledTimes(2);
+    nativeMutation.mockRestore();
     await expect(retained.client.read("listSessions", { directory: f.target.directory })).rejects.toBeDefined();
     for (const target of [
       { ...f.target, session: { ...f.target.session, applicationThreadId: "different-thread" } },

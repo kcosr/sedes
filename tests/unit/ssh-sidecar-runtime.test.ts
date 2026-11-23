@@ -833,6 +833,32 @@ describe("SidecarRuntimeOwner", () => {
     }
   });
 
+  it("opens a newly saved root after a failed delivery without stalling an unchanged root", async () => {
+    const base = ownerPolicy();
+    const old = {id: "old", path: "/old", generation: 1};
+    const added = {id: "new", path: "/new", generation: 1};
+    const make = (roots: (typeof old)[], revision: number) => {
+      const snapshot = {...base.snapshot, roots};
+      return {...base, snapshot, revision, digest: executionPolicyDigest(snapshot)};
+    };
+    let desired = make([old], 1);
+    const value = fixture({readDesiredPolicy: () => desired});
+    const signal = new AbortController().signal;
+    const watch = await value.owner.acquireWatch(scope, environmentId, signal);
+    try {
+      desired = make([old, added], 2);
+      const apply = vi.spyOn(watch.session, "applyPolicy").mockRejectedValueOnce(new Error("policy delivery interrupted"));
+      await expect(value.owner.synchronizePolicy()).rejects.toThrow("policy delivery interrupted");
+      await value.owner.confirmWorkspacePolicy("/old/thread");
+      expect(apply).toHaveBeenCalledTimes(1);
+      const opening = value.owner.confirmWorkspacePolicy("/new/thread");
+      await opening;
+      expect(apply).toHaveBeenCalledTimes(2);
+      expect(value.owner.acquirableWorkspaceRoots()).toEqual([old, added]);
+      expect(value.launch).toHaveBeenCalledOnce();
+    } finally { watch.release(); await value.owner.close(); }
+  });
+
   it("applies environment and operation revisions to the admitted service while a watch is open", async () => {
     const value = fixture();
     const signal = new AbortController().signal;

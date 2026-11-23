@@ -184,6 +184,19 @@ describe("LocalEnvironmentChannelProvider", () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
+  it.skipIf(process.platform === "win32")("rechecks launch authority after recording intent and before spawning the child", async () => {
+    let admitted = true;
+    const recordSpawn = vi.fn();
+    const provider = new LocalEnvironmentChannelProvider({ scope, executionEnvironmentId: scope.executionEnvironmentId,
+      launchRecorder: { markUnsupported: vi.fn(), armOwnedProcess: async () => { admitted = false; return { recordSpawn }; } } });
+    const prepared = await provider.prepareOwnedProcess(scope, { executablePath: process.execPath, workingDirectory: process.cwd() });
+    const spawn = vi.spyOn(ChildProcess.prototype as unknown as { spawn(): number }, "spawn");
+    await expect(provider.openOwnedProcess(scope, { prepared, arguments: ["--version"], environment: {}, cleanup: cleanupPolicy,
+      assertLaunchAdmission() { if (!admitted) throw new Error("backend_policy_denied"); } }, new AbortController().signal)).rejects.toThrow("backend_policy_denied");
+    expect(spawn).not.toHaveBeenCalled();
+    expect(recordSpawn).not.toHaveBeenCalled();
+  });
+
   it.skipIf(process.platform === "win32")("rejects failed identity publication and cleans only its direct child handle", async () => {
     let pid: number | undefined;
     const provider = new LocalEnvironmentChannelProvider({

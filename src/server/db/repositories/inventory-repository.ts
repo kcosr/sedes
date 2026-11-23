@@ -83,6 +83,7 @@ export type InventoryProjectAssignment =
 type WorkspaceObservation = {
   /** A fresh explicit admission may restore revoked authority for this exact location. */
   readonly rebindAuthority?: true;
+  readonly requireExistingProject?: (projectId: string) => void;
   readonly environmentId: string;
   readonly canonicalPath: string;
   readonly displayName: string;
@@ -814,7 +815,7 @@ export class InventoryRepository {
   workspaceAuthorityIsCurrent(scope: RequestScope, workspace: InventoryWorkspaceRecord): boolean {
     const environment = this.getEnvironment(scope, workspace.environmentId);
     const desired = this.#workspaceRoots(scope, environment);
-    if (!desired) return workspace.environmentConfigurationRevision === environment.configurationRevision;
+    if (!desired) return !workspace.authorityRootId && workspace.environmentConfigurationRevision === environment.configurationRevision;
     return !!workspaceRootGrant(desired, workspace.canonicalPath, {
       ...(workspace.authorityRootId && { authorityRootId: workspace.authorityRootId }),
       authorityRevision: workspace.environmentConfigurationRevision,
@@ -950,6 +951,7 @@ export class InventoryRepository {
           projectId: project.id,
         });
       }
+      input.requireExistingProject?.(existing.projectId);
       const availability = input.available ? "available" : "unavailable";
       const changed =
         removed ||

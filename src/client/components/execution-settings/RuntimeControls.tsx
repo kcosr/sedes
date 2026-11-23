@@ -10,7 +10,7 @@ import { StatusPill } from "../ui/status-pill.js";
 import type { Tone } from "../ui/tone.js";
 import { useFocusReturn } from "../settings/use-focus-return.js";
 import { errorMessage } from "./fields.js";
-import { actionLabels, applyLabels, atLeast, componentLabels, effectLabels, effectSubject, preferenceLabels, presentRuntime, upgradeLabels, type RuntimeAction, type RuntimeActionPresentation, type RuntimePresentation, type StatusPresentation } from "./runtime-presentation.js";
+import { actionLabels, applyLabels, atLeast, componentLabels, effectLabels, effectSubject, needsBackendRestart, preferenceLabels, presentRuntime, upgradeLabels, type RuntimeAction, type RuntimeActionPresentation, type RuntimePresentation, type StatusPresentation } from "./runtime-presentation.js";
 import type { ConfigurationControls } from "./useConfiguration.js";
 
 const confirmationNotes: Partial<Record<RuntimeAction, string>> = {
@@ -358,7 +358,7 @@ export function runtimeDiagnostics(controller: RuntimeController): KeyValueItem[
   const unconfirmed = runtime.connectionState === "unknown" || runtime.connectionState === "unreachable" || runtime.connectionState === "recovery_required";
   return [
     { label: "Connection preference", value: preferenceLabels[runtime.preference] },
-    { label: "Configuration", value: runtime.applyState === "pending" && runtime.startupEnvironmentPending ? effectLabels.restart_backend : applyLabels[runtime.applyState] },
+    { label: "Configuration", value: runtime.applyState === "pending" && needsBackendRestart(runtime) ? effectLabels.restart_backend : applyLabels[runtime.applyState] },
     { label: "Saved revision", value: runtime.desiredRevision, mono: true },
     { label: "Applied revision", value: runtime.effectiveRevision ?? "Not confirmed", mono: runtime.effectiveRevision !== null },
     { label: "Active or unconfirmed resources", value: unconfirmed ? "Not confirmed" : runtime.activeResources },

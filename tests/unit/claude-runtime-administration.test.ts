@@ -42,7 +42,7 @@ async function fixture() {
     sidecarRuntime: { acquireRecovery: vi.fn(async () => ({ channel: carrier.mainChannel, controllerEpoch, serviceIncarnation: services.serviceIncarnation, closed: new Promise(() => {}), release })) },
   };
   cleanup.push(async () => { detach(); await carrier.close(); await native.runtime.close(); });
-  return { ...native, services, hosts, context, createRuntime, artifact, release, detach, controllerEpoch, connection: new ClaudeSidecarRuntimeConnection(carrier.mainChannel) };
+  return { ...native, services, hosts, context, createRuntime, artifact, release, detach, controllerEpoch, connection: new ClaudeSidecarRuntimeConnection(carrier.mainChannel, scope.backendInstanceId) };
 }
 
 it("recovers only existing providers and releases every administrative attachment", async () => {
@@ -421,7 +421,7 @@ it("retains failed idle-eviction cleanup evidence and rejects the earlier stop c
   expect(f.hosts.lookup(configuration, f.controllerEpoch)).toBeUndefined();
 });
 
-it("allows exact pending permission settlement on a recovery controller but rejects new sessions and turns", async () => {
+it("lets a recovery controller deny a pending request and refuses approvals, sessions and turns", async () => {
   const f = await fixture();
   const runtimeId = await f.connection.ensure(configuration);
   const host = f.hosts.get(runtimeId);
@@ -432,7 +432,8 @@ it("allows exact pending permission settlement on a recovery controller but reje
   const epoch = attachFixturePolicy(f.services, serviceConfiguration, "recovery");
   const authority = { runtimeId, controllerEpoch: epoch };
   await host.execute({ ...authority, action: "attach", replay: "unacknowledged", request: { sessionId } }, () => {});
-  const response = { behavior: "allow" as const, updatedInput: {} };
+  await expect(host.execute({ ...authority, action: "respond_permission", request: { sessionId, requestId: "pending", toolUseID: "tool", response: { behavior: "allow", updatedInput: {} } } }, () => {})).rejects.toThrow("sidecar_recovery_attachment_read_only");
+  const response = { behavior: "deny" as const, message: "Denied during recovery" };
   await host.execute({ ...authority, action: "respond_permission", request: { sessionId, requestId: "pending", toolUseID: "tool", response } }, () => {});
   await expect(pending).resolves.toEqual(response);
   await expect(host.execute({ ...authority, action: "send", request: { queryId: sessionId, operationId: randomUUID(), content: "new turn" } }, () => {})).rejects.toThrow("sidecar_recovery_attachment_read_only");

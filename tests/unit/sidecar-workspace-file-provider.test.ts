@@ -70,6 +70,114 @@ const root: WorkspaceFileRootTarget = {
 };
 
 describe("SidecarWorkspaceFileProvider", () => {
+  it.each(["read pending", "write preparing", "write committed"])("fences the original root at %s", async phase => {
+    let generation = 1;
+    const call = vi.fn(async (definition: unknown) => {
+      if (definition === workspaceFilesRootOpenOperation) {
+        if (phase === "write preparing") generation++;
+        return { rootHandle: randomUuid(10) };
+      }
+      if (definition === workspaceFilesWriteOperation || definition === workspaceFilesListDirectoryOperation) {
+        generation++;
+        return { path: "a", sizeBytes: 1, revision: "committed" };
+      }
+      return {};
+    });
+    const session = { call } as unknown as SidecarClientSession;
+    const provider = new SidecarWorkspaceFileProvider({ scope, environmentId, policyRoots: ["/srv"],
+      selectPolicyRoot: () => ({path: "/srv", key: String(generation)}), runtime: fakeRuntime([session]) });
+    const write = () => provider.write(scope, root, {path:"a", content:"a", expectedRevision:"before"});
+    if (phase === "read pending") {
+      await expect(provider.listDirectory(scope, root, {directory:"",pageSize:10})).rejects.toBeInstanceOf(WorkspaceFileRootUnavailableError);
+    } else if (phase === "write preparing") {
+      await expect(write()).rejects.toBeInstanceOf(WorkspaceFileRootUnavailableError);
+      expect(call.mock.calls.some(([definition]) => definition === workspaceFilesWriteOperation)).toBe(false);
+    } else {
+      await expect(write()).resolves.toMatchObject({ revision: "committed" });
+    }
+  });
+
+  it("suppresses buffered download bytes after the original root is revoked", async () => {
+    let generation = 1;
+    const close = vi.fn(), write = vi.fn(), addCredit = vi.fn();
+    const session = {
+      closed: new Promise<void>(() => {}),
+      registerIncomingWorkspaceFileDownload(input: Parameters<SidecarClientSession["registerIncomingWorkspaceFileDownload"]>[0]) {
+        input.onData({ sequence: 0, channel:"data", bytes:Buffer.from("a") });
+        input.onData({ sequence: 1, channel:"data", bytes:Buffer.from("b") });
+        return { addCredit, unregister:close };
+      },
+      call: vi.fn(async (definition: unknown) => {
+        if (definition === workspaceFilesRootOpenOperation) return {rootHandle:randomUuid(10)};
+        if (definition === workspaceFilesDownloadStartOperation) return {path:"a", fileName:"a", sizeBytes:2, revision:"r1"};
+        return {};
+      }),
+    } as unknown as SidecarClientSession;
+    const provider = new SidecarWorkspaceFileProvider({ scope, environmentId, policyRoots:["/srv"],
+      selectPolicyRoot: () => ({path:"/srv", key:String(generation)}), runtime:fakeRuntime([session]) });
+    await expect(provider.withDownload(scope,root,{path:"a", expectedRevision:"r1"}, source => source.stream(async chunk => {
+      write(chunk); generation++;
+    }))).rejects.toBeInstanceOf(WorkspaceFileRootUnavailableError);
+    expect(write).toHaveBeenCalledOnce();
+    expect(addCredit).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalledOnce();
+    expect(vi.mocked(session.call).mock.calls.some(([definition]) => definition === workspaceFilesDownloadCancelOperation)).toBe(true);
+  });
+
+  it("retires the remote watch and drops its invalidation after root removal", async () => {
+    let generation = 1;
+    const listener = vi.fn();
+    const session = fakeSession("first");
+    const provider = new SidecarWorkspaceFileProvider({ scope, environmentId, policyRoots:["/srv"],
+      selectPolicyRoot: () => ({path:"/srv", key:String(generation)}), runtime:fakeRuntime([session]) });
+    const sub = await provider.watch(scope,root,listener);
+    generation++;
+    const [,notify] = vi.mocked(session.registerInvalidation).mock.calls[0]!;
+    notify();
+    await sub.failed;
+    expect(listener).not.toHaveBeenCalled();
+    expect(vi.mocked(session.call).mock.calls.some(([definition]) => definition === workspaceFilesWatchCloseOperation)).toBe(true);
+    await sub.close();
+  });
+
+  it("withholds discovered worktrees whose original candidate grant was withdrawn during the scan", async () => {
+    let granted = true;
+    const session = {
+      call: vi.fn(async (definition: unknown) => {
+        if (definition === workspaceFilesRootOpenOperation) return {rootHandle:randomUuid(10)};
+        if (definition === workspaceFilesDiscoverLinkedWorktreesOperation) {
+          granted = false;
+          return { truncated:false, worktrees:[{ canonicalPath:"/linked-tree/repo" }, { canonicalPath:root.canonicalPath }] };
+        }
+        throw new Error("unexpected_request");
+      }),
+    } as unknown as SidecarClientSession;
+    const provider = new SidecarWorkspaceFileProvider({
+      scope, environmentId, policyRoots:["/srv","/linked-tree"],
+      selectPolicyRoot: path => {
+        if (!path.startsWith("/linked-tree")) return {path:"/srv",key:"primary/1"};
+        return granted ? {path:"/linked-tree", key:"linked/1"} : undefined;
+      },
+      runtime:fakeRuntime([session]),
+    });
+    await expect(provider.discoverLinkedWorktrees(scope,root)).resolves.toEqual({truncated:false,worktrees:[{canonicalPath:root.canonicalPath}]});
+  });
+
+  it("closes a watch completed after the original feature grant changed", async () => {
+    let generation = 1;
+    const ready = deferred<void>();
+    const session = fakeSession("first", {watchOpenGate: ready.promise});
+    const provider = new SidecarWorkspaceFileProvider({ scope, environmentId, policyRoots:["/srv"],
+      selectPolicyRoot:() => ({path:"/srv",key:String(generation)}), runtime:fakeRuntime([session]) });
+    const pending = provider.watch(scope,root,vi.fn());
+    await vi.waitFor(() => expect(vi.mocked(session.call).mock.calls.some(([definition]) => definition === workspaceFilesWatchOpenOperation)).toBe(true));
+    generation++;
+    ready.resolve();
+    await expect(pending).rejects.toBeInstanceOf(WorkspaceFileRootUnavailableError);
+    expect(session.registerInvalidation).not.toHaveBeenCalled();
+    expect(vi.mocked(session.call).mock.calls.some(([definition]) => definition === workspaceFilesWatchCloseOperation)).toBe(true);
+  });
+
   it("rechecks a tentatively selected Files grant after cold attachment and before root validation", async () => {
     let generation = 1;
     const call = vi.fn();

@@ -167,6 +167,8 @@ export type CanonicalComposerAttachmentEvidence = Readonly<{
 
 /** Ordered, path-free immutable evidence captured under scoped ownership. */
 export interface CanonicalComposerAttachmentEvidenceResolver {
+  /** Only new provider deliveries need the current staging grant. */
+  readonly assertDeliverable?: () => void;
   resolve(): readonly CanonicalComposerAttachmentEvidence[];
 }
 

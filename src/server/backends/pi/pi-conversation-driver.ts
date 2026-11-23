@@ -1271,7 +1271,7 @@ export class PiConversationBackendDriver implements ConversationBackendDriver {
   async catalog(context: BackendCatalogContext): Promise<BackendCatalog> {
     this.#assertScope(context.scope);
     this.#assertWorkspaceTarget(context.workspace);
-    return this.#catalogs.read(context.workspace, async () => {
+    const catalog = await this.#catalogs.read(context.workspace, async () => {
       const manager = this.#store.transient(context.workspace);
       const interactions = new PiInteractionBridge({
         cancelUnpublishedRequests: true,
@@ -1292,13 +1292,14 @@ export class PiConversationBackendDriver implements ConversationBackendDriver {
         await backendCall(() => session.ready());
         return {
           ...session.catalog(),
-          models: filterPiModels(this.#modelPolicy, await piModels(session)),
+          models: await piModels(session),
         };
       } finally {
         interactions.close();
         await session.dispose();
       }
     });
+    return { ...catalog, models: filterPiModels(this.#modelPolicy, catalog.models) };
   }
 
   async discover(

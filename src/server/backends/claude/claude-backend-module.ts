@@ -466,7 +466,7 @@ export class ClaudeBackendModule implements BackendModule {
   readonly creationProvenanceRepair = undefined;
   readonly startupPolicy = "composition_only" as const;
   readonly remoteRuntimeCapabilities = Object.freeze([Object.freeze({
-    capabilityId: "claude_persistent_runtime", majorVersion: 5,
+    capabilityId: "claude_persistent_runtime", majorVersion: 6,
     operations: Object.freeze(claudePersistentRuntimeOperations.map(operation => operation.operation)),
   })]);
   readonly backendKind = "claude_agent_sdk" as const;

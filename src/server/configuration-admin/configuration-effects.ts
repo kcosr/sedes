@@ -89,10 +89,18 @@ export function changedConfigurationEffects(scope: RequestScope, previous: Confi
     // Initial installation establishes the launch specification; a newly added provider has no process to restart.
     if (input.component === "provider_launch" && (!old || !next)) continue;
     const previousEffect = saved.get(k);
-    const launch = input.providerLaunch && { ...input.providerLaunch, confirmedDigest: previousEffect?.providerLaunch?.confirmedDigest ?? null };
+    const mainPreviouslyApplied = input.providerLaunch?.owner === "main" && !previousEffect &&
+      current?.connectionState === "connected" && current.applyState === "applied" && current.effectiveRevision === current.desiredRevision;
+    const launch = input.providerLaunch && { ...input.providerLaunch,
+      confirmedDigest: previousEffect?.providerLaunch?.confirmedDigest ?? (mainPreviouslyApplied ? old?.value ?? null : null) };
     const restart = launch?.owner === "host" ? Boolean(launch.confirmedDigest && launch.confirmedDigest !== launch.desiredDigest) : current?.connectionState === "connected";
-    const state = launch && restart ? "restart_backend" : input.state;
-    const pending = state === "awaiting_host" || state === "next_launch" || state === "restart_backend";
+    let state = input.state;
+    if (launch) {
+      if (launch.confirmedDigest === launch.desiredDigest) state = "applied";
+      else if (restart) state = "restart_backend";
+      else if (launch.owner === "host" && !previousEffect?.lastHostConfirmation) state = "unknown";
+    }
+    const pending = state === "unknown" || state === "awaiting_host" || state === "next_launch" || state === "restart_backend";
     retained.set(k, { component: input.component, subjectId: input.subjectId, state, desiredRevision: revision,
       effectiveRevision: pending ? previousEffect?.effectiveRevision ?? null : revision,
       ...(input.subjectLabel ? { subjectLabel: input.subjectLabel } : {}),
@@ -112,18 +120,24 @@ export function changedConfigurationEffects(scope: RequestScope, previous: Confi
 }
 
 
+export function configurationEffectsPending(effects: readonly ConfigurationEffect[]): boolean {
+  return effects.some(effect => ["awaiting_host", "restart_backend", "unsupported", "failed"].includes(effect.state) ||
+    (effect.providerLaunch?.owner === "host" && (effect.state === "next_launch" || effect.state === "unknown")));
+}
+
 export function observeProviderLaunch(runtime: ConfigurationRuntimeState, effects: ConfigurationEffect[], desiredDigest: string,
-  reportedDigest: string | undefined, confirmation: NonNullable<ConfigurationEffect["lastHostConfirmation"]>): void {
+  reportedDigest: string | null | undefined, confirmation: NonNullable<ConfigurationEffect["lastHostConfirmation"]>): void {
   const index = effects.findIndex(effect => effect.component === "provider_launch");
   const before = effects[index];
   if (!before && !reportedDigest) return;
   // A normal reattachment to the same service keeps the admitted runtime. A different service cannot
   // inherit its process evidence. Missing inventory by itself neither proves launch nor retirement.
   const sameService = before?.lastHostConfirmation?.incarnation === confirmation.incarnation;
-  const confirmedDigest = reportedDigest ?? (sameService ? before?.providerLaunch?.confirmedDigest : null) ?? null;
-  const confirmedAt = reportedDigest ? confirmation : sameService ? before?.lastHostConfirmation : undefined;
+  const confirmedDigest = reportedDigest === undefined ? (sameService ? before?.providerLaunch?.confirmedDigest ?? null : null) : reportedDigest;
+  const confirmedAt = reportedDigest !== undefined ? confirmation : sameService ? before?.lastHostConfirmation : undefined;
   const desiredRevision = before?.desiredRevision ?? runtime.desiredRevision;
-  const state = !confirmedDigest ? "next_launch" : confirmedDigest === desiredDigest ? "applied" : "restart_backend";
+  const state = confirmedDigest ? (confirmedDigest === desiredDigest ? "applied" : "restart_backend")
+    : confirmedAt ? "next_launch" : "unknown";
   const effect: ConfigurationEffect = { component: "provider_launch", subjectId: runtime.resourceId, state, desiredRevision,
     effectiveRevision: state === "applied" ? desiredRevision : sameService && before?.effectiveRevision !== desiredRevision ? before?.effectiveRevision ?? null : null,
     providerLaunch: {owner:"host", desiredDigest, confirmedDigest}, ...(confirmedAt ? {lastHostConfirmation: confirmedAt} : {}) };
