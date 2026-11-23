@@ -3,6 +3,8 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import { normalizedApplicationSnapshotSchema } from "../../src/shared/protocol/application.js";
+import { SidecarUnavailableError } from "../../src/server/sidecar/sidecar-runtime.js";
 import { SIDECAR_WIRE_VERSION } from "../../src/internal/sidecar-protocol/envelopes.js";
 import type { ExecutionPolicyStatus, InstalledExecutionPolicy } from "../../src/internal/sidecar-protocol/execution-policy.js";
 import { ConfigurationAdminService } from "../../src/server/configuration-admin/configuration-admin-service.js";
@@ -25,6 +27,8 @@ it.each(["maintenance", "impact", "removal"] as const)("publishes another host's
   let armed = false, ready = false;
   let recovered = false;
   const forcedRetries: string[] = [];
+  let siblingOperationAttempts = 0;
+  const eventStream = new AbortController();
   const notify = new Map<string, () => void>();
   let application: RunningApplication | undefined;
   let operation: Promise<unknown> | undefined;
@@ -38,6 +42,15 @@ it.each(["maintenance", "impact", "removal"] as const)("publishes another host's
     const owner = runtime.sidecarRuntime;
     if (!owner) return runtime;
     const id = input.configured.id;
+    if (id === b && blocker === "maintenance") {
+      vi.spyOn(owner, "acquireOperation").mockImplementation(async () => {
+        if (armed) {
+          siblingOperationAttempts++;
+          await release.promise;
+        }
+        throw new SidecarUnavailableError();
+      });
+    }
     const service = new PersistentSidecarServiceRegistry({ scope: {...input.scope, installationId: input.installationId, executionEnvironmentId: id},
       buildId: "host-isolation", artifactSha256: "d".repeat(64), runtimeWireVersion: SIDECAR_WIRE_VERSION,
       configuration: input.readDesiredPolicy!().configuration });
@@ -91,6 +104,10 @@ it.each(["maintenance", "impact", "removal"] as const)("publishes another host's
       configuration.executionEnvironments.push({id, kind:"ssh", hostAlias:alias, label:alias, workspaceRoots:["/work"], connectionCompression:true,
         operations:{kind:"sidecar", enabledCapabilities:["workspace_tools", "workspace_context"]}});
     }
+    if (blocker === "maintenance") {
+      configuration.backends.push({id: "sibling-pi", kind: "pi", label: "Sibling Pi", enabled: true, modelPolicy: {type: "catalog"}});
+      configuration.targets.push({id: "sibling-target", kind: "pi_sdk", backendInstanceId: "sibling-pi", executionEnvironmentId: b, label: "Blocked sibling target", enabled: true});
+    }
     const initial = await service.save(scope, {mutationId:randomUUID(),expectedRevision:original.revision, configuration});
     await hostsCreated.promise;
     // Authentication and initial policy installation complete independently on each mocked SSH carrier.
@@ -107,11 +124,39 @@ it.each(["maintenance", "impact", "removal"] as const)("publishes another host's
     // Capture the outcome now: resolving the old removal proof after another document commit must fail its CAS.
     const outcome = operation?.then(() => undefined, (error: unknown) => error);
     await entered.promise;
+    let readPublished: ((expected: string) => Promise<void>) | undefined;
+    if (blocker === "maintenance") {
+      // Opening the page and its event stream must work while B's attachment is stalled.
+      const url = `http://127.0.0.1:${address.port}/api/application`;
+      const page = await request(`${url}/snapshot`, {signal: AbortSignal.timeout(3_000)});
+      expect(page.status).toBe(200);
+      expect(normalizedApplicationSnapshotSchema.parse(await page.json()).executionTargets)
+        .toContainEqual(expect.objectContaining({environmentId: b}));
+      const events = await request(`${url}/events?handshake=authoritative_replacement`,
+        {signal: AbortSignal.any([eventStream.signal, AbortSignal.timeout(8_000)])});
+      expect(events.status).toBe(200);
+      const reader = events.body!.getReader();
+      const decoder = new TextDecoder();
+      readPublished = async expected => {
+        let text = "";
+        while (!text.includes(expected)) {
+          const chunk = await reader.read();
+          if (chunk.done) throw new Error("Application event stream ended before publishing the target.");
+          text += decoder.decode(chunk.value, {stream: true});
+        }
+      };
+      await readPublished("Blocked sibling target");
+    }
     configuration.executionEnvironments.find(e => e.id === a)!.label = "Renamed during remote wait";
     configuration.backends.push({id:"added-pi", kind:"pi", label:"Added Pi", enabled:true, modelPolicy:{type:"catalog"}});
     configuration.targets.push({id:"added-target",kind:"pi_sdk",backendInstanceId:"added-pi",executionEnvironmentId:a,label:"Added target",enabled:true});
     const saved = await service.save(scope, {mutationId:randomUUID(),expectedRevision:initial.revision,configuration});
     expect((await service.get(scope)).configuration.executionEnvironments.find(e => e.id === a)?.label).toBe("Renamed during remote wait");
+    if (readPublished) {
+      await readPublished("Added target");
+      expect(siblingOperationAttempts).toBe(0);
+      eventStream.abort();
+    }
     const observed = () => service.repository.runtime(scope, "environment", a).effects?.find(e => e.subjectId === "backend:added-pi");
     await vi.waitFor(() => expect(observed()).toMatchObject({state:"awaiting_host", desiredRevision:saved.revision, lastHostConfirmation:{epoch:1}}));
     // There was no maintenance tick for this save on A. The new backend policy
@@ -147,6 +192,7 @@ it.each(["maintenance", "impact", "removal"] as const)("publishes another host's
       expect(forcedRetries).toEqual([]);
     }
   } finally {
+    eventStream.abort();
     release.open();
     await operation?.catch(() => {});
     await application?.close();

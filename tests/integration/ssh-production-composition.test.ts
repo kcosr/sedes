@@ -491,7 +491,7 @@ describe.skipIf(!openSshAvailable)(
       }
     }, 60_000);
 
-    it("selects a Pi-only SSH target on its first request across a main restart", async () => {
+    it("lists a cold Pi-only SSH target across a main restart and attaches only for its first workspace request", async () => {
       const fixture = await ProductionSshFixture.create({
         directoryBrowser: true,
         piOnly: true,
@@ -521,12 +521,15 @@ describe.skipIf(!openSshAvailable)(
         await fixture.authenticate(application);
         const first = await readApplicationSnapshot(fixture);
         expect(first.executionTargets).toContainEqual(expect.objectContaining({environmentId: SSH_ENVIRONMENT_ID, available: true}));
+        const normalConnections = async () => (await fixture.sshInvocations()).filter(command => command.includes("service connect")).length;
+        expect(await normalConnections()).toBe(0);
         await application.close();
         application = await start();
         await fixture.authenticate(application);
         const [session, snapshot] = await Promise.all([readApplicationSession(fixture), readApplicationSnapshot(fixture)]);
         expect(snapshot.executionTargets).toContainEqual(expect.objectContaining({environmentId: SSH_ENVIRONMENT_ID, available: true}));
 
+        expect(await normalConnections()).toBe(0);
         const response = await fixture.fetch(
           `http://127.0.0.1:${fixture.httpPort}/api/execution-environments/${SSH_ENVIRONMENT_ID}/directories/browse`,
           {
@@ -542,6 +545,7 @@ describe.skipIf(!openSshAvailable)(
           },
         );
         expect(response.status).toBe(200);
+        expect(await normalConnections()).toBe(1);
         await waitFor(async () => {
           const current = await readApplicationSnapshot(fixture);
           return (

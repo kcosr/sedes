@@ -316,6 +316,30 @@ describe("SidecarRuntimeOwner", () => {
     await value.owner.close();
   });
 
+  it("lets an explicit selection cancel its join without losing the host's in-flight synchronization", async () => {
+    const base = ownerPolicy();
+    const snapshot = {...base.snapshot, backends: [{...base.snapshot.backends[0]!, targets: [{id: "target", generation: 1}]}]};
+    const value = fixture({readDesiredPolicy: () => ({...base, snapshot, digest: executionPolicyDigest(snapshot)})});
+    const gate = deferred<void>();
+    const session = new FakeSession();
+    const apply = vi.spyOn(session, "applyPolicy").mockImplementation(async desired => {
+      await gate.promise;
+      return session.policy.applyPolicy(desired);
+    });
+    value.startSession.mockResolvedValueOnce(session);
+    const controller = new AbortController();
+    try {
+      const selection = value.owner.confirmTargetSelection("backend", "target", controller.signal);
+      await vi.waitFor(() => expect(apply).toHaveBeenCalledOnce());
+      controller.abort(new Error("selection_cancelled"));
+      await expect(selection).rejects.toThrow("selection_cancelled");
+      expect(value.owner.activeOperationLeaseCount).toBe(0);
+      gate.resolve();
+      await expect(value.owner.confirmTargetSelection("backend", "target")).resolves.toBe(true);
+      expect(value.startSession).toHaveBeenCalledOnce();
+    } finally { gate.resolve(); await value.owner.close(); }
+  });
+
   it("reacquires confirmation for a Pi SDK driver and held handle after idle and transport loss", async () => {
     vi.useFakeTimers();
     let generation = 1;

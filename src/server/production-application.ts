@@ -1560,11 +1560,14 @@ export async function startProductionApplication(
     const executionTargets = new DatabaseExecutionTargetReader({
       configuration: backendConfiguration,
       registry,
-      targetAdmitted: profile => {
-        if (!moduleRuntimes.has(profile.backendInstanceId)) return false;
+      targetAdmission: profile => {
         const owner = environmentRuntimes.get(profile.executionEnvironmentId)?.sidecarRuntime;
-        return owner ? owner.confirmTargetSelection(profile.backendInstanceId, profile.templateId) :
-          targetGeneration(connectionProfile(profile)) !== undefined;
+        const eligible = moduleRuntimes.has(profile.backendInstanceId) && targetGeneration(connectionProfile(profile)) !== undefined;
+        if (!owner) return {eligible};
+        return {
+          eligible: eligible && !backendPreparationFailures.has(profile.backendInstanceId),
+          confirmRemote: (signal: AbortSignal) => owner.confirmTargetSelection(profile.backendInstanceId, profile.templateId, signal),
+        };
       },
       environmentOperations,
       workspaceIsolationNetworkProfiles:

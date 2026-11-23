@@ -59,6 +59,7 @@ function profile(
 }
 
 function fixture(input?: {
+  readonly targetAdmission?: ConstructorParameters<typeof DatabaseExecutionTargetReader>[0]["targetAdmission"];
   readonly unavailableProfileId?: string;
   readonly throwingProfileId?: string | "all";
   readonly disabledBackendId?: string;
@@ -164,6 +165,7 @@ function fixture(input?: {
     reader: new DatabaseExecutionTargetReader({
       configuration,
       registry,
+      ...(input?.targetAdmission && {targetAdmission: input.targetAdmission}),
       environmentOperations: input?.environmentOperations,
       workspaceIsolationNetworkProfiles:
         input?.workspaceIsolationNetworkProfiles,
@@ -529,6 +531,32 @@ describe("execution-target catalog reader", () => {
         { id: "profile-z", available: true },
       ],
     });
+  });
+
+  it("lists eligible remote targets without confirming or probing any host and checks only an explicitly selected target", async () => {
+    const confirm = vi.fn(async (_id: string, _signal: AbortSignal) => true);
+    let eligible = true;
+    const current = fixture({targetAdmission: profile => ({
+      eligible: profile.id === "profile-z" || eligible,
+      confirmRemote: signal => confirm(profile.id, signal),
+    })});
+    expect((await current.reader.read(scope)).executionTargets.every(target => target.available)).toBe(true);
+    expect(confirm).not.toHaveBeenCalled();
+    expect(current.health).not.toHaveBeenCalled();
+    const signal = new AbortController().signal;
+    await current.reader.requireAgentSelectable(scope, "profile-z", signal);
+    expect(confirm).toHaveBeenCalledWith("profile-z", signal);
+    expect(current.health).toHaveBeenCalledTimes(1);
+    current.health.mockResolvedValueOnce({available: false});
+    await expect(current.reader.requireSelectable(scope, "profile-a")).rejects.toThrow();
+    const snapshot = await current.reader.read(scope);
+    expect(snapshot.executionTargets.find(target => target.id === "profile-a")?.available).toBe(false);
+    expect(current.health).toHaveBeenCalledTimes(2);
+    current.reader.invalidateHealth();
+    eligible = false;
+    expect((await current.reader.read(scope)).executionTargets.find(target => target.id === "profile-a")?.available).toBe(false);
+    expect(confirm).toHaveBeenCalledTimes(2);
+    expect(current.health).toHaveBeenCalledTimes(2);
   });
 
   it("caches snapshot health briefly but rechecks an explicit selection", async () => {

@@ -48,7 +48,11 @@ export class DatabaseExecutionTargetReader implements ExecutionTargetReader {
     readonly input: {
       readonly configuration: BackendConfigurationRepository;
       readonly registry: AgentBackendRegistry;
-      readonly targetAdmitted?: (profile: ConnectionProfileRecord) => boolean | Promise<boolean>;
+      readonly targetAdmission?: (profile: ConnectionProfileRecord) => {
+        readonly eligible: boolean;
+        /** Only an explicit selection may connect to this host. */
+        readonly confirmRemote?: (signal: AbortSignal) => Promise<boolean>;
+      };
       /** Static environment operation contributions; resolving them never starts a sidecar. */
       readonly environmentOperations?: ReadonlyMap<
         string,
@@ -219,7 +223,8 @@ export class DatabaseExecutionTargetReader implements ExecutionTargetReader {
         unavailableReason: boundDisplayText("This backend is disabled."),
       };
     }
-    if (this.input.targetAdmitted && !(await this.input.targetAdmitted(profile))) {
+    const admission = this.input.targetAdmission?.(profile);
+    if (admission && !admission.eligible) {
       return {...base, available: false, unavailableReason: boundDisplayText("Waiting for the execution target to become ready.")};
     }
     const environmentDisposition = this.#environmentDisposition(
@@ -239,7 +244,6 @@ export class DatabaseExecutionTargetReader implements ExecutionTargetReader {
       ...profile,
       enabled: true,
     } as const;
-    let driver;
     try {
       if (!this.input.registry.supportsConversationCreation(connection)) {
         return {
@@ -250,7 +254,6 @@ export class DatabaseExecutionTargetReader implements ExecutionTargetReader {
           ),
         };
       }
-      driver = this.input.registry.driver(connection);
     } catch (error) {
       this.input.onHealthError?.(error, profile);
       return {
@@ -269,15 +272,24 @@ export class DatabaseExecutionTargetReader implements ExecutionTargetReader {
       profile.id,
       profile.configurationRevision,
     ].join("\0");
-    const generation = this.#healthGeneration;
     const now = this.input.now?.() ?? Date.now();
     const cached = this.#health.get(cacheKey);
     let available: boolean;
-    if (useHealthCache && cached && cached.expiresAt > now) {
+    if (admission?.confirmRemote && !useHealthCache) {
+      const confirmed = await admission.confirmRemote(signal ?? new AbortController().signal);
+      signal?.throwIfAborted();
+      if (!confirmed) return {...base, available: false, unavailableReason: boundDisplayText("Waiting for the execution target to become ready.")};
+    }
+    const generation = this.#healthGeneration;
+    if (useHealthCache && admission?.confirmRemote) {
+      // The picker advertises eligibility and retains any observed health. A
+      // fresh remote health probe belongs to selection on this specific host.
+      available = cached?.available ?? true;
+    } else if (useHealthCache && cached && cached.expiresAt > now) {
       available = cached.available;
     } else {
       try {
-        const health = await driver.health();
+        const health = await this.input.registry.driver(connection).health();
         signal?.throwIfAborted();
         available = health.available;
       } catch (error) {
@@ -285,7 +297,7 @@ export class DatabaseExecutionTargetReader implements ExecutionTargetReader {
         this.input.onHealthError?.(error, profile);
         available = false;
       }
-      if (useHealthCache && generation === this.#healthGeneration) {
+      if ((useHealthCache || admission?.confirmRemote) && generation === this.#healthGeneration) {
         this.#health.set(cacheKey, {
           available,
           expiresAt: now + (this.input.healthCacheMilliseconds ?? 5_000),

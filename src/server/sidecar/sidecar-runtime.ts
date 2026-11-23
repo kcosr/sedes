@@ -285,22 +285,26 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
     return this.#canAttach() ? this.#policy.targetGeneration(backendId, targetId, true) : undefined;
   }
 
-  async confirmTargetSelection(backendId: string, targetId: string): Promise<boolean> {
+  async confirmTargetSelection(backendId: string, targetId: string, signal?: AbortSignal): Promise<boolean> {
+    signal?.throwIfAborted();
     if (!this.#canAttach()) return false;
     const generation = this.#policy.targetGeneration(backendId, targetId, true);
     if (generation === undefined) return false;
     if (this.#policy.targetGeneration(backendId, targetId) === generation) return true;
     try {
-      return await this.withTargetAuthorization(backendId, targetId, generation, () => true);
+      const deadline = AbortSignal.timeout(10_000);
+      return await this.withTargetAuthorization(backendId, targetId, generation, () => true,
+        signal ? AbortSignal.any([signal, deadline]) : deadline);
     } catch (error) {
+      signal?.throwIfAborted();
       if (error instanceof SidecarUnavailableError) return false;
       throw error;
     }
   }
 
-  async withTargetAuthorization<T>(backendId: string, targetId: string, generation: number, operation: () => T): Promise<T> {
+  async withTargetAuthorization<T>(backendId: string, targetId: string, generation: number, operation: () => T, signal?: AbortSignal): Promise<T> {
     if (this.acquirableTargetGeneration(backendId, targetId) !== generation) throw new SidecarUnavailableError();
-    const lease = await this.acquireOperation(this.#scope, this.#executionEnvironmentId, this.#attachmentController.signal);
+    const lease = await this.acquireOperation(this.#scope, this.#executionEnvironmentId, signal ?? this.#attachmentController.signal);
     try {
       if (this.#current?.session !== lease.session || this.#policy.targetGeneration(backendId, targetId) !== generation)
         throw new SidecarUnavailableError();
