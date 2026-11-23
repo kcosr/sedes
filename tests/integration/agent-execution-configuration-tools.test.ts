@@ -165,6 +165,43 @@ describe("agent execution configuration",()=>{
     expect(await f.call("environment.configure",mutation)).toEqual(result);
   });
 
+  it("removes only an empty non-source environment and revalidates retained removal receipts",async()=>{
+    const f=fixture();const before=f.repository.get(f.scope).configuration;
+    const request={...f.mutation(),environmentId:remoteId};
+    const result=await f.call("environment.remove",request);
+    expect(f.repository.get(f.scope).configuration).toEqual({...before,executionEnvironments:before.executionEnvironments.filter(item=>item.id!==remoteId)});
+    const saved=f.repository.get(f.scope);
+    f.restart();
+    expect(await f.call("environment.remove",request)).toEqual(result);
+    f.setCrossEnvironment(false);
+    await expect(f.call("environment.remove",request)).rejects.toMatchObject({code:"permission_denied"});
+    f.setCrossEnvironment(true);
+    f.enabledToolIds.delete("environment.remove");
+    await expect(f.call("environment.remove",request)).rejects.toMatchObject({code:"permission_denied"});
+    f.enabledToolIds.add("environment.remove");
+    expect(await f.call("environment.remove",request)).toEqual(result);
+    expect(f.repository.get(f.scope)).toEqual(saved);
+    expect(f.reconcile).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects environment removal while disabled backends remain without cascading changes",async()=>{
+    const f=fixture();await f.create("claude_agent_sdk",remoteId,{enabled:false});
+    const before=f.repository.get(f.scope);
+    f.reconcile.mockClear();
+    await expect(f.call("environment.remove",{...f.mutation(),environmentId:remoteId})).rejects.toMatchObject({
+      code:"conflict",message:"Remove this environment's backends before removing the environment.",
+    });
+    expect(f.repository.get(f.scope)).toEqual(before);
+    expect(f.reconcile).not.toHaveBeenCalled();
+  });
+
+  it("denies source environment removal before checking dependent backends",async()=>{
+    const f=fixture();const before=f.repository.get(f.scope);
+    await expect(f.call("environment.remove",{...f.mutation(),environmentId:localId})).rejects.toMatchObject({code:"permission_denied"});
+    expect(f.repository.get(f.scope)).toEqual(before);
+    expect(f.reconcile).not.toHaveBeenCalled();
+  });
+
   it("keeps connection collections and names stable while adding/updating/removing exact IDs",async()=>{
     const f=fixture();const added=await f.create("claude_agent_sdk");
     await f.call("backend.configure",{...f.mutation(),backendId:added.backendId,connections:{create:[{label:"Second"}]}});
@@ -184,6 +221,53 @@ describe("agent execution configuration",()=>{
     expect(f.authorizeSecretReference).toHaveBeenCalledWith(f.scope,localId,{source:"protected_file",path:"/private/opencode-password"});
     expect(f.repository.hasApprovedSecret(f.scope,localId,{source:"protected_file",path:"/private/opencode-password"})).toBe(true);
     expect(f.repository.get(f.scope).configuration.backends.find(b=>b.id===added.backendId)).toMatchObject({moduleConfiguration:{connection:{ownership:"external",channel:{type:"http"}}}});
+  });
+
+  it.each([
+    {kind:"codex_app_server",from:"environment"},
+    {kind:"codex_app_server",from:"protected_file"},
+    {kind:"opencode",from:"environment"},
+    {kind:"opencode",from:"protected_file"},
+  ] as const)("replaces $kind authentication references from $from through secret approval",async({kind,from})=>{
+    const f=fixture();
+    const environment={source:"environment" as const,variable:kind==="codex_app_server"?"SEDES_CODEX_TEST_TOKEN":"SEDES_OPENCODE_TEST_PASSWORD"};
+    const file={source:"protected_file" as const,path:`/private/${kind}-credential`};
+    const before=from==="environment"?environment:file;
+    const after=from==="environment"?file:environment;
+    const authentication=kind==="codex_app_server"?{type:"capability_token",secret:before}:{type:"basic",username:"opencode",secret:before};
+    const channel=kind==="codex_app_server"?{type:"tcp_websocket",url:"ws://127.0.0.1:4581",authentication}:{type:"http",url:"http://127.0.0.1:4580",authentication};
+    const added=await f.create(kind,localId,{moduleConfiguration:{connection:{ownership:"external",channel}}});
+    const saved=f.repository.get(f.scope);
+    expect(f.repository.hasApprovedSecret(f.scope,localId,before)).toBe(true);
+    f.authorizeSecretReference.mockClear();
+    const configure=(secret:unknown)=>f.call("backend.configure",{...f.mutation(),backendId:added.backendId,changes:{moduleConfiguration:{connection:{channel:{authentication:{secret}}}}}});
+
+    await expect(configure({source:after.source})).rejects.toThrow("invalid");
+    expect(f.authorizeSecretReference).not.toHaveBeenCalled();
+    expect(f.repository.get(f.scope)).toEqual(saved);
+
+    f.authorizeSecretReference.mockImplementationOnce(()=>{throw new DomainError("bad_request","Secret reference is not approved.");});
+    await expect(configure(after)).rejects.toThrow("Secret reference is not approved.");
+    expect(f.repository.hasApprovedSecret(f.scope,localId,after)).toBe(false);
+    expect(f.repository.get(f.scope)).toEqual(saved);
+    f.authorizeSecretReference.mockClear();
+
+    await configure(after);
+    expect(f.authorizeSecretReference).toHaveBeenCalledExactlyOnceWith(f.scope,localId,after);
+    expect(f.repository.hasApprovedSecret(f.scope,localId,after)).toBe(true);
+    const backend=f.repository.get(f.scope).configuration.backends.find(item=>item.id===added.backendId)!;
+    expect(backend).toMatchObject({moduleConfiguration:{connection:{ownership:"external",channel:{...channel,authentication:{...authentication,secret:after}}}}});
+    if(backend.kind!=="codex_app_server"&&backend.kind!=="opencode")throw new Error("Unexpected backend kind");
+    const connection=backend.moduleConfiguration.connection;
+    if(connection.ownership!=="external"||connection.channel.type==="unix_websocket")throw new Error("Unexpected connection kind");
+    expect(connection.channel.authentication.secret).toEqual(after);
+  });
+
+  it("rejects backend kind patches before changing saved configuration",async()=>{
+    const f=fixture();const added=await f.create("claude_agent_sdk");
+    const before=f.repository.get(f.scope);
+    await expect(f.call("backend.configure",{...f.mutation(),backendId:added.backendId,changes:{kind:"claude_agent_sdk",label:"Changed"}})).rejects.toMatchObject({code:"bad_request"});
+    expect(f.repository.get(f.scope)).toEqual(before);
   });
 
   it("replays creation after intervening edits/removal/restart without reallocating IDs or exposing configured values",async()=>{

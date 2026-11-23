@@ -127,7 +127,11 @@ function sourceTargetSafetyShape(target: ConfigurationTarget): { id: string; [ke
     : target.kind === "opencode_http" ? ["model", "variant"]
     : target.kind === "grok_acp" ? ["model", "reasoningEffort"]
     : target.kind === "codex_app_server" ? ["model"] : [];
-  return { ...target, moduleConfiguration: { ...target.moduleConfiguration, defaults: without(target.moduleConfiguration.defaults, allowed) } };
+  // Clearing defaultable connection settings removes the property until the
+  // completed document is parsed. Compare their schema-normalized empty value.
+  const defaults = target.kind === "pi_rpc" || target.kind === "antigravity_acp"
+    ? target.moduleConfiguration.defaults ?? {} : target.moduleConfiguration.defaults;
+  return { ...target, moduleConfiguration: { ...target.moduleConfiguration, defaults: without(defaults, allowed) } };
 }
 function without(value: object, keys: readonly string[]): Record<string, unknown> {
   return Object.fromEntries(Object.entries(value).filter(([key, item]) => !keys.includes(key) && item !== undefined));

@@ -509,21 +509,43 @@ export function normalizeCanonicalAgentToolSchema(
   ) as CanonicalAgentToolRootSchema;
 }
 
-export function compileCanonicalAgentToolSchema<T = unknown>(
-  schema: unknown,
-): CanonicalSchemaValidator<T> {
-  const normalized = normalizeCanonicalAgentToolSchema(schema);
+export interface CanonicalSchemaCompiler {
+  compile<T = unknown>(schema: unknown): CanonicalSchemaValidator<T>;
+}
+
+/** A registry owns its compiler, so meta-schema compilation is amortized across
+ * its tool set without a process-wide cache of dynamically supplied schemas.
+ * Each compile still creates a detached schema and independent error state. */
+export function createCanonicalAgentToolSchemaCompiler(): CanonicalSchemaCompiler {
   const ajv = new Ajv2020({
     allErrors: true,
     strict: true,
     validateFormats: false,
+    addUsedSchema: false,
   });
-  const validate: ValidateFunction<T> = ajv.compile(normalized);
   return {
-    schema: normalized,
-    check(value: unknown): value is T {
-      return validate(value);
+    compile<T = unknown>(schema: unknown): CanonicalSchemaValidator<T> {
+      const normalized = normalizeCanonicalAgentToolSchema(schema);
+      let validate: ValidateFunction<T>;
+      try {
+        validate = ajv.compile<T>(normalized);
+      } finally {
+        // Validators remain usable after removal. Ajv's code-generation scope
+        // can retain references, so this compiler must stay registry-scoped.
+        ajv.removeSchema(normalized);
+      }
+      return {
+        schema: normalized,
+        check(value: unknown): value is T { return validate(value); },
+        errors: () => Object.freeze([...(validate.errors ?? [])]),
+      };
     },
-    errors: () => Object.freeze([...(validate.errors ?? [])]),
   };
+}
+
+/** Standalone callers do not share a long-lived dynamic-schema compiler. */
+export function compileCanonicalAgentToolSchema<T = unknown>(
+  schema: unknown,
+): CanonicalSchemaValidator<T> {
+  return createCanonicalAgentToolSchemaCompiler().compile<T>(schema);
 }

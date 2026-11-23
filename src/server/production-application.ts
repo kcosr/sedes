@@ -2198,7 +2198,6 @@ export async function startProductionApplication(
       {},
       agentToolPolicyDependencies.catalog,
     );
-    agentTools.bind(sourceScopedAgentTools);
     const httpAgentTools = new PolicyCheckedAgentToolHttpService(
       sourceScopedAgentTools,
     );
@@ -2207,11 +2206,6 @@ export async function startProductionApplication(
       publisher: automations,
     });
 
-    await queueDispatcher.recover(scope);
-    await completionCallbackDispatcher.deliverReady(scope);
-    await mutations.recoverUncertain(scope);
-    observeAutomationQueue.recover();
-    observeAutomationTurns.recover();
     scheduler = new DurableScheduler(
       [
         automations,
@@ -2367,7 +2361,6 @@ export async function startProductionApplication(
         }),
       );
     };
-    scheduler.start();
     resources.defer("durable scheduler", () => scheduler?.stop(), {
       mode: "ownership_critical",
     });
@@ -3711,6 +3704,16 @@ export async function startProductionApplication(
         mode: "ownership_critical",
       },
     );
+    // Recovered turns, callbacks and due automations may invoke management
+    // tools immediately. Publish the facade and dispatch startup work only
+    // after all tool services and their cleanup boundaries are ready.
+    agentTools.bind(sourceScopedAgentTools);
+    await queueDispatcher.recover(scope);
+    await completionCallbackDispatcher.deliverReady(scope);
+    await mutations.recoverUncertain(scope);
+    observeAutomationQueue.recover();
+    observeAutomationTurns.recover();
+    scheduler.start();
     const app = createNormalizedApp({
       usage,
       environmentVariables,

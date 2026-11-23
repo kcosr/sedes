@@ -94,10 +94,13 @@ const backendVariants = variants(backendFull);
 const environmentVariants = variants(environmentFull);
 
 const backendChanges = union(backendVariants.map(variant => {
-  const patch = partial(omit(variant,["id", "environmentVariables"])) as CanonicalObjectSchema;
+  const patch = partial(omit(variant,["id", "kind", "environmentVariables"])) as CanonicalObjectSchema;
   return object({...patch.properties, environmentVariables: configuredVariableEditsSchema}, []);
 }));
-const backendCreate = union(variants(backendChanges).map(variant => object(variant.properties,["kind","label"])));
+const backendCreate = union(backendVariants.map(variant => {
+  const patch = partial(omit(variant,["id", "environmentVariables"])) as CanonicalObjectSchema;
+  return object({...patch.properties, environmentVariables: configuredVariableEditsSchema}, ["kind","label"]);
+}));
 const environmentChanges = union(environmentVariants.map(variant => {
   const patch = partial(omit(variant,["id", "kind", "hostAlias", "pairingId", "platform", "environmentVariables"])) as CanonicalObjectSchema;
   return object({...patch.properties, environmentVariables: configuredVariableEditsSchema}, []);

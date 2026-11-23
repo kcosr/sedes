@@ -174,6 +174,20 @@ describe("source route safety", () => {
   });
 
   it.each([
+    ["pi_rpc",{provider:"provider",model:"model",thinkingLevel:"low"}],
+    ["antigravity_acp",{modelId:"model",thinkingLevel:"low"}],
+  ])("allows resetting optional %s model/reasoning defaults", (kind,before) => {
+    const target = {id:"connection",kind,label:"Connection",backendInstanceId:backend.id,executionEnvironmentId:"env-a",enabled:true,moduleConfiguration:{defaults:before}} as ConfigurationTarget;
+    // A defaults:null patch removes the property before the completed target
+    // schema restores its default {} value.
+    for (const moduleConfiguration of [{}, {defaults:{}}]) {
+      const reset = {...target,moduleConfiguration} as ConfigurationTarget;
+      expect(() => access.sourceBackendChange(context(),backend,backend,[target],[reset])).not.toThrow();
+      expect(() => access.sourceBackendChange(context(),backend,backend,[reset],[target])).not.toThrow();
+    }
+  });
+
+  it.each([
     ["codex_app_server",{sandboxMode:"read-only",networkAccess:"disabled",approvalPolicy:"never",approvalReviewer:"user",model:{type:"catalogDefault"}},"sandboxMode","danger-full-access"],
     ["claude_agent_sdk",{permissionMode:"default"},"permissionMode","auto"],
     ["antigravity_acp",{modelId:"model",modeId:"planning"},"modeId","fast"],
@@ -181,6 +195,11 @@ describe("source route safety", () => {
     const target = {id:"connection",kind,label:"Connection",backendInstanceId:backend.id,executionEnvironmentId:"env-a",enabled:true,moduleConfiguration:{defaults:before}} as ConfigurationTarget;
     const changed = {...target,moduleConfiguration:{defaults:{...before,[field as string]:value}}} as ConfigurationTarget;
     expect(() => access.sourceBackendChange(context(),backend,backend,[target],[changed])).toThrow(denied);
+    const cleared = Object.fromEntries(Object.entries(before).filter(([key]) => key !== field));
+    expect(() => access.sourceBackendChange(context(),backend,backend,[target],[{...target,moduleConfiguration:{defaults:cleared}} as ConfigurationTarget])).toThrow(denied);
+    expect(() => access.sourceBackendChange(context(),backend,backend,[target],[{...target,moduleConfiguration:{defaults:{}}} as ConfigurationTarget])).toThrow(denied);
+    if (kind === "antigravity_acp")
+      expect(() => access.sourceBackendChange(context(),backend,backend,[target],[{...target,moduleConfiguration:{}} as ConfigurationTarget])).toThrow(denied);
   });
 
   it("forbids own runtime and applied tool-policy changes while permitting a sibling backend", () => {

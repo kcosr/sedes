@@ -11,7 +11,7 @@ import {
   AGENT_TOOL_MAXIMUM_RESPONSE_BYTES,
 } from "../contracts/agent-tool-transport-limits.js";
 import {
-  compileCanonicalAgentToolSchema,
+  createCanonicalAgentToolSchemaCompiler,
   type CanonicalSchemaValidator,
   type CanonicalAgentToolRootSchema,
 } from "../schema/canonical-json-schema.js";
@@ -389,6 +389,7 @@ function normalizedArtifact(
 }
 
 export class AgentToolRegistry {
+  readonly #schemaCompiler = createCanonicalAgentToolSchemaCompiler();
   readonly #byId = new Map<string, RegisteredAgentTool>();
   readonly #adapterNames = new Map<AgentToolAdapter, Map<string, string>>();
   readonly #cliCommandPaths = new Map<string, string>();
@@ -466,10 +467,10 @@ export class AgentToolRegistry {
     validateEffects(definition as AgentToolDefinition);
     validateCatalog(definition as AgentToolDefinition);
     validateEnvironmentAuthority(definition as AgentToolDefinition);
-    const inputValidator = compileCanonicalAgentToolSchema(
+    const inputValidator = this.#schemaCompiler.compile(
       definition.inputSchema,
     );
-    const outputValidator = compileCanonicalAgentToolSchema(
+    const outputValidator = this.#schemaCompiler.compile(
       definition.outputSchema,
     );
     const inputSchema = inputValidator.schema;

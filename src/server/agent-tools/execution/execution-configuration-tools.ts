@@ -160,6 +160,8 @@ export class ExecutionConfigurationTools {
       const before=requireEnvironment(previous,id);
       const after=operation==="environment.remove" ? undefined : editVariables(before,operation==="environment.rename"?{label:input.label}:record(input.changes)) as ConfigurationEnvironment;
       this.options.access.sourceEnvironmentChange(context,before,after);
+      if(operation==="environment.remove"&&previous.targets.some(target=>target.executionEnvironmentId===id))
+        throw new DomainError("conflict","Remove this environment's backends before removing the environment.");
       configuration.executionEnvironments=configuration.executionEnvironments.flatMap(item=>item.id!==id?[item]:after?[after]:[]);
       return {configuration,scopeFacts:environmentFacts(id),environmentId:id,changedSettings:operation==="environment.configure"?changedNames(record(input.changes)):operation==="environment.rename"?["label"]:["removed"]};
     }
@@ -250,7 +252,7 @@ function withVariableEntries<T extends {environmentVariables?:ConfiguredEnvironm
 export function mergeSettings(current:unknown,patch:unknown):unknown {
   if(patch===null||typeof patch!=="object"||Array.isArray(patch)) return structuredClone(patch);
   const edits=record(patch),before=record(current);
-  const changedVariant=["kind","type","ownership"].some(key=>edits[key]!==undefined&&before[key]!==undefined&&edits[key]!==before[key]);
+  const changedVariant=["kind","type","ownership","source"].some(key=>edits[key]!==undefined&&before[key]!==undefined&&edits[key]!==before[key]);
   const result:ObjectValue=changedVariant?{}:structuredClone(before);
   for(const [key,value] of Object.entries(edits)) {
     if(value===null) delete result[key];
