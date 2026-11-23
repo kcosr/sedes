@@ -2,6 +2,7 @@ import { canonicalLocalWorkspaceRoots } from "../execution/local-workspace-roots
 import { WorkspaceFileRootUnavailableError, WORKSPACE_FILE_LINK_CANDIDATE_ROOT_ID } from "./contracts.js";
 import { workspaceRootGrant, type WorkspaceRootGrant } from "../execution/workspace-root-grant.js";
 import { isWithinRemoteRoot } from "../execution/remote-path.js";
+import { realpath } from "node:fs/promises";
 import path from "node:path";
 import type { WorkspaceFileLinkReference } from "../../shared/protocol/workspace-files.js";
 import type {
@@ -43,6 +44,14 @@ function sameScope(left: RequestScope, right: RequestScope): boolean {
   return (
     left.tenantId === right.tenantId && left.principalId === right.principalId
   );
+}
+
+function captureGrant(root: WorkspaceRootGrant, readRoots: () => readonly WorkspaceRootGrant[]) {
+  return { root, check() {
+    const current = canonicalLocalWorkspaceRoots(readRoots());
+    if (!current.some(item => item.id === root.id && item.generation === root.generation && item.path === root.path))
+      throw new WorkspaceFileRootUnavailableError();
+  } };
 }
 
 export type LocalWorkspaceFileProviderTestHooks = WorkspaceFilesEngineTestHooks;
@@ -129,7 +138,19 @@ export class LocalWorkspaceFileProvider implements WorkspaceFileProvider {
       return undefined;
     }
     signal?.throwIfAborted();
-    const authority = this.#capture(absolutePath);
+    let authority;
+    const readRoots = this.input.readWorkspaceRoots;
+    if (readRoots) {
+      const candidates = canonicalLocalWorkspaceRoots(readRoots()).filter(root =>
+        isWithinRemoteRoot(absolutePath, root.path) || isWithinRemoteRoot(absolutePath, root.declaredPath));
+      if (!candidates.length) return undefined;
+      const canonicalFile = await realpath(absolutePath).catch(() => undefined);
+      signal?.throwIfAborted();
+      const grant = canonicalFile && workspaceRootGrant(candidates, canonicalFile);
+      if (!grant) return undefined;
+      authority = captureGrant(grant, readRoots);
+      authority.check();
+    }
     const result = await this.#engine.discoverFileLinkRoot(absolutePath, signal);
     authority?.check();
     if (authority && result && !isWithinRemoteRoot(result.canonicalPath, authority.root.path)) return undefined;
@@ -415,9 +436,7 @@ export class LocalWorkspaceFileProvider implements WorkspaceFileProvider {
     const binding = requiresBinding ? this.input.readWorkspaceBinding?.(workspaceId, rootId) : undefined;
     const root = workspaceRootGrant(canonicalLocalWorkspaceRoots(roots()), path, binding);
     if (!root || (requiresBinding && !binding)) throw new WorkspaceFileRootUnavailableError();
-    return { root, check() {
-      if (!canonicalLocalWorkspaceRoots(roots()).some(current => current.id === root.id && current.generation === root.generation && current.path === root.path)) throw new WorkspaceFileRootUnavailableError();
-    } };
+    return captureGrant(root, roots);
   }
 
   #supports(scope: RequestScope, environmentId: string): boolean {

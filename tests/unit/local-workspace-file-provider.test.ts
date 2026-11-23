@@ -6,6 +6,7 @@ import {
   open,
   readFile,
   readdir,
+  realpath,
   rename,
   rm,
   symlink,
@@ -90,6 +91,26 @@ const WEBP_SIGNATURE = Buffer.from([
 ]);
 
 describe("LocalWorkspaceFileProvider", () => {
+  it("discovers an absolute file link beneath a configured symlink and rejects escapes", async () => {
+    const current = await fixture();
+    const directory = path.join(current.root, "actual");
+    const alias = path.join(current.root, "alias");
+    await mkdir(directory);
+    await symlink(directory, alias, "dir");
+    await writeFile(path.join(directory, "visible.txt"), "visible");
+    await writeFile(path.join(current.root, "outside.txt"), "outside");
+    await symlink(current.root, path.join(directory, "escape"), "dir");
+    const provider = new LocalWorkspaceFileProvider({
+      scope, environmentId, readWorkspaceRoots: () => [{id:"declared-alias", path:alias, generation:1}],
+    });
+    try {
+      await expect(provider.discoverFileLinkRoot(scope, environmentId, path.join(alias, "visible.txt")))
+        .resolves.toEqual({canonicalPath:await realpath(directory), relativePath:"visible.txt"});
+      await expect(provider.discoverFileLinkRoot(scope, environmentId, path.join(alias, "escape", "outside.txt")))
+        .resolves.toBeUndefined();
+    } finally { provider.close(); current.provider.close(); }
+  });
+
   it("rechecks the workspace's original root before committing a write despite an overlapping grant", async () => {
     const current = await fixture();
     const original = { id: "original", path: current.root, generation: 4 };
