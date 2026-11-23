@@ -509,11 +509,12 @@ describe("MarkdownContent workspace file links", () => {
     );
 
     const link = screen.getByRole("link", { name: "the source" });
-    const copy = screen.getByRole("button", { name: "Copy file reference" });
+    const copy = screen.getByRole("button", { name: `Copy file reference for ${text}` });
     expect(link.nextElementSibling).toBe(copy);
     fireEvent.click(copy);
 
-    expect(await screen.findByRole("button", { name: "File reference copied" })).toBe(copy);
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("File reference copied."));
+    expect(link.closest("p")?.textContent).toBe("See the source for details and the docs.");
     expect(writeText).toHaveBeenCalledExactlyOnceWith(text);
     expect(openReference).not.toHaveBeenCalled();
   });
@@ -533,11 +534,11 @@ describe("MarkdownContent workspace file links", () => {
         </WorkspaceFileLinkProvider>,
       );
       await act(async () => {
-        fireEvent.click(screen.getByRole("button", { name: "Copy file reference" }));
+        fireEvent.click(screen.getByRole("button", { name: "Copy file reference for src/app.ts" }));
       });
-      expect(screen.getByRole("button", { name: "Copy failed" })).toBeInTheDocument();
+      expect(screen.getByRole("status")).toHaveTextContent("Copying the file reference failed.");
       act(() => vi.advanceTimersByTime(1_800));
-      expect(screen.getByRole("button", { name: "Copy file reference" })).toBeInTheDocument();
+      expect(screen.getByRole("status")).toBeEmptyDOMElement();
     } finally {
       vi.useRealTimers();
     }
@@ -551,7 +552,7 @@ describe("MarkdownContent workspace file links", () => {
     );
 
     expect(screen.getByRole("link", { name: "Source" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Copy file reference" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Copy file reference/ })).toBeNull();
   });
 
   it.each([

@@ -13,6 +13,7 @@ import {
   type HTMLAttributes,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -174,23 +175,30 @@ function FileReferenceCopyButton({ request }: {
   const text = target.kind === "source_line"
     ? `${reference.path}:${target.lineNumber}`
     : reference.path;
-  const label = copyState === "copied"
-    ? "File reference copied"
-    : copyState === "failed" ? "Copy failed" : "Copy file reference";
+  const announcement = copyState === "copied"
+    ? "File reference copied."
+    : copyState === "failed" ? "Copying the file reference failed." : "";
   const Icon = copyState === "copied" ? Check : copyState === "failed" ? X : Copy;
 
   return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon-xs"
-      className="markdown-file-reference-copy"
-      aria-label={label}
-      title={copyState === "failed" ? "Copy failed" : "Copy file reference"}
-      onClick={() => void copy(text)}
-    >
-      <Icon aria-hidden="true" strokeWidth={1.8} />
-    </Button>
+    <>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-xs"
+        className="markdown-file-reference-copy"
+        aria-label={`Copy file reference for ${text}`}
+        title={copyState === "failed" ? "Copy failed" : "Copy file reference"}
+        onClick={() => void copy(text)}
+      >
+        <Icon aria-hidden="true" strokeWidth={1.8} />
+      </Button>
+      {/* Keep feedback outside the selectable transcript text. */}
+      {createPortal(
+        <span className="sr-only" role="status">{announcement}</span>,
+        document.body,
+      )}
+    </>
   );
 }
 
@@ -261,7 +269,9 @@ const LINK_COMPONENT: NonNullable<MarkdownComponents["a"]> = ({
             });
         }}
       >
-        {linkChildren}
+        {copyFileReferences ? (
+          <span className="markdown-file-reference-label">{linkChildren}</span>
+        ) : linkChildren}
         <FileText aria-hidden="true" size={12} strokeWidth={1.8} />
       </a>
     );
