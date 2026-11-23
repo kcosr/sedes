@@ -15,6 +15,7 @@ User-facing changes are collected here before release. See the
   next launch. If an upgrade disables competing Antigravity backends on a local
   host, Settings lets you confirm each previous runtime’s retirement after
   inspecting that host. See [execution settings](docs/user/settings.md#saving-and-runtime-state).
+  ([#150](https://github.com/kcosr/sedes/pull/150))
 
 - Native Pi reduces round trips before sending a message on an attached thread.
   Drain retained native Pi work using the currently installed main and sidecar
