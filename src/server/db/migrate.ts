@@ -1,3 +1,4 @@
+import { replyOnlyTurnBookmarksMigration } from "./migrations/170-reply-only-turn-bookmarks.js";
 import { configurationCommandReceiptsMigration } from "./migrations/169-configuration-command-receipts.js";
 import { workspaceFileRootGrantsMigration } from "./migrations/168-workspace-file-root-grants.js";
 import { liveExecutionPolicyMigration } from "./migrations/166-live-execution-policy.js";
@@ -352,6 +353,7 @@ export const backendNormalizedMigrations = [
   workspaceRootAuthorityMigration,
   workspaceFileRootGrantsMigration,
   configurationCommandReceiptsMigration,
+  replyOnlyTurnBookmarksMigration,
 ] as const;
 
 export type DatabaseMigration = {

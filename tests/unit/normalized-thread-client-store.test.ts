@@ -6158,6 +6158,50 @@ describe("ThreadClientStore bookmark preview reconciliation", () => {
     expect(store.getSnapshot().bookmarks).toEqual([{ ...pendingBookmark, ...preview }]);
   });
 
+  it.each([
+    { assistantPreview: "Final", responseState: "responded" as const },
+    { assistantPreview: "Unrelated retained response suffix", responseState: "responded" as const },
+    { assistantPreview: null, responseState: "no_response" as const },
+  ])("lets a reply-only bookmark adopt its durable prompt without changing the saved reply: $assistantPreview", async (response) => {
+    const replyOnly = { ...pendingBookmark, userPreview: null };
+    const adopted = { ...pendingBookmark, userPreview: "Durable prompt" };
+    const listTurnBookmarks = vi.fn().mockResolvedValue({ revision: 2, bookmarks: [replyOnly] });
+    const setTurnBookmark = vi.fn().mockResolvedValue({ revision: 3, bookmark: adopted, replayed: false });
+    const store = new ThreadClientStore("thread-1", { listTurnBookmarks, setTurnBookmark } as unknown as ApiClient, new FakeTransport());
+    await store.loadBookmarks();
+    await store.refreshTurnBookmarkPreview({ turnId: "turn-1", preview: { userPreview: "Durable prompt", ...response } });
+
+    expect(setTurnBookmark).toHaveBeenCalledExactlyOnceWith("thread-1", "turn-1", {
+      bookmarked: true,
+      expectedRevision: 2,
+      mutationId: expect.any(String),
+      userPreview: "Durable prompt",
+      assistantPreview: "Final",
+      responseState: "responded",
+    });
+    expect(store.getSnapshot().bookmarks).toEqual([adopted]);
+  });
+
+  it("extends a reply-only bookmark's reply and keeps it reply-only while the turn has no prompt", async () => {
+    const replyOnly = { ...pendingBookmark, userPreview: null };
+    const listTurnBookmarks = vi.fn().mockResolvedValue({ revision: 2, bookmarks: [replyOnly] });
+    const setTurnBookmark = vi.fn().mockResolvedValue({ revision: 3, bookmark: { ...replyOnly, assistantPreview: "Final answer" }, replayed: false });
+    const store = new ThreadClientStore("thread-1", { listTurnBookmarks, setTurnBookmark } as unknown as ApiClient, new FakeTransport());
+    await store.loadBookmarks();
+    await store.refreshTurnBookmarkPreview({ turnId: "turn-1", preview: { ...preview, userPreview: null, assistantPreview: "Final" } });
+    expect(setTurnBookmark).not.toHaveBeenCalled();
+    await store.refreshTurnBookmarkPreview({ turnId: "turn-1", preview: { ...preview, userPreview: null } });
+
+    expect(setTurnBookmark).toHaveBeenCalledExactlyOnceWith("thread-1", "turn-1", {
+      bookmarked: true,
+      expectedRevision: 2,
+      mutationId: expect.any(String),
+      userPreview: null,
+      assistantPreview: "Final answer",
+      responseState: "responded",
+    });
+  });
+
   it("reconciles a loaded bookmark on revisit and persists its final preview only once", async () => {
     const listTurnBookmarks = vi.fn().mockResolvedValue({
       revision: 2,

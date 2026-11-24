@@ -1828,7 +1828,10 @@ export class ThreadClientStore {
     return this.#mutateTurnBookmark(input);
   }
 
-  /** Complete a loaded terminal reply without re-adding or degrading a bookmark. */
+  /**
+   * Complete a loaded terminal reply, or a reply-only bookmark's missing
+   * prompt, without re-adding or degrading a bookmark.
+   */
   refreshTurnBookmarkPreview(input: {
     readonly turnId: string;
     readonly preview: TurnBookmarkPreview;
@@ -1855,15 +1858,24 @@ export class ThreadClientStore {
     // A terminal history window can omit earlier replies. Only extend the saved
     // visible text; never replace it with a missing or unrelated retained suffix.
     // This also makes reconciliation converge across differently bounded views.
-    if (
-      !current ||
-      !reply ||
-      reply === savedReply ||
-      (!completesMarkdown && !reply.startsWith(savedReply))
-    ) {
+    const extendsReply = Boolean(
+      reply &&
+        reply !== savedReply &&
+        (completesMarkdown || reply.startsWith(savedReply)),
+    );
+    // A reply-only bookmark adopts the turn's prompt once it is durable, such
+    // as after an optimistic send is confirmed. A saved prompt is never replaced.
+    const userPreview = current?.userPreview ?? input.preview.userPreview;
+    if (!current || (!extendsReply && userPreview === current.userPreview)) {
       return Promise.resolve();
     }
-    const preview = { ...input.preview, userPreview: current.userPreview };
+    const preview: TurnBookmarkPreview = extendsReply
+      ? { ...input.preview, userPreview }
+      : {
+          userPreview,
+          assistantPreview: current.assistantPreview,
+          responseState: current.responseState,
+        };
     const revision = this.#state.bookmarkRevision;
     const attempt = JSON.stringify([
       revision,

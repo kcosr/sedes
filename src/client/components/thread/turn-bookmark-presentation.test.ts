@@ -46,8 +46,31 @@ describe("turn bookmark presentation", () => {
     expect(turnBookmarkPreview(turn(["question", "empty"]), items)).toEqual({ userPreview: "Question", assistantPreview: null, responseState: "no_response" });
   });
 
-  it("does not offer a bookmark for an optimistic or provider-only turn without a durable user message", () => {
-    expect(turnBookmarkPreview(turn(["reply"]), { reply: assistant("reply", "Reply") })).toBeUndefined();
+  it("identifies a turn without a user message by its whole reply", () => {
+    const activity: ConversationItem = { id: "activity", turnId: "turn", revision: 1, kind: "reasoning", status: "completed", markdown: { text: "Thinking" } };
+    const items = { activity, first: assistant("first", "Background task **finished**."), last: assistant("last", "Here is the summary.") };
+    const current = turn(Object.keys(items));
+    expect(turnBookmarkPreview(current, items)).toEqual({ userPreview: null, assistantPreview: "Background task finished. Here is the summary.", responseState: "responded" });
+    expect(turnResponseItemId(current, items)).toBe("first");
+    // The history rail lists user messages only.
+    expect(createChatHistoryEntries(["turn"], { turn: current }, items)).toEqual([]);
+  });
+
+  it("keeps a continued reply prompt-less when the user steers it", () => {
+    const items = { placeholder: assistant("placeholder", " "), first: assistant("first", "Background task finished."), steer: user("steer", "Also check the tests"), last: assistant("last", "Tests pass.") };
+    const current = turn(Object.keys(items));
+    expect(turnBookmarkPreview(current, items)).toEqual({ userPreview: null, assistantPreview: "Background task finished. Tests pass.", responseState: "responded" });
+    expect(turnResponseItemId(current, items)).toBe("first");
+    // An empty placeholder ahead of the prompt does not make a turn prompt-less.
+    const prompted = { placeholder: assistant("placeholder", " "), question: user("question", "Question"), reply: assistant("reply", "Reply") };
+    expect(turnBookmarkPreview(turn(Object.keys(prompted)), prompted)).toEqual({ userPreview: "Question", assistantPreview: "Reply", responseState: "responded" });
+  });
+
+  it("does not offer a bookmark for a turn with neither a user message nor reply text", () => {
+    const activity: ConversationItem = { id: "activity", turnId: "turn", revision: 1, kind: "reasoning", status: "completed", markdown: { text: "Thinking" } };
+    const items = { activity, empty: assistant("empty", " ") };
+    expect(turnBookmarkPreview(turn(Object.keys(items)), items)).toBeUndefined();
+    expect(turnBookmarkPreview(turn([]), {})).toBeUndefined();
   });
 
   it("reuses a turn's presentation until one of its items changes", () => {

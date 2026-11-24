@@ -52,7 +52,8 @@ User-facing changes are collected here before release. See the
   ([#121](https://github.com/kcosr/sedes/pull/121))
 
 - Upgrade server and browser/packaged clients together for client protocol
-  **178**. Clients can verify exact abandoned inputs after Force Reset.
+  **180**. Turn bookmarks may omit the user prompt for replies that continue
+  without one. Clients can verify exact abandoned inputs after Force Reset.
   Antigravity targets add a normalized brand and execution configuration.
   Chat excerpts captured from highlighted questions retain their quote
   style in drafts and sent messages. Account quota snapshots now include the
@@ -433,6 +434,10 @@ User-facing changes are collected here before release. See the
   ([#81](https://github.com/kcosr/sedes/pull/81))
 
 ### Fixed
+
+- Replies that continue without a new prompt, such as Claude's reply after a
+  background task finishes, can be bookmarked; the Bookmarks list labels them
+  with the reply.
 
 - Native Pi threads can be renamed while a turn is running, matching the other
   backends. See [native Pi controls](docs/operator/backends/pi-native.md#conversation-controls-and-history).

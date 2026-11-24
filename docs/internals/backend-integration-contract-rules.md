@@ -113,6 +113,11 @@ order and fenced against newer events and responses completed during the read.
 Application abandonment can release an exact scoped terminal provider receipt,
 but cannot establish native non-consumption or discard a pending callback.
 
+Client protocol 180 allows a turn bookmark without a user-prompt preview. A
+bookmark for a turn with no durable user message, such as a provider
+continuation after background work, must carry an assistant preview instead.
+Backends need no change: eligibility follows the normalized turn's items.
+
 Client protocol 179 adds per-effect execution settings and confirmed host
 generations to the strict configuration response.
 

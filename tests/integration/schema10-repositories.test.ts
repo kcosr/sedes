@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { importLegacyDatabaseConfigurationFixture } from "../support/database-configuration-fixture.js";
 import { ConfigurationRepository } from "../../src/server/configuration-admin/configuration-repository.js";
 import { ConfigurationProjection } from "../../src/server/configuration-admin/configuration-projection.js";
@@ -749,6 +749,478 @@ describe("conversation turn bookmarks", () => {
           createdAt: 700,
         },
       });
+    } finally {
+      fixture.database.close();
+    }
+  });
+
+  it("persists, lists, and replays a reply-only bookmark", () => {
+    const fixture = createFixture();
+    try {
+      const bookmarks = new ConversationTurnBookmarkRepository(
+        fixture.database,
+        new InventoryRepository(fixture.database),
+      );
+      const request = {
+        bookmarked: true,
+        expectedRevision: 0,
+        mutationId: "66666666-6666-4666-8666-666666666670",
+        userPreview: null,
+        assistantPreview: "The background task finished; here is its result.",
+        responseState: "responded",
+      } as const;
+      const created = bookmarks.set(
+        fixture.scope,
+        fixture.threadId,
+        "turn-reply-only",
+        request,
+        700,
+      );
+      expect(created).toEqual({
+        revision: 1,
+        bookmark: {
+          turnId: "turn-reply-only",
+          userPreview: null,
+          assistantPreview: request.assistantPreview,
+          responseState: "responded",
+          createdAt: 700,
+        },
+        replayed: false,
+      });
+      expect(
+        bookmarks.set(
+          fixture.scope,
+          fixture.threadId,
+          "turn-reply-only",
+          request,
+          800,
+        ),
+      ).toEqual({ ...created, replayed: true });
+      expect(bookmarks.list(fixture.scope, fixture.threadId)).toEqual({
+        revision: 1,
+        bookmarks: [created.bookmark],
+      });
+      expect(
+        fixture.database
+          .prepare(
+            `
+              SELECT user_preview AS userPreview
+              FROM conversation_turn_bookmarks
+              WHERE tenant_id = ? AND principal_id = ? AND thread_id = ?
+                AND turn_id = 'turn-reply-only'
+            `,
+          )
+          .get(fixture.scope.tenantId, fixture.scope.principalId, fixture.threadId),
+      ).toEqual({ userPreview: null });
+    } finally {
+      fixture.database.close();
+    }
+  });
+
+  it("requires at least one preview in the table", () => {
+    const fixture = createFixture();
+    try {
+      const insert = fixture.database.prepare(`
+        INSERT INTO conversation_turn_bookmarks(
+          tenant_id, principal_id, thread_id, turn_id, user_preview,
+          assistant_preview, response_state, created_at
+        ) VALUES (?, ?, ?, ?, NULL, ?, ?, 700)
+      `);
+      const owner = [
+        fixture.scope.tenantId,
+        fixture.scope.principalId,
+        fixture.threadId,
+      ] as const;
+      expect(() =>
+        insert.run(...owner, "turn-without-previews", null, "no_response"),
+      ).toThrowError(
+        expect.objectContaining({
+          code: "SQLITE_CONSTRAINT_CHECK",
+          message: expect.stringContaining(
+            "user_preview IS NOT NULL OR assistant_preview IS NOT NULL",
+          ),
+        }),
+      );
+      insert.run(...owner, "turn-reply-only", "Reply only", "responded");
+      expect(
+        fixture.database
+          .prepare(
+            `
+              SELECT turn_id AS turnId, user_preview AS userPreview,
+                assistant_preview AS assistantPreview
+              FROM conversation_turn_bookmarks
+              WHERE tenant_id = ? AND principal_id = ? AND thread_id = ?
+            `,
+          )
+          .all(...owner),
+      ).toEqual([
+        {
+          turnId: "turn-reply-only",
+          userPreview: null,
+          assistantPreview: "Reply only",
+        },
+      ]);
+    } finally {
+      fixture.database.close();
+    }
+  });
+
+  it("adds the user prompt to a reply-only bookmark once it is durable", () => {
+    const fixture = createFixture();
+    try {
+      const bookmarks = new ConversationTurnBookmarkRepository(
+        fixture.database,
+        new InventoryRepository(fixture.database),
+      );
+      const assistantPreview = "Continued after the background task.";
+      bookmarks.set(
+        fixture.scope,
+        fixture.threadId,
+        "turn-reply-only",
+        {
+          bookmarked: true,
+          expectedRevision: 0,
+          mutationId: "77777777-7777-4777-8777-777777777770",
+          userPreview: null,
+          assistantPreview,
+          responseState: "responded",
+        },
+        700,
+      );
+      const updated = bookmarks.set(
+        fixture.scope,
+        fixture.threadId,
+        "turn-reply-only",
+        {
+          bookmarked: true,
+          expectedRevision: 1,
+          mutationId: "88888888-8888-4888-8888-888888888870",
+          userPreview: "Check on the background task.",
+          assistantPreview,
+          responseState: "responded",
+        },
+        900,
+      );
+      expect(updated).toEqual({
+        revision: 2,
+        bookmark: {
+          turnId: "turn-reply-only",
+          userPreview: "Check on the background task.",
+          assistantPreview,
+          responseState: "responded",
+          createdAt: 700,
+        },
+        replayed: false,
+      });
+      expect(bookmarks.list(fixture.scope, fixture.threadId)).toEqual({
+        revision: 2,
+        bookmarks: [updated.bookmark],
+      });
+    } finally {
+      fixture.database.close();
+    }
+  });
+
+  it("migration 170 preserves existing bookmarks and admits reply-only turns", () => {
+    const fixture = createFixture(169);
+    try {
+      const { database, scope } = fixture;
+      const columns = `
+        tenant_id, principal_id, thread_id, turn_id, user_preview,
+        assistant_preview, response_state, created_at
+      `;
+      const insertSql = `
+        INSERT INTO conversation_turn_bookmarks(${columns})
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `;
+      const legacyInsert = database.prepare(insertSql);
+      const owner = [scope.tenantId, scope.principalId] as const;
+      const legacyRequest = {
+        bookmarked: true,
+        expectedRevision: 0,
+        mutationId: "99999999-9999-4999-8999-999999999970",
+        userPreview: "What changed before the upgrade?",
+        assistantPreview: "Only the bookmark table shape.",
+        responseState: "responded",
+      } as const;
+      const legacyBookmark = {
+        turnId: "turn-legacy-responded",
+        userPreview: legacyRequest.userPreview,
+        assistantPreview: legacyRequest.assistantPreview,
+        responseState: legacyRequest.responseState,
+        createdAt: 700,
+      };
+      const legacyRows = [
+        [
+          ...owner,
+          fixture.threadId,
+          legacyBookmark.turnId,
+          legacyBookmark.userPreview,
+          legacyBookmark.assistantPreview,
+          legacyBookmark.responseState,
+          legacyBookmark.createdAt,
+        ],
+        [
+          ...owner,
+          fixture.threadId,
+          "turn-legacy-pending",
+          "é".repeat(1_000),
+          null,
+          "no_response",
+          710,
+        ],
+        [
+          ...owner,
+          fixture.secondThreadId,
+          "turn-legacy-second-thread",
+          "Second thread prompt",
+          "Second thread reply",
+          "responded",
+          720,
+        ],
+      ] as const;
+      for (const row of legacyRows) legacyInsert.run(...row);
+      expect(() =>
+        legacyInsert.run(
+          ...owner,
+          fixture.threadId,
+          "turn-reply-only-before",
+          null,
+          "Reply before migration",
+          "responded",
+          730,
+        ),
+      ).toThrowError(
+        expect.objectContaining({ code: "SQLITE_CONSTRAINT_NOTNULL" }),
+      );
+      database
+        .prepare(
+          `
+            UPDATE thread_principal_state SET bookmark_revision = 2
+            WHERE tenant_id = ? AND principal_id = ? AND thread_id = ?
+          `,
+        )
+        .run(...owner, fixture.threadId);
+      const legacyResult = { revision: 1, bookmark: legacyBookmark };
+      database
+        .prepare(
+          `
+            INSERT INTO conversation_turn_bookmark_mutation_receipts(
+              tenant_id, principal_id, thread_id, mutation_id,
+              request_fingerprint, result_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, 700)
+          `,
+        )
+        .run(
+          ...owner,
+          fixture.threadId,
+          legacyRequest.mutationId,
+          createHash("sha256")
+            .update(
+              JSON.stringify([
+                "set_turn_bookmark",
+                fixture.threadId,
+                legacyBookmark.turnId,
+                legacyRequest,
+              ]),
+            )
+            .digest("hex"),
+          JSON.stringify(legacyResult),
+        );
+      const selectBookmarks = () =>
+        database
+          .prepare(
+            `
+              SELECT * FROM conversation_turn_bookmarks
+              ORDER BY thread_id, created_at, turn_id
+            `,
+          )
+          .all();
+      const selectReceipts = () =>
+        database
+          .prepare("SELECT * FROM conversation_turn_bookmark_mutation_receipts")
+          .all();
+      const bookmarksBefore = selectBookmarks();
+      const receiptsBefore = selectReceipts();
+      expect(bookmarksBefore).toHaveLength(legacyRows.length);
+      expect(receiptsBefore).toHaveLength(1);
+
+      applyDatabaseMigrations(database, backendNormalizedMigrations);
+      const insert = database.prepare(insertSql);
+
+      expect(
+        database
+          .prepare("SELECT name FROM schema_migrations WHERE version = 170")
+          .get(),
+      ).toEqual({ name: "reply_only_turn_bookmarks" });
+      expect(selectBookmarks()).toEqual(bookmarksBefore);
+      expect(selectReceipts()).toEqual(receiptsBefore);
+      expect(
+        database
+          .prepare(
+            `
+              SELECT type, name, tbl_name AS tableName FROM sqlite_master
+              WHERE tbl_name LIKE 'conversation_turn_bookmarks%'
+              ORDER BY type, name
+            `,
+          )
+          .all(),
+      ).toEqual([
+        {
+          type: "index",
+          name: "conversation_turn_bookmarks_by_thread",
+          tableName: "conversation_turn_bookmarks",
+        },
+        {
+          type: "index",
+          name: "sqlite_autoindex_conversation_turn_bookmarks_1",
+          tableName: "conversation_turn_bookmarks",
+        },
+        {
+          type: "table",
+          name: "conversation_turn_bookmarks",
+          tableName: "conversation_turn_bookmarks",
+        },
+        {
+          type: "trigger",
+          name: "conversation_turn_bookmarks_capacity",
+          tableName: "conversation_turn_bookmarks",
+        },
+      ]);
+      expect(
+        (
+          database.pragma(
+            "index_info(conversation_turn_bookmarks_by_thread)",
+          ) as { name: string }[]
+        ).map(({ name }) => name),
+      ).toEqual(["tenant_id", "principal_id", "thread_id", "created_at", "turn_id"]);
+      expect(
+        database.pragma("table_list(conversation_turn_bookmarks)"),
+      ).toEqual([expect.objectContaining({ strict: 1 })]);
+      expect(
+        database.pragma("foreign_key_list(conversation_turn_bookmarks)"),
+      ).toEqual(
+        ["tenant_id", "principal_id", "thread_id"].map((column) =>
+          expect.objectContaining({
+            table: "thread_principal_state",
+            from: column,
+            to: column,
+            on_delete: "CASCADE",
+          }),
+        ),
+      );
+      expect(database.pragma("foreign_key_check")).toEqual([]);
+      expect(database.pragma("integrity_check")).toEqual([
+        { integrity_check: "ok" },
+      ]);
+
+      for (const rejected of [
+        [null, null, "no_response"],
+        ["", "Reply", "responded"],
+        ["Prompt", "", "responded"],
+        ["x".repeat(1_001), null, "no_response"],
+        ["Prompt", null, "responded"],
+        ["Prompt", "Reply", "no_response"],
+      ] as const) {
+        expect(() =>
+          insert.run(
+            ...owner,
+            fixture.threadId,
+            "turn-rejected",
+            ...rejected,
+            740,
+          ),
+        ).toThrowError(
+          expect.objectContaining({ code: "SQLITE_CONSTRAINT_CHECK" }),
+        );
+      }
+
+      const bookmarks = new ConversationTurnBookmarkRepository(
+        database,
+        new InventoryRepository(database),
+      );
+      expect(
+        bookmarks.set(
+          scope,
+          fixture.threadId,
+          legacyBookmark.turnId,
+          legacyRequest,
+          900,
+        ),
+      ).toEqual({ ...legacyResult, replayed: true });
+      const replyOnly = bookmarks.set(
+        scope,
+        fixture.threadId,
+        "turn-reply-only",
+        {
+          bookmarked: true,
+          expectedRevision: 2,
+          mutationId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa70",
+          userPreview: null,
+          assistantPreview: "Reply after migration",
+          responseState: "responded",
+        },
+        750,
+      );
+      expect(bookmarks.list(scope, fixture.threadId)).toEqual({
+        revision: 3,
+        bookmarks: [
+          legacyBookmark,
+          {
+            turnId: "turn-legacy-pending",
+            userPreview: "é".repeat(1_000),
+            assistantPreview: null,
+            responseState: "no_response",
+            createdAt: 710,
+          },
+          replyOnly.bookmark,
+        ],
+      });
+
+      database.transaction(() => {
+        for (let index = 3; index < 500; index += 1) {
+          insert.run(
+            ...owner,
+            fixture.threadId,
+            `capacity-turn-${index}`,
+            `Preview ${index}`,
+            null,
+            "no_response",
+            1_000 + index,
+          );
+        }
+      })();
+      expect(() =>
+        insert.run(
+          ...owner,
+          fixture.threadId,
+          "turn-over-capacity",
+          null,
+          "Over capacity",
+          "responded",
+          2_000,
+        ),
+      ).toThrow("conversation_turn_bookmark_limit_reached");
+      database
+        .prepare(
+          `
+            INSERT INTO conversation_turn_bookmarks(${columns})
+            VALUES (?, ?, ?, ?, NULL, 'Updated reply', 'responded', 2000)
+            ON CONFLICT(tenant_id, principal_id, thread_id, turn_id)
+            DO UPDATE SET assistant_preview = excluded.assistant_preview
+          `,
+        )
+        .run(...owner, fixture.threadId, "turn-reply-only");
+      expect(
+        database
+          .prepare(
+            `
+              SELECT COUNT(*) AS count FROM conversation_turn_bookmarks
+              WHERE tenant_id = ? AND principal_id = ? AND thread_id = ?
+            `,
+          )
+          .get(...owner, fixture.threadId),
+      ).toEqual({ count: 500 });
     } finally {
       fixture.database.close();
     }

@@ -468,9 +468,11 @@ export const Transcript = memo(function Transcript({
       const entry = bookmarkPreviews.get(turn.id);
       if (!entry) continue;
       // Bounded history may omit replies. Missing text must not erase a saved
-      // response preview from a more complete projection.
-      if (entry.responseState !== "responded" && bookmark.assistantPreview !== null) continue;
-      const preview = { ...entry, userPreview: bookmark.userPreview };
+      // response preview from a more complete projection. A reply-only
+      // bookmark may still adopt its turn's now-durable prompt.
+      const adoptsPrompt = bookmark.userPreview === null && entry.userPreview !== null;
+      if (!adoptsPrompt && entry.responseState !== "responded" && bookmark.assistantPreview !== null) continue;
+      const preview = { ...entry, userPreview: bookmark.userPreview ?? entry.userPreview };
       if (
         bookmark.userPreview === preview.userPreview &&
         bookmark.assistantPreview === preview.assistantPreview &&

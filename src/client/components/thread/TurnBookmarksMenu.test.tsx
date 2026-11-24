@@ -87,6 +87,56 @@ describe("turn bookmarks menu", () => {
     });
   });
 
+  it("labels a reply without a user prompt by the reply", async () => {
+    const setTurnBookmarked = vi.fn(() => Promise.resolve());
+    const onSelectTurn = vi.fn(() => false);
+    render(
+      <TurnBookmarksMenu
+        bookmarks={[
+          {
+            turnId: "turn-continued",
+            userPreview: null,
+            assistantPreview: "The background review finished cleanly.",
+            responseState: "responded",
+            createdAt: 1,
+          },
+        ]}
+        status="ready"
+        pendingTurnIds={[]}
+        store={{ setTurnBookmarked } as unknown as ThreadClientStore}
+        mobile={false}
+        onSelectTurn={onSelectTurn}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Bookmarks, 1" }));
+    const link = screen.getByRole("button", {
+      name: /^Assistant: ?The background review finished cleanly\.$/,
+    });
+    expect(
+      link.querySelector('[data-slot="turn-bookmark-item-title"]'),
+    ).toHaveTextContent("The background review finished cleanly.");
+    expect(
+      link.querySelector('[data-slot="turn-bookmark-item-description"]'),
+    ).toBeNull();
+    expect(link).not.toHaveTextContent("You:");
+    fireEvent.click(link);
+    await waitFor(() =>
+      expect(onSelectTurn).toHaveBeenCalledWith("turn-continued"),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Bookmarks, 1" }));
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Remove bookmark: The background review finished cleanly.",
+      }),
+    );
+    expect(setTurnBookmarked).toHaveBeenCalledWith({
+      turnId: "turn-continued",
+      bookmarked: false,
+    });
+  });
+
   it("moves between bookmarks with the arrow keys and keeps remove a Tab stop", () => {
     render(
       <TurnBookmarksMenu
