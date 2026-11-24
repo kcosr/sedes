@@ -5,6 +5,8 @@ import { authenticatedProductionFetch } from "../helpers/authenticated-productio
 import { randomUUID } from "node:crypto";
 import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
 import { ConversationBindingRepository } from "../../src/server/db/repositories/conversation-binding-repository.js";
+import { SubmissionCompletionRepository } from "../../src/server/db/repositories/submission-completion-repository.js";
+import { DomainError } from "../../src/server/domain/errors.js";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -598,6 +600,166 @@ describe("production configuration reconciliation", () => {
       expect.objectContaining({ component: "host_policy", subjectLabel: "/additional-root", state: "awaiting_host" }));
   });
 
+  it("opens unresolved recent submissions in the background once main serves requests", async () => {
+    const { service, scope, environmentId } = await fixture();
+    const database = service.repository.database;
+    const now = Date.now();
+    const workspace = new InventoryRepository(database).upsertWorkspace(scope, { environmentId, canonicalPath: directory!,
+      displayName: "Recovery", project: { kind: "new", name: "Recovery" }, available: true, trustState: "trusted", environmentConfigurationRevision: 1, now });
+    const profile = (templateId: string) => (database.prepare("SELECT id FROM agent_connection_profiles WHERE tenant_id = ? AND owner_principal_id = ? AND template_id = ?")
+      .get(scope.tenantId, scope.principalId, templateId) as { id: string }).id;
+    const bindings = new ConversationBindingRepository(database);
+    const completions = new SubmissionCompletionRepository(database);
+    const unresolved = (templateId: string, title: string, acceptedAt: number) => {
+      const thread = bindings.createUnboundThread(scope, { workspaceId: workspace.id, connectionProfileId: profile(templateId), title, now });
+      bindings.bindDiscoveredConversation(scope, thread.id, { backendConversationId: `native-${title}`, now });
+      completions.recordAccepted(scope, thread.id, { operationId: `${title}-operation`, acceptedAt, backendCorrelation: `${title}-operation` });
+      return thread.id;
+    };
+    const recent = unresolved("busy-claude-target", "recent", now - 60_000);
+    const broken = unresolved("busy-claude-target", "broken", now - 120_000);
+    const expired = unresolved("busy-claude-target", "expired", now - 25 * 60 * 60 * 1000);
+    // Pi SDK history cannot tell a restart-cut turn from a completed one.
+    const piThread = unresolved("idle-pi-target", "pi", now - 60_000);
+    await application!.close();
+    application = undefined;
+
+    const events: string[] = [];
+    const write = process.stdout.write.bind(process.stdout);
+    vi.spyOn(process.stdout, "write").mockImplementation(((chunk: string | Uint8Array, ...rest: unknown[]) => {
+      if (String(chunk).startsWith("Sedes listening")) events.push("listening");
+      return (write as (...values: unknown[]) => boolean)(chunk, ...rest);
+    }) as typeof process.stdout.write);
+    const list = SubmissionCompletionRepository.prototype.listUnresolvedSubmissionThreads;
+    const listed = vi.spyOn(SubmissionCompletionRepository.prototype, "listUnresolvedSubmissionThreads")
+      .mockImplementation(function(this: SubmissionCompletionRepository, ...args) {
+        events.push(`list:${args[1].backendInstanceId}`);
+        return list.apply(this, args);
+      });
+    const releases: (() => void)[] = [];
+    const attach = vi.spyOn(retainedWork, "attachRetainedThreads").mockImplementation(input => new Promise(resolve => {
+      events.push(`attach:${input.threadIds.join(",")}`);
+      releases.push(() => resolve(attach.mock.calls.length === 1
+        // The provider connection can still be coming up: a retryable
+        // unavailability is retried, while a permanent failure is not.
+        ? { complete: true, attachedThreadIds: [], failures: [
+          { threadId: recent, error: new DomainError("runtime_unavailable", "The target is no longer available.", true) },
+          { threadId: broken, error: new Error("thread_history_unreadable") },
+        ] }
+        : { complete: true, attachedThreadIds: [...input.threadIds], failures: [] }));
+    }));
+    try {
+      // Startup returns and serves requests while the attachment is still held.
+      await openApplication();
+      await vi.waitFor(() => expect(attach).toHaveBeenCalledOnce());
+      expect(attach.mock.calls[0]![0].threadIds).toEqual([recent, broken]);
+      expect(events.indexOf("listening")).toBeGreaterThanOrEqual(0);
+      expect(events.findIndex(event => event.startsWith("list:"))).toBeGreaterThan(events.indexOf("listening"));
+      expect(listed.mock.calls.map(([, input]) => input.backendInstanceId)).not.toContain("idle-pi");
+      expect(attach.mock.calls.flatMap(([input]) => input.threadIds)).not.toContain(piThread);
+      expect(attach.mock.calls.flatMap(([input]) => input.threadIds)).not.toContain(expired);
+      releases.shift()!();
+      await vi.waitFor(() => expect(attach).toHaveBeenCalledTimes(2), { timeout: 5_000 });
+      expect(attach.mock.calls[1]![0].threadIds).toEqual([recent]);
+      releases.shift()!();
+      // Neither an opened nor a permanently failed thread is reopened.
+      const passes = listed.mock.calls.length;
+      await new Promise<void>(resolve => setTimeout(resolve, 1_500));
+      expect(listed.mock.calls.length).toBe(passes);
+      expect(attach).toHaveBeenCalledTimes(2);
+    } finally { for (const release of releases) release(); }
+  }, 30_000);
+
+  it("opens provider-retained work before unresolved submission candidates on the same module", async () => {
+    const modules: BackendModuleRuntime[] = [];
+    const prepare = compiledBackendModuleCatalog.prepare.bind(compiledBackendModuleCatalog);
+    vi.spyOn(compiledBackendModuleCatalog, "prepare").mockImplementation(input => prepare(input).map(prepared => {
+      if (prepared.backendInstanceId !== "busy-claude") return prepared;
+      const create = prepared.createRuntime.bind(prepared);
+      prepared.createRuntime = context => { const runtime = create(context); modules.push(runtime); return runtime; };
+      return prepared;
+    }));
+    const releases: (() => void)[] = [];
+    const attach = vi.spyOn(retainedWork, "attachRetainedThreads").mockImplementation(input => new Promise(resolve => {
+      releases.push(() => resolve({ complete: true, attachedThreadIds: [...input.threadIds], failures: [] }));
+    }));
+    try {
+      const { service, scope, environmentId } = await fixture();
+      // Seed after the startup sweep so one inspection triggers both passes.
+      const database = service.repository.database;
+      const now = Date.now();
+      const workspace = new InventoryRepository(database).upsertWorkspace(scope, { environmentId, canonicalPath: directory!,
+        displayName: "Priority", project: { kind: "new", name: "Priority" }, available: true, trustState: "trusted", environmentConfigurationRevision: 1, now });
+      const connection = database.prepare("SELECT id FROM agent_connection_profiles WHERE tenant_id = ? AND owner_principal_id = ? AND template_id = ?")
+        .get(scope.tenantId, scope.principalId, "busy-claude-target") as { id: string };
+      const bindings = new ConversationBindingRepository(database);
+      const candidate = bindings.createUnboundThread(scope, { workspaceId: workspace.id, connectionProfileId: connection.id, title: "Candidate", now }).id;
+      bindings.bindDiscoveredConversation(scope, candidate, { backendConversationId: "native-candidate", now });
+      new SubmissionCompletionRepository(database).recordAccepted(scope, candidate, { operationId: "candidate", acceptedAt: now, backendCorrelation: "candidate" });
+      Object.defineProperty(modules.at(-1)!, "administration", { value: {
+        inspect: async () => ({ state: "idle", incarnation: "claude-module", revision: "claude-module", blockers: [], retainedThreadIds: ["retained-thread"] }),
+        stop: async () => undefined, restart: async () => undefined,
+      } });
+      await service.impact(scope, { resourceKind: "backend", resourceId: "busy-claude", action: "stop", expectedRevision: (await service.get(scope)).revision });
+      await vi.waitFor(() => expect(attach).toHaveBeenCalledOnce());
+      expect(attach.mock.calls[0]![0].threadIds).toEqual(["retained-thread"]);
+      // The recovery candidate cannot take a runtime slot first.
+      await new Promise<void>(resolve => setTimeout(resolve, 200));
+      expect(attach).toHaveBeenCalledOnce();
+      releases.shift()!();
+      await vi.waitFor(() => expect(attach).toHaveBeenCalledTimes(2));
+      expect(attach.mock.calls[1]![0].threadIds).toEqual([candidate]);
+    } finally { for (const release of releases) release(); }
+  }, 30_000);
+
+  it("inspects provider-retained work before startup recovery opens candidates", async () => {
+    let installOnCreate = false;
+    const prepare = compiledBackendModuleCatalog.prepare.bind(compiledBackendModuleCatalog);
+    vi.spyOn(compiledBackendModuleCatalog, "prepare").mockImplementation(input => prepare(input).map(prepared => {
+      if (prepared.backendInstanceId !== "busy-claude") return prepared;
+      const create = prepared.createRuntime.bind(prepared);
+      prepared.createRuntime = context => {
+        const runtime = create(context);
+        if (installOnCreate) Object.defineProperty(runtime, "administration", { value: {
+          inspect: async () => ({ state: "active", incarnation: "claude-module", revision: "claude-module", blockers: [], retainedThreadIds: ["retained-thread"] }),
+          stop: async () => undefined, restart: async () => undefined,
+        } });
+        return runtime;
+      };
+      return prepared;
+    }));
+    const { service, scope, environmentId } = await fixture();
+    const database = service.repository.database;
+    const now = Date.now();
+    const workspace = new InventoryRepository(database).upsertWorkspace(scope, { environmentId, canonicalPath: directory!,
+      displayName: "Startup priority", project: { kind: "new", name: "Startup priority" }, available: true, trustState: "trusted", environmentConfigurationRevision: 1, now });
+    const connection = database.prepare("SELECT id FROM agent_connection_profiles WHERE tenant_id = ? AND owner_principal_id = ? AND template_id = ?")
+      .get(scope.tenantId, scope.principalId, "busy-claude-target") as { id: string };
+    const bindings = new ConversationBindingRepository(database);
+    const candidate = bindings.createUnboundThread(scope, { workspaceId: workspace.id, connectionProfileId: connection.id, title: "Candidate", now }).id;
+    bindings.bindDiscoveredConversation(scope, candidate, { backendConversationId: "native-candidate", now });
+    new SubmissionCompletionRepository(database).recordAccepted(scope, candidate, { operationId: "candidate", acceptedAt: now, backendCorrelation: "candidate" });
+    await application!.close();
+    application = undefined;
+
+    installOnCreate = true;
+    const releases: (() => void)[] = [];
+    const attach = vi.spyOn(retainedWork, "attachRetainedThreads").mockImplementation(input => new Promise(resolve => {
+      releases.push(() => resolve({ complete: true, attachedThreadIds: [...input.threadIds], failures: [] }));
+    }));
+    try {
+      await openApplication();
+      await vi.waitFor(() => expect(attach).toHaveBeenCalledOnce());
+      expect(attach.mock.calls[0]![0].threadIds).toEqual(["retained-thread"]);
+      // The recovery candidate cannot take a runtime slot before retained work.
+      await new Promise<void>(resolve => setTimeout(resolve, 200));
+      expect(attach).toHaveBeenCalledOnce();
+      releases.shift()!();
+      await vi.waitFor(() => expect(attach).toHaveBeenCalledTimes(2));
+      expect(attach.mock.calls[1]![0].threadIds).toEqual([candidate]);
+    } finally { for (const release of releases) release(); }
+  }, 30_000);
+
   it("attaches a replacement module's retained work before the old pass settles", async () => {
     const modules: BackendModuleRuntime[] = [];
     const installAdministration = (runtime: BackendModuleRuntime) => {
@@ -621,7 +783,7 @@ describe("production configuration reconciliation", () => {
     }));
     const releases: (() => void)[] = [];
     const attach = vi.spyOn(retainedWork, "attachRetainedThreads").mockImplementation(() => new Promise(resolve => {
-      releases.push(() => resolve({ complete: false, attachedThreadIds: [] }));
+      releases.push(() => resolve({ complete: false, attachedThreadIds: [], failures: [] }));
     }));
     try {
       const { service, scope } = await fixture();

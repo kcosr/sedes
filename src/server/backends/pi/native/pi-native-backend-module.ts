@@ -101,6 +101,8 @@ class PiNativeModuleRuntime implements BackendModuleRuntime {
   readonly accountUsage = NO_BACKEND_ACCOUNT_USAGE;
   readonly installationAdvisories;
   readonly managedProviderTerminals = managedProviderTerminals;
+  /** Attachment reports a running turn and closes an ended one only from native terminal evidence. */
+  readonly unresolvedSubmissionRecovery = "attach" as const;
   readonly #drivers = new ConnectionDriverCache<PiNativeConversationDriver>();
   readonly #agentTools;
   #closed = false;

@@ -118,4 +118,59 @@ describe("backend-neutral completion observation work", () => {
       expect(writes(f.database)).toBe(afterWake);
     } finally { f.database.close(); }
   });
+
+  it("lists unresolved correlated submissions for startup recovery newest first within one backend and scope", () => {
+    const f = applicationSummaryFixture(6);
+    try {
+      const backendInstanceId = (f.database.prepare("SELECT backend_instance_id AS id FROM application_threads WHERE id = ?")
+        .get(f.ids[0]) as { id: string }).id;
+      const [newest, older, parked, archived, resolved, unbound] = f.ids as [string, string, string, string, string, string];
+      for (const [index, threadId] of [newest, older, parked, archived, resolved].entries()) {
+        f.bindings.bindDiscoveredConversation(f.scope, threadId, { backendConversationId: `native-${index}`, now: 400 });
+      }
+      // The newest accepted operation orders a thread; an older unresolved one adds no duplicate.
+      f.completion.recordAccepted(f.scope, newest, { operationId: "newest-old", acceptedAt: 1_000, backendCorrelation: "newest-old" });
+      f.completion.recordAccepted(f.scope, newest, { operationId: "newest", acceptedAt: 5_000, backendCorrelation: "newest" });
+      f.completion.recordAccepted(f.scope, older, { operationId: "older", acceptedAt: 2_000, backendCorrelation: "older" });
+      f.completion.recordAccepted(f.scope, parked, { operationId: "parked", acceptedAt: 2_000, backendCorrelation: "parked" });
+      f.completion.recordAccepted(f.scope, archived, { operationId: "archived", acceptedAt: 4_000, backendCorrelation: "archived" });
+      f.completion.recordAccepted(f.scope, resolved, { operationId: "resolved", acceptedAt: 4_500, backendCorrelation: "resolved" });
+      f.completion.observeCompletion(f.scope, resolved, "resolved", { completionIdentity: "native:completed", observedAt: 4_600, createAttention: true });
+      // Without a correlation, attachment has no evidence to close the row.
+      f.completion.recordAccepted(f.scope, older, { operationId: "uncorrelated", acceptedAt: 6_000 });
+      // An unbound thread has no conversation to attach.
+      f.database.prepare(`INSERT INTO submission_completion_observations(tenant_id, owner_principal_id, application_thread_id, operation_id, accepted_at, backend_correlation)
+        VALUES (?, ?, ?, 'unbound', 7000, 'unbound')`).run(f.scope.tenantId, f.scope.principalId, unbound);
+      const setState = (threadId: string, state: string) => f.database.prepare(`UPDATE thread_principal_state SET inventory_state = ?
+        WHERE tenant_id = ? AND principal_id = ? AND thread_id = ?`).run(state, f.scope.tenantId, f.scope.principalId, threadId);
+      setState(parked, "settled");
+      setState(archived, "archived");
+
+      const list = (input: Partial<Parameters<typeof f.completion.listUnresolvedSubmissionThreads>[1]> = {}) =>
+        f.completion.listUnresolvedSubmissionThreads(f.scope, { backendInstanceId, acceptedSince: 0, limit: 16, ...input });
+      const ordered = [older, parked].sort();
+      expect(list()).toEqual([
+        { threadId: newest, latestAcceptedAt: 5_000 },
+        ...ordered.map(threadId => ({ threadId, latestAcceptedAt: 2_000 })),
+      ]);
+      // Keyset pages break ties by thread ID without repeating or skipping.
+      const first = list({ limit: 2 });
+      expect(first.map(item => item.threadId)).toEqual([newest, ordered[0]]);
+      expect(list({ limit: 2, after: first.at(-1)! })).toEqual([{ threadId: ordered[1], latestAcceptedAt: 2_000 }]);
+      // The cutoff is inclusive and applies to each accepted operation.
+      expect(list({ acceptedSince: 2_000 }).map(item => item.threadId)).toEqual([newest, ...ordered]);
+      expect(list({ acceptedSince: 2_001 })).toEqual([{ threadId: newest, latestAcceptedAt: 5_000 }]);
+      expect(list({ acceptedSince: 5_001 })).toEqual([]);
+      expect(list({ backendInstanceId: "another-backend" })).toEqual([]);
+      expect(f.completion.listUnresolvedSubmissionThreads({ ...f.scope, principalId: "other" },
+        { backendInstanceId, acceptedSince: 0, limit: 16 })).toEqual([]);
+      f.database.prepare("UPDATE application_threads SET availability = 'missing' WHERE id = ?").run(older);
+      expect(list().map(item => item.threadId)).toEqual([newest, parked]);
+
+      const plan = (f.database.prepare(`EXPLAIN QUERY PLAN SELECT application_thread_id FROM submission_completion_observations
+        WHERE tenant_id = ? AND owner_principal_id = ? AND completion_observed_at IS NULL AND backend_correlation IS NOT NULL AND accepted_at >= ?`)
+        .all(f.scope.tenantId, f.scope.principalId, 0) as { detail: string }[]).map(row => row.detail).join("\n");
+      expect(plan).toContain("submission_completion_observations_unresolved");
+    } finally { f.database.close(); }
+  });
 });

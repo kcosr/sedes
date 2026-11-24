@@ -25,7 +25,7 @@ describe("retained provider work attachment", () => {
     });
     expect(order).toEqual(["running", "unacknowledged"]);
     expect(open).toBe(0);
-    expect(result).toEqual({ complete: true, attachedThreadIds: ["running", "unacknowledged"] });
+    expect(result).toEqual({ complete: true, attachedThreadIds: ["running", "unacknowledged"], failures: [] });
     expect(report).not.toHaveBeenCalled();
   });
 
@@ -39,7 +39,7 @@ describe("retained provider work attachment", () => {
       threadIds: ["first", "second", "third"], signal: new AbortController().signal, acquire, report,
     });
     expect(acquire.mock.calls.map(([threadId]) => threadId)).toEqual(["first", "second"]);
-    expect(result).toEqual({ complete: false, attachedThreadIds: ["first"] });
+    expect(result).toEqual({ complete: false, attachedThreadIds: ["first"], failures: [] });
     expect(report).toHaveBeenCalledWith(expect.stringContaining("runtime budget"), expect.any(BackendError));
   });
 
@@ -54,7 +54,7 @@ describe("retained provider work attachment", () => {
       },
       report,
     });
-    expect(result).toEqual({ complete: true, attachedThreadIds: ["live"] });
+    expect(result).toEqual({ complete: true, attachedThreadIds: ["live"], failures: [{ threadId: "archived", error: new Error("thread_not_found") }] });
     expect(report).toHaveBeenCalledOnce();
   });
 
@@ -67,7 +67,7 @@ describe("retained provider work attachment", () => {
       acquire: async () => { controller.abort(); return { release: () => undefined }; },
       report,
     });
-    expect(result).toEqual({ complete: false, attachedThreadIds: ["first"] });
+    expect(result).toEqual({ complete: false, attachedThreadIds: ["first"], failures: [] });
     expect(report).not.toHaveBeenCalled();
   });
 });

@@ -220,6 +220,15 @@ export interface BackendModuleRuntime {
    * support from backend kind or optional methods.
    */
   readonly managedProviderTerminals: ManagedTerminalResourceAuthority;
+  /**
+   * Required disposition for opening a dormant thread after main starts when
+   * a Sedes-accepted submission has no observed terminal outcome. `attach`
+   * means ordinary attachment reports a turn that is still running as running
+   * and records a turn that ended while main was away only from authenticated
+   * terminal evidence. Declare `unsupported` when attachment would report such
+   * a turn with a false outcome.
+   */
+  readonly unresolvedSubmissionRecovery: "attach" | "unsupported";
   /** Provider connection startup must honor cancellation before publication. */
   start(signal?: AbortSignal): Promise<void>;
   close(): Promise<void>;

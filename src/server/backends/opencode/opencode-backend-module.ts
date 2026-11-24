@@ -132,6 +132,8 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
   readonly accountUsage = NO_BACKEND_ACCOUNT_USAGE;
   readonly installationAdvisories = new OpenCodeInstallationAdvisorySource();
   readonly managedProviderTerminals = managedTerminals;
+  /** Attachment reports a running turn and closes an ended one only from native terminal evidence. */
+  readonly unresolvedSubmissionRecovery = "attach" as const;
   readonly administration: BackendRuntimeAdministration | undefined;
   readonly stopBeforeConversationCleanup: (() => Promise<void>) | undefined;
   readonly #incarnation = randomUUID();

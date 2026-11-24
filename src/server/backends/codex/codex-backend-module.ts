@@ -180,6 +180,8 @@ class CodexBackendModuleRuntime implements BackendModuleRuntime {
   readonly discoveryPersistence;
   readonly discovery;
   readonly managedProviderTerminals;
+  /** Attachment reports a running turn and closes an ended one only from native terminal evidence. */
+  readonly unresolvedSubmissionRecovery = "attach" as const;
   readonly savedAgents;
   readonly automationExecutionPolicy;
   readonly installationAdvisories = new CodexInstallationAdvisorySource();

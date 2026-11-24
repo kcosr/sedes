@@ -204,6 +204,7 @@ function createRuntime(
     savedAgents: new AntigravitySavedAgentAdapter(threadPersistence, modeCatalog),
     automationExecutionPolicy: new AntigravityAutomationPolicy(settings, prepared.modelPolicy, scope, instance.id),
     managedProviderTerminals, installationAdvisories: NO_ACTIVE_BACKEND_INSTALLATION_ADVISORIES,
+    unresolvedSubmissionRecovery: "attach",
     agentToolRuntimeAvailability: input => agentTools.availability(input),
     administration: antigravityAdministration(context, executionEnvironmentId, port),
     async start(signal) {

@@ -65,6 +65,8 @@ class GrokBackendModuleRuntime implements BackendModuleRuntime {
   readonly agentToolRuntimeAvailability: NonNullable<BackendModuleRuntime["agentToolRuntimeAvailability"]>;
   readonly automationExecutionPolicy = new GrokAutomationExecutionPolicy();
   readonly managedProviderTerminals = unsupportedManagedTerminals;
+  /** Attachment reports a running turn and closes an ended one only from native terminal evidence. */
+  readonly unresolvedSubmissionRecovery = "attach" as const;
   #closed = false;
 
   constructor(input: {
