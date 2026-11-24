@@ -308,6 +308,11 @@ User-facing changes are collected here before release. See the
 
 ### Changed
 
+- In the chat, pressing Command/Ctrl+Down on the last prompt now jumps to the
+  latest output, like **Jump to latest**. Escape in a question prompt no
+  longer stops the turn; use **Stop**. See
+  [conversations](docs/user/conversations.md).
+
 - OpenCode on SSH and outbound hosts makes fewer host round trips before sending
   a message on an attached thread. With several attached threads, streamed text
   no longer waits up to a second behind another thread's idle update request.

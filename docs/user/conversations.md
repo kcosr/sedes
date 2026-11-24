@@ -361,7 +361,9 @@ With focus in the chat or an empty composer, press **Command+Up/Down** or
 **Ctrl+Up/Down** to jump to the previous or next loaded prompt relative to the
 top of the chat viewport. Scrolling manually changes the starting point for
 the next jump. Up from within a response returns to its prompt; pressing Up
-again moves to the preceding prompt. Navigation stops at the loaded boundaries.
+again moves to the preceding prompt, and Up stops at the first loaded prompt.
+Down from the last prompt continues to the latest output, like **Jump to
+latest**.
 These shortcuts preserve normal text navigation while editing a draft.
 
 ## First send
@@ -817,8 +819,9 @@ transcript remains available while you answer.
 - Questionnaires keep local answers while you move between questions and can
   submit an explicitly unanswered response.
 - Secret answers are masked and use an ephemeral response path.
-- Escape requests an interrupt when available; it does not submit blank
-  answers.
+- Escape never stops the turn or submits blank answers; use **Stop** to stop
+  the turn. An open note or Other editor uses Escape to close or clear itself,
+  and the unanswered-question confirmation uses it to return to the questions.
 
 Sedes imposes no interaction timeout. An attended approval mode remains
 attended, including during automations. For exact behavior, see

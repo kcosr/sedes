@@ -1253,17 +1253,29 @@ describe("Transcript history positioning", () => {
     expect(viewport.scrollTop).toBe(0);
   });
 
-  it("does not wrap at prompt boundaries and tolerates subpixel alignment", () => {
+  it("does not wrap above the first prompt and tolerates subpixel alignment", () => {
     const { viewport, scrollTo, seek } = mountAdjacentHistoryNavigation();
     viewport.scrollTop = 0;
     seek("previous");
     expect(scrollTo).not.toHaveBeenCalled();
-    viewport.scrollTop = 984;
-    seek("next");
-    expect(scrollTo).not.toHaveBeenCalled();
     viewport.scrollTop = 484.5;
     seek("previous");
     expect(viewport.scrollTop).toBe(0);
+  });
+
+  it("continues past the last prompt to the latest output like Jump to latest", () => {
+    const { viewport, scrollTo, seek } = mountAdjacentHistoryNavigation();
+    viewport.scrollTop = 484;
+    seek("next");
+    expect(viewport.scrollTop).toBe(984);
+    expect(screen.getByRole("button", { name: "Jump to latest" })).toBeInTheDocument();
+    seek("next");
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: 1_500, behavior: "auto" });
+    expect(viewport.scrollTop).toBe(1_200);
+    expect(screen.queryByRole("button", { name: "Jump to latest" })).not.toBeInTheDocument();
+    // At the latest output another Down stays there.
+    seek("next");
+    expect(viewport.scrollTop).toBe(1_200);
   });
 
   it("renders authenticated callback provenance through the transcript user-message path", () => {

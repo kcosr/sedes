@@ -27,8 +27,8 @@ this interaction system.
 
 The client presents pending input at the bottom of the active Chat or TUI view
 without unmounting the transcript or composer. Questionnaires have no Sedes
-timeout. Escape may invoke the separately authorized active-turn interrupt; it
-never fabricates a response. Secret answers are masked and ephemeral. Pending
+timeout. Escape never invokes the active-turn interrupt or fabricates a
+response; Stop remains the explicit interrupt control. Secret answers are masked and ephemeral. Pending
 presentation survives navigation and reconnect while its owning runtime
 generation remains alive.
 

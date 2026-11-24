@@ -948,7 +948,7 @@ describe("InteractionPrompt", () => {
     expect(screen.getByRole("button", { name: "Proceed" })).toBeDisabled();
   });
 
-  it("ignores composed and modified text shortcuts", () => {
+  it("ignores composed and modified text shortcuts and never stops the turn on Escape", () => {
     const questionnaire = questionnaireRequest();
     if (questionnaire.kind !== "questionnaire") {
       throw new Error("questionnaire fixture expected");
@@ -962,7 +962,6 @@ describe("InteractionPrompt", () => {
     render(
       <InteractionPrompt
         request={request}
-        canInterrupt
         store={{ respond, stopActiveTurn } as unknown as ThreadClientStore}
       />,
     );
@@ -971,10 +970,27 @@ describe("InteractionPrompt", () => {
     fireEvent.keyDown(input, { key: "Enter", isComposing: true });
     fireEvent.keyDown(input, { key: "Escape", metaKey: true });
     fireEvent.keyDown(input, { key: "Escape", isComposing: true });
+    fireEvent.keyDown(input, { key: "Escape" });
     expect(respond).not.toHaveBeenCalled();
     expect(stopActiveTurn).not.toHaveBeenCalled();
-    fireEvent.keyDown(input, { key: "Escape" });
-    expect(stopActiveTurn).toHaveBeenCalledOnce();
+  });
+
+  it("never stops the turn when Escape is pressed on a choice question", () => {
+    const respond = vi.fn().mockResolvedValue(undefined);
+    const stopActiveTurn = vi.fn().mockResolvedValue(undefined);
+    render(
+      <InteractionPrompt
+        request={questionnaireRequest()}
+        store={{ respond, stopActiveTurn } as unknown as ThreadClientStore}
+      />,
+    );
+    const options = screen.getByTestId("questionnaire-options");
+    fireEvent.keyDown(options, { key: "Escape" });
+    fireEvent.keyDown(screen.getByTestId("interaction-prompt"), { key: "Escape" });
+    expect(stopActiveTurn).not.toHaveBeenCalled();
+    expect(respond).not.toHaveBeenCalled();
+    // The prompt stays open for an answer.
+    expect(screen.getByTestId("questionnaire-options")).toBeInTheDocument();
   });
 
   it("preserves each question's option scroll position", async () => {

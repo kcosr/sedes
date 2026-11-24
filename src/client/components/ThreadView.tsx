@@ -809,9 +809,6 @@ export const ThreadView = memo(function ThreadView({
                 externallyPending={state.actionPending}
                 actionError={state.actionError}
                 onDismissError={() => store.clearActionError()}
-                canInterrupt={snapshot.capabilities.operations.some(
-                  ({ id, available }) => id === "interrupt" && available,
-                )}
                 unavailable={interactionUnavailable}
                 unavailableReason={interactionUnavailableReason}
                 returnFocusTarget={interactionReturnFocus.current}
