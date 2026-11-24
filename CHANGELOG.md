@@ -69,7 +69,7 @@ User-facing changes are collected here before release. See the
   contracts advance to version 7 and thread-create to version 6. Agent context
   and thread status advance to version 5, and thread listing to version 9.
   Thread-message transcripts advance to version 5 to identify automatic follow-ups. See [tool policy sets](docs/user/tool-policies.md).
-  ([#96](https://github.com/kcosr/sedes/pull/96), [#112](https://github.com/kcosr/sedes/pull/112), [#116](https://github.com/kcosr/sedes/pull/116), [#142](https://github.com/kcosr/sedes/pull/142))
+  ([#96](https://github.com/kcosr/sedes/pull/96), [#112](https://github.com/kcosr/sedes/pull/112), [#116](https://github.com/kcosr/sedes/pull/116), [#142](https://github.com/kcosr/sedes/pull/142), [#156](https://github.com/kcosr/sedes/pull/156))
 
 - Upgrade execution sidecars with the server for runtime wire version **17**
   and negotiated traffic compression. Incompatible active services retain the
@@ -438,6 +438,7 @@ User-facing changes are collected here before release. See the
 - Replies that continue without a new prompt, such as Claude's reply after a
   background task finishes, can be bookmarked; the Bookmarks list labels them
   with the reply.
+  ([#156](https://github.com/kcosr/sedes/pull/156))
 
 - Native Pi threads can be renamed while a turn is running, matching the other
   backends. See [native Pi controls](docs/operator/backends/pi-native.md#conversation-controls-and-history).
