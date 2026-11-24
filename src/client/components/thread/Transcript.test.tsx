@@ -840,6 +840,107 @@ describe("Transcript history positioning", () => {
     expect(fake.refreshTurnBookmarkPreview).not.toHaveBeenCalled();
   });
 
+  function replyOnlySnapshot(reply: string | null, durablePrompt = false): NormalizedThreadSnapshot {
+    const snapshot = userMessageSnapshot(["turn-1"]);
+    const orderedItemIds = durablePrompt ? ["turn-1-user"] : [];
+    if (!durablePrompt) delete snapshot.itemsById["turn-1-user"];
+    snapshot.itemsById.activity = {
+      id: "activity", turnId: "turn-1", kind: "reasoning",
+      status: "completed", revision: 1, markdown: { text: "Background task finished" },
+    };
+    orderedItemIds.push("activity");
+    if (reply !== null) {
+      snapshot.itemsById.reply = {
+        id: "reply", turnId: "turn-1", kind: "assistant_message",
+        status: "completed", revision: 1, markdown: { text: reply },
+      };
+      orderedItemIds.push("reply");
+    }
+    snapshot.turnsById["turn-1"] = { ...snapshot.turnsById["turn-1"]!, orderedItemIds };
+    return snapshot;
+  }
+
+  it("offers a reply bookmark for a turn without a user message", () => {
+    const fake = new FakeTranscriptStore(replyOnlySnapshot("The background review **finished**."));
+    render(<Transcript store={fake as unknown as ThreadClientStore} />);
+    const bookmarkButton = screen.getByRole("button", { name: "Bookmark response" });
+    expect(bookmarkButton.closest("footer")).not.toBeNull();
+    fireEvent.click(bookmarkButton);
+    expect(fake.setTurnBookmarked).toHaveBeenCalledWith({
+      turnId: "turn-1", bookmarked: true,
+      preview: { userPreview: null, assistantPreview: "The background review finished.", responseState: "responded" },
+    });
+    expect(document.querySelector('[data-turn-id="turn-1"]')).toHaveAttribute("data-response-item-id", "reply");
+  });
+
+  it("offers no bookmark for a turn with neither a user message nor reply text", () => {
+    const fake = new FakeTranscriptStore(replyOnlySnapshot(null));
+    render(<Transcript store={fake as unknown as ThreadClientStore} />);
+    expect(screen.queryByRole("button", { name: "Bookmark response" })).toBeNull();
+  });
+
+  it.each([
+    { loadedReply: "Saved reply", placeholder: false, preview: { userPreview: "Prompt turn-1", assistantPreview: "Saved reply", responseState: "responded" } },
+    { loadedReply: null, placeholder: false, preview: { userPreview: "Prompt turn-1", assistantPreview: null, responseState: "no_response" } },
+    { loadedReply: "Saved reply", placeholder: true, preview: { userPreview: "Prompt turn-1", assistantPreview: "Saved reply", responseState: "responded" } },
+  ])("lets a reply-only bookmark adopt its finished turn's durable prompt: $loadedReply, placeholder $placeholder", ({ loadedReply, placeholder, preview }) => {
+    const snapshot = replyOnlySnapshot(loadedReply, true);
+    if (placeholder) {
+      // An empty assistant placeholder ahead of the prompt does not hide it.
+      snapshot.itemsById.placeholder = {
+        id: "placeholder", turnId: "turn-1", kind: "assistant_message",
+        status: "completed", revision: 1, markdown: { text: " " },
+      };
+      snapshot.turnsById["turn-1"] = {
+        ...snapshot.turnsById["turn-1"]!,
+        orderedItemIds: ["placeholder", ...snapshot.turnsById["turn-1"]!.orderedItemIds],
+      };
+    }
+    const fake = new FakeTranscriptStore(snapshot);
+    fake.replaceBookmarkState({ bookmarks: [{
+      turnId: "turn-1", userPreview: null, assistantPreview: "Saved reply",
+      responseState: "responded", createdAt: 1,
+    }] });
+    render(<Transcript store={fake as unknown as ThreadClientStore} />);
+    expect(fake.refreshTurnBookmarkPreview).toHaveBeenCalledExactlyOnceWith({ turnId: "turn-1", preview });
+  });
+
+  it("does not adopt a steer retained after history omits a continued reply's start", () => {
+    const fake = new FakeTranscriptStore(replyOnlySnapshot("Unrelated later reply"));
+    const continued = fake.getSnapshot().snapshot!;
+    const omitted = structuredClone(continued);
+    omitted.itemsById.omission = {
+      id: "omission", turnId: "turn-1", kind: "notice", status: "completed",
+      revision: 1, tone: "warning", text: { text: "Claude omitted 2 earlier items from this oversized current turn." },
+    };
+    omitted.itemsById.steer = {
+      id: "steer", turnId: "turn-1", kind: "user_message", status: "completed",
+      revision: 1, content: [{ kind: "text", text: { text: "Also check the tests" } }],
+    };
+    omitted.turnsById["turn-1"] = { ...omitted.turnsById["turn-1"]!, orderedItemIds: ["omission", "steer", "reply"] };
+    fake.replaceSnapshot(omitted);
+    fake.replaceBookmarkState({ bookmarks: [{
+      turnId: "turn-1", userPreview: null, assistantPreview: "Saved reply",
+      responseState: "responded", createdAt: 1,
+    }] });
+    render(<Transcript store={fake as unknown as ThreadClientStore} />);
+    expect(fake.refreshTurnBookmarkPreview).toHaveBeenCalledExactlyOnceWith({
+      turnId: "turn-1",
+      preview: { userPreview: null, assistantPreview: "Unrelated later reply", responseState: "responded" },
+    });
+  });
+
+  it("keeps a reply-only bookmark unchanged while its turn still has no prompt", () => {
+    const fake = new FakeTranscriptStore(replyOnlySnapshot("Saved reply"));
+    fake.replaceBookmarkState({ bookmarks: [{
+      turnId: "turn-1", userPreview: null, assistantPreview: "Saved reply",
+      responseState: "responded", createdAt: 1,
+    }] });
+    render(<Transcript store={fake as unknown as ThreadClientStore} />);
+    expect(screen.getByRole("button", { name: "Remove response bookmark" })).toBeEnabled();
+    expect(fake.refreshTurnBookmarkPreview).not.toHaveBeenCalled();
+  });
+
   it("does not schedule a reply refresh for only a different retained user preview", () => {
     const fake = new FakeTranscriptStore(userMessageSnapshot(["turn-1"]));
     fake.replaceBookmarkState({ bookmarks: [{
@@ -1447,7 +1548,7 @@ describe("Transcript history positioning", () => {
     ).toBeInTheDocument();
   });
 
-  it("keeps an earlier fork action when the running turn has no durable user message", () => {
+  it("keeps an earlier fork action while a turn without a user message runs", () => {
     const snapshot = makeSnapshot(["turn-1", "turn-2"], false);
     snapshot.forkSource = {
       selectedCompletedTurn: { available: true },
@@ -1485,7 +1586,15 @@ describe("Transcript history positioning", () => {
     expect(
       screen.getByRole("button", { name: /Fork from here/ }),
     ).toHaveAttribute("aria-disabled", "false");
-    expect(screen.queryByTestId("turn-fork-turn-2")).toBeNull();
+    // The running reply can be bookmarked by its text, but it is no fork point.
+    const activeFooter = screen.getByTestId("turn-fork-turn-2");
+    expect(
+      within(activeFooter).getByRole("button", { name: "Bookmark response" }),
+    ).toBeEnabled();
+    expect(
+      within(activeFooter).queryByRole("button", { name: /Fork from here|Copy response|Turn usage and cost|Play response aloud/ }),
+    ).toBeNull();
+    expect(screen.getAllByRole("button", { name: /Fork from here/ })).toHaveLength(1);
     expect(screen.queryByText("Current turn")).toBeNull();
   });
 

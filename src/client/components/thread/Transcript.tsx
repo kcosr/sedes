@@ -51,6 +51,7 @@ import { currentFailedTurn, TurnFailureDetails } from "./ThreadFailureNotice.js"
 import {
   turnBookmarkPreview,
   turnResponseItemId,
+  turnStartsWithPrompt,
   type TurnBookmarkPreview,
 } from "./turn-bookmark-presentation.js";
 import { sameTurnItems } from "./turn-derivation.js";
@@ -468,9 +469,14 @@ export const Transcript = memo(function Transcript({
       const entry = bookmarkPreviews.get(turn.id);
       if (!entry) continue;
       // Bounded history may omit replies. Missing text must not erase a saved
-      // response preview from a more complete projection.
-      if (entry.responseState !== "responded" && bookmark.assistantPreview !== null) continue;
-      const preview = { ...entry, userPreview: bookmark.userPreview };
+      // response preview from a more complete projection. A reply-only
+      // bookmark may still adopt its turn's now-durable prompt if that prompt
+      // starts the turn.
+      const startsWithPrompt = viewItemsById !== undefined && turnStartsWithPrompt(turn, viewItemsById);
+      const userPreview = bookmark.userPreview ?? (startsWithPrompt ? entry.userPreview : null);
+      const adoptsPrompt = bookmark.userPreview === null && userPreview !== null;
+      if (!adoptsPrompt && entry.responseState !== "responded" && bookmark.assistantPreview !== null) continue;
+      const preview = { ...entry, userPreview };
       if (
         bookmark.userPreview === preview.userPreview &&
         bookmark.assistantPreview === preview.assistantPreview &&

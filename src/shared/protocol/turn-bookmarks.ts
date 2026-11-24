@@ -21,26 +21,48 @@ export type TurnBookmarkResponseState = z.infer<
   typeof turnBookmarkResponseStateSchema
 >;
 
+type TurnBookmarkPreviewFields = {
+  readonly userPreview: string | null;
+  readonly assistantPreview: string | null;
+  readonly responseState: TurnBookmarkResponseState;
+};
+
+/**
+ * A turn without a durable user prompt, such as a reply continued after
+ * background work, is identified by its reply instead.
+ */
+function refineTurnBookmarkPreview(
+  preview: TurnBookmarkPreviewFields,
+  context: z.RefinementCtx,
+): void {
+  if (
+    (preview.responseState === "responded") !==
+    (preview.assistantPreview !== null)
+  ) {
+    context.addIssue({
+      code: "custom",
+      message: "Response state must match assistant preview presence.",
+      path: ["assistantPreview"],
+    });
+  }
+  if (preview.userPreview === null && preview.assistantPreview === null) {
+    context.addIssue({
+      code: "custom",
+      message: "A bookmark without a user prompt requires an assistant preview.",
+      path: ["userPreview"],
+    });
+  }
+}
+
 export const turnBookmarkSchema = z
   .strictObject({
     turnId: applicationTurnIdSchema,
-    userPreview: turnBookmarkPreviewSchema,
+    userPreview: turnBookmarkPreviewSchema.nullable(),
     assistantPreview: turnBookmarkPreviewSchema.nullable(),
     responseState: turnBookmarkResponseStateSchema,
     createdAt: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   })
-  .superRefine((bookmark, context) => {
-    if (
-      (bookmark.responseState === "responded") !==
-      (bookmark.assistantPreview !== null)
-    ) {
-      context.addIssue({
-        code: "custom",
-        message: "Response state must match assistant preview presence.",
-        path: ["assistantPreview"],
-      });
-    }
-  });
+  .superRefine(refineTurnBookmarkPreview);
 export type TurnBookmark = z.infer<typeof turnBookmarkSchema>;
 
 export const turnBookmarkRouteParametersSchema = z.strictObject({
@@ -58,7 +80,7 @@ export const setTurnBookmarkRequestSchema = z
     z.strictObject({
       bookmarked: z.literal(true),
       ...turnBookmarkMutationFields,
-      userPreview: turnBookmarkPreviewSchema,
+      userPreview: turnBookmarkPreviewSchema.nullable(),
       assistantPreview: turnBookmarkPreviewSchema.nullable(),
       responseState: turnBookmarkResponseStateSchema,
     }),
@@ -68,17 +90,7 @@ export const setTurnBookmarkRequestSchema = z
     }),
   ])
   .superRefine((input, context) => {
-    if (
-      input.bookmarked &&
-      (input.responseState === "responded") !==
-        (input.assistantPreview !== null)
-    ) {
-      context.addIssue({
-        code: "custom",
-        message: "Response state must match assistant preview presence.",
-        path: ["assistantPreview"],
-      });
-    }
+    if (input.bookmarked) refineTurnBookmarkPreview(input, context);
   });
 export type SetTurnBookmarkRequest = z.infer<
   typeof setTurnBookmarkRequestSchema

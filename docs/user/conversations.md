@@ -733,11 +733,16 @@ Use **Bookmark response** in the footer below the assistant’s response. Runnin
 turns can be bookmarked before reply text arrives, including during thinking or
 tool activity. The response preview stays empty until reply text is
 available. Finished turns can also be bookmarked,
-including stopped or failed turns.
+including stopped or failed turns. A reply that continues without a new prompt,
+such as Claude’s reply after a background task finishes, can be bookmarked once
+it has reply text.
 
 The **Bookmarks** button in the thread header shows every saved turn with both
 the initiating user prompt and a preview of the whole assistant response,
-including text after steering or question answers. A bookmark made during a reply
+including text after steering or question answers. A bookmark for a reply without
+a prompt is labeled with that reply. If the turn’s prompt was still being
+confirmed when you bookmarked it, the bookmark gains the prompt once the turn
+finishes and its message is confirmed. A bookmark made during a reply
 initially saves the response so far. Its saved preview expands when more of the
 same reply is available in the loaded finished turn. It retains the saved text
 if loaded history omits or changes that text. If you leave before the turn

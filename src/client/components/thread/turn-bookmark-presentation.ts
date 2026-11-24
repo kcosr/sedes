@@ -4,20 +4,51 @@ import { derivedPerTurn } from "./turn-derivation.js";
 
 export type TurnBookmarkPreview = Pick<TurnBookmark, "userPreview" | "assistantPreview" | "responseState">;
 
-/** One bookmark describes the whole turn, including replies after steering. */
+/**
+ * The index of the user message that started the turn, or -1. A turn whose
+ * reply text comes first, such as a reply continued after background work,
+ * has no prompt even if the user steers it later.
+ */
+function promptIndex(items: readonly (ConversationItem | undefined)[]): number {
+  return items.findIndex(item =>
+    item?.kind === "user_message" ||
+    (item?.kind === "assistant_message" && assistantMessagePreview(item) !== ""),
+  );
+}
+
+/**
+ * Whether the turn's prompt is its first item, ignoring empty assistant
+ * placeholders. History that omits a turn's beginning can leave a later steer
+ * as the first retained user message; only a prompt that starts the turn may
+ * be adopted by a reply-only bookmark.
+ */
+export function turnStartsWithPrompt(
+  turn: ConversationTurn,
+  itemsById: Readonly<Record<string, ConversationItem>>,
+): boolean {
+  const first = turn.orderedItemIds.map(id => itemsById[id]).find(item =>
+    item?.kind !== "assistant_message" || assistantMessagePreview(item) !== "",
+  );
+  return first?.kind === "user_message";
+}
+
+/**
+ * One bookmark describes the whole turn, including replies after steering. A
+ * turn without a prompt is identified by its reply and needs reply text.
+ */
 export const turnBookmarkPreview = derivedPerTurn(function turnBookmarkPreview(
   turn: ConversationTurn,
   itemsById: Readonly<Record<string, ConversationItem>>,
 ): TurnBookmarkPreview | undefined {
   const items = turn.orderedItemIds.map(id => itemsById[id]);
-  const userIndex = items.findIndex(item => item?.kind === "user_message");
-  const user = items[userIndex];
-  if (user?.kind !== "user_message") return undefined;
-  const assistantPreview = collapsePreview(items.slice(userIndex + 1).flatMap(item =>
+  const first = promptIndex(items);
+  const prompt = items[first]?.kind === "user_message" ? items[first] : undefined;
+  const assistantPreview = collapsePreview(items.slice(prompt ? first + 1 : 0).flatMap(item =>
     item?.kind === "assistant_message" ? [assistantMessagePreview(item)] : [],
   ).filter(Boolean).join(" "), assistantPreviewLimit);
+  if (!prompt && !assistantPreview) return undefined;
   return {
-    userPreview: userMessagePreview(user),
+    userPreview: prompt ? userMessagePreview(prompt) : null,
     assistantPreview: assistantPreview || null,
     responseState: assistantPreview ? "responded" : "no_response",
   };
@@ -29,7 +60,8 @@ export const turnResponseItemId = derivedPerTurn(function turnResponseItemId(
   itemsById: Readonly<Record<string, ConversationItem>>,
 ): string | undefined {
   const items = turn.orderedItemIds.map(id => itemsById[id]);
-  const response = items.slice(items.findIndex(item => item?.kind === "user_message") + 1);
+  const first = promptIndex(items);
+  const response = items.slice(items[first]?.kind === "user_message" ? first + 1 : 0);
   return response.find(item => item?.kind === "assistant_message" && item.markdown.text.trim())?.id
     ?? response.find(item => item && item.kind !== "user_message" && item.kind !== "assistant_message")?.id;
 });

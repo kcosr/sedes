@@ -113,30 +113,43 @@ function BookmarkList({
                 onClick={() => onSelectTurn(bookmark.turnId)}
               >
                 <span className="min-w-0 flex-1">
-                  <span
-                    data-slot="turn-bookmark-item-title"
-                    className="block truncate"
-                  >
-                    <span className="sr-only">You: </span>
-                    {bookmark.userPreview}
-                  </span>
-                  <span
-                    data-slot="turn-bookmark-item-description"
-                    data-response-state={bookmark.responseState}
-                    className={cn(
-                      menuDescriptionClass,
-                      "truncate data-[response-state=no_response]:italic",
-                    )}
-                  >
-                    <span className="sr-only">Assistant: </span>
-                    {bookmark.assistantPreview ?? "No assistant response."}
-                  </span>
+                  {bookmark.userPreview === null ? (
+                    // A reply without a user prompt is labelled by the reply.
+                    <span
+                      data-slot="turn-bookmark-item-title"
+                      className="block truncate"
+                    >
+                      <span className="sr-only">Assistant: </span>
+                      {bookmark.assistantPreview}
+                    </span>
+                  ) : (
+                    <>
+                      <span
+                        data-slot="turn-bookmark-item-title"
+                        className="block truncate"
+                      >
+                        <span className="sr-only">You: </span>
+                        {bookmark.userPreview}
+                      </span>
+                      <span
+                        data-slot="turn-bookmark-item-description"
+                        data-response-state={bookmark.responseState}
+                        className={cn(
+                          menuDescriptionClass,
+                          "truncate data-[response-state=no_response]:italic",
+                        )}
+                      >
+                        <span className="sr-only">Assistant: </span>
+                        {bookmark.assistantPreview ?? "No assistant response."}
+                      </span>
+                    </>
+                  )}
                 </span>
               </button>
               <button
                 type="button"
                 className={menuRowActionClass}
-                aria-label={`Remove bookmark: ${bookmark.userPreview}`}
+                aria-label={`Remove bookmark: ${bookmark.userPreview ?? bookmark.assistantPreview}`}
                 title="Remove bookmark"
                 disabled={pending}
                 onClick={() =>

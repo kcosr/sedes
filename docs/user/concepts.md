@@ -112,11 +112,12 @@ composer, new typing belongs to a new draft.
 
 ## Turn
 
-A **turn** begins with user input and contains the provider's resulting work
-and response. A running turn can be bookmarked even before the assistant starts
-replying. Finished turns can also be bookmarked; completed turns can be used as
-fork points, searched, and selected as context. Work still streaming is not a
-completed turn.
+A **turn** usually begins with user input and contains the provider's resulting
+work and response. Some providers also continue in a turn of their own without
+new input, such as a reply after background work finishes. A running turn can be
+bookmarked even before the assistant starts replying. Finished turns can also be
+bookmarked; completed turns can be used as fork points, searched, and selected
+as context. Work still streaming is not a completed turn.
 
 ## Fork and New
 

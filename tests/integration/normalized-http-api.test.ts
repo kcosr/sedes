@@ -6163,6 +6163,80 @@ describe("normalized HTTP application contract", () => {
     }
   });
 
+  it("bookmarks a reply-only turn by its reply", async () => {
+    const current = await fixture();
+    try {
+      const workspace = await current
+        .mutate(request(current.app).post("/api/workspaces/open"))
+        .send({
+          environmentId: current.environmentId,
+          path: current.workspacePath,
+          project: { kind: "new", name: "workspace" },
+        })
+        .expect(201);
+      const created = await current
+        .mutate(request(current.app).post("/api/threads"))
+        .send({
+          workspaceId: workspace.body.id,
+          configuration: { kind: "custom", targetId: current.profile.id },
+          executionWorkspace: { kind: "direct" },
+          title: "Reply-only bookmark target",
+        })
+        .expect(201);
+      const threadId = created.body.threadId as string;
+      const route = `/api/threads/${threadId}/bookmarks/turn-reply-only`;
+      for (const responseState of ["responded", "no_response"]) {
+        await current
+          .mutate(request(current.app).patch(route))
+          .send({
+            bookmarked: true,
+            expectedRevision: 0,
+            mutationId: randomUUID(),
+            userPreview: null,
+            assistantPreview: null,
+            responseState,
+          })
+          .expect(400)
+          .expect(({ body }) => expect(body.error.code).toBe("bad_request"));
+      }
+      const bookmark = await current
+        .mutate(request(current.app).patch(route))
+        .send({
+          bookmarked: true,
+          expectedRevision: 0,
+          mutationId: randomUUID(),
+          userPreview: null,
+          assistantPreview: "Continued after the background task finished.",
+          responseState: "responded",
+        })
+        .expect(200);
+      expect(bookmark.body).toEqual({
+        revision: 1,
+        replayed: false,
+        bookmark: {
+          turnId: "turn-reply-only",
+          userPreview: null,
+          assistantPreview: "Continued after the background task finished.",
+          responseState: "responded",
+          createdAt: expect.any(Number),
+        },
+      });
+      await current
+        .withHost(
+          request(current.app).get(`/api/threads/${threadId}/bookmarks`),
+        )
+        .expect(200)
+        .expect(({ body: list }) =>
+          expect(list).toEqual({
+            revision: 1,
+            bookmarks: [bookmark.body.bookmark],
+          }),
+        );
+    } finally {
+      current.close();
+    }
+  });
+
   it("previews and commits a scoped user-authoritative force reset", async () => {
     const current = await fixture();
     try {

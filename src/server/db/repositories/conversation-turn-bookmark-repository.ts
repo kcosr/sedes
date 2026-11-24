@@ -13,7 +13,7 @@ import type { InventoryRepository } from "./inventory-repository.js";
 
 type BookmarkRow = {
   readonly turnId: string;
-  readonly userPreview: string;
+  readonly userPreview: string | null;
   readonly assistantPreview: string | null;
   readonly responseState: "responded" | "no_response";
   readonly createdAt: number;
