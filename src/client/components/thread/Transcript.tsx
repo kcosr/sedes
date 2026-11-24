@@ -469,10 +469,14 @@ export const Transcript = memo(function Transcript({
       if (!entry) continue;
       // Bounded history may omit replies. Missing text must not erase a saved
       // response preview from a more complete projection. A reply-only
-      // bookmark may still adopt its turn's now-durable prompt.
-      const adoptsPrompt = bookmark.userPreview === null && entry.userPreview !== null;
+      // bookmark may still adopt its turn's now-durable prompt, but only one
+      // that starts the turn: history that omits a turn's beginning can leave
+      // a later steer as its first retained user message.
+      const startsWithPrompt = viewItemsById?.[turn.orderedItemIds[0] ?? ""]?.kind === "user_message";
+      const userPreview = bookmark.userPreview ?? (startsWithPrompt ? entry.userPreview : null);
+      const adoptsPrompt = bookmark.userPreview === null && userPreview !== null;
       if (!adoptsPrompt && entry.responseState !== "responded" && bookmark.assistantPreview !== null) continue;
-      const preview = { ...entry, userPreview: bookmark.userPreview ?? entry.userPreview };
+      const preview = { ...entry, userPreview };
       if (
         bookmark.userPreview === preview.userPreview &&
         bookmark.assistantPreview === preview.assistantPreview &&

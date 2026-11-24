@@ -892,6 +892,31 @@ describe("Transcript history positioning", () => {
     expect(fake.refreshTurnBookmarkPreview).toHaveBeenCalledExactlyOnceWith({ turnId: "turn-1", preview });
   });
 
+  it("does not adopt a steer retained after history omits a continued reply's start", () => {
+    const fake = new FakeTranscriptStore(replyOnlySnapshot("Unrelated later reply"));
+    const continued = fake.getSnapshot().snapshot!;
+    const omitted = structuredClone(continued);
+    omitted.itemsById.omission = {
+      id: "omission", turnId: "turn-1", kind: "notice", status: "completed",
+      revision: 1, tone: "warning", text: { text: "Claude omitted 2 earlier items from this oversized current turn." },
+    };
+    omitted.itemsById.steer = {
+      id: "steer", turnId: "turn-1", kind: "user_message", status: "completed",
+      revision: 1, content: [{ kind: "text", text: { text: "Also check the tests" } }],
+    };
+    omitted.turnsById["turn-1"] = { ...omitted.turnsById["turn-1"]!, orderedItemIds: ["omission", "steer", "reply"] };
+    fake.replaceSnapshot(omitted);
+    fake.replaceBookmarkState({ bookmarks: [{
+      turnId: "turn-1", userPreview: null, assistantPreview: "Saved reply",
+      responseState: "responded", createdAt: 1,
+    }] });
+    render(<Transcript store={fake as unknown as ThreadClientStore} />);
+    expect(fake.refreshTurnBookmarkPreview).toHaveBeenCalledExactlyOnceWith({
+      turnId: "turn-1",
+      preview: { userPreview: null, assistantPreview: "Unrelated later reply", responseState: "responded" },
+    });
+  });
+
   it("keeps a reply-only bookmark unchanged while its turn still has no prompt", () => {
     const fake = new FakeTranscriptStore(replyOnlySnapshot("Saved reply"));
     fake.replaceBookmarkState({ bookmarks: [{

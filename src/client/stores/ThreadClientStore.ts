@@ -1830,7 +1830,8 @@ export class ThreadClientStore {
 
   /**
    * Complete a loaded terminal reply, or a reply-only bookmark's missing
-   * prompt, without re-adding or degrading a bookmark.
+   * prompt, without re-adding or degrading a bookmark. Callers pass a user
+   * preview only for the user message that started the turn.
    */
   refreshTurnBookmarkPreview(input: {
     readonly turnId: string;
