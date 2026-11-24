@@ -312,6 +312,7 @@ User-facing changes are collected here before release. See the
   latest output, like **Jump to latest**. Escape in a question prompt no
   longer stops the turn; use **Stop**. See
   [conversations](docs/user/conversations.md).
+  ([#158](https://github.com/kcosr/sedes/pull/158))
 
 - OpenCode on SSH and outbound hosts makes fewer host round trips before sending
   a message on an attached thread. With several attached threads, streamed text
