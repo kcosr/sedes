@@ -440,6 +440,7 @@ User-facing changes are collected here before release. See the
   opened. Sedes reopens them in the background once it is ready; Pi SDK
   threads still update when opened. See
   [agent activity](docs/user/conversations.md#read-agent-activity).
+  ([#157](https://github.com/kcosr/sedes/pull/157))
 
 - Replies that continue without a new prompt, such as Claude's reply after a
   background task finishes, can be bookmarked; the Bookmarks list labels them
