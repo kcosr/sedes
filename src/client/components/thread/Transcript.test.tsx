@@ -880,10 +880,23 @@ describe("Transcript history positioning", () => {
   });
 
   it.each([
-    { loadedReply: "Saved reply", preview: { userPreview: "Prompt turn-1", assistantPreview: "Saved reply", responseState: "responded" } },
-    { loadedReply: null, preview: { userPreview: "Prompt turn-1", assistantPreview: null, responseState: "no_response" } },
-  ])("lets a reply-only bookmark adopt its finished turn's durable prompt: $loadedReply", ({ loadedReply, preview }) => {
-    const fake = new FakeTranscriptStore(replyOnlySnapshot(loadedReply, true));
+    { loadedReply: "Saved reply", placeholder: false, preview: { userPreview: "Prompt turn-1", assistantPreview: "Saved reply", responseState: "responded" } },
+    { loadedReply: null, placeholder: false, preview: { userPreview: "Prompt turn-1", assistantPreview: null, responseState: "no_response" } },
+    { loadedReply: "Saved reply", placeholder: true, preview: { userPreview: "Prompt turn-1", assistantPreview: "Saved reply", responseState: "responded" } },
+  ])("lets a reply-only bookmark adopt its finished turn's durable prompt: $loadedReply, placeholder $placeholder", ({ loadedReply, placeholder, preview }) => {
+    const snapshot = replyOnlySnapshot(loadedReply, true);
+    if (placeholder) {
+      // An empty assistant placeholder ahead of the prompt does not hide it.
+      snapshot.itemsById.placeholder = {
+        id: "placeholder", turnId: "turn-1", kind: "assistant_message",
+        status: "completed", revision: 1, markdown: { text: " " },
+      };
+      snapshot.turnsById["turn-1"] = {
+        ...snapshot.turnsById["turn-1"]!,
+        orderedItemIds: ["placeholder", ...snapshot.turnsById["turn-1"]!.orderedItemIds],
+      };
+    }
+    const fake = new FakeTranscriptStore(snapshot);
     fake.replaceBookmarkState({ bookmarks: [{
       turnId: "turn-1", userPreview: null, assistantPreview: "Saved reply",
       responseState: "responded", createdAt: 1,

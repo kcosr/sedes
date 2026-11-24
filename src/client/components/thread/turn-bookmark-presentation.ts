@@ -17,6 +17,22 @@ function promptIndex(items: readonly (ConversationItem | undefined)[]): number {
 }
 
 /**
+ * Whether the turn's prompt is its first item, ignoring empty assistant
+ * placeholders. History that omits a turn's beginning can leave a later steer
+ * as the first retained user message; only a prompt that starts the turn may
+ * be adopted by a reply-only bookmark.
+ */
+export function turnStartsWithPrompt(
+  turn: ConversationTurn,
+  itemsById: Readonly<Record<string, ConversationItem>>,
+): boolean {
+  const first = turn.orderedItemIds.map(id => itemsById[id]).find(item =>
+    item?.kind !== "assistant_message" || assistantMessagePreview(item) !== "",
+  );
+  return first?.kind === "user_message";
+}
+
+/**
  * One bookmark describes the whole turn, including replies after steering. A
  * turn without a prompt is identified by its reply and needs reply text.
  */

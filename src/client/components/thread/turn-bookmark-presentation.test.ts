@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ConversationItem, ConversationTurn } from "../../../shared/index.js";
 import { createChatHistoryEntries } from "./ChatHistoryRail.js";
-import { turnBookmarkPreview, turnResponseItemId } from "./turn-bookmark-presentation.js";
+import { turnBookmarkPreview, turnResponseItemId, turnStartsWithPrompt } from "./turn-bookmark-presentation.js";
 import { formatThreadReferenceText } from "../../../shared/thread-references.js";
 
 const user = (id: string, text: string): ConversationItem => ({ id, turnId: "turn", revision: 1, status: "completed", kind: "user_message", content: [{ kind: "text", text: { text } }] });
@@ -61,9 +61,20 @@ describe("turn bookmark presentation", () => {
     const current = turn(Object.keys(items));
     expect(turnBookmarkPreview(current, items)).toEqual({ userPreview: null, assistantPreview: "Background task finished. Tests pass.", responseState: "responded" });
     expect(turnResponseItemId(current, items)).toBe("first");
+    expect(turnStartsWithPrompt(current, items)).toBe(false);
     // An empty placeholder ahead of the prompt does not make a turn prompt-less.
     const prompted = { placeholder: assistant("placeholder", " "), question: user("question", "Question"), reply: assistant("reply", "Reply") };
     expect(turnBookmarkPreview(turn(Object.keys(prompted)), prompted)).toEqual({ userPreview: "Question", assistantPreview: "Reply", responseState: "responded" });
+    expect(turnStartsWithPrompt(turn(Object.keys(prompted)), prompted)).toBe(true);
+  });
+
+  it("does not treat a steer retained after omitted history as the turn's start", () => {
+    const items: Record<string, ConversationItem> = {
+      omission: { id: "omission", turnId: "turn", revision: 1, kind: "notice", status: "completed", tone: "warning", text: { text: "Earlier items omitted." } },
+      steer: user("steer", "Also check the tests"),
+      reply: assistant("reply", "Tests pass."),
+    };
+    expect(turnStartsWithPrompt(turn(Object.keys(items)), items)).toBe(false);
   });
 
   it("does not offer a bookmark for a turn with neither a user message nor reply text", () => {
