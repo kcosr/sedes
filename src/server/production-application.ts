@@ -146,7 +146,7 @@ import { WorkspaceFileLinkedWorktreeRepository } from "./db/repositories/workspa
 import { WorkspaceDiffReviewRepository } from "./db/repositories/workspace-diff-review-repository.js";
 import { TaskRepository } from "./db/repositories/task-repository.js";
 import { QueuedInputRepository } from "./db/repositories/queued-input-repository.js";
-import { SubmissionCompletionRepository } from "./db/repositories/submission-completion-repository.js";
+import { SubmissionCompletionRepository, type UnresolvedSubmissionThread } from "./db/repositories/submission-completion-repository.js";
 import { ThreadLineageRepository } from "./db/repositories/thread-lineage-repository.js";
 import { ThreadCompletionCallbackRepository } from "./db/repositories/thread-completion-callback-repository.js";
 import { ThreadAgentToolPolicyRepository } from "./db/repositories/thread-agent-tool-policy-repository.js";
@@ -209,6 +209,7 @@ import { ThreadNativeArchiveService } from "./domain/thread-native-archive-servi
 import { NativeArchiveOperationRepository } from "./db/repositories/native-archive-operation-repository.js";
 import { ThreadBulkInventoryService } from "./domain/thread-bulk-inventory-service.js";
 import { DomainError } from "./domain/errors.js";
+import { BackendError } from "./backends/contracts.js";
 import { ThreadForceResetService } from "./domain/thread-force-reset-service.js";
 import { PrincipalApplicationPreferenceService } from "./domain/principal-application-preference-service.js";
 import { ThreadAttentionService } from "./domain/thread-attention-service.js";
@@ -977,10 +978,13 @@ export async function startProductionApplication(
       backendStartupBackoff.set(id, { fingerprint, failures,
         retryAt: Date.now() + Math.min(60_000, 5_000 * 2 ** Math.min(failures - 1, 4)) });
     };
+    // Assigned once main serves requests; modules admitted earlier are swept then.
+    let onBackendApplied: (id: string) => void = () => undefined;
     const recordBackendApplied = (id: string, revision: number, fingerprint: string, startupFingerprint: string): void => {
       clearBackendPreparationFailure(id); backendStartupBackoff.delete(id);
       appliedBackendRevisions.set(id, revision); appliedBackendFingerprints.set(id, fingerprint);
       appliedStartupEnvironmentFingerprints.set(id, startupFingerprint); backendIncarnations.set(id, randomUUID());
+      onBackendApplied(id);
     };
     const cancelBackendStartup = (id: string): void => {
       const attempt = backendStartups.get(id);
@@ -2563,40 +2567,172 @@ export async function startProductionApplication(
     // Replacement modules get their own pass even while an older module's
     // in-flight acquisition is still settling. Its finalizer cannot clear the
     // replacement's admission marker.
-    const retainedAttachments = new WeakSet<BackendModuleRuntime>();
-    const attachRetainedWork = (backendId: string): void => {
-      const threadIds = observedBackends.get(backendId)?.retainedThreadIds ?? [];
-      // Existing-only inspection also runs while Settings has detached the
-      // backend or its environment. Do not create actors without admission:
-      // their transient generations would invalidate the inspection's own
-      // lifecycle confirmation fence and implicitly undo Disconnect.
-      const module = moduleRuntimes.get(backendId);
+    const retainedAttachments = new WeakMap<BackendModuleRuntime, Promise<void>>();
+    // Existing-only inspection also runs while Settings has detached the
+    // backend or its environment. Do not create actors without admission:
+    // their transient generations would invalidate the inspection's own
+    // lifecycle confirmation fence and implicitly undo Disconnect. Recheck
+    // the same module and admission before every acquisition.
+    const backendAttachmentAdmission = (backendId: string, module: BackendModuleRuntime | undefined) => {
       const environmentId = profiles.find(profile => profile.backendInstanceId === backendId)?.executionEnvironmentId;
-      const isAdmitted = () => module !== undefined && moduleRuntimes.get(backendId) === module &&
+      return () => module !== undefined && moduleRuntimes.get(backendId) === module &&
         environmentId !== undefined && profiles.some(profile => profile.backendInstanceId === backendId && profile.executionEnvironmentId === environmentId) &&
         configurationRepository.runtime(scope, "backend", backendId).preference === "automatic" &&
         configurationRepository.runtime(scope, "environment", environmentId).preference === "automatic";
+    };
+    const attachAdmittedThreads = async (
+      backendId: string, threadIds: readonly string[], signal: AbortSignal, isAdmitted: () => boolean, coordinator: ThreadRuntimeCoordinator,
+      reportable: (error: unknown) => boolean = () => true,
+    ) => {
+      const detached = new AbortController();
+      return await attachRetainedThreads({ threadIds, signal: AbortSignal.any([signal, detached.signal]),
+        acquire: threadId => {
+          if (!isAdmitted()) {
+            detached.abort();
+            return Promise.reject(new DOMException("Retained work attachment was detached", "AbortError"));
+          }
+          return coordinator.acquire(scope, threadId);
+        },
+        report: (context, error) => { if (reportable(error)) reportBackgroundError(`Backend ${backendId}: ${context}`)(error); } });
+    };
+    // A Sedes-accepted submission whose terminal outcome main never observed
+    // may still be running in a runtime that outlived main, or may have ended
+    // while main was away, without any runtime reporting it. Once main serves
+    // requests, open those threads in the background so the sidebar shows
+    // running work and an ended turn's unread completion without waiting for
+    // the user to open each thread. Ordinary attachment observes only
+    // authenticated provider evidence; it never resends input or infers an
+    // outcome. Rows can stay unresolved (history outside the attached window,
+    // unreadable provider state), so each module generation opens a thread at
+    // most once and skips one that failed until its connection is
+    // re-established. A module can be applied before its provider connection
+    // is ready, so a retryable unavailability or the runtime budget defers the
+    // thread instead, and the pass retries with bounded backoff.
+    const UNRESOLVED_SUBMISSION_RECOVERY_WINDOW_MILLISECONDS = 24 * 60 * 60 * 1000;
+    const UNRESOLVED_SUBMISSION_RECOVERY_PAGE_SIZE = 16;
+    const UNRESOLVED_SUBMISSION_RECOVERY_RETRY_MILLISECONDS = [1_000, 2_000, 5_000, 10_000, 20_000, 40_000, 60_000, 60_000] as const;
+    const retryableAttachmentFailure = (error: unknown): boolean =>
+      (error instanceof DomainError || error instanceof BackendError) && error.retryable;
+    const unresolvedSubmissionRecovery = new WeakMap<BackendModuleRuntime, {
+      readonly attempted: Set<string>; readonly failed: Set<string>; running: boolean; rerun: boolean; retries: number;
+    }>();
+    const unresolvedSubmissionRetryTimers = new Set<NodeJS.Timeout>();
+    resources.defer("unresolved submission recovery retries", () => {
+      for (const timer of unresolvedSubmissionRetryTimers) clearTimeout(timer);
+      unresolvedSubmissionRetryTimers.clear();
+    });
+    let unresolvedSubmissionRecoveryReady = false;
+    // Startup and module admission can precede any inspection. Complete the
+    // same existing-only inspection a lifecycle preview performs first, so
+    // provider-retained work attaches ahead of database candidates. Inspection
+    // never launches a provider; a failure leaves recovery to proceed.
+    const inspectRetainedWork = async (backendId: string): Promise<void> => {
+      try {
+        await hostQueue.run([resourceHost({ resourceKind: "backend", resourceId: backendId })], async () => {
+          const control = backendHasRemoteProvider(backendId) ? await recoverBackendAdministration(backendId) : moduleRuntimes.get(backendId)?.administration;
+          if (!control) return;
+          observedBackends.set(backendId, await control.inspect());
+          attachProviderRetainedWork(backendId);
+        });
+      } catch { /* Recovery candidates do not depend on a provider inventory. */ }
+    };
+    const recoverUnresolvedSubmissions = (backendId: string, options: { readonly retryFailed?: boolean; readonly inspectFirst?: boolean } = {}): void => {
+      const module = moduleRuntimes.get(backendId);
+      if (!unresolvedSubmissionRecoveryReady || drain.isDraining || !runtimes || module?.unresolvedSubmissionRecovery !== "attach") return;
+      const isAdmitted = backendAttachmentAdmission(backendId, module);
+      if (!isAdmitted()) return;
+      let state = unresolvedSubmissionRecovery.get(module);
+      if (!state) {
+        state = { attempted: new Set(), failed: new Set(), running: false, rerun: false, retries: 0 };
+        unresolvedSubmissionRecovery.set(module, state);
+      }
+      if (options.retryFailed) {
+        for (const threadId of state.failed) state.attempted.delete(threadId);
+        state.failed.clear();
+        state.retries = 0;
+      }
+      if (state.running) { state.rerun = true; return; }
+      const current = state;
+      const coordinator = runtimes;
+      current.running = true;
+      let deferred = false;
+      const admitted = discoveryOperations.admit(async signal => {
+        // Inspect only when there is something to recover, so an ordinary
+        // restart adds no remote round trip.
+        if (options.inspectFirst && completion.listUnresolvedSubmissionThreads(scope, {
+          backendInstanceId: backendId, acceptedSince: Date.now() - UNRESOLVED_SUBMISSION_RECOVERY_WINDOW_MILLISECONDS,
+          limit: UNRESOLVED_SUBMISSION_RECOVERY_PAGE_SIZE,
+        }).some(candidate => !current.attempted.has(candidate.threadId))) await inspectRetainedWork(backendId);
+        do {
+          current.rerun = false;
+          deferred = false;
+          // One cutoff per pass keeps the keyset traversal stable.
+          const acceptedSince = Date.now() - UNRESOLVED_SUBMISSION_RECOVERY_WINDOW_MILLISECONDS;
+          let after: UnresolvedSubmissionThread | undefined;
+          while (!signal.aborted && isAdmitted()) {
+            const page = completion.listUnresolvedSubmissionThreads(scope, {
+              backendInstanceId: backendId, acceptedSince, ...(after ? { after } : {}), limit: UNRESOLVED_SUBMISSION_RECOVERY_PAGE_SIZE,
+            });
+            after = page.at(-1);
+            const threadIds = page.map(candidate => candidate.threadId).filter(threadId => !current.attempted.has(threadId));
+            if (threadIds.length > 0) {
+              // Provider-reported retained work keeps priority for runtime
+              // slots: its buffered output must be acknowledged before the
+              // owner's retention bound fills.
+              await retainedAttachments.get(module);
+              if (signal.aborted || !isAdmitted()) break;
+              const result = await attachAdmittedThreads(backendId, threadIds, signal, isAdmitted, coordinator,
+                error => !retryableAttachmentFailure(error));
+              for (const threadId of result.attachedThreadIds) current.attempted.add(threadId);
+              for (const { threadId, error } of result.failures) {
+                if (retryableAttachmentFailure(error)) { deferred = true; continue; }
+                current.attempted.add(threadId);
+                current.failed.add(threadId);
+              }
+              if (!result.complete) { deferred = !signal.aborted; break; }
+            }
+            if (page.length < UNRESOLVED_SUBMISSION_RECOVERY_PAGE_SIZE) break;
+            // Detached work still shares the event loop with request handling.
+            await new Promise<void>(resolve => setImmediate(resolve));
+          }
+        } while (current.rerun && !deferred && !signal.aborted && isAdmitted());
+      });
+      if (!admitted) { current.running = false; return; }
+      void admitted.catch(reportBackgroundError(`Backend ${backendId} unresolved submission recovery`))
+        .finally(() => {
+          current.running = false;
+          if (!deferred) { current.retries = 0; return; }
+          const delay = UNRESOLVED_SUBMISSION_RECOVERY_RETRY_MILLISECONDS[current.retries];
+          if (delay === undefined || drain.isDraining) return;
+          current.retries += 1;
+          const timer = setTimeout(() => {
+            unresolvedSubmissionRetryTimers.delete(timer);
+            try { recoverUnresolvedSubmissions(backendId); }
+            catch (error) { reportBackgroundError(`Backend ${backendId} unresolved submission recovery`)(error); }
+          }, delay);
+          timer.unref();
+          unresolvedSubmissionRetryTimers.add(timer);
+        });
+    };
+    const attachProviderRetainedWork = (backendId: string): void => {
+      const threadIds = observedBackends.get(backendId)?.retainedThreadIds ?? [];
+      const module = moduleRuntimes.get(backendId);
+      const isAdmitted = backendAttachmentAdmission(backendId, module);
       if (!module || threadIds.length === 0 || retainedAttachments.has(module) || !runtimes || !isAdmitted()) return;
       const coordinator = runtimes;
-      retainedAttachments.add(module);
       const admitted = discoveryOperations.admit(async signal => {
         if (!isAdmitted()) return;
-        const detached = new AbortController();
-        const attachmentSignal = AbortSignal.any([signal, detached.signal]);
-        const result = await attachRetainedThreads({ threadIds, signal: attachmentSignal,
-          acquire: threadId => {
-            if (!isAdmitted()) {
-              detached.abort();
-              return Promise.reject(new DOMException("Retained work attachment was detached", "AbortError"));
-            }
-            return coordinator.acquire(scope, threadId);
-          },
-          report: (context, error) => reportBackgroundError(`Backend ${backendId}: ${context}`)(error) });
+        const result = await attachAdmittedThreads(backendId, threadIds, signal, isAdmitted, coordinator);
         if (!result.complete && isAdmitted()) remoteBackendObservations.delete(module);
       });
-      if (!admitted) { retainedAttachments.delete(module); return; }
-      void admitted.catch(reportBackgroundError(`Backend ${backendId} retained work attachment`))
-        .finally(() => retainedAttachments.delete(module));
+      if (!admitted) return;
+      const settled: Promise<void> = admitted.catch(reportBackgroundError(`Backend ${backendId} retained work attachment`))
+        .finally(() => { if (retainedAttachments.get(module) === settled) retainedAttachments.delete(module); });
+      retainedAttachments.set(module, settled);
+    };
+    const attachRetainedWork = (backendId: string): void => {
+      attachProviderRetainedWork(backendId);
+      recoverUnresolvedSubmissions(backendId);
     };
     const confirmedHostPolicy = (environmentId: string) => {
       const owner = environmentRuntimes.get(environmentId)?.sidecarRuntime;
@@ -3606,7 +3742,11 @@ export async function startProductionApplication(
           await terminalService.reconcileRemote(scope, id);
         }
         await reconcileHost(id);
-        for (const backend of environmentBackendIds(id)) attachRetainedWork(backend);
+        for (const backend of environmentBackendIds(id)) {
+          // A re-established connection may make previously failed threads openable.
+          recoverUnresolvedSubmissions(backend, { retryFailed: true });
+          attachRetainedWork(backend);
+        }
       }).catch(reportBackgroundError("Outbound host reconnection"));
     });
     resources.defer("outbound configuration subscription", unsubscribeOutboundReconciliation);
@@ -3840,6 +3980,11 @@ export async function startProductionApplication(
     // Provider connection startup requires listening host carriers and must not
     // delay HTTP or Settings. Reconciliation publishes only completed modules.
     if (hasDeferredBackendStartup) scheduleLiveConfiguration(desiredConfiguration, true);
+    // Recovery opens threads after startup recovery has made completion
+    // observation available, and never delays serving requests.
+    unresolvedSubmissionRecoveryReady = true;
+    onBackendApplied = id => recoverUnresolvedSubmissions(id, { inspectFirst: true });
+    for (const backendId of moduleRuntimes.keys()) recoverUnresolvedSubmissions(backendId, { inspectFirst: true });
     // Fork recovery can launch providers; it never delays serving requests.
     void forks
       .recoverInterruptedForks(scope)

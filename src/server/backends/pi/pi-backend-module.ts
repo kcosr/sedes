@@ -51,6 +51,12 @@ class PiBackendModuleRuntime implements BackendModuleRuntime {
   readonly agentToolRuntimeAvailability: NonNullable<BackendModuleRuntime["agentToolRuntimeAvailability"]>;
   readonly accountUsage = NO_BACKEND_ACCOUNT_USAGE;
   readonly installationAdvisories = NO_ACTIVE_BACKEND_INSTALLATION_ADVISORIES;
+  /**
+   * Persisted Pi SDK history cannot distinguish a turn cut off by a main
+   * restart from one that ended normally, so attachment would report it as
+   * completed. Recovery waits until the user opens the thread.
+   */
+  readonly unresolvedSubmissionRecovery = "unsupported" as const;
   readonly managedProviderTerminals = Object.freeze({
     async authorizeAdmission(): Promise<never> {
       throw new ManagedTerminalCarrierError(

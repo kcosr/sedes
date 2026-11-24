@@ -154,6 +154,8 @@ class ClaudeBackendModuleRuntime implements BackendModuleRuntime {
   readonly automationExecutionPolicy;
   readonly agentToolRuntimeAvailability: NonNullable<BackendModuleRuntime["agentToolRuntimeAvailability"]>;
   readonly managedProviderTerminals = unsupportedManagedTerminals;
+  /** Attachment reports a running turn and closes an ended one only from native terminal evidence. */
+  readonly unresolvedSubmissionRecovery = "attach" as const;
   readonly #runtimeClient: ClaudeRuntimeClient;
   readonly #closeRuntimeClient: () => void | Promise<void>;
   #closed = false;

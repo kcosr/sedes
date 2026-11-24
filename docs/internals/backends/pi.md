@@ -391,6 +391,13 @@ identity until the actor can establish a terminal outcome. On restart, the
 runtime reconciles the durable application receipt against authenticated native
 evidence before allowing a conflicting retry.
 
+The Pi SDK module declares `unresolvedSubmissionRecovery: "unsupported"`, so
+main does not open its threads at startup to recover accepted submissions
+without an observed outcome. The SDK runtime ends with main, and persisted
+history cannot distinguish a turn cut off by that restart from one that ended
+normally, so the history projector would report it as completed. Such a thread
+reconciles when the user opens it.
+
 ## Steer and fork invariants
 
 Sedes durably admits multiple exact-target Steer intents and invokes Pi

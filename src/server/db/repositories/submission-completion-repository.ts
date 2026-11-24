@@ -79,6 +79,12 @@ function present(row: ObservationRow): SubmissionCompletionObservationRecord {
   return Object.freeze({ ...record, assistantResult, classifiedResult });
 }
 
+/** Keyset position in newest-first unresolved-submission thread order. */
+export interface UnresolvedSubmissionThread {
+  readonly threadId: string;
+  readonly latestAcceptedAt: number;
+}
+
 type FinalizedCompletion = {
   readonly applicationTurnId: string;
   readonly outcome: "completed" | "interrupted" | "failed";
@@ -451,6 +457,73 @@ export class SubmissionCompletionRepository {
       )
       .all(scope.tenantId, scope.principalId) as ObservationRow[];
     return rows.map(present);
+  }
+
+  /**
+   * Non-archived, available, bound threads of one backend instance with a
+   * correlated submission accepted at or after `acceptedSince` whose terminal
+   * outcome was never observed, newest first. The result is a recovery hint:
+   * an open row proves acceptance, not that provider work is still running.
+   */
+  listUnresolvedSubmissionThreads(
+    scope: RequestScope,
+    input: {
+      readonly backendInstanceId: string;
+      readonly acceptedSince: number;
+      readonly after?: UnresolvedSubmissionThread;
+      readonly limit: number;
+    },
+  ): UnresolvedSubmissionThread[] {
+    const after = input.after;
+    return this.database
+      .prepare(
+        `
+          SELECT candidate.threadId, candidate.latestAcceptedAt
+          FROM (
+            SELECT
+              observation.application_thread_id AS threadId,
+              max(observation.accepted_at) AS latestAcceptedAt
+            FROM submission_completion_observations AS observation
+            INNER JOIN application_threads AS thread
+              ON thread.tenant_id = observation.tenant_id
+              AND thread.owner_principal_id = observation.owner_principal_id
+              AND thread.id = observation.application_thread_id
+            INNER JOIN conversation_bindings AS binding
+              ON binding.tenant_id = thread.tenant_id
+              AND binding.owner_principal_id = thread.owner_principal_id
+              AND binding.application_thread_id = thread.id
+            INNER JOIN thread_principal_state AS principal
+              ON principal.tenant_id = thread.tenant_id
+              AND principal.principal_id = thread.owner_principal_id
+              AND principal.thread_id = thread.id
+            WHERE observation.tenant_id = ?
+              AND observation.owner_principal_id = ?
+              AND observation.completion_observed_at IS NULL
+              AND observation.backend_correlation IS NOT NULL
+              AND observation.accepted_at >= ?
+              AND thread.backend_instance_id = ?
+              AND thread.availability = 'available'
+              AND principal.inventory_state <> 'archived'
+            GROUP BY observation.application_thread_id
+          ) AS candidate
+          WHERE ? IS NULL
+            OR candidate.latestAcceptedAt < ?
+            OR (candidate.latestAcceptedAt = ? AND candidate.threadId > ?)
+          ORDER BY candidate.latestAcceptedAt DESC, candidate.threadId
+          LIMIT ?
+        `,
+      )
+      .all(
+        scope.tenantId,
+        scope.principalId,
+        input.acceptedSince,
+        input.backendInstanceId,
+        after?.latestAcceptedAt ?? null,
+        after?.latestAcceptedAt ?? null,
+        after?.latestAcceptedAt ?? null,
+        after?.threadId ?? null,
+        input.limit,
+      ) as UnresolvedSubmissionThread[];
   }
 
   find(

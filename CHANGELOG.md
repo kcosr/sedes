@@ -435,6 +435,12 @@ User-facing changes are collected here before release. See the
 
 ### Fixed
 
+- After a server restart, threads whose recent turn kept running or finished
+  while the server was down show their spinner or unread dot without being
+  opened. Sedes reopens them in the background once it is ready; Pi SDK
+  threads still update when opened. See
+  [agent activity](docs/user/conversations.md#read-agent-activity).
+
 - Replies that continue without a new prompt, such as Claude's reply after a
   background task finishes, can be bookmarked; the Bookmarks list labels them
   with the reply.

@@ -697,6 +697,14 @@ unacknowledged-completion dot. Opening the thread acknowledges completion and
 reveals any remaining background indicator. Hover for counts by kind. Uncertain
 or disconnected observations do not claim that background work is still live.
 
+After a server restart, Sedes reopens threads in the background once the
+server is ready when a message it sent in the past 24 hours has no recorded
+end. A turn that is still running shows its spinner, and one that finished
+while the server was down shows the unacknowledged-completion dot, without
+opening each thread. Older messages, turns started outside Sedes (for example
+from another client of the same Codex app-server), and Pi SDK threads still
+update when you open the thread.
+
 ## Adjust chat width
 
 When the Chat panel has room to expand, open **Chat width** using the

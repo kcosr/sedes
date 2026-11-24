@@ -1,3 +1,4 @@
+import { unresolvedSubmissionRecoveryMigration } from "./migrations/171-unresolved-submission-recovery.js";
 import { replyOnlyTurnBookmarksMigration } from "./migrations/170-reply-only-turn-bookmarks.js";
 import { configurationCommandReceiptsMigration } from "./migrations/169-configuration-command-receipts.js";
 import { workspaceFileRootGrantsMigration } from "./migrations/168-workspace-file-root-grants.js";
@@ -354,6 +355,7 @@ export const backendNormalizedMigrations = [
   workspaceFileRootGrantsMigration,
   configurationCommandReceiptsMigration,
   replyOnlyTurnBookmarksMigration,
+  unresolvedSubmissionRecoveryMigration,
 ] as const;
 
 export type DatabaseMigration = {

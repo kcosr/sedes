@@ -113,6 +113,11 @@ export class OutboundCodexFixture {
     return this.#closePromise;
   }
 
+  /** Whether the native connection that started the held turn is still open. */
+  get activeTurnConnected(): boolean {
+    return this.#active?.socket.readyState === WebSocket.OPEN;
+  }
+
   /** Drive the same native turn on either side of a Settings save. */
   appendOutput(text: string): void {
     if (!this.#active) throw new Error("outbound_codex_fixture_turn_missing");

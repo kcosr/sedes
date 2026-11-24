@@ -484,6 +484,51 @@ describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")("
       cancelThread.mock.calls[index]![1] === created.threadId);
     expect(fencedAt).toBeLessThan(stopRuntimes.mock.invocationCallOrder[0]!);
   }, 120_000);
+
+  it("shows Codex turns that ran or ended while main was down without a client opening their threads", async () => {
+    const fixture = await OutboundFixture.create("offline");
+    cleanups.push(() => fixture.close());
+    await fixture.startBusyHost("outbound");
+    const targetId = await fixture.addCodexBackend();
+    const workspace = await fixture.json("/api/workspaces/open", "POST", { path: fixture.workspace, environmentId: fixture.environmentId,
+      project: { kind: "new", name: "Restart recovery" } }) as { id: string };
+    const codex = fixture.codex!;
+    // After each restart only the application snapshot is read: a sidebar
+    // read never opens a thread, so any running or unread state comes from
+    // main's own recovery of the unresolved submission.
+    const summary = async (threadId: string) => (await fixture.snapshot()).threads.find(thread => thread.id === threadId);
+    const turnStarts = () => codex.requests.filter(request => request.method === "turn/start");
+
+    // A turn still running in the retained provider shows as running again.
+    const running = await fixture.submit(workspace.id, targetId, "Keep running while main restarts.");
+    await fixture.waitFor(async () => (await fixture.thread(running)).runState === "running");
+    await fixture.stopMain();
+    expect(codex.activeTurnConnected).toBe(true);
+    await fixture.startMain();
+    await fixture.waitFor(async () => (await summary(running))?.runState === "running");
+    expect((await summary(running))?.attention.unseenCompletion).toBe(false);
+    codex.completeTurn();
+    await fixture.waitFor(async () => {
+      const thread = await summary(running);
+      return thread?.runState === "idle" && thread.attention.unseenCompletion;
+    });
+    expect(turnStarts()).toHaveLength(1);
+
+    // A turn that ends while main is away becomes an unread completion.
+    const ended = await fixture.submit(workspace.id, targetId, "Finish while main is down.");
+    await fixture.waitFor(async () => (await fixture.thread(ended)).runState === "running");
+    await fixture.stopMain();
+    expect(codex.activeTurnConnected).toBe(true);
+    codex.completeTurn();
+    await fixture.startMain();
+    await fixture.waitFor(async () => (await summary(ended))?.attention.unseenCompletion === true);
+    expect(await summary(ended)).toMatchObject({ runState: "idle", attention: { unseenCompletion: true } });
+    expect(await summary(running)).toMatchObject({ runState: "idle", attention: { unseenCompletion: true } });
+    // Recovery observes the provider; it never resubmits or reconnects it.
+    expect(turnStarts()).toHaveLength(2);
+    expect(codex.requests.filter(request => request.method === "initialize")).toHaveLength(1);
+    expect(codex.errors).toEqual([]);
+  }, 120_000);
 });
 
 class OutboundFixture {

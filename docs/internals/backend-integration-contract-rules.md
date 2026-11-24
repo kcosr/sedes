@@ -1396,6 +1396,36 @@ its absent aggregate activity counts remain unknown. Codex's runtime-wide attach
 acknowledges retained outcomes without a thread handle, and Pi, Grok, and
 local Claude workers end with main, so they report neither.
 
+Main also recovers Sedes-accepted work without a runtime report. Once startup
+recovery of queued inputs, completion callbacks and uncertain mutations has
+finished and HTTP is listening, a background pass opens bound, available,
+non-archived threads with a correlated `submission_completion_observations` row
+accepted within the last 24 hours and no observed terminal outcome. Parked
+threads are included because their completion wakes them. The pass repeats when
+a backend module is applied and at the same inspection and outbound-reconnection
+points as retained work, under the same module and connection-preference
+admission. Each module generation opens such a thread at most once, and
+retries one whose attachment failed only after an outbound reconnection. A
+module can be applied before its provider connection is ready, so a retryable
+unavailability or the runtime budget defers the thread instead, and the pass
+retries with bounded backoff. Provider-reported retained work keeps priority
+for runtime slots: a recovery pass waits for the same module's in-flight
+retained-work pass before opening its candidates, and at startup and module
+application, when it has candidates, it first completes the existing-only
+inspection, so retained work reported then attaches first. Server readiness never awaits
+the pass, and shutdown drains it and cancels pending retries. Attachment is the ordinary acquisition that
+opening the thread performs, so it may launch a main-owned provider. The open
+row is a hint, not proof of running work: attachment must report a running
+turn as running and close the row only from authenticated terminal evidence,
+never by time or idleness, and never resend input. A row can stay open when the
+evidence is outside the attached history window or unreadable. Every backend
+module declares `unresolvedSubmissionRecovery`: `attach` when its attachment
+meets these rules, or `unsupported` when its history would report a cut-off
+turn with a false outcome. Pi SDK declares `unsupported`; Codex, Claude,
+OpenCode, native Pi, Grok and Antigravity declare `attach`. Turns started by
+another native client or by a provider continuation without a Sedes submission
+are not covered.
+
 **Execution** definitions are principal-owned Environment → Backend → Saved
 Agent → Thread layers. Capture definitions and provenance transactionally before
 native creation, fence the preview's configuration and agent revisions, and
