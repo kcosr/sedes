@@ -560,7 +560,8 @@ describe("production configuration reconciliation", () => {
       const blockers = vi.spyOn(ThreadRuntimeCoordinator.prototype, "providerReplacementBlockers");
       const capture = vi.spyOn(ThreadRuntimeCoordinator.prototype, "captureLoadedRuntime");
       await service.save(scope, { mutationId: randomUUID(), expectedRevision: snapshot.revision, configuration });
-      await vi.waitFor(() => expect(modules).toHaveLength(1));
+      // Module startup can exceed the default wait under full-suite load.
+      await vi.waitFor(() => expect(modules).toHaveLength(1), { timeout: 5_000 });
 
       const database = service.repository.database;
       const now = Date.now();

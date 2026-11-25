@@ -156,6 +156,59 @@ describe("Antigravity driver authority and projection", () => {
     await expect(handle.respond({ applicationOperationId: "duplicate", interactionId: pending.requestId, kind: "cancel" }))
       .rejects.toMatchObject({ category: "invalid_state" });
   });
+  it("keeps background work revealed while disconnected fenced after its service is replaced", async () => {
+    const f = fixture();
+    const handle = await f.driver.attach(f.attached), events: BackendConversationEvent[] = [];
+    handle.subscribe(event => events.push(event));
+    const port = f.port as AntigravityPort & { serviceReplaced?: boolean };
+    let finish!: () => void;
+    vi.mocked(f.port.observe).mockRejectedValue(new Error("carrier lost"));
+    vi.mocked(f.port.attachExisting).mockImplementation(() => new Promise((_resolve, reject) => {
+      finish = () => { port.serviceReplaced = true; reject(new Error("antigravity_runtime_incarnation_changed")); };
+    }));
+    await vi.waitFor(() => expect(f.port.attachExisting).toHaveBeenCalledOnce());
+    // A history read during retained recovery reveals a background child agent.
+    f.native.steps.push({ index: 0, type: 14, status: 3, hasSubtrajectory: false, user: { text: "Delegate" }, executionId: "execution",
+      subagents: [{ sessionId: "child", state: "active" }] } as AntigravityNativeHistory["steps"][number]);
+    await handle.establishProjection({ signal: new AbortController().signal });
+    finish();
+    await vi.waitFor(() => expect(handle.providerServiceReplacementSafe).toBe(false));
+    expect(events.filter(event => event.type === "background_activity_changed").at(-1)).toMatchObject({ activity: { state: "unknown" } });
+    await handle.close();
+  });
+  it.each(["replaced", "permission", "carrier"] as const)("stops recovering a retired runtime and vouches for replacement retirement only when settled (%s)", async disposition => {
+    const f = fixture();
+    const pending = { requestId: "permission", openedAt: "2026-11-22T00:00:00.000Z", request: { sessionId: identity.sessionId,
+      toolCall: { toolCallId: "tool", title: "Permission" }, options: [{ optionId: "deny", name: "Deny", kind: "reject_once" as const }] } };
+    if (disposition === "permission") vi.mocked(f.port.attach).mockResolvedValue({ ...f.attachment, pendingPermissions: [pending] });
+    const handle = await f.driver.attach(f.attached), events: BackendConversationEvent[] = [];
+    handle.subscribe(event => events.push(event));
+    expect(handle.providerServiceReplacementSafe).toBe(disposition === "permission" ? false : undefined);
+    const port = f.port as AntigravityPort & { serviceReplaced?: boolean };
+    vi.mocked(f.port.observe).mockRejectedValue(new Error("carrier lost"));
+    vi.mocked(f.port.attachExisting).mockImplementation(async () => {
+      if (disposition !== "carrier") port.serviceReplaced = true;
+      throw new Error("antigravity_runtime_incarnation_changed");
+    });
+    await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ type: "run_state_changed", state: "disconnected" })));
+    await vi.waitFor(() => expect(f.port.attachExisting).toHaveBeenCalled());
+    await delay(1_200);
+    if (disposition === "carrier") {
+      // An unproven owner keeps polling and its background stays unknown.
+      expect(vi.mocked(f.port.attachExisting).mock.calls.length).toBeGreaterThanOrEqual(2);
+      expect(handle.providerServiceReplacementSafe).toBeUndefined();
+      expect(events.filter(event => event.type === "background_activity_changed").at(-1)).toMatchObject({ activity: { state: "unknown" } });
+    } else {
+      // The retired owner can never return: stop polling it.
+      expect(f.port.attachExisting).toHaveBeenCalledOnce();
+      expect(handle.providerServiceReplacementSafe).toBe(disposition === "replaced");
+      // Background confirmed idle before the disconnect is settled by the retirement.
+      expect(events.filter(event => event.type === "background_activity_changed").at(-1))
+        .toMatchObject({ activity: { state: "known", agents: 0, commands: 0, other: 0 } });
+    }
+    await handle.close();
+    expect(f.port.release).toHaveBeenCalledOnce();
+  });
   it("acknowledges accepted ACP events even when passive history fails, without replaying permissions", async () => {
     const f = fixture();
     const handle = await f.driver.attach(f.attached), events: BackendConversationEvent[] = [];

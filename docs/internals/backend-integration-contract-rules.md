@@ -1194,11 +1194,12 @@ while any durable backend receipt remains unresolved. Dispositions:
 Pi sets it and releases replaced-service handles locally. Codex's supervisor
 recognizes a successor that no longer holds its bound runtime, stops retrying,
 and reports `provider_service_replaced`; its handles then set the property
-from their in-memory, interaction, goal and durable runtime receipts. Claude
-and OpenCode remote handles close themselves after finding the successor.
-Antigravity handles remain `disconnected` with a release that targets the
-retired service, leaving loaded threads fenced until explicit Restart; this
-is intentionally unsupported for now.
+from their in-memory, interaction, goal and durable runtime receipts.
+Antigravity's port also releases replaced-service handles locally; a
+disconnected handle stops polling and sets the property only when background
+work was confirmed idle before the disconnect and nothing else is in flight.
+Claude and OpenCode remote handles close themselves after finding the
+successor.
 
 The runtime owns everything it starts: SDK clients, daemons, sockets, SSH
 forwards, subprocesses, watchers, and temporary secrets. Startup is bounded;

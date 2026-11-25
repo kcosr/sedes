@@ -16,6 +16,7 @@ export class AntigravityRemotePort implements AntigravityPort {
   #opening?: { readonly existingOnly: boolean; readonly promise: Promise<Attachment> };
   #identity?: { readonly runtimeId: string; readonly serviceIncarnation: string };
   #closed = false;
+  #serviceReplaced = false;
   readonly #handles = new Set<string>();
   readonly #lifetime = new AbortController();
   constructor(readonly input: { readonly configuration: AntigravityRuntimeConfiguration;
@@ -48,7 +49,12 @@ export class AntigravityRemotePort implements AntigravityPort {
     try {
       lease.channel.assertReady();
       if (!antigravityRuntimeOperations.every(operation => lease.channel.supportsOperation(operation))) throw new AntigravityError("antigravity_remote_unsupported");
-      if (this.#identity && lease.serviceIncarnation !== this.#identity.serviceIncarnation) throw new AntigravityError("antigravity_runtime_incarnation_changed", "sent_outcome_unknown");
+      if (this.#identity && lease.serviceIncarnation !== this.#identity.serviceIncarnation) {
+        // A successor service starts only after its predecessor and every
+        // process it launched are retired; the bound runtime ended with it.
+        this.#serviceReplaced = true;
+        throw new AntigravityError("antigravity_runtime_incarnation_changed", "sent_outcome_unknown");
+      }
       let value = await call(lease, retained
         ? { action: "lookup_retained", backendInstanceId: this.input.configuration.backendInstanceId }
         : { action: "lookup", configuration: this.input.configuration }, this.#lifetime.signal);
@@ -99,9 +105,21 @@ export class AntigravityRemotePort implements AntigravityPort {
   async acknowledgeOperation(input: Parameters<AntigravityPort["acknowledgeOperation"]>[0], signal?: AbortSignal) { antigravitySuccessSchema.parse(await this.#invoke("acknowledge_operation", input, signal, true)); }
   async observe(input: Parameters<AntigravityPort["observe"]>[0], signal?: AbortSignal) { return antigravityObservationSchema.parse(await this.#invoke("observe", input, signal, true)); }
   async acknowledge(input: Parameters<AntigravityPort["acknowledge"]>[0], signal?: AbortSignal) { antigravitySuccessSchema.parse(await this.#invoke("acknowledge", input, signal, true)); }
+  get serviceReplaced(): boolean { return this.#serviceReplaced; }
   async release(input: Parameters<AntigravityPort["release"]>[0], signal?: AbortSignal) {
     if (this.#closed) { if (!this.#handles.has(input.handleId)) throw new AntigravityError("antigravity_session_unknown", "sent_outcome_unknown"); return; }
-    antigravitySuccessSchema.parse(await this.#invoke("release", input, signal, true));
+    if (this.#serviceReplaced) {
+      // Retirement is already proven; the successor's availability is irrelevant.
+      if (!this.#handles.has(input.handleId)) throw new AntigravityError("antigravity_runtime_incarnation_changed", "sent_outcome_unknown");
+      return;
+    }
+    try { antigravitySuccessSchema.parse(await this.#invoke("release", input, signal, true)); }
+    catch (error) {
+      // The attachment of a handle this port holds ended with the replaced
+      // service. Never send it to the successor or claim a foreign handle.
+      if (!(error instanceof AntigravityError && error.code === "antigravity_runtime_incarnation_changed" &&
+        this.#serviceReplaced && this.#handles.has(input.handleId))) throw error;
+    }
   }
   async retireSession(input: Parameters<AntigravityPort["retireSession"]>[0], signal?: AbortSignal) {
     try { return antigravityRetirementSchema.parse(await this.#invoke("retire_session", input, signal, true)); }

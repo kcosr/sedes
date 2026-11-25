@@ -10,6 +10,7 @@ import { BackendError, type AttachConversationInput, type BackendEventListener, 
   type LocateTurnInput, type RegisteredBackendActionInput, type SubmitTurnInput, type SteerTurnInput, type SteerTurnResult } from "../contracts.js";
 import type { AntigravityBinding } from "./binding.js";
 import type { UsageSnapshot } from "../../../shared/protocol/conversation.js";
+import { hasOutstandingBackgroundActivity } from "../../../shared/protocol/background-activity.js";
 import { antigravityCapabilities, antigravityConfigOption, antigravityConfigValue, antigravitySelectOptions } from "./catalog.js";
 import { unavailable, unsupported, type AntigravityDriver } from "./driver.js";
 import { antigravityHistoryPage, antigravityWindowSnapshot, locateAntigravityTurn, projectAntigravityHistory, type AntigravityProjection } from "./history.js";
@@ -63,6 +64,9 @@ export class AntigravityHandle implements ConversationHandle {
   #streaming = false;
   #disconnected = false;
   #recovering = false;
+  // Background work confirmed before the first disconnect; unknown afterwards.
+  #backgroundBeforeDisconnect?: BackendConversationSnapshot["backgroundActivity"];
+  #serviceRetired = false;
   #contextUsage?: UsageSnapshot["context"];
   #configurationSequence: number;
   constructor(readonly driver: AntigravityDriver, readonly attached: AttachConversationInput,
@@ -76,6 +80,17 @@ export class AntigravityHandle implements ConversationHandle {
   get retirementBlocked(): boolean { return !!this.#pendingSubmit || this.#ackReady.size > 0 || [...this.#controlOperations].some(([id, kind]) =>
     (kind === "set_config" || kind === "set_mode") && this.#requestedSetters.has(id) && !this.#appliedSetters.has(id)) || [...this.#receipts.values()].some(value =>
     value.status === "pending" || value.status === "failed" && value.failure.delivery === "sent_outcome_unknown"); }
+  /**
+   * A replaced execution-host service retired this runtime and every process
+   * it launched. Vouch only when no receipt, permission, setter or request is
+   * outstanding and no background work was running before the disconnect.
+   */
+  get providerServiceReplacementSafe(): boolean | undefined {
+    if (this.#closed || this.retirementBlocked || this.#streaming || this.#permissions.size > 0 || this.#inFlightRequests.size > 0 ||
+      this.#waitingOperations.size > 0 || this.#controlOperations.size > 0 || this.#configurationApplications.size > 0) return false;
+    if (!this.#serviceRetired) return undefined;
+    return !hasOutstandingBackgroundActivity(this.#backgroundBeforeDisconnect);
+  }
   get scope() { return { binding: this.detail, key: this.driver.input.correlationKey }; }
   get identity() { return { sessionId: this.detail.sessionId, cwd: this.detail.canonicalWorkspacePath }; }
   async initialize(): Promise<void> {
@@ -145,8 +160,12 @@ export class AntigravityHandle implements ConversationHandle {
     if (this.#disconnected) projection.snapshot.runState = "disconnected";
     if (this.#pendingSubmit && projection.snapshot.runState === "idle" && !Object.values(projection.snapshot.turnsById).some(
       turn => turn.completionCorrelations?.includes(this.#pendingSubmit!))) projection.snapshot.runState = "starting";
-    if (this.#disconnected && projection.snapshot.backgroundActivity)
-      projection.snapshot.backgroundActivity = { ...projection.snapshot.backgroundActivity, state: "unknown" };
+    if (this.#disconnected && projection.snapshot.backgroundActivity) {
+      // Newer native evidence of background work invalidates the idle proof
+      // taken before the disconnect; it never restores one.
+      if (hasOutstandingBackgroundActivity(projection.snapshot.backgroundActivity)) this.#backgroundBeforeDisconnect = projection.snapshot.backgroundActivity;
+      projection.snapshot.backgroundActivity = this.#disconnectedBackground(projection.snapshot.backgroundActivity);
+    }
     if (emit && this.#projection) this.#diff(this.#projection.snapshot, projection.snapshot);
     this.#projection = projection;
     if (projection.snapshot.runState === "idle") this.#streaming = false;
@@ -185,10 +204,25 @@ export class AntigravityHandle implements ConversationHandle {
   #markDisconnected(): void {
     if (this.#closed || this.#control.signal.aborted) return;
     this.#cancelDeferredHistoryRefresh();
-    this.#disconnected = true; this.#recovering = true; this.#streaming = false;
     const before = this.#projection.snapshot;
+    if (!this.#disconnected) this.#backgroundBeforeDisconnect = before.backgroundActivity;
+    this.#disconnected = true; this.#recovering = true; this.#streaming = false;
     const snapshot: BackendConversationSnapshot = { ...before, runState: "disconnected",
-      ...(before.backgroundActivity ? { backgroundActivity: { ...before.backgroundActivity, state: "unknown" } } : {}) };
+      ...(before.backgroundActivity ? { backgroundActivity: this.#disconnectedBackground(before.backgroundActivity) } : {}) };
+    this.#projection = { ...this.#projection, snapshot };
+    this.#diff(before, snapshot);
+  }
+  /** Retirement of the whole service settles background work confirmed idle before the disconnect. */
+  #disconnectedBackground(activity: NonNullable<BackendConversationSnapshot["backgroundActivity"]>) {
+    return this.#serviceRetired && this.#backgroundBeforeDisconnect && !hasOutstandingBackgroundActivity(this.#backgroundBeforeDisconnect)
+      ? this.#backgroundBeforeDisconnect : { ...activity, state: "unknown" as const };
+  }
+  #observeServiceRetired(): void {
+    if (this.#serviceRetired || this.#closed) return;
+    this.#serviceRetired = true;
+    const before = this.#projection.snapshot;
+    if (!before.backgroundActivity) return;
+    const snapshot: BackendConversationSnapshot = { ...before, backgroundActivity: this.#disconnectedBackground(before.backgroundActivity) };
     this.#projection = { ...this.#projection, snapshot };
     this.#diff(before, snapshot);
   }
@@ -260,6 +294,12 @@ export class AntigravityHandle implements ConversationHandle {
           if (this.#control.signal.aborted) return;
         } catch { /* Keep ownership unknown until exact retained lookup succeeds. */ }
         finally { if (this.#permissionReadChanges === changed) this.#permissionReadChanges = undefined; }
+        if (this.driver.input.port.serviceReplaced) {
+          // The retained owner retired with its service and can never return.
+          // Stay disconnected until the backend is rebuilt; do not keep polling.
+          await this.#serialize(async () => this.#observeServiceRetired());
+          return;
+        }
         await delay(500, undefined, { signal: this.#lifetime.signal }).catch(() => undefined);
       }
     }
