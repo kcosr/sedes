@@ -5017,10 +5017,10 @@ describe("InventorySidebar view modes", () => {
     }
   });
 
-  it("opens peek only for keyboard-visible focus and hides it on blur", async () => {
+  it("opens the detail card on keyboard-visible focus only after opting in", async () => {
     vi.useFakeTimers();
     try {
-      seedViewPreferences({ groupBy: "none", lastAltGroupBy: "none", showThreadDetailCards: true });
+      seedViewPreferences({ groupBy: "none", lastAltGroupBy: "none" });
       renderSidebar([makeThread("thread-1", "Keyboard peek")]);
       const item = document.querySelector<HTMLElement>(
         '[data-thread-id="thread-1"]',
@@ -5031,6 +5031,14 @@ describe("InventorySidebar view modes", () => {
         selector === ":focus-visible" ? true : nativeMatches(selector),
       );
 
+      fireEvent.focus(link);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(200);
+      });
+      expect(screen.queryByTestId("thread-peek")).toBeNull();
+      fireEvent.blur(link);
+
+      act(() => setSidebarShowThreadDetailCards(true));
       fireEvent.focus(link);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(200);
