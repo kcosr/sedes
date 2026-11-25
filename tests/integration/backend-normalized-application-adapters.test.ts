@@ -1587,7 +1587,7 @@ describe("backend-normalized application adapters", () => {
       await service.wakeForRuntimeSignal(
         current.scope,
         current.threadId,
-        "completion",
+        { kind: "submission_completion", acceptedAt: 500, completionObservedAt: 501, outcome: "completed" },
         502,
       );
       expect(publish).toHaveBeenCalledTimes(2);
@@ -3929,7 +3929,7 @@ describe("passive lifecycle notification sources", () => {
       await service.wakeForRuntimeSignal(
         current.scope,
         current.threadId,
-        "completion",
+        { kind: "submission_completion", acceptedAt: 1260, completionObservedAt: 1299, outcome: "completed" },
         1300,
       );
       expect(emit).toHaveBeenCalledOnce();

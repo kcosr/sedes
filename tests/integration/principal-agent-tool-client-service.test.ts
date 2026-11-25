@@ -455,7 +455,8 @@ describe("principal agent-tool client persistence and admission", () => {
       expect(new Set(optionIds)).toEqual(
         value.repository.eligibility.eligibleToolIds,
       );
-      expect(optionIds).toHaveLength(36);
+      expect(optionIds).toHaveLength(37);
+      expect(optionIds).toContain("thread.set_state");
       expect(optionIds).not.toContain("agent.context");
       expect(optionIds).not.toContain("automation.resolve");
       expect(optionIds).not.toContain("automation.acknowledge");

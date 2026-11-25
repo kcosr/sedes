@@ -291,10 +291,14 @@ describe("CanonicalInlineAgentToolService", () => {
   });
 
   it("scopes thread status through the injected reader and bounds its output", async () => {
+    const snoozedUntil = "2026-11-30T00:00:00.000Z";
+    const wakeReminder = "\u0001".repeat(1_000);
     const readThreadStatus = vi.fn(async () => ({
       threadId: "target-thread",
       backend: "codex_app_server" as const,
       lifecycle: "snoozed" as const,
+      snoozedUntil,
+      wakeReminder,
       pinned: false,
       activity: "waiting_for_input" as const,
     }));
@@ -317,6 +321,8 @@ describe("CanonicalInlineAgentToolService", () => {
       output: {
         threadId: "target-thread",
         lifecycle: "snoozed",
+        snoozedUntil,
+        wakeReminder,
         pinned: false,
         activity: "waiting_for_input",
       },

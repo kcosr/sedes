@@ -529,7 +529,7 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
     id: "thread.status",
     schemaVersion: 6,
     description:
-      "Returns bounded lifecycle, activity, and read-only pin state for a Sedes thread.",
+      "Returns a Sedes thread's lifecycle, activity, read-only pin state, and any snooze deadline and reminder.",
     catalog: { groupId: "threads", label: "Thread status", order: 10 },
     effects: { application: "read", modelUsage: "none", external: "none" },
   }),
@@ -538,7 +538,7 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
     id: "thread.list",
     schemaVersion: 10,
     description:
-      "Searches admitted principal-owned Sedes threads, including read-only pin state, defaulting to the caller's configured environment with newest activity first.",
+      "Searches admitted Sedes threads with lifecycle, activity, read-only pin state, and snooze details. Defaults to the caller's configured environment with newest activity first.",
     catalog: { groupId: "threads", label: "List threads", order: 20 },
     effects: { application: "read", modelUsage: "none", external: "none" },
   }),
@@ -614,6 +614,19 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
     description:
       "Restores one archived principal-owned Sedes thread to active inventory.",
     catalog: { groupId: "threads", label: "Restore thread", order: 80 },
+    effects: { application: "write", modelUsage: "none", external: "none" },
+  }),
+  "thread.set_state": manifestEntry({
+    environmentAuthority: {
+      kind: "direct_resource",
+      resource: "thread",
+      defaultToSource: true,
+    },
+    id: "thread.set_state",
+    schemaVersion: 1,
+    description:
+      "Parks, unparks, snoozes, or wakes one Sedes thread. Omit threadId to target the calling thread or the Tool client's configured default. Parking keeps Tasks and stashes attached. Set a parked thread to active before snoozing it. A thread already in the requested lifecycle keeps its current settings. Use thread.restore for archived threads.",
+    catalog: { groupId: "threads", label: "Set thread state", order: 85 },
     effects: { application: "write", modelUsage: "none", external: "none" },
   }),
   "saved_agent.list": manifestEntry({

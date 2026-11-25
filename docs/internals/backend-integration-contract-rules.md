@@ -3022,6 +3022,16 @@ Notification enablement, delivery, and silence do not apply. The read is
 application-owned and identical for every backend: it needs no provider code
 and returns whatever sections that backend's completion froze.
 
+Inventory wake and reply attention are independent. A replay of a completion
+already observed before `snoozed_at` leaves the current snooze in place. For a
+successful completion, an acceptance before the snooze also leaves it in place
+and still records the reply's attention. Failure, interruption, and a newly
+opened blocking interaction can wake the thread. A pending blocking interaction
+must be resolved before the thread can be snoozed.
+The deadline wake follows the existing inventory scheduler. This rule uses
+shared application records for Pi SDK, native Pi, Codex, Claude, Grok,
+OpenCode, and Antigravity.
+
 Notification event consumption is deduplicated per principal and normalized
 thread/turn, separately from UI attention acknowledgment. Wake hooks consume
 committed snooze deadline transitions; automation-start hooks require actual

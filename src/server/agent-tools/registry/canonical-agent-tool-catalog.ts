@@ -42,6 +42,7 @@ import {
   createThreadMessagesToolDefinition,
   createThreadRestoreToolDefinition,
   createThreadSendToolDefinition,
+  createThreadSetStateToolDefinition,
 } from "../tools/thread-control-tools.js";
 import { createThreadStatusToolDefinition } from "../tools/thread-status-tool.js";
 import { createEnvironmentListToolDefinition } from "../tools/environment-list-tool.js";
@@ -186,6 +187,7 @@ export function createCanonicalAgentToolDefinitions(input: {
           createThreadForkToolDefinition(input.threadControl),
           createThreadArchiveToolDefinition(input.threadControl),
           createThreadRestoreToolDefinition(input.threadControl),
+          createThreadSetStateToolDefinition(input.threadControl),
         ]
       : []),
     ...serviceBackedDefinitions,

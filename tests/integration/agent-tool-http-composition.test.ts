@@ -503,6 +503,10 @@ secondAuthority, testAgentToolExecutionAuthority);
             restore: vi.fn(async (_scope, input) => ({
               threadId: input.threadId,
             })),
+            setState: vi.fn(async (_scope, input) => ({
+              threadId: input.threadId ?? thread.thread.id,
+              lifecycle: input.lifecycle,
+            })),
           },
         },
         invocationId: () => "invocation-1",
@@ -536,6 +540,7 @@ sourceAuthority, testAgentToolExecutionAuthority);
         "thread.fork",
         "thread.archive",
         "thread.restore",
+        "thread.set_state",
         "client.list", "client.end_interaction", "client.switch_thread", "client.settings.get", "client.settings.update", "client.replay_turn",
       ]);
       expect(providerTools.eligibleCatalog("cli").map(({ id }) => id)).toEqual(
@@ -668,6 +673,12 @@ sourceAuthority, testAgentToolExecutionAuthority);
             backend: "pi",
           }),
         );
+      database
+        .prepare(
+          `UPDATE thread_principal_state SET inventory_state = 'parked'
+           WHERE tenant_id = ? AND principal_id = ? AND thread_id = ?`,
+        )
+        .run(scope.tenantId, scope.principalId, thread.thread.id);
       await associated(request(app).post("/api/agent-tool-invocations"))
         .send({
           toolId: "thread.status",
@@ -686,6 +697,44 @@ sourceAuthority, testAgentToolExecutionAuthority);
           }),
         );
       expect(snapshot).toHaveBeenCalledWith(scope, thread.thread.id);
+      const snoozedUntil = 10_000;
+      snapshot.mockImplementationOnce(async () => {
+        database
+          .prepare(
+            `UPDATE thread_principal_state
+             SET inventory_state = 'snoozed', snoozed_at = ?,
+               snoozed_until = ?, wake_reminder_text = ?
+             WHERE tenant_id = ? AND principal_id = ? AND thread_id = ?`,
+          )
+          .run(
+            9_000,
+            snoozedUntil,
+            "Review the build",
+            scope.tenantId,
+            scope.principalId,
+            thread.thread.id,
+          );
+        return { thread: { inventoryState: "parked", runState: "waiting_for_input" } };
+      });
+      await associated(request(app).post("/api/agent-tool-invocations"))
+        .send({
+          toolId: "thread.status",
+          schemaVersion: 6,
+          requestId: "snoozed-status-request",
+          input: { threadId: thread.thread.id },
+        })
+        .expect(200)
+        .expect(({ body }) =>
+          expect(body.output).toEqual({
+            threadId: thread.thread.id,
+            backend: "pi",
+            lifecycle: "snoozed",
+            snoozedUntil: new Date(snoozedUntil).toISOString(),
+            wakeReminder: "Review the build",
+            activity: "waiting_for_input",
+            pinned: false,
+          }),
+        );
       await associated(request(app).post("/api/agent-tool-invocations"))
         .send({
           toolId: "thread.messages",

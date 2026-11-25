@@ -33,6 +33,15 @@ export type InventoryState = "active" | "snoozed" | "parked" | "archived";
 export type InventoryWakeReason =
   "manual" | "deadline" | "completion" | "failure" | "needs-input" | "activity";
 
+export type InventoryRuntimeWakeSignal =
+  | {
+      readonly kind: "submission_completion";
+      readonly acceptedAt: number;
+      readonly completionObservedAt: number | null;
+      readonly outcome: "completed" | "interrupted" | "failed";
+    }
+  | { readonly kind: "needs_input" };
+
 export type InventoryEnvironmentRecord = {
   readonly tenantId: string;
   readonly ownerPrincipalId: string;
@@ -1911,6 +1920,7 @@ export class InventoryRepository {
       readonly mutationId: string;
       readonly change: InventoryTransition;
       readonly now: number;
+      readonly assertSnoozeAllowed?: () => void;
     },
   ): {
     readonly state: InventoryPrincipalStateRecord;
@@ -1951,6 +1961,7 @@ export class InventoryRepository {
       this.#assertTransitionNotBlocked(scope, threadId, input.change);
       const next = this.#nextInventory(current, input.change, input.now);
       if (next !== current) {
+        if (change.action === "snooze") input.assertSnoozeAllowed?.();
         this.#writeInventory(next);
         this.#bumpGeneration(scope);
       }
@@ -2741,12 +2752,29 @@ export class InventoryRepository {
   wakeForRuntimeSignal(
     scope: RequestScope,
     threadId: string,
-    reason: "completion" | "failure" | "needs-input",
+    signal: InventoryRuntimeWakeSignal,
     now: number,
   ): InventoryPrincipalStateRecord {
     return this.database.transaction(() => {
       const current = this.getInventory(scope, threadId);
-      if (current.inventoryState !== "snoozed") return current;
+      if (current.inventoryState !== "snoozed" || current.snoozedAt === null) {
+        return current;
+      }
+      // Replays keep the time of the first durable observation. Completion
+      // attention is committed independently of the inventory wake.
+      if (
+        signal.kind === "submission_completion" &&
+        (signal.completionObservedAt === null ||
+          signal.completionObservedAt < current.snoozedAt ||
+          (signal.outcome === "completed" && signal.acceptedAt < current.snoozedAt))
+      ) {
+        return current;
+      }
+      const reason = signal.kind === "needs_input"
+        ? "needs-input"
+        : signal.outcome === "failed"
+          ? "failure"
+          : "completion";
       const changed = prepareCached(this.database,
           `
             UPDATE thread_principal_state

@@ -353,13 +353,14 @@ Choose a local **Wake date and time**, or use **1 hour**, **Tomorrow**, or
 the thread wakes so the reason for the follow-up is not lost. To keep a thread
 in view without a deadline, pin it; to keep a note about it, add a Task.
 
-A snoozed thread wakes when its deadline arrives or when qualifying new runtime
-activity requires attention. The wake remains visible until acknowledged.
-Pinning and Group membership remain intact.
-
-Snooze is organization, not a provider timer or pause. It does not stop an
-active provider turn. Sedes prevents unsafe transitions, such as snoozing after
-an automation run has begun dispatching.
+Snoozing leaves an active provider turn running. When a submission accepted
+before the snooze completes successfully, the thread stays snoozed and its
+reply is still marked unread. A submission accepted later can wake the thread
+when it finishes. A failure, a blocking request for input or approval, or the
+snooze deadline also wakes it. The wake remains visible until acknowledged.
+Pinning and Group membership remain intact. Resolve pending input or approval
+before snoozing. Sedes also blocks snoozing when a scheduled automation run has
+begun dispatching.
 
 ## Park quiet work
 
@@ -380,6 +381,10 @@ automation comes back when a run sends it a prompt or fails; see
 Park never pauses an automation; snooze the thread to skip runs. Open Tasks
 remain unchanged and attached to their threads, without a task-handling prompt.
 Stashes also remain attached, with a warning before parking.
+
+Agents with the `thread.set_state` grant can park, unpark, snooze, or wake
+their own thread or another thread within their tool scope. See
+[Sedes tools](provider-features.md#let-an-agent-use-sedes-tools).
 
 ## Archive finished work
 

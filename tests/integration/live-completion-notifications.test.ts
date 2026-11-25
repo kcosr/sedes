@@ -2,6 +2,7 @@ import { UserInputRevisionRepository } from "../../src/server/db/repositories/us
 import type { ResponseVoiceFreshness } from "../../src/server/conversations/response-voice-freshness.js";
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
+import { DatabaseApplicationThreadSummaryReader } from "../../src/server/application/database-application-summary-reader.js";
 import type { ConversationActorEvent } from "../../src/server/conversations/conversation-actor.js";
 import { NotificationRepository } from "../../src/server/db/repositories/notification-repository.js";
 import {
@@ -95,6 +96,63 @@ async function fixture(observeNotifications = true) {
 }
 
 describe("live completion notification provenance", { timeout: 30_000 }, () => {
+  it("keeps a running thread snoozed when its accepted reply completes and shows unread attention", async () => {
+    const current = await fixture();
+    const { harness } = current;
+    let release: (() => void) | undefined;
+    const stages = vi.spyOn(harness.driver, "deliverScriptedAssistantStage").mockImplementation(
+      (_text, stage, deliver) => {
+        if (stage === "settled") release = deliver;
+        else deliver();
+      },
+    );
+    try {
+      const threadId = await current.start();
+      await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+      const before = await harness.threads.snapshot(harness.scope, threadId);
+      expect(before.runState).toBe("running");
+      expect(before.capabilities.operations.find(({ id }) => id === "snooze")?.available).toBe(true);
+      expect(before.capabilities.operations.find(({ id }) => id === "park")?.available).toBe(false);
+      const snoozedAt = Date.now() + 1;
+      const snoozedUntil = snoozedAt + 60_000;
+      await harness.inventory.transition(harness.scope, threadId, {
+        expectedRevision: before.thread.inventoryRevision,
+        mutationId: randomUUID(),
+        change: { action: "snooze", snoozedUntil, wakeReminderText: "Review the reply" },
+      }, snoozedAt);
+      const settle = release!;
+      release = undefined;
+      settle();
+      await vi.waitFor(() => expect(current.observations).toHaveLength(1));
+      await Promise.all(harness.completionFollowUps.splice(0));
+      const { observation } = current.observations[0]!;
+      expect(observation.acceptedAt).toBeLessThan(snoozedAt);
+      expect(observation).toMatchObject({
+        completionOutcome: "completed",
+        attentionCreatedAt: expect.any(Number),
+        acknowledgedAt: null,
+      });
+      expect(harness.inventoryRepository.getInventory(harness.scope, threadId)).toMatchObject({
+        inventoryState: "snoozed",
+        snoozedUntil,
+        wokeAt: null,
+        wakeReminderText: "Review the reply",
+      });
+      const summaries = new DatabaseApplicationThreadSummaryReader({
+        inventory: harness.inventoryRepository,
+        queue: harness.queueRepository,
+        completion: current.completions,
+      });
+      expect(summaries.listByIds(harness.scope, [threadId])).toMatchObject([
+        { id: threadId, inventoryState: "snoozed", attention: { unseenCompletion: true, wake: false } },
+      ]);
+    } finally {
+      stages.mockRestore();
+      release?.();
+      await current.close();
+    }
+  });
+
   it("reobserves a newly classified actor reply without changing its frozen completion or blocking follow-ups", async () => {
     const current = await fixture();
     const { harness } = current;
@@ -131,7 +189,12 @@ describe("live completion notification provenance", { timeout: 30_000 }, () => {
           for (const { observation } of current.observations.slice(before)) expect(observation).toEqual(original);
           expect(current.completions.get(harness.scope, threadId, original.operationId)).toEqual(original);
           expect(recover).toHaveBeenCalledWith(harness.scope, threadId);
-          expect(wake).toHaveBeenCalledWith(harness.scope, threadId, "completion");
+          expect(wake).toHaveBeenCalledWith(harness.scope, threadId, {
+            kind: "submission_completion",
+            acceptedAt: original.acceptedAt,
+            completionObservedAt: original.completionObservedAt,
+            outcome: "completed",
+          });
           expect(current.executor).toHaveBeenCalledOnce();
 
           const writes = () => (harness.database.prepare("SELECT total_changes() AS count").get() as { count: number }).count;

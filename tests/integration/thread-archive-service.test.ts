@@ -1,4 +1,15 @@
+import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
+import {
+  AgentThreadInventoryControlService,
+  type ThreadSetStateToolInput,
+} from "../../src/server/agent-tools/application/agent-thread-inventory-control-service.js";
+import { DatabaseAgentToolSourceAuthority } from "../../src/server/agent-tools/application/database-agent-tool-source-authority.js";
+import {
+  AgentToolEnvironmentAuthorityResolver,
+  createTrustedEnvironmentAuthorityGrant,
+} from "../../src/server/agent-tools/environment/environment-authority.js";
+import { CANONICAL_AGENT_TOOL_MANIFEST } from "../../src/server/agent-tools/registry/canonical-agent-tool-manifest.js";
 import { parseResolvedBackendConfiguration } from "../support/resolved-backend-configuration.js";
 import { openOverlayDatabase } from "../../src/server/db/database.js";
 import {
@@ -15,6 +26,7 @@ import { ProviderFeatureMutationRepository } from "../../src/server/db/repositor
 import { TaskRepository } from "../../src/server/db/repositories/task-repository.js";
 import { ThreadLineageRepository } from "../../src/server/db/repositories/thread-lineage-repository.js";
 import { ThreadArchiveService } from "../../src/server/domain/thread-archive-service.js";
+import { InventoryService } from "../../src/server/domain/inventory-service.js";
 import { DomainError } from "../../src/server/domain/errors.js";
 import type { ArchivedThreadRuntimeRetirement } from "../../src/server/domain/thread-runtime-archive-retirement.js";
 import {
@@ -504,6 +516,118 @@ describe("thread family archive service", () => {
     }
   });
 
+  it("sets the running caller's lifecycle with the existing single-thread Park and Snooze guards", async () => {
+    const current = fixture();
+    try {
+      const { scope, rootId: threadId } = current;
+      const { thread } = current.inventory.getThread(scope, threadId);
+      const defaults = {
+        kind: "thread_agent" as const,
+        threadId,
+        workspaceId: thread.workspaceId,
+        environmentId: thread.environmentId,
+        projectId: thread.projectId,
+      };
+      const resolver = new AgentToolEnvironmentAuthorityResolver(
+        new DatabaseAgentToolSourceAuthority(current.database, new Uint8Array(32)),
+      );
+      const tool = CANONICAL_AGENT_TOOL_MANIFEST["thread.set_state"];
+      const resourceScope = { allowOtherEnvironments: false, allowOtherProjects: false };
+      const service = new AgentThreadInventoryControlService({
+        inventory: current.inventory,
+        threads: current.inventory,
+        lineage: current.lineage,
+        archives: current.service,
+        transitions: new InventoryService(current.inventory, {
+          publishMany: () => undefined,
+          publishApplicationThread: () => undefined,
+        }),
+      });
+      const setState = (input: ThreadSetStateToolInput) => service.setState(scope, {
+        ...input,
+        mutationId: randomUUID(),
+        environmentAuthority: createTrustedEnvironmentAuthorityGrant({
+          ...resolver.resolve({ tool, scope, input, defaults, resourceScope }),
+          tool,
+          defaults,
+          callerKind: "thread_agent",
+          resourceScope,
+          policyIdentity: { ownerKind: "thread", ownerId: threadId, revision: 1 },
+          admittedEnvironmentIds: [thread.environmentId],
+        }),
+      });
+      const inventory = () => current.inventory.getInventory(scope, threadId);
+      const task = current.tasks.create(scope, {
+        title: "Follow up after parking",
+        scope: { kind: "thread", threadId },
+        mutationId: "agent-park-task",
+        now: 450,
+      });
+      current.stashPrompt(threadId, "Keep this prompt", "agent-park-stash", 451);
+      current.runtimeStates.set(threadId, "running");
+
+      await expect(setState({ lifecycle: "parked" }))
+        .resolves.toEqual({ threadId, lifecycle: "parked" });
+      await expect(setState({ lifecycle: "parked" }))
+        .resolves.toEqual({ threadId, lifecycle: "parked" });
+      expect(inventory()).toMatchObject({ inventoryState: "parked", inventoryRevision: 1 });
+      expect(current.tasks.get(scope, task.id)).toMatchObject({
+        scopeKind: "thread", threadId, revision: task.revision,
+      });
+      expect(current.inventory.listStashes(scope, threadId)).toHaveLength(1);
+      expect(current.publishTaskChange).not.toHaveBeenCalled();
+      expect(current.runWithRuntimeRetired).not.toHaveBeenCalled();
+
+      const until = new Date(Date.now() + 3_600_000).toISOString();
+      await expect(setState({ lifecycle: "snoozed", until }))
+        .rejects.toMatchObject({ code: "invalid_transition" });
+      await expect(setState({ lifecycle: "active" }))
+        .resolves.toEqual({ threadId, lifecycle: "active" });
+
+      for (const input of [
+        { lifecycle: "snoozed" },
+        { lifecycle: "snoozed", until: "2000-01-01T00:00:00.000Z" },
+        { lifecycle: "snoozed", until: "2099-01-01 01:00:00.000Z" },
+        { lifecycle: "active", reminder: "A wake reminder requires a snooze" },
+        { lifecycle: "parked", until },
+      ] satisfies ThreadSetStateToolInput[]) {
+        await expect(setState(input)).rejects.toMatchObject({ code: "invalid_input" });
+      }
+      expect(inventory()).toMatchObject({ inventoryState: "active", inventoryRevision: 2 });
+
+      const snoozed = { threadId, lifecycle: "snoozed", snoozedUntil: until, wakeReminder: "Review status" };
+      await expect(setState({ lifecycle: "snoozed", until, reminder: "Review status" }))
+        .resolves.toEqual(snoozed);
+      const later = new Date(Date.parse(until) + 3_600_000).toISOString();
+      await expect(setState({ lifecycle: "snoozed", until: later, reminder: "Changed" }))
+        .resolves.toEqual(snoozed);
+      await expect(setState({ lifecycle: "snoozed", until: "2000-01-01T00:00:00.000Z" }))
+        .rejects.toMatchObject({ code: "invalid_input" });
+      expect(inventory()).toMatchObject({ inventoryState: "snoozed", inventoryRevision: 3 });
+
+      await expect(setState({ lifecycle: "active" }))
+        .resolves.toEqual({ threadId, lifecycle: "active" });
+      expect(inventory()).toMatchObject({
+        inventoryState: "active", inventoryRevision: 4, wakeReason: "manual",
+      });
+      await expect(setState({ lifecycle: "snoozed", until }))
+        .resolves.toEqual({ threadId, lifecycle: "snoozed", snoozedUntil: until, wakeReminder: null });
+
+      current.inventory.transitionInventory(scope, threadId, {
+        expectedRevision: inventory().inventoryRevision,
+        mutationId: randomUUID(),
+        change: { action: "archive" },
+        now: Date.now(),
+      });
+      await expect(setState({ lifecycle: "active" })).rejects.toMatchObject({
+        code: "conflict", message: expect.stringContaining("thread.restore"),
+      });
+      expect(inventory().inventoryState).toBe("archived");
+    } finally {
+      current.database.close();
+    }
+  });
+
   it("rejects a stale family archive stash count atomically", async () => {
     const current = fixture();
     try {
@@ -561,7 +685,7 @@ describe("thread family archive service", () => {
     const current = fixture();
     try {
       const task = current.tasks.create(current.scope, {
-        title: "Follow up after settling",
+        title: "Follow up after parking",
         scope: { kind: "thread", threadId: current.rootId },
         mutationId: "park-task-create",
         now: 450,

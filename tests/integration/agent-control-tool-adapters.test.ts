@@ -27,6 +27,7 @@ import {
   CanonicalInlineAgentToolService,
 } from "../../src/server/agent-tools/invocation/canonical-inline-agent-tool-service.js";
 import { createThreadCreateToolDefinition } from "../../src/server/agent-tools/tools/thread-management-tools.js";
+import type { AgentThreadControlToolServices } from "../../src/server/agent-tools/tools/thread-control-tools.js";
 import { SourceScopedAgentToolService } from "../../src/server/agent-tools/application/source-scoped-agent-tool-service.js";
 import { AgentToolEnvironmentAuthorityResolver } from "../../src/server/agent-tools/environment/environment-authority.js";
 import { unavailablePrincipalAgentToolClientService } from "../support/agent-tool-http.js";
@@ -149,7 +150,7 @@ function fixture() {
       {
         enabled: false,
         revision: 1,
-        presentation: { surface: "cli" as const, mode: "progressive" as const },
+        presentation: { surface: "cli" as const, mode: "progressive" as "progressive" | "individual" },
         resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
         enabledToolIds: [
           "thread.status",
@@ -159,6 +160,7 @@ function fixture() {
           "thread.fork",
           "thread.archive",
           "thread.restore",
+          "thread.set_state",
         ],
       },
     ]),
@@ -267,6 +269,15 @@ function fixture() {
       async restore(_requestScope: RequestScope, input: { threadId: string }) {
         requireThread(input.threadId);
         return { threadId: input.threadId };
+      },
+      async setState(
+        requestScope: RequestScope,
+        input: Parameters<AgentThreadControlToolServices["inventory"]["setState"]>[1],
+      ) {
+        expect(requestScope).toEqual(scope);
+        const threadId = input.threadId ?? input.environmentAuthority.defaults.threadId!;
+        if (!sources.has(threadId)) requireThread(threadId);
+        return { threadId, lifecycle: input.lifecycle };
       },
     },
   };
@@ -426,7 +437,7 @@ new AgentToolEnvironmentAuthorityResolver(authorityReader),
 }
 
 describe("agent control tools through canonical adapters", () => {
-  it("keeps the five tools default-off and exposes the same bounded contracts for Pi, Codex, Claude, and Grok", async () => {
+  it("keeps thread controls default-off and exposes the same bounded contracts across backends", async () => {
     const value = fixture();
     for (const [backend, sourceThreadId] of Object.entries(sourceThreadIds)) {
       await request(value.app)
@@ -455,6 +466,7 @@ describe("agent control tools through canonical adapters", () => {
             "thread.fork",
             "thread.archive",
             "thread.restore",
+            "thread.set_state",
           ]),
         );
       await request(value.app)
@@ -492,6 +504,7 @@ describe("agent control tools through canonical adapters", () => {
         "thread.fork",
         "thread.archive",
         "thread.restore",
+        "thread.set_state",
       ]);
       if (backend === "pi") {
         await expect(
@@ -726,7 +739,7 @@ describe("agent control tools through canonical adapters", () => {
     expect(value.turns.get(targetThreadId)).toEqual([]);
   });
 
-  it("discovers and composes the controls through the compiled generic CLI", async () => {
+  it("discovers and composes the controls through the compiled CLI", async () => {
     const value = fixture();
     const sourceThreadId = sourceThreadIds.claude_agent_sdk;
     value.policies.get(sourceThreadId)!.enabled = true;
@@ -745,10 +758,13 @@ describe("agent control tools through canonical adapters", () => {
           value.sourceCapabilities.get(sourceThreadId)!,
         SEDES_AGENT_TOOL_CLI_MODE: "progressive",
       };
-      const run = (arguments_: readonly string[]) =>
+      const run = (
+        arguments_: readonly string[],
+        mode = "progressive",
+      ) =>
         execFileAsync("sedes", arguments_, {
           cwd: root,
-          env: environment,
+          env: { ...environment, SEDES_AGENT_TOOL_CLI_MODE: mode },
           encoding: "utf8",
           timeout: 10_000,
         });
@@ -764,6 +780,7 @@ describe("agent control tools through canonical adapters", () => {
         "thread.fork",
         "thread.archive",
         "thread.restore",
+        "thread.set_state",
       ]);
       const created = JSON.parse(
         (
@@ -858,6 +875,21 @@ describe("agent control tools through canonical adapters", () => {
         ).stdout,
       );
       expect(restored).toEqual({ threadId: targetThreadId });
+      expect(JSON.parse((await run([
+        "tool", "invoke", "thread.set_state", "--input-json",
+        JSON.stringify({ lifecycle: "parked" }), "--json",
+      ])).stdout)).toEqual({ threadId: sourceThreadId, lifecycle: "parked" });
+      value.policies.get(sourceThreadId)!.presentation = {
+        surface: "cli", mode: "individual",
+      };
+      expect((await run(["thread", "set-state", "--help"], "individual")).stdout)
+        .toContain("--lifecycle");
+      expect(JSON.parse((await run([
+        "thread", "set-state", "--thread-id", targetThreadId, "--lifecycle", "parked", "--json",
+      ], "individual")).stdout)).toEqual({ threadId: targetThreadId, lifecycle: "parked" });
+      value.policies.get(sourceThreadId)!.presentation = {
+        surface: "cli", mode: "progressive",
+      };
       expect(forked).toEqual({ status: "created", childThreadId });
       await run([
         "tool",

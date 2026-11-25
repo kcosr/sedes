@@ -19,6 +19,7 @@ import {
   isoDateSchema,
   sharedAdapters,
   targetIdentifierSchema,
+  threadSnoozeOutputProperties,
   threadTitleSchema,
 } from "./management-tool-schemas.js";
 import { CANONICAL_AGENT_TOOL_MANIFEST } from "../registry/canonical-agent-tool-manifest.js";
@@ -143,6 +144,7 @@ const threadItemSchema = Type.Object(
       maxLength: 8,
       description: "Thread inventory state.",
     }),
+    ...threadSnoozeOutputProperties,
     activity: Type.String({
       enum: ["idle", "running", "waiting_for_input"],
       maxLength: 17,
@@ -150,7 +152,7 @@ const threadItemSchema = Type.Object(
     automations: automationsSchema,
     pinned: Type.Boolean({ description: "Whether this thread is pinned for the current user." }),
   },
-  { additionalProperties: false, maxProperties: 10 },
+  { additionalProperties: false, maxProperties: 12 },
 );
 
 const threadListScopeSchema = Type.Union(
@@ -289,7 +291,7 @@ export function createThreadListToolDefinition(
       idempotency: "not_applicable",
       progress: "none",
       maximumInputBytes: 8_192,
-      maximumOutputBytes: 512 * 1_024,
+      maximumOutputBytes: 1_536 * 1_024,
       concurrencyClass: "thread_list_read",
       uncertainExternalOutcome: false,
     },

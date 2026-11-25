@@ -74,6 +74,7 @@ User-facing changes are collected here before release. See the
   `get/create/update/set_state@3`. See [agent tool contracts](docs/internals/agent-tools.md#catalog-and-effects).
   Thread-message transcripts advance to version 5 to identify automatic follow-ups. See [tool policy sets](docs/user/tool-policies.md).
   ([#96](https://github.com/kcosr/sedes/pull/96), [#112](https://github.com/kcosr/sedes/pull/112), [#116](https://github.com/kcosr/sedes/pull/116), [#142](https://github.com/kcosr/sedes/pull/142), [#156](https://github.com/kcosr/sedes/pull/156))
+  ([#163](https://github.com/kcosr/sedes/pull/163))
 
 - Upgrade execution sidecars with the server for runtime wire version **17**
   and negotiated traffic compression. Incompatible active services retain the
@@ -116,6 +117,11 @@ User-facing changes are collected here before release. See the
   ([#81](https://github.com/kcosr/sedes/pull/81), [#83](https://github.com/kcosr/sedes/pull/83), [#87](https://github.com/kcosr/sedes/pull/87), [#88](https://github.com/kcosr/sedes/pull/88), [#92](https://github.com/kcosr/sedes/pull/92), [#95](https://github.com/kcosr/sedes/pull/95), [#111](https://github.com/kcosr/sedes/pull/111))
 
 ### Added
+
+- Grant `thread.set_state` to let agents park, unpark, snooze, and wake threads
+  within their tool scope. Thread status and list show the snooze deadline and
+  reminder. See [Sedes tools](docs/user/provider-features.md#let-an-agent-use-sedes-tools).
+  ([#163](https://github.com/kcosr/sedes/pull/163))
 
 - Thread agents can manage execution environments, backends, variables,
   runtime lifecycle, tool-policy sets/defaults and other threads' or templates'
@@ -311,6 +317,12 @@ User-facing changes are collected here before release. See the
   ([#81](https://github.com/kcosr/sedes/pull/81))
 
 ### Changed
+
+- Snoozing a running thread keeps it snoozed when that submission completes
+  successfully. The reply still appears as unread. Resolve pending input or
+  approval before snoozing. See
+  [Snooze work until later](docs/user/organize-work.md#snooze-work-until-later).
+  ([#163](https://github.com/kcosr/sedes/pull/163))
 
 - Sidebar thread detail cards are off by default. **Show thread detail cards**
   in **View options** applies across Timeline, State, and Flat list on this
