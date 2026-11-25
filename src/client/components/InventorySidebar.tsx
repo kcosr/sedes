@@ -55,6 +55,7 @@ import {
   setSidebarInventoryScope,
   setSidebarScopeCollapsed,
   setSidebarShowBackendIcons,
+  setSidebarShowThreadDetailCards,
   setSidebarShowFilter,
   setSidebarStackBy,
   updateSidebarModePreferences,
@@ -440,7 +441,7 @@ export function InventorySidebar({
   onOpenSettings: (trigger: HTMLButtonElement, page?: SettingsPage) => void;
   /** Desktop fallback for routes whose navigation trigger is not rendered. */
   showFooterConnectionStatus?: boolean;
-  /** Desktop-only detail preview; the full-screen mobile drawer disables it. */
+  /** Desktop sidebar behavior, including hover rosters and optional detail cards. */
   peekEnabled?: boolean;
   /** Client-session position retained by the shell while the drawer is closed. */
   scrollPosition?: { current: number };
@@ -1145,7 +1146,10 @@ export function InventorySidebar({
   const [viewOptionsOpen, setViewOptionsOpen] = useState(false);
   const peek = useThreadPeek({
     enabled:
-      peekEnabled && Boolean(flatModePreferences?.peek) && !viewOptionsOpen,
+      peekEnabled &&
+      groupBy !== "project" &&
+      viewPreferences.showThreadDetailCards &&
+      !viewOptionsOpen,
   });
   const peekTarget = useMemo(() => {
     if (peek.peekId === null) return undefined;
@@ -1767,13 +1771,7 @@ export function InventorySidebar({
                   updateSidebarModePreferences(groupBy, { density });
                 }
               }}
-              onPeekToggle={() => {
-                if (groupBy !== "project") {
-                  updateSidebarModePreferences(groupBy, {
-                    peek: !flatModePreferences?.peek,
-                  });
-                }
-              }}
+              onShowThreadDetailCardsChange={setSidebarShowThreadDetailCards}
               onPinnedOnlyToggle={() => {
                 if (groupBy !== "project") {
                   updateSidebarModePreferences(groupBy, {

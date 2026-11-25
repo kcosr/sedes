@@ -647,6 +647,10 @@ test("thread groups stack on desktop and open as a member sheet on mobile", asyn
   await chooseThreadGroups(page, desktopSidebar);
   await desktopSidebar.getByTestId("view-options-trigger").click();
   const showSnoozed = page.getByRole("menuitemcheckbox", { name: "Snoozed" });
+  const showThreadDetailCards = page.getByRole("menuitemcheckbox", {
+    name: "Show thread detail cards",
+  });
+  await expect(showThreadDetailCards).not.toBeChecked();
   await expect(showSnoozed).toBeChecked();
   await showSnoozed.click();
   await page.keyboard.press("Escape");
@@ -687,6 +691,23 @@ test("thread groups stack on desktop and open as a member sheet on mobile", asyn
   );
   await expect(siblingMember).toHaveAttribute("data-representative", "true");
   await expect(selectedMember).toHaveAttribute("data-selected", "true");
+  const peek = page.getByTestId("thread-peek");
+  await siblingMember.hover();
+  // The optional detail card has a 180 ms hover delay.
+  await page.waitForTimeout(250);
+  await expect(peek).toHaveCount(0);
+  await expect(roster).toBeVisible();
+
+  const viewOptions = desktopSidebar.getByTestId("view-options-trigger");
+  await viewOptions.hover();
+  await expect(roster).toBeHidden();
+  await viewOptions.click();
+  await showThreadDetailCards.click();
+  await expect(showThreadDetailCards).toBeChecked();
+  await page.keyboard.press("Escape");
+  await expect(showThreadDetailCards).toBeHidden();
+  await groupStack.hover();
+  await expect(roster).toBeVisible();
 
   await roster
     .getByRole("button", { name: "Manage group Focus cluster" })
@@ -747,7 +768,6 @@ test("thread groups stack on desktop and open as a member sheet on mobile", asyn
   await expect(snoozeDialog).toBeHidden();
 
   await siblingMember.hover();
-  const peek = page.getByTestId("thread-peek");
   await expect(peek).toBeVisible();
   await expect(peek).toContainText("Grouped recent sibling");
   const [memberBox, peekBox] = await Promise.all([

@@ -106,7 +106,7 @@ export interface SidebarViewControlsProps {
   /** Parent flips direction when the reported sort key is already active. */
   readonly onSortChange: (sortBy: SidebarSortBy) => void;
   readonly onDensityChange: (density: SidebarDensity) => void;
-  readonly onPeekToggle: () => void;
+  readonly onShowThreadDetailCardsChange: (show: boolean) => void;
   readonly onPinnedOnlyToggle: () => void;
   readonly onHasOpenTasksToggle: () => void;
   readonly onShowToggle: (key: keyof SidebarShowFilters) => void;
@@ -123,7 +123,7 @@ export function SidebarViewControls({
   onStackByChange,
   onSortChange,
   onDensityChange,
-  onPeekToggle,
+  onShowThreadDetailCardsChange,
   onPinnedOnlyToggle,
   onHasOpenTasksToggle,
   onShowToggle,
@@ -152,8 +152,8 @@ export function SidebarViewControls({
     mode.direction !== defaults.direction ||
     (flatMode !== undefined &&
       flatDefaults !== undefined &&
-      (flatMode.density !== flatDefaults.density ||
-        flatMode.peek !== flatDefaults.peek)) ||
+      flatMode.density !== flatDefaults.density) ||
+    (flatMode !== undefined && preferences.showThreadDetailCards) ||
     (flatMode !== undefined && flatMode.pinnedOnly) ||
     preferences.hasOpenTasks ||
     !show.snoozed ||
@@ -328,11 +328,11 @@ export function SidebarViewControls({
                 </DropdownMenuRadioItem>
               </DropdownMenuRadioGroup>
               <DropdownMenuCheckboxItem
-                checked={flatMode.peek}
-                onCheckedChange={() => onPeekToggle()}
+                checked={preferences.showThreadDetailCards}
+                onCheckedChange={onShowThreadDetailCardsChange}
                 onSelect={keepOpen()}
               >
-                Peek details on hover
+                Show thread detail cards
               </DropdownMenuCheckboxItem>
             </>
           )}

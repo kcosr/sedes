@@ -21,11 +21,16 @@ Open **View options** and choose one layout:
 | **Flat list** | A compact working set without time or state headings |
 
 Each view remembers its own sort. Timeline, State, and Flat list also remember
-their own density, detail, and **Pinned only** choices. Visibility controls for
+their own density and **Pinned only** choices. Visibility controls for
 draft, snoozed, and parked threads apply across views. Collapsed sections,
 projects and fork families are saved locally on this client and restored
 when you reopen the sidebar or reload the app. Explicitly collapsed projects
 stay collapsed even when they contain the current thread.
+
+In **View options**, turn on **Show thread detail cards** to see a thread's
+details when you hover over its row or focus it with the keyboard. This option
+is off by default and applies across Timeline, State, and Flat list on this
+client. Stacks open their member lists on hover with either setting.
 
 Select **Has open tasks** in **View options**, or the Tasks icon immediately
 right of it, to show threads with open Tasks assigned directly to them. Both

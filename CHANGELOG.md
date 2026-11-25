@@ -308,6 +308,11 @@ User-facing changes are collected here before release. See the
 
 ### Changed
 
+- Sidebar thread detail cards are off by default. **Show thread detail cards**
+  in **View options** applies across Timeline, State, and Flat list on this
+  client. Stacks still open their member list on hover. See
+  [sidebar organization](docs/user/organize-work.md#choose-a-sidebar-organization).
+
 - In the chat, pressing Command/Ctrl+Down on the last prompt now jumps to the
   latest output, like **Jump to latest**. Escape in a question prompt no
   longer stops the turn; use **Stop**. See

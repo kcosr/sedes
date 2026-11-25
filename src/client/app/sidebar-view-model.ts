@@ -20,8 +20,6 @@ export interface SidebarSortPreferences {
 
 export interface SidebarModePreferences extends SidebarSortPreferences {
   readonly density: SidebarDensity;
-  /** Show the hover peek pop-out for rows in this mode. */
-  readonly peek: boolean;
   /** Restrict this non-project view to pinned threads. */
   readonly pinnedOnly: boolean;
 }
@@ -88,6 +86,8 @@ export interface SidebarViewPreferences {
   readonly groupForks: boolean;
   /** Render each row's backend brand mark (from the normalized summary). */
   readonly showBackendIcons: boolean;
+  /** Show sidebar detail cards on hover and keyboard focus in flat views. */
+  readonly showThreadDetailCards: boolean;
 }
 
 export type SidebarInventoryScopePatch = Partial<
@@ -109,21 +109,18 @@ export const SIDEBAR_MODE_DEFAULTS: SidebarModePreferencesByGroup = {
     sortBy: "activity",
     direction: "desc",
     density: "compact",
-    peek: true,
     pinnedOnly: false,
   },
   state: {
     sortBy: "stateChanged",
     direction: "desc",
     density: "compact",
-    peek: true,
     pinnedOnly: false,
   },
   none: {
     sortBy: "activity",
     direction: "desc",
     density: "compact",
-    peek: true,
     pinnedOnly: false,
   },
 };
@@ -145,6 +142,7 @@ export const SIDEBAR_VIEW_DEFAULTS: SidebarViewPreferences = {
   show: { snoozed: true, settled: true, drafts: true },
   groupForks: true,
   showBackendIcons: true,
+  showThreadDetailCards: false,
 };
 
 /** Merge a mode's sparse overrides over its defaults. */

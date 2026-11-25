@@ -45,7 +45,7 @@ function renderControls(overrides?: Partial<SidebarViewPreferences>) {
     onStackByChange: vi.fn(),
     onSortChange: vi.fn(),
     onDensityChange: vi.fn(),
-    onPeekToggle: vi.fn(),
+    onShowThreadDetailCardsChange: vi.fn(),
     onPinnedOnlyToggle: vi.fn(),
     onHasOpenTasksToggle: vi.fn(),
     onShowToggle: vi.fn(),
@@ -216,18 +216,22 @@ describe("SidebarViewControls", () => {
     ).toHaveAttribute("data-direction", "asc");
   });
 
-  it("density, peek, and show rows fire their callbacks in an alt view", async () => {
+  it("density and show rows fire their callbacks in an alt view", async () => {
     const user = userEvent.setup();
-    const { handlers } = renderControls({ groupBy: "time" });
+    const { handlers, rerender } = renderControls({ groupBy: "time" });
     await openOptions(user);
 
     await user.click(screen.getByRole("menuitemradio", { name: "Card" }));
     expect(handlers.onDensityChange).toHaveBeenCalledExactlyOnceWith("card");
 
-    await user.click(
-      screen.getByRole("menuitemcheckbox", { name: "Peek details on hover" }),
-    );
-    expect(handlers.onPeekToggle).toHaveBeenCalledOnce();
+    const detailCards = screen.getByRole("menuitemcheckbox", { name: "Show thread detail cards" });
+    expect(detailCards).toHaveAttribute("aria-checked", "false");
+    await user.click(detailCards);
+    expect(handlers.onShowThreadDetailCardsChange).toHaveBeenCalledExactlyOnceWith(true);
+    rerender({ groupBy: "state", showThreadDetailCards: true });
+    expect(detailCards).toHaveAttribute("aria-checked", "true");
+    await user.click(detailCards);
+    expect(handlers.onShowThreadDetailCardsChange).toHaveBeenLastCalledWith(false);
 
     await user.click(screen.getByRole("menuitemcheckbox", { name: "Pinned only" }));
     expect(handlers.onPinnedOnlyToggle).toHaveBeenCalledOnce();
@@ -253,12 +257,12 @@ describe("SidebarViewControls", () => {
 
     await user.click(screen.getByRole("menuitemradio", { name: "Card" }));
     await user.click(
-      screen.getByRole("menuitemcheckbox", { name: "Peek details on hover" }),
+      screen.getByRole("menuitemcheckbox", { name: "Show thread detail cards" }),
     );
     await user.click(screen.getByRole("menuitemcheckbox", { name: "Pinned only" }));
 
     expect(handlers.onDensityChange).toHaveBeenCalledExactlyOnceWith("card");
-    expect(handlers.onPeekToggle).toHaveBeenCalledOnce();
+    expect(handlers.onShowThreadDetailCardsChange).toHaveBeenCalledExactlyOnceWith(true);
     expect(handlers.onPinnedOnlyToggle).toHaveBeenCalledOnce();
   });
 
@@ -270,11 +274,11 @@ describe("SidebarViewControls", () => {
     expect(screen.queryByRole("menuitemradio", { name: "Compact" })).toBeNull();
     expect(screen.queryByRole("menuitemradio", { name: "Card" })).toBeNull();
     expect(
-      screen.queryByRole("menuitemcheckbox", { name: "Peek details on hover" }),
+      screen.queryByRole("menuitemcheckbox", { name: "Show thread detail cards" }),
     ).toBeNull();
     expect(screen.queryByRole("menuitemcheckbox", { name: "Pinned only" })).toBeNull();
     expect(handlers.onDensityChange).not.toHaveBeenCalled();
-    expect(handlers.onPeekToggle).not.toHaveBeenCalled();
+    expect(handlers.onShowThreadDetailCardsChange).not.toHaveBeenCalled();
 
     // Sort, Show, and fork-families rows stay live in Projects mode.
     await user.click(screen.getByRole("menuitemradio", { name: "Alphabetical" }));
@@ -368,7 +372,7 @@ describe("SidebarViewControls", () => {
     await user.click(screen.getByTestId("view-options-trigger"));
     expect(screen.queryByRole("group", { name: "Density" })).toBeNull();
     expect(
-      screen.queryByRole("menuitemcheckbox", { name: "Peek details on hover" }),
+      screen.queryByRole("menuitemcheckbox", { name: "Show thread detail cards" }),
     ).toBeNull();
     expect(screen.queryByRole("menuitemcheckbox", { name: "Pinned only" })).toBeNull();
     project.view.unmount();
