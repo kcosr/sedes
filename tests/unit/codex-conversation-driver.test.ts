@@ -21573,7 +21573,7 @@ it("Codex publishes a confirmed Goal pause even when the Stop budget ends just a
   } finally { vi.useRealTimers(); harness.enqueue("thread/unsubscribe", { status: "unsubscribed" }); await handle.close(); }
 });
 
-it.each(["confirmed", "uncertain"] as const)("Codex vetoes provider-replacement retirement only while its automatic Goal pause is unresolved (%s)", async pause => {
+it.each(["confirmed", "uncertain", "uncertain_then_rejected", "uncertain_then_confirmed"] as const)("Codex vetoes provider-replacement retirement only while its automatic Goal pause is unresolved (%s)", async pause => {
   const harness = new RpcHarness();
   const goals = new CodexGoalSessionRegistry();
   const target = driver(harness, connection, new CodexConversationOwnershipRegistry(), catalogModelPolicy, executionSettingsProvider(), goals);
@@ -21589,12 +21589,25 @@ it.each(["confirmed", "uncertain"] as const)("Codex vetoes provider-replacement 
     harness.enqueue("thread/goal/set", pause === "confirmed" ? { goal: { ...goal, status: "paused", updatedAt: 2 } } : () => {
       throw new CodexRpcDeliveryError({ code: "goal_response_lost", delivery: "sent_outcome_unknown", generation: 1, method: "thread/goal/set" });
     });
-    if (pause === "uncertain") harness.enqueue("thread/goal/get", new Error("goal_read_failed"));
+    if (pause !== "confirmed") harness.enqueue("thread/goal/get", new Error("goal_read_failed"));
     await expect(control!.mutateProviderFeature!({ featureId: "codex.goal", schemaVersion: 1, actionId: "pause", arguments: {} }))
       .resolves.toMatchObject({ outcome: pause === "confirmed" ? "accepted" : "uncertain" });
+    if (pause === "uncertain_then_rejected" || pause === "uncertain_then_confirmed") {
+      // A later Stop's pause: a failed preflight is a pre-boundary rejection;
+      // an accepted pause proves the goal paused.
+      harness.enqueue("thread/read", { thread: nativeThread() });
+      await control!.interrupt({ applicationOperationId: "second-stop", deadlineAt: Date.now() + 30_000 });
+      if (pause === "uncertain_then_rejected") harness.enqueue("thread/goal/get", new Error("goal_read_failed"));
+      else {
+        harness.enqueue("thread/goal/get", { goal });
+        harness.enqueue("thread/goal/set", { goal: { ...goal, status: "paused", updatedAt: 3 } });
+      }
+      await expect(control!.mutateProviderFeature!({ featureId: "codex.goal", schemaVersion: 1, actionId: "pause", arguments: {} }))
+        .resolves.toMatchObject({ outcome: pause === "uncertain_then_rejected" ? "rejected" : "accepted" });
+    }
     harness.facade.updateLifecycle({ state: "unavailable", generation: harness.generation, unavailableReason: "provider_service_replaced" });
     // The accepted Stop alone never vetoes; its unresolved Goal pause does.
-    expect(handle.providerServiceReplacementSafe).toBe(pause === "confirmed");
+    expect(handle.providerServiceReplacementSafe).toBe(pause === "confirmed" || pause === "uncertain_then_confirmed");
   } finally { await handle.close(); }
 });
 

@@ -382,7 +382,7 @@ export class CodexConversationHandle implements ConversationHandle {
       this.#pendingNotificationWork > 0 || this.#pendingControlStart !== undefined ||
       // An accepted Stop is retained authority; only an unresolved one, or its
       // unresolved automatic Goal pause, vetoes.
-      this.#interruptOperations.unresolved || this.#goalPauseUnresolved ||
+      this.#interruptOperations.unresolved || this.#goalPausesInFlight > 0 || this.#goalPauseUncertain ||
       [...this.#submitOperations.values(), ...this.#steerOperations.values()].some(operation => operation.state === "outcome_unknown") ||
       [...this.#compactOperations.values()].includes("outcome_unknown") ||
       this.#interactions.pendingCount() > 0 || this.#interactions.hasUnresolvedResponses() ||
@@ -573,7 +573,8 @@ export class CodexConversationHandle implements ConversationHandle {
     observedTurnId: string | undefined;
   } | undefined;
   #acceptedStop: InterruptConversationInput | undefined;
-  #goalPauseUnresolved = false;
+  #goalPausesInFlight = 0;
+  #goalPauseUncertain = false;
   readonly #submitOperations = new Map<
     string,
     | {
@@ -2202,11 +2203,16 @@ export class CodexConversationHandle implements ConversationHandle {
             input.schemaVersion !== CODEX_GOAL_FEATURE_REF.schemaVersion || input.actionId !== "pause") {
           return Promise.resolve({ outcome: "rejected" as const });
         }
-        // The automatic Goal pause bypasses durable feature receipts. It stays
-        // an unresolved obligation until its outcome is proven either way.
-        this.#goalPauseUnresolved = true;
-        const result = await this.#mutateGoal(input, generation, this.#acceptedStop);
-        this.#goalPauseUnresolved = result.outcome === "uncertain";
+        // The automatic Goal pause bypasses durable feature receipts. An
+        // uncertain attempt stays unresolved until a later pause is accepted,
+        // which proves the goal paused; a rejection or failure never clears it.
+        this.#goalPausesInFlight++;
+        let result: Awaited<ReturnType<CodexConversationHandle["mutateProviderFeature"]>>;
+        try { result = await this.#mutateGoal(input, generation, this.#acceptedStop); }
+        catch (error) { this.#goalPauseUncertain = true; throw error; }
+        finally { this.#goalPausesInFlight--; }
+        if (result.outcome === "uncertain") this.#goalPauseUncertain = true;
+        else if (result.outcome === "accepted") this.#goalPauseUncertain = false;
         return result;
       },
     });
