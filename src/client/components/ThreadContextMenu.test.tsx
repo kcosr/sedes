@@ -1032,7 +1032,7 @@ describe("ThreadContextMenu content per thread state", () => {
 
   it("swaps park for unpark on a parked thread", async () => {
     const trigger = renderMenu(
-      makeThread({ inventoryState: "settled" }),
+      makeThread({ inventoryState: "parked" }),
       makeStore(),
     );
     const menu = await openMenu(trigger);
@@ -1781,7 +1781,7 @@ describe("ThreadContextMenu actions", () => {
     });
     expect(park.querySelector("svg")).not.toBeNull();
     await userEvent.click(park);
-    expect(store.mutateInventory).toHaveBeenCalledWith(thread, "settle", {
+    expect(store.mutateInventory).toHaveBeenCalledWith(thread, "park", {
       expectedStashedPromptCount: 0,
     });
   });
@@ -1792,7 +1792,7 @@ describe("ThreadContextMenu actions", () => {
     const trigger = renderMenu(thread, store);
     let menu = await openMenu(trigger);
     await userEvent.click(within(menu).getByText("Park"));
-    expect(store.mutateInventory).toHaveBeenCalledWith(thread, "settle", {
+    expect(store.mutateInventory).toHaveBeenCalledWith(thread, "park", {
       expectedStashedPromptCount: 0,
     });
 
@@ -1836,7 +1836,7 @@ describe("ThreadContextMenu actions", () => {
 
     await userEvent.click(within(menu).getByText("Park"));
     await waitFor(() =>
-      expect(store.mutateInventory).toHaveBeenCalledWith(thread, "settle", {
+      expect(store.mutateInventory).toHaveBeenCalledWith(thread, "park", {
         expectedStashedPromptCount: 0,
       }),
     );
@@ -1873,7 +1873,7 @@ describe("ThreadContextMenu actions", () => {
     await userEvent.click(
       within(dialog).getByRole("button", { name: "Park" }),
     );
-    expect(store.mutateInventory).toHaveBeenCalledWith(thread, "settle", {
+    expect(store.mutateInventory).toHaveBeenCalledWith(thread, "park", {
       expectedStashedPromptCount: 2,
     });
   });
@@ -2828,7 +2828,7 @@ describe("sidebar row archive control", () => {
     const first = new Promise<void>((resolve) => {
       resolveFirst = resolve;
     });
-    const thread = makeThread({ inventoryState: "settled" });
+    const thread = makeThread({ inventoryState: "parked" });
     const { state, store } = sidebarFixture(thread);
     store.mutateInventory.mockReturnValueOnce(first);
     render(

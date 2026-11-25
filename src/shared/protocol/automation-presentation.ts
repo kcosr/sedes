@@ -58,7 +58,7 @@ export const automationSourceSchema = z.strictObject({
       "reconciling",
     ])
     .optional(),
-  inventoryState: z.enum(["active", "snoozed", "settled", "archived"]),
+  inventoryState: z.enum(["active", "snoozed", "parked", "archived"]),
   inventoryRevision: z.number().int().nonnegative(),
   snoozedUntil: z.iso.datetime().optional(),
 });

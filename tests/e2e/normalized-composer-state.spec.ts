@@ -957,7 +957,7 @@ test.describe.serial("normalized composer state", () => {
     await expect(
       page
         .getByTestId("desktop-sidebar")
-        .locator('[data-testid="inventory-shelf"][data-shelf="settled"]'),
+        .locator('[data-testid="inventory-shelf"][data-shelf="parked"]'),
     ).toContainText("New thread");
 
     await page.getByRole("button", { name: "Thread actions" }).click();
@@ -967,7 +967,7 @@ test.describe.serial("normalized composer state", () => {
     await expect(
       page
         .getByTestId("desktop-sidebar")
-        .locator('[data-testid="inventory-shelf"][data-shelf="settled"]'),
+        .locator('[data-testid="inventory-shelf"][data-shelf="parked"]'),
     ).not.toContainText("New thread");
 
     await page.getByRole("button", { name: "Thread actions" }).click();

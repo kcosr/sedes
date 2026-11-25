@@ -1,3 +1,4 @@
+import { parkedThreadInventoryMigration } from "./migrations/172-parked-thread-inventory.js";
 import { unresolvedSubmissionRecoveryMigration } from "./migrations/171-unresolved-submission-recovery.js";
 import { replyOnlyTurnBookmarksMigration } from "./migrations/170-reply-only-turn-bookmarks.js";
 import { configurationCommandReceiptsMigration } from "./migrations/169-configuration-command-receipts.js";
@@ -356,6 +357,7 @@ export const backendNormalizedMigrations = [
   configurationCommandReceiptsMigration,
   replyOnlyTurnBookmarksMigration,
   unresolvedSubmissionRecoveryMigration,
+  parkedThreadInventoryMigration,
 ] as const;
 
 export type DatabaseMigration = {

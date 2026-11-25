@@ -5871,7 +5871,7 @@ describe("normalized HTTP application contract", () => {
     }
   });
 
-  it("preflights and atomically settles an explicit visible stack", async () => {
+  it("preflights and atomically parks an explicit visible stack", async () => {
     const current = await fixture();
     try {
       const workspace = await current
@@ -5898,10 +5898,10 @@ describe("normalized HTTP application contract", () => {
 
       const impact = await current
         .mutate(request(current.app).post("/api/thread-inventory/bulk-impact"))
-        .send({ action: "settle", threadIds })
+        .send({ action: "park", threadIds })
         .expect(200);
       expect(impact.body).toMatchObject({
-        action: "settle",
+        action: "park",
         targets: threadIds.map((threadId) => ({
           threadId,
           expectedRevision: 0,
@@ -5923,7 +5923,7 @@ describe("normalized HTTP application contract", () => {
             .set("X-Test-Foreign-Principal", "yes"),
         )
         .send({
-          action: "settle",
+          action: "park",
           targets: impact.body.targets,
           expectedStashedPromptCount: 0,
           mutationId: randomUUID(),
@@ -5940,7 +5940,7 @@ describe("normalized HTTP application contract", () => {
       await current
         .mutate(request(current.app).post("/api/thread-inventory/bulk"))
         .send({
-          action: "settle",
+          action: "park",
           targets: impact.body.targets,
           expectedStashedPromptCount: 0,
           mutationId: randomUUID(),
@@ -5950,12 +5950,12 @@ describe("normalized HTTP application contract", () => {
       for (const threadId of threadIds) {
         expect(
           current.repository.getInventory(current.owner, threadId),
-        ).toMatchObject({ inventoryState: "settled", inventoryRevision: 1 });
+        ).toMatchObject({ inventoryState: "parked", inventoryRevision: 1 });
       }
 
       await current
         .mutate(request(current.app).post("/api/thread-inventory/bulk-impact"))
-        .send({ action: "settle", threadIds })
+        .send({ action: "park", threadIds })
         .expect(200)
         .expect(({ body }) => {
           expect(body).toMatchObject({
@@ -7002,7 +7002,7 @@ describe("normalized HTTP application contract", () => {
           ),
         )
         .send({
-          action: "settle",
+          action: "park",
           expectedRevision: 0,
           expectedStashedPromptCount: 1,
           mutationId: randomUUID(),
@@ -7015,7 +7015,7 @@ describe("normalized HTTP application contract", () => {
           ),
         )
         .send({
-          action: "unsettle",
+          action: "unpark",
           expectedRevision: 1,
           mutationId: randomUUID(),
         })
@@ -7118,7 +7118,7 @@ describe("normalized HTTP application contract", () => {
           ),
         )
         .send({
-          action: "settle",
+          action: "park",
           expectedRevision: 6,
           expectedStashedPromptCount: 1,
           mutationId: randomUUID(),
@@ -7128,7 +7128,7 @@ describe("normalized HTTP application contract", () => {
       expect(
         current.repository.getThread(current.owner, created.body.id).inventory
           .inventoryState,
-      ).toBe("settled");
+      ).toBe("parked");
 
       const restartedInventory = new InventoryService(current.repository, {
         publishMany() {},
@@ -7138,7 +7138,7 @@ describe("normalized HTTP application contract", () => {
         restartedInventory.repository.getThread(current.owner, created.body.id),
       ).toMatchObject({
         draft: { text: "", revision: 2 },
-        inventory: { inventoryState: "settled" },
+        inventory: { inventoryState: "parked" },
       });
       expect(
         restartedInventory.repository.listStashes(

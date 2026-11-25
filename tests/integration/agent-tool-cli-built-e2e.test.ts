@@ -827,7 +827,7 @@ sourceAuthority, testAgentToolExecutionAuthority),
       });
       const automationRequest = {
         toolId: "automation.create",
-        schemaVersion: 2,
+        schemaVersion: 3,
         requestId: "direct-http-automation-create",
         input: {
           name:"Review",initialState:"paused",mutationId:randomUUID(),misfirePolicy:null,
@@ -890,7 +890,7 @@ sourceAuthority, testAgentToolExecutionAuthority),
           },
           body: JSON.stringify({
             toolId: "automation.get",
-            schemaVersion: 2,
+            schemaVersion: 3,
             requestId: "direct-http-automation-get",
             input: {automationId: automationRequest.input.mutationId},
           }),

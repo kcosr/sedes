@@ -189,7 +189,7 @@ function discoveryFixture() {
                WHERE tenant_id = ? AND principal_id = ? AND thread_id = ?`,
             )
             .get(current.scope.tenantId, current.scope.principalId, id) as {
-            inventoryState: "active" | "snoozed" | "settled" | "archived";
+            inventoryState: "active" | "snoozed" | "parked" | "archived";
           };
           return {
             ...summaries.get(id)!,
@@ -620,7 +620,7 @@ describe("AgentManagementService discovery", () => {
       current.database
         .prepare(
           `UPDATE thread_principal_state
-           SET inventory_state = 'settled'
+           SET inventory_state = 'parked'
            WHERE tenant_id = ? AND principal_id = ? AND thread_id = ?`,
         )
         .run(
@@ -633,7 +633,7 @@ describe("AgentManagementService discovery", () => {
           current.scope,
           undefined,
           {
-            lifecycle: "settled",
+            lifecycle: "parked",
             pageSize: 10,
           },
           current.environmentAuthority,
@@ -642,7 +642,7 @@ describe("AgentManagementService discovery", () => {
         items: [
           expect.objectContaining({
             id: current.older.id,
-            lifecycle: "settled",
+            lifecycle: "parked",
           }),
         ],
       });

@@ -113,6 +113,10 @@ order and fenced against newer events and responses completed during the read.
 Application abandonment can release an exact scoped terminal provider receipt,
 but cannot establish native non-consumption or discard a pending callback.
 
+Client protocol 181 uses `parked` in normalized thread inventory and `park` and
+`unpark` for inventory actions. All compiled backends use the same
+principal-scoped inventory projection and mutations.
+
 Client protocol 180 allows a turn bookmark without a user-prompt preview. A
 bookmark for a turn with no durable user message, such as a provider
 continuation after background work, must carry an assistant preview instead.
@@ -519,7 +523,7 @@ the complete mutation if any target changes or becomes unavailable. Do not
 reinterpret a browser collection as every member of a persistent Group,
 project, lineage family, or provider-native hierarchy.
 
-Park (`settle`), unpark (`unsettle`), archive, and similar inventory operations
+Park, unpark, archive, and similar inventory operations
 remain application-owned when their meaning is identical across providers. Perform
 an all-or-nothing principal-scoped database mutation with one replay receipt
 and publish only after commit. External execution-workspace deletion cannot be

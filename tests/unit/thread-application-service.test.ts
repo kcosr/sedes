@@ -547,7 +547,7 @@ describe("ThreadApplicationService", () => {
     expect(pending.capabilities.providerFeatures).toEqual(ordinary.capabilities.providerFeatures);
     expect(pending.capabilities.providerFeatures[0]?.availability).toBe("available");
     expect(pending.forkSource).toEqual(ordinary.forkSource);
-    for (const id of ["archive", "settle", "snooze", "compact", "attach_automation"] as const) {
+    for (const id of ["archive", "park", "snooze", "compact", "attach_automation"] as const) {
       expect(pending.capabilities.operations.find(operation => operation.id === id)?.available).toBe(true);
     }
     expect(pending.capabilities.operations.filter(operation => operation.id !== "interrupt"))
@@ -2038,7 +2038,7 @@ describe("ThreadApplicationService", () => {
     expect(snapshot.draft.text).toBe("later");
     expect(snapshot.stashes).toHaveLength(1);
     expect(snapshot.queue).toHaveLength(1);
-    for (const operationId of ["archive", "settle", "snooze"] as const) {
+    for (const operationId of ["archive", "park", "snooze"] as const) {
       expect(
         snapshot.capabilities.operations.find(({ id }) => id === operationId),
       ).toMatchObject({ available: false });
@@ -2061,7 +2061,7 @@ describe("ThreadApplicationService", () => {
     expect(
       snapshot.capabilities.operations
         .filter(({ id }) =>
-          ["rename", "compact", "archive", "settle", "snooze"].includes(id),
+          ["rename", "compact", "archive", "park", "snooze"].includes(id),
         )
         .every(({ available }) => !available),
     ).toBe(true);

@@ -144,10 +144,10 @@ function parseShow(value: unknown): SidebarShowFilters {
       typeof raw.snoozed === "boolean"
         ? raw.snoozed
         : SIDEBAR_VIEW_DEFAULTS.show.snoozed,
-    settled:
-      typeof raw.settled === "boolean"
-        ? raw.settled
-        : SIDEBAR_VIEW_DEFAULTS.show.settled,
+    parked:
+      typeof raw.parked === "boolean"
+        ? raw.parked
+        : SIDEBAR_VIEW_DEFAULTS.show.parked,
     drafts:
       typeof raw.drafts === "boolean"
         ? raw.drafts
@@ -172,6 +172,19 @@ function parsePreferences(raw: string): SidebarViewPreferences {
     return SIDEBAR_VIEW_DEFAULTS;
   }
   const blob = parsed as Record<string, unknown>;
+  if (blob.version === 2) {
+    const show = blob.show;
+    if (typeof show === "object" && show !== null && !Array.isArray(show)) {
+      const { settled, ...filters } = show as Record<string, unknown>;
+      blob.show = { ...filters, parked: settled };
+    }
+    blob.version = SIDEBAR_VIEW_DEFAULTS.version;
+    try {
+      window.localStorage.setItem(SIDEBAR_VIEW_STORAGE_KEY, JSON.stringify(blob));
+    } catch {
+      // Storage unavailable: use the migrated preference in memory.
+    }
+  }
   if (blob.version !== SIDEBAR_VIEW_DEFAULTS.version) {
     return SIDEBAR_VIEW_DEFAULTS;
   }
@@ -409,7 +422,7 @@ export function hasActiveSidebarFilters(
     preferences.ungroupedFilter;
   const showActive =
     preferences.show.snoozed !== SIDEBAR_VIEW_DEFAULTS.show.snoozed ||
-    preferences.show.settled !== SIDEBAR_VIEW_DEFAULTS.show.settled ||
+    preferences.show.parked !== SIDEBAR_VIEW_DEFAULTS.show.parked ||
     preferences.show.drafts !== SIDEBAR_VIEW_DEFAULTS.show.drafts;
   const pinnedOnlyActive =
     preferences.groupBy !== "project" &&

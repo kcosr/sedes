@@ -300,9 +300,8 @@ export const ThreadHeader = memo(function ThreadHeader({
   const moveDraft = snapshot.capabilities.operations.find(
     ({ id }) => id === "move_draft",
   );
-  // Park's capability keeps its wire name, `settle`.
   const park = snapshot.capabilities.operations.find(
-    ({ id }) => id === "settle",
+    ({ id }) => id === "park",
   );
   const snooze = snapshot.capabilities.operations.find(
     ({ id }) => id === "snooze",
@@ -488,8 +487,8 @@ export const ThreadHeader = memo(function ThreadHeader({
 
   const mutateInventory = async (
     action:
-      | "settle"
-      | "unsettle"
+      | "park"
+      | "unpark"
       | "snooze"
       | "wake"
       | "archive"
@@ -557,7 +556,7 @@ export const ThreadHeader = memo(function ThreadHeader({
         snapshot.thread.id,
       );
       if (!parkNeedsConfirmation(impact)) {
-        await mutateInventory("settle", { expectedStashedPromptCount: 0 });
+        await mutateInventory("park", { expectedStashedPromptCount: 0 });
         return;
       }
       closeActionsBefore(() => {
@@ -912,11 +911,11 @@ export const ThreadHeader = memo(function ThreadHeader({
                       {disabled && <ReasonShortcut reason={busyReason} />}
                     </DropdownMenuItem>
                   )}
-                  {snapshot.thread.inventoryState === "settled" ? (
+                  {snapshot.thread.inventoryState === "parked" ? (
                     <DropdownMenuItem
                       disabled={disabled}
                       onSelect={keepOpen(() =>
-                        void mutateInventory("unsettle").catch(() => undefined),
+                        void mutateInventory("unpark").catch(() => undefined),
                       )}
                     >
                       <ArrowUpFromDot aria-hidden="true" />
@@ -1218,7 +1217,7 @@ export const ThreadHeader = memo(function ThreadHeader({
         loadImpact={() =>
           applicationStore.getThreadArchiveImpact(snapshot.thread.id)
         }
-        onPark={(options) => mutateInventory("settle", options)}
+        onPark={(options) => mutateInventory("park", options)}
         returnFocusRef={actionsTrigger}
       />
       <SnoozeDialog

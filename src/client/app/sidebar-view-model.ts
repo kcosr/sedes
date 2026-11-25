@@ -34,8 +34,7 @@ export interface SidebarModePreferencesByGroup {
 /** Global across group modes: what data the user cares about, not view shape. */
 export interface SidebarShowFilters {
   readonly snoozed: boolean;
-  /** Show parked threads; saved under the stored inventory state's name. */
-  readonly settled: boolean;
+  readonly parked: boolean;
   readonly drafts: boolean;
 }
 
@@ -45,7 +44,7 @@ export interface SidebarProjectFilterPublication {
 }
 
 export interface SidebarViewPreferences {
-  readonly version: 2;
+  readonly version: 3;
   /** Viewer-local execution-environment scope; `null` means all. */
   readonly environmentFilterId: string | null;
   /** Viewer-local exact execution-target scope; `null` means all. */
@@ -126,7 +125,7 @@ export const SIDEBAR_MODE_DEFAULTS: SidebarModePreferencesByGroup = {
 };
 
 export const SIDEBAR_VIEW_DEFAULTS: SidebarViewPreferences = {
-  version: 2,
+  version: 3,
   environmentFilterId: null,
   targetFilterId: null,
   projectFilterId: null,
@@ -139,7 +138,7 @@ export const SIDEBAR_VIEW_DEFAULTS: SidebarViewPreferences = {
   stackBy: "none",
   lastAltGroupBy: "time",
   modes: {},
-  show: { snoozed: true, settled: true, drafts: true },
+  show: { snoozed: true, parked: true, drafts: true },
   groupForks: true,
   showBackendIcons: true,
   showThreadDetailCards: false,

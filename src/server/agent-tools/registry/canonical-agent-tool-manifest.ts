@@ -527,7 +527,7 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
   "thread.status": manifestEntry({
     environmentAuthority: { kind: "direct_resource", resource: "thread" },
     id: "thread.status",
-    schemaVersion: 5,
+    schemaVersion: 6,
     description:
       "Returns bounded lifecycle, activity, and read-only pin state for a Sedes thread.",
     catalog: { groupId: "threads", label: "Thread status", order: 10 },
@@ -536,7 +536,7 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
   "thread.list": manifestEntry({
     environmentAuthority: { kind: "scoped_query", resource: "thread" },
     id: "thread.list",
-    schemaVersion: 9,
+    schemaVersion: 10,
     description:
       "Searches admitted principal-owned Sedes threads, including read-only pin state, defaulting to the caller's configured environment with newest activity first.",
     catalog: { groupId: "threads", label: "List threads", order: 20 },
@@ -779,7 +779,7 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
       resource: "automation",
     },
     id: "automation.get",
-    schemaVersion: 2,
+    schemaVersion: 3,
     description:
       "Returns the named automation selected by automationId and its upcoming occurrences.",
     catalog: {
@@ -811,7 +811,7 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
       defaultToSource: true,
     },
     id: "automation.create",
-    schemaVersion: 2,
+    schemaVersion: 3,
     description:
       "Creates a named independent automation in its requested initial state. Reuse mutationId for a retry; enabled state schedules model execution.",
     catalog: {
@@ -827,7 +827,7 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
       resource: "automation",
     },
     id: "automation.update",
-    schemaVersion: 2,
+    schemaVersion: 3,
     description:
       "Revision-checks schedule, pre-check, prompt, and run-mode changes that govern future automated executions; omitted fields are preserved and a null pre-check clears it. retired is true when the change retired a finished one-time automation, which then no longer exists.",
     catalog: {
@@ -843,7 +843,7 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
       resource: "automation",
     },
     id: "automation.set_state",
-    schemaVersion: 2,
+    schemaVersion: 3,
     description:
       "Enables or pauses an automation using its revision. Enabling schedules future model execution. retired is true when pausing retired a finished one-time automation, which then no longer exists.",
     catalog: {
@@ -880,7 +880,7 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
       defaultToSource: true,
     },
     id: "automation.list",
-    schemaVersion: 1,
+    schemaVersion: 2,
     description:
       "Lists independent automations on the requested thread, defaulting to the current thread. Follow nextCursor until null.",
     catalog: {

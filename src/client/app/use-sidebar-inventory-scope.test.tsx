@@ -117,7 +117,7 @@ describe("useSidebarInventoryScope", () => {
       projectFilterId: "project-1",
       groupFilterId: "group-1",
     });
-    setSidebarShowFilter("settled", false);
+    setSidebarShowFilter("parked", false);
     function Probe() {
       const view = useSidebarInventoryScope(catalog);
       return (
@@ -135,7 +135,7 @@ describe("useSidebarInventoryScope", () => {
       "false|null|All threads",
     );
     // Search and Show toggles are not Scope.
-    expect(getSidebarViewPreferences().show.settled).toBe(false);
+    expect(getSidebarViewPreferences().show.parked).toBe(false);
     expect(
       JSON.parse(localStorage.getItem(SIDEBAR_VIEW_STORAGE_KEY)!),
     ).toMatchObject({

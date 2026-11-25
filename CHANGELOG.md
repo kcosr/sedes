@@ -52,7 +52,9 @@ User-facing changes are collected here before release. See the
   ([#121](https://github.com/kcosr/sedes/pull/121))
 
 - Upgrade server and browser/packaged clients together for client protocol
-  **180**. Turn bookmarks may omit the user prompt for replies that continue
+  **181**. Thread inventory uses `parked` with `park` and `unpark` actions.
+  Existing parked threads and saved sidebar visibility preferences carry over.
+  Turn bookmarks may omit the user prompt for replies that continue
   without one. Clients can verify exact abandoned inputs after Force Reset.
   Antigravity targets add a normalized brand and execution configuration.
   Chat excerpts captured from highlighted questions retain their quote
@@ -67,7 +69,9 @@ User-facing changes are collected here before release. See the
   outside requests are denied. Legacy thread-only policies are disabled for
   review rather than broadened. Saved Agent `list/get/options/create/update`
   contracts advance to version 7 and thread-create to version 6. Agent context
-  and thread status advance to version 5, and thread listing to version 9.
+  advances to version 5, thread status to version 6, and thread listing to version 10.
+  Automation tools that return thread inventory advance to `list@2` and
+  `get/create/update/set_state@3`. See [agent tool contracts](docs/internals/agent-tools.md#catalog-and-effects).
   Thread-message transcripts advance to version 5 to identify automatic follow-ups. See [tool policy sets](docs/user/tool-policies.md).
   ([#96](https://github.com/kcosr/sedes/pull/96), [#112](https://github.com/kcosr/sedes/pull/112), [#116](https://github.com/kcosr/sedes/pull/116), [#142](https://github.com/kcosr/sedes/pull/142), [#156](https://github.com/kcosr/sedes/pull/156))
 

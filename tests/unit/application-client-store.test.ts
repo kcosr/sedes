@@ -186,7 +186,7 @@ describe("ApplicationClientStore lineage", () => {
     });
   });
 
-  it("requires a confirmed stash count before park (settle) or archive mutations", async () => {
+  it("requires a confirmed stash count before park or archive mutations", async () => {
     const mutateInventory = vi.fn(async () => undefined);
     const api = {
       session: vi.fn(async () => session()),
@@ -196,7 +196,7 @@ describe("ApplicationClientStore lineage", () => {
     await store.initialize();
     const root = snapshot().threads[0]!;
 
-    await expect(store.mutateInventory(root, "settle")).rejects.toThrow(
+    await expect(store.mutateInventory(root, "park")).rejects.toThrow(
       "confirmed stashed-prompt count",
     );
     await expect(store.mutateInventory(root, "archive")).rejects.toThrow(
@@ -253,13 +253,13 @@ describe("ApplicationClientStore lineage", () => {
     await store.initialize();
     const root = snapshot().threads[0]!;
 
-    await store.mutateInventory(root, "settle", {
+    await store.mutateInventory(root, "park", {
       openTaskDisposition: "move_to_global",
       expectedStashedPromptCount: 2,
     });
 
     expect(mutateInventory).toHaveBeenCalledWith(root.id, {
-      action: "settle",
+      action: "park",
       expectedRevision: root.inventoryRevision,
       mutationId: expect.any(String),
       expectedStashedPromptCount: 2,

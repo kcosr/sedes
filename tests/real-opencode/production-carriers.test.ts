@@ -207,7 +207,7 @@ async function qualifyTools(fixture: OpenCodeProductionFixture, threadId: string
   expect(nativeTool, JSON.stringify([...new Set(fixture.model.requests.flatMap(request => request.toolNames))]).slice(0, 4096)).toBeDefined();
   if (!nativeTool) throw new Error("fixture_native_mcp_not_ready");
   const mcpStart = fixture.model.requests.length;
-  const mcp = fixture.model.callToolNextStream("qualified-mcp", nativeTool, { toolId: "thread.status", schemaVersion: 5, input: { threadId } });
+  const mcp = fixture.model.callToolNextStream("qualified-mcp", nativeTool, { toolId: "thread.status", schemaVersion: 6, input: { threadId } });
   expect(["delivery_accepted", "delivery_queued"]).toContain((await fixture.send(threadId, "qualified-mcp") as { status: string }).status);
   let mcpCalled = false; void mcp.called.then(() => { mcpCalled = true; });
   await fixture.waitFor(async () => mcpCalled);

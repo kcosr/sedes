@@ -467,35 +467,35 @@ describe("thread family archive service", () => {
     }
   });
 
-  it("rejects a stale settle stash count and preserves the confirmed stash", async () => {
+  it("rejects a stale park stash count and preserves the confirmed stash", async () => {
     const current = fixture();
     try {
       current.stashPrompt(
         current.rootId,
-        "Settle later",
-        "settle-stale-stash",
+        "Park later",
+        "park-stale-stash",
         450,
       );
 
       await expect(
-        current.service.settle(current.scope, current.rootId, {
+        current.service.park(current.scope, current.rootId, {
           expectedRevision: 0,
           expectedStashedPromptCount: 0,
-          mutationId: "settle-stale-stash-count",
+          mutationId: "park-stale-stash-count",
         }),
       ).rejects.toThrow("Stashed prompts changed");
       expect(
         current.inventory.getInventory(current.scope, current.rootId),
       ).toMatchObject({ inventoryState: "active", inventoryRevision: 0 });
 
-      await current.service.settle(current.scope, current.rootId, {
+      await current.service.park(current.scope, current.rootId, {
         expectedRevision: 0,
         expectedStashedPromptCount: 1,
-        mutationId: "settle-confirmed-stash-count",
+        mutationId: "park-confirmed-stash-count",
       });
       expect(
         current.inventory.getInventory(current.scope, current.rootId),
-      ).toMatchObject({ inventoryState: "settled", inventoryRevision: 1 });
+      ).toMatchObject({ inventoryState: "parked", inventoryRevision: 1 });
       expect(
         current.inventory.listStashes(current.scope, current.rootId),
       ).toHaveLength(1);
@@ -557,26 +557,26 @@ describe("thread family archive service", () => {
     }
   });
 
-  it("settles and moves open thread tasks atomically with replay publication", async () => {
+  it("parks and moves open thread tasks atomically with replay publication", async () => {
     const current = fixture();
     try {
       const task = current.tasks.create(current.scope, {
         title: "Follow up after settling",
         scope: { kind: "thread", threadId: current.rootId },
-        mutationId: "settle-task-create",
+        mutationId: "park-task-create",
         now: 450,
       });
       const input = {
         expectedRevision: 0,
-        mutationId: "settle-with-task-disposition",
+        mutationId: "park-with-task-disposition",
         openTaskDisposition: "move_to_project",
       } as const;
 
-      await current.service.settle(current.scope, current.rootId, input);
+      await current.service.park(current.scope, current.rootId, input);
       expect(
         current.inventory.getInventory(current.scope, current.rootId),
       ).toMatchObject({
-        inventoryState: "settled",
+        inventoryState: "parked",
         inventoryRevision: 1,
       });
       const { projectId } = current.database
@@ -598,7 +598,7 @@ describe("thread family archive service", () => {
         task.id,
       );
 
-      await current.service.settle(current.scope, current.rootId, input);
+      await current.service.park(current.scope, current.rootId, input);
       expect(
         current.inventory.getInventory(current.scope, current.rootId)
           .inventoryRevision,
@@ -1365,7 +1365,7 @@ describe("thread family archive service", () => {
 });
 
 describe("reviewed lifecycle task completion", () => {
-  it.each(["settle", "archive", "archive_family"] as const)("%s completes only reviewed tasks in place and replays publication", async (action) => {
+  it.each(["park", "archive", "archive_family"] as const)("%s completes only reviewed tasks in place and replays publication", async (action) => {
     const current = fixture();
     try {
       const rootTask = current.tasks.create(current.scope, {
@@ -1385,8 +1385,8 @@ describe("reviewed lifecycle task completion", () => {
         openTaskDisposition: "complete" as const,
         expectedOpenTaskSnapshot: action === "archive_family" ? impact.openTasks.familySnapshot : impact.openTasks.root.snapshot,
       };
-      const perform = () => action === "settle"
-        ? current.service.settle(current.scope, current.rootId, input)
+      const perform = () => action === "park"
+        ? current.service.park(current.scope, current.rootId, input)
         : current.service.archive(current.scope, current.rootId, {
           ...input, includeDescendants: action === "archive_family", executionWorkspaceDisposition: { kind: "keep" },
         });
@@ -1428,7 +1428,7 @@ describe("reviewed lifecycle task completion", () => {
       if (kind === "edited") current.tasks.update(current.scope, task.id, {
         title: "Changed meaning", expectedRevision: 0, mutationId: "edit-task", now: 460,
       });
-      await expect(current.service.settle(current.scope, current.rootId, {
+      await expect(current.service.park(current.scope, current.rootId, {
         expectedRevision: 0, mutationId: "stale-complete", openTaskDisposition: "complete", expectedOpenTaskSnapshot: snapshot,
       })).rejects.toMatchObject({ code: kind === "missing" ? "bad_request" : "conflict" });
       expect(current.inventory.getInventory(current.scope, current.rootId)).toMatchObject({ inventoryState: "active", inventoryRevision: 0 });
@@ -1440,7 +1440,7 @@ describe("reviewed lifecycle task completion", () => {
   it("requires confirmation even for zero tasks and excludes archived descendants", async () => {
     const current = fixture();
     try {
-      await expect(current.service.settle(current.scope, current.rootId, {
+      await expect(current.service.park(current.scope, current.rootId, {
         expectedRevision: 0, mutationId: "empty-without-review", openTaskDisposition: "complete",
       })).rejects.toMatchObject({ code: "bad_request" });
       const retained = current.tasks.create(current.scope, {

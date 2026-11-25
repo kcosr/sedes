@@ -1885,7 +1885,7 @@ describe("inactive schema-10 repositories", () => {
       for (const [index, action] of [
         "snooze",
         "wake",
-        "settle",
+        "park",
         "archive",
         "restore",
       ].entries()) {
@@ -1898,7 +1898,7 @@ describe("inactive schema-10 repositories", () => {
               ? { action, snoozedUntil: 10_000 }
               : ({ action } as
                   | { readonly action: "wake" }
-                  | { readonly action: "settle" }
+                  | { readonly action: "park" }
                   | { readonly action: "archive" }
                   | { readonly action: "restore" }),
           now: 500 + index,
@@ -1958,13 +1958,13 @@ describe("inactive schema-10 repositories", () => {
     }
   });
 
-  it("activates a settled bound thread when composer input enters the durable queue", () => {
+  it("activates a parked bound thread when composer input enters the durable queue", () => {
     const fixture = createFixture();
     try {
       bindDiscovered(fixture);
       const inventory = new InventoryRepository(fixture.database);
       const queue = new QueuedInputRepository(fixture.database);
-      const settled = inventory.transitionInventory(
+      const parked = inventory.transitionInventory(
         fixture.scope,
         fixture.threadId,
         {
@@ -1972,16 +1972,16 @@ describe("inactive schema-10 repositories", () => {
             fixture.scope,
             fixture.threadId,
           ).inventoryRevision,
-          mutationId: "settle-before-submit",
-          change: { action: "settle" },
+          mutationId: "park-before-submit",
+          change: { action: "park" },
           now: 510,
         },
       );
-      expect(settled.state.inventoryState).toBe("settled");
+      expect(parked.state.inventoryState).toBe("parked");
 
       const queued = queue.enqueue(fixture.scope, fixture.threadId, {
-        id: "settled-submit",
-        mutationId: "settled-submit-operation",
+        id: "parked-submit",
+        mutationId: "parked-submit-operation",
         text: "durable initial input",
         contextExcerpts: [],
         attachmentIds: [],
@@ -1999,7 +1999,7 @@ describe("inactive schema-10 repositories", () => {
       const active = inventory.getInventory(fixture.scope, fixture.threadId);
       expect(active).toMatchObject({
         inventoryState: "active",
-        inventoryRevision: settled.state.inventoryRevision + 1,
+        inventoryRevision: parked.state.inventoryRevision + 1,
         stateChangedAt: 520,
       });
 
@@ -2010,29 +2010,29 @@ describe("inactive schema-10 repositories", () => {
         queue.claimHead(
           fixture.scope,
           fixture.threadId,
-          "settled-submit-anchor",
+          "parked-submit-anchor",
           530,
         )?.state,
       ).toBe("dispatching");
       queue.markAccepted(fixture.scope, fixture.threadId, queued.item.id, {
         expectedState: "dispatching",
         acceptedAt: 540,
-        backendCorrelation: "settled-submit-correlation",
+        backendCorrelation: "parked-submit-correlation",
       });
       const settledAgain = inventory.transitionInventory(
         fixture.scope,
         fixture.threadId,
         {
           expectedRevision: active.inventoryRevision,
-          mutationId: "settle-after-submit",
-          change: { action: "settle" },
+          mutationId: "park-after-submit",
+          change: { action: "park" },
           now: 550,
         },
       );
       expect(
         queue.enqueue(fixture.scope, fixture.threadId, {
-          id: "ignored-settled-submit-replay-id",
-          mutationId: "settled-submit-operation",
+          id: "ignored-parked-submit-replay-id",
+          mutationId: "parked-submit-operation",
           text: "durable initial input",
           contextExcerpts: [],
           attachmentIds: [],
@@ -2050,7 +2050,7 @@ describe("inactive schema-10 repositories", () => {
       expect(
         inventory.getInventory(fixture.scope, fixture.threadId),
       ).toMatchObject({
-        inventoryState: "settled",
+        inventoryState: "parked",
         inventoryRevision: settledAgain.state.inventoryRevision,
         stateChangedAt: 550,
       });
@@ -2059,13 +2059,13 @@ describe("inactive schema-10 repositories", () => {
     }
   });
 
-  it("activates a settled bound thread for a direct agent send while it waits in queue", () => {
+  it("activates a parked bound thread for a direct agent send while it waits in queue", () => {
     const fixture = createFixture();
     try {
       bindDiscovered(fixture);
       const inventory = new InventoryRepository(fixture.database);
       const queue = new QueuedInputRepository(fixture.database);
-      const settled = inventory.transitionInventory(
+      const parked = inventory.transitionInventory(
         fixture.scope,
         fixture.threadId,
         {
@@ -2073,14 +2073,14 @@ describe("inactive schema-10 repositories", () => {
             fixture.scope,
             fixture.threadId,
           ).inventoryRevision,
-          mutationId: "settle-before-agent-send",
-          change: { action: "settle" },
+          mutationId: "park-before-agent-send",
+          change: { action: "park" },
           now: 510,
         },
       );
       const queued = queue.enqueue(fixture.scope, fixture.threadId, {
-        id: "settled-agent-send",
-        mutationId: "settled-agent-send-operation",
+        id: "parked-agent-send",
+        mutationId: "parked-agent-send-operation",
         text: "Agent-originated follow-up",
         contextExcerpts: [],
         attachmentIds: [],
@@ -2104,7 +2104,7 @@ describe("inactive schema-10 repositories", () => {
         inventory.getInventory(fixture.scope, fixture.threadId),
       ).toMatchObject({
         inventoryState: "active",
-        inventoryRevision: settled.state.inventoryRevision + 1,
+        inventoryRevision: parked.state.inventoryRevision + 1,
         stateChangedAt: 520,
       });
     } finally {
@@ -2112,13 +2112,13 @@ describe("inactive schema-10 repositories", () => {
     }
   });
 
-  it("leaves a settled bound thread settled when queue admission is rejected", () => {
+  it("leaves a parked bound thread parked when queue admission is rejected", () => {
     const fixture = createFixture();
     try {
       bindDiscovered(fixture);
       const inventory = new InventoryRepository(fixture.database);
       const queue = new QueuedInputRepository(fixture.database);
-      const settled = inventory.transitionInventory(
+      const parked = inventory.transitionInventory(
         fixture.scope,
         fixture.threadId,
         {
@@ -2126,15 +2126,15 @@ describe("inactive schema-10 repositories", () => {
             fixture.scope,
             fixture.threadId,
           ).inventoryRevision,
-          mutationId: "settle-before-rejected-admission",
-          change: { action: "settle" },
+          mutationId: "park-before-rejected-admission",
+          change: { action: "park" },
           now: 510,
         },
       );
       expect(() =>
         queue.enqueue(fixture.scope, fixture.threadId, {
-          id: "rejected-settled-admission",
-          mutationId: "rejected-settled-admission-operation",
+          id: "rejected-parked-admission",
+          mutationId: "rejected-parked-admission-operation",
           text: "Rejected before admission",
           contextExcerpts: [],
           attachmentIds: [],
@@ -2151,8 +2151,8 @@ describe("inactive schema-10 repositories", () => {
       expect(
         inventory.getInventory(fixture.scope, fixture.threadId),
       ).toMatchObject({
-        inventoryState: "settled",
-        inventoryRevision: settled.state.inventoryRevision,
+        inventoryState: "parked",
+        inventoryRevision: parked.state.inventoryRevision,
         stateChangedAt: 510,
       });
     } finally {
@@ -2160,13 +2160,13 @@ describe("inactive schema-10 repositories", () => {
     }
   });
 
-  it("activates a settled unbound thread at first-send acceptance but not on replay", () => {
+  it("activates a parked unbound thread at first-send acceptance but not on replay", () => {
     const fixture = createFixture();
     try {
       const inventory = new InventoryRepository(fixture.database);
       const creation = new ConversationCreationRepository(fixture.database);
       const bindings = new ConversationBindingRepository(fixture.database);
-      const settled = inventory.transitionInventory(
+      const parked = inventory.transitionInventory(
         fixture.scope,
         fixture.threadId,
         {
@@ -2174,71 +2174,71 @@ describe("inactive schema-10 repositories", () => {
             fixture.scope,
             fixture.threadId,
           ).inventoryRevision,
-          mutationId: "settle-before-first-send",
-          change: { action: "settle" },
+          mutationId: "park-before-first-send",
+          change: { action: "park" },
           now: 510,
         },
       );
       creation.prepare(fixture.scope, fixture.threadId, {
-        attemptId: "settled-first-send-attempt",
-        mutationId: "settled-first-send-operation",
+        attemptId: "parked-first-send-attempt",
+        mutationId: "parked-first-send-operation",
         expectedThreadRevision: threadRevision(fixture),
         creationKind: "first_input",
         sourceKind: "agent_control",
         initiatingAgentThreadId: fixture.secondThreadId,
         initialInputText: "Start from an agent tool",
         initialAttachmentIds: [],
-        backendCreationCorrelation: "settled-first-send-conversation",
+        backendCreationCorrelation: "parked-first-send-conversation",
         now: 520,
       });
       creation.markExternalCallStarted(
         fixture.scope,
         fixture.threadId,
-        "settled-first-send-attempt",
+        "parked-first-send-attempt",
         530,
       );
       creation.recordConversationIdentified(
         fixture.scope,
         fixture.threadId,
-        "settled-first-send-attempt",
+        "parked-first-send-attempt",
         {
-          backendConversationId: "settled-first-send-conversation",
-          opaqueBindingDetail: "settled-first-send-detail",
-          reconciliationToken: "settled-first-send-create-token",
+          backendConversationId: "parked-first-send-conversation",
+          opaqueBindingDetail: "parked-first-send-detail",
+          reconciliationToken: "parked-first-send-create-token",
           now: 540,
         },
       );
       creation.markFirstSubmissionStarted(
         fixture.scope,
         fixture.threadId,
-        "settled-first-send-attempt",
+        "parked-first-send-attempt",
         {
-          reconciliationToken: "settled-first-send-submit-token",
-          retryAnchor: "settled-first-send-anchor",
+          reconciliationToken: "parked-first-send-submit-token",
+          retryAnchor: "parked-first-send-anchor",
           now: 550,
         },
       );
       creation.markAcceptedUnpersisted(
         fixture.scope,
         fixture.threadId,
-        "settled-first-send-attempt",
+        "parked-first-send-attempt",
         {
           expected: "first_submission_started",
           acceptedAt: 560,
-          reconciliationToken: "settled-first-send-submit-token",
-          backendCorrelation: "settled-first-send-operation",
+          reconciliationToken: "parked-first-send-submit-token",
+          backendCorrelation: "parked-first-send-operation",
         },
       );
       const active = inventory.getInventory(fixture.scope, fixture.threadId);
       expect(active).toMatchObject({
         inventoryState: "active",
-        inventoryRevision: settled.state.inventoryRevision + 1,
+        inventoryRevision: parked.state.inventoryRevision + 1,
         stateChangedAt: 560,
       });
 
       bindings.bindCreatedConversation(fixture.scope, fixture.threadId, {
-        attemptId: "settled-first-send-attempt",
-        backendConversationId: "settled-first-send-conversation",
+        attemptId: "parked-first-send-attempt",
+        backendConversationId: "parked-first-send-conversation",
         acceptedAt: 560,
       });
       const settledAgain = inventory.transitionInventory(
@@ -2246,8 +2246,8 @@ describe("inactive schema-10 repositories", () => {
         fixture.threadId,
         {
           expectedRevision: active.inventoryRevision,
-          mutationId: "settle-after-first-send",
-          change: { action: "settle" },
+          mutationId: "park-after-first-send",
+          change: { action: "park" },
           now: 570,
         },
       );
@@ -2255,7 +2255,7 @@ describe("inactive schema-10 repositories", () => {
         creation.markAcceptedUnpersisted(
           fixture.scope,
           fixture.threadId,
-          "settled-first-send-attempt",
+          "parked-first-send-attempt",
           {
             expected: "first_submission_started",
             acceptedAt: 560,
@@ -2265,7 +2265,7 @@ describe("inactive schema-10 repositories", () => {
       expect(
         inventory.getInventory(fixture.scope, fixture.threadId),
       ).toMatchObject({
-        inventoryState: "settled",
+        inventoryState: "parked",
         inventoryRevision: settledAgain.state.inventoryRevision,
         stateChangedAt: 570,
       });
@@ -2274,7 +2274,7 @@ describe("inactive schema-10 repositories", () => {
     }
   });
 
-  it("activates a settled thread only when a prepared Steer becomes accepted", () => {
+  it("activates a parked thread only when a prepared Steer becomes accepted", () => {
     const fixture = createFixture();
     try {
       bindDiscovered(fixture);
@@ -2284,7 +2284,7 @@ describe("inactive schema-10 repositories", () => {
         fixture.scope,
         fixture.threadId,
       );
-      const settled = inventory.transitionInventory(
+      const parked = inventory.transitionInventory(
         fixture.scope,
         fixture.threadId,
         {
@@ -2292,13 +2292,13 @@ describe("inactive schema-10 repositories", () => {
             fixture.scope,
             fixture.threadId,
           ).inventoryRevision,
-          mutationId: "settle-before-steer",
-          change: { action: "settle" },
+          mutationId: "park-before-steer",
+          change: { action: "park" },
           now: 510,
         },
       );
       const receipt = operations.prepareSteer(fixture.scope, fixture.threadId, {
-        mutationId: "settled-steer-operation",
+        mutationId: "parked-steer-operation",
         text: draft.text,
         contextExcerpts: draft.contextExcerpts,
         attachmentIds: [],
@@ -2310,18 +2310,18 @@ describe("inactive schema-10 repositories", () => {
       expect(receipt.state).toBe("prepared");
       expect(
         inventory.getInventory(fixture.scope, fixture.threadId).inventoryState,
-      ).toBe("settled");
+      ).toBe("parked");
 
       operations.markSteerSubmissionStarted(
         fixture.scope,
         receipt.mutationId,
-        { kind: "turn" as const, turnId: "settled-steer-active-turn" },
+        { kind: "turn" as const, turnId: "parked-steer-active-turn" },
       );
       operations.acceptSteer(fixture.scope, receipt.mutationId, 530);
       const active = inventory.getInventory(fixture.scope, fixture.threadId);
       expect(active).toMatchObject({
         inventoryState: "active",
-        inventoryRevision: settled.state.inventoryRevision + 1,
+        inventoryRevision: parked.state.inventoryRevision + 1,
         stateChangedAt: 530,
       });
 
@@ -2330,8 +2330,8 @@ describe("inactive schema-10 repositories", () => {
         fixture.threadId,
         {
           expectedRevision: active.inventoryRevision,
-          mutationId: "settle-after-steer",
-          change: { action: "settle" },
+          mutationId: "park-after-steer",
+          change: { action: "park" },
           now: 540,
         },
       );
@@ -2341,7 +2341,7 @@ describe("inactive schema-10 repositories", () => {
       expect(
         inventory.getInventory(fixture.scope, fixture.threadId),
       ).toMatchObject({
-        inventoryState: "settled",
+        inventoryState: "parked",
         inventoryRevision: settledAgain.state.inventoryRevision,
         stateChangedAt: 540,
       });
@@ -2350,7 +2350,7 @@ describe("inactive schema-10 repositories", () => {
     }
   });
 
-  it("leaves a settled thread settled when a prepared Steer is rejected", () => {
+  it("leaves a parked thread parked when a prepared Steer is rejected", () => {
     const fixture = createFixture();
     try {
       bindDiscovered(fixture);
@@ -2360,7 +2360,7 @@ describe("inactive schema-10 repositories", () => {
         fixture.scope,
         fixture.threadId,
       );
-      const settled = inventory.transitionInventory(
+      const parked = inventory.transitionInventory(
         fixture.scope,
         fixture.threadId,
         {
@@ -2368,13 +2368,13 @@ describe("inactive schema-10 repositories", () => {
             fixture.scope,
             fixture.threadId,
           ).inventoryRevision,
-          mutationId: "settle-before-rejected-steer",
-          change: { action: "settle" },
+          mutationId: "park-before-rejected-steer",
+          change: { action: "park" },
           now: 510,
         },
       );
       const receipt = operations.prepareSteer(fixture.scope, fixture.threadId, {
-        mutationId: "rejected-settled-steer-operation",
+        mutationId: "rejected-parked-steer-operation",
         text: draft.text,
         contextExcerpts: draft.contextExcerpts,
         attachmentIds: [],
@@ -2387,8 +2387,8 @@ describe("inactive schema-10 repositories", () => {
       expect(
         inventory.getInventory(fixture.scope, fixture.threadId),
       ).toMatchObject({
-        inventoryState: "settled",
-        inventoryRevision: settled.state.inventoryRevision,
+        inventoryState: "parked",
+        inventoryRevision: parked.state.inventoryRevision,
         stateChangedAt: 510,
       });
     } finally {

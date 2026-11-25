@@ -10,6 +10,17 @@ afterEach(() => {
 });
 
 describe("sidebar disclosure storage", () => {
+  it.each(["shelves", "flat:time", "flat:state", "flat:none", "flat:project"])(
+    "migrates Parked disclosure state in %s",
+    (category) => {
+      const key = `sedes-sidebar-disclosures@1:${category}`;
+      localStorage.setItem(key, JSON.stringify({ settled: false, snoozed: true }));
+      const hook = renderHook(() => useSidebarDisclosures(category));
+      expect(hook.result.current[0]).toEqual({ parked: false, snoozed: true });
+      expect(JSON.parse(localStorage.getItem(key)!)).toEqual({ parked: false, snoozed: true });
+    },
+  );
+
   it("restores explicit choices and isolates categories and entity IDs", () => {
     const first = renderHook(() => useSidebarDisclosure("projects", "one", true));
     act(() => first.result.current[1](false));

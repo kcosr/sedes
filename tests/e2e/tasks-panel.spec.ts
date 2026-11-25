@@ -802,7 +802,7 @@ for (const action of ["Park", "Archive"] as const) {
       }
     }
     expect(snapshot.threads.find(({ id }) => id === threadId)?.inventoryState).toBe(
-      action === "Park" ? "settled" : "archived",
+      action === "Park" ? "parked" : "archived",
     );
   });
 }

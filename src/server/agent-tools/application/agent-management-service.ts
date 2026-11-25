@@ -85,7 +85,7 @@ export type AgentThreadSummary = {
     readonly label: string;
   };
   readonly backend: BackendKind;
-  readonly lifecycle: "active" | "snoozed" | "settled" | "archived";
+  readonly lifecycle: NormalizedThreadSummary["inventoryState"];
   readonly pinned: boolean;
   readonly activity: AgentThreadActivity;
   readonly automations: AgentThreadAutomations;

@@ -32,8 +32,8 @@ import { CanonicalAgentToolRequestError } from "../invocation/canonical-inline-a
 const UPCOMING_OCCURRENCE_COUNT = 5;
 
 /**
- * The definition shape frozen by the `automation.get@2`, `automation.create@2`,
- * `automation.update@2` and `automation.set_state@2` output schemas; the last
+ * The definition shape frozen by the `automation.get@3`, `automation.create@3`,
+ * `automation.update@3` and `automation.set_state@3` output schemas; the last
  * two add `retired`. The run-history revision and the last run's agent turn
  * are browser-only detail and are stripped.
  */
@@ -49,7 +49,7 @@ export interface AgentAutomationDefinition extends Omit<
 }
 
 /**
- * The `automation.update@2` and `automation.set_state@2` result: the
+ * The `automation.update@3` and `automation.set_state@3` result: the
  * definition the change produced, and whether that change retired a finished
  * one-time automation, which then no longer exists.
  */

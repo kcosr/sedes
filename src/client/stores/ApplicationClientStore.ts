@@ -320,12 +320,11 @@ export class ApplicationClientStore {
     return this.api.reopenWorkspace(workspaceId);
   }
 
-  /** Wire action names: `settle` parks a thread and `unsettle` unparks it. */
   async mutateInventory(
     thread: Pick<NormalizedApplicationThreadSummary, "id" | "inventoryRevision">,
     action:
-      | "settle"
-      | "unsettle"
+      | "park"
+      | "unpark"
       | "snooze"
       | "wake"
       | "archive"
@@ -349,7 +348,7 @@ export class ApplicationClientStore {
       throw new Error("A snooze deadline is required.");
     }
     if (
-      (action === "archive" || action === "settle") &&
+      (action === "archive" || action === "park") &&
       options?.expectedStashedPromptCount === undefined
     ) {
       throw new Error(
@@ -368,15 +367,15 @@ export class ApplicationClientStore {
               : {}),
           }
         : {}),
-      ...((action === "archive" || action === "settle") &&
+      ...((action === "archive" || action === "park") &&
       options?.openTaskDisposition
         ? { openTaskDisposition: options.openTaskDisposition }
         : {}),
-      ...((action === "archive" || action === "settle") &&
+      ...((action === "archive" || action === "park") &&
       options?.expectedOpenTaskSnapshot !== undefined
         ? { expectedOpenTaskSnapshot: options.expectedOpenTaskSnapshot }
         : {}),
-      ...((action === "archive" || action === "settle") &&
+      ...((action === "archive" || action === "park") &&
       options?.expectedStashedPromptCount !== undefined
         ? { expectedStashedPromptCount: options.expectedStashedPromptCount }
         : {}),
@@ -422,9 +421,9 @@ export class ApplicationClientStore {
     for (const target of targets) Object.freeze(target);
     Object.freeze(targets);
     const mutationId = crypto.randomUUID();
-    if (impact.action === "unsettle") {
+    if (impact.action === "unpark") {
       const request: BulkInventoryMutationRequest = {
-        action: "unsettle",
+        action: "unpark",
         targets,
         mutationId,
       };
@@ -437,8 +436,8 @@ export class ApplicationClientStore {
       mutationId,
     };
     const request: BulkInventoryMutationRequest =
-      impact.action === "settle"
-        ? { action: "settle", ...confirmed }
+      impact.action === "park"
+        ? { action: "park", ...confirmed }
         : {
             action: "archive",
             ...confirmed,
@@ -1016,7 +1015,7 @@ export function useApplicationStore(
 const INVENTORY_STATE_ORDER = {
   active: 0,
   snoozed: 1,
-  settled: 2,
+  parked: 2,
   archived: 3,
 } as const satisfies Record<
   NormalizedApplicationThreadSummary["inventoryState"],

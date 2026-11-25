@@ -3,14 +3,14 @@ import { DomainError } from "../../domain/errors.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
 
 /**
- * Returns a settled thread (Parked in the UI) to Active. This is the
- * application-owned inventory consequence of a durable fact that needs the
+ * Returns a parked thread to Active. This is the application-owned
+ * inventory consequence of a durable fact that needs the
  * user's attention: accepted input, or an automation run anchored on the
  * thread ending failed or uncertain. Callers must invoke this inside the same
  * SQLite transaction that first records that fact. The conditional update
  * makes replay a no-op and lets a later manual Park remain authoritative.
  */
-export function activateSettledThread(
+export function activateParkedThread(
   database: Database.Database,
   scope: RequestScope,
   applicationThreadId: string,
@@ -24,7 +24,7 @@ export function activateSettledThread(
           inventory_revision = inventory_revision + 1,
           state_changed_at = ?
         WHERE tenant_id = ? AND principal_id = ? AND thread_id = ?
-          AND inventory_state = 'settled'
+          AND inventory_state = 'parked'
       `,
     )
     .run(

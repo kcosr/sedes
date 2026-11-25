@@ -4,6 +4,7 @@ import {
   applyDatabaseMigrations,
   backendNormalizedMigrations,
 } from "../../src/server/db/migrate.js";
+import { multipleThreadAutomationsMigration } from "../../src/server/db/migrations/146-multiple-thread-automations.js";
 import { savedAgentDatabase } from "../support/saved-agent-fixture.js";
 
 const compactSql = (sql: string) => sql.replace(/[\s"]/g, "");
@@ -85,7 +86,12 @@ describe("multiple thread automations migration", () => {
         new Set(prior.externalForeignKeys.map(({ name }) => name)).size,
       ).toBe(11);
 
-      applyDatabaseMigrations(database, backendNormalizedMigrations);
+      applyDatabaseMigrations(
+        database,
+        backendNormalizedMigrations.filter(
+          ({ version }) => version <= multipleThreadAutomationsMigration.version,
+        ),
+      );
 
       expect(principalStateSchema(database)).toEqual(prior);
       expect(
@@ -93,15 +99,17 @@ describe("multiple thread automations migration", () => {
       ).toHaveLength(18);
       expect(database.pragma("foreign_keys", { simple: true })).toBe(1);
       expect(database.pragma("legacy_alter_table", { simple: true })).toBe(0);
-      expect(database.pragma("foreign_key_check")).toEqual([]);
-      expect(database.pragma("integrity_check")).toEqual([
-        { integrity_check: "ok" },
-      ]);
       expect(
         database
           .prepare("SELECT name FROM sqlite_schema WHERE sql LIKE '%_v146%'")
           .all(),
       ).toEqual([]);
+
+      applyDatabaseMigrations(database, backendNormalizedMigrations);
+      expect(database.pragma("foreign_key_check")).toEqual([]);
+      expect(database.pragma("integrity_check")).toEqual([
+        { integrity_check: "ok" },
+      ]);
     } finally {
       database.close();
     }

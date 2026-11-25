@@ -12,7 +12,7 @@ export function voiceRecordingTarget(threads: readonly NormalizedApplicationThre
   const { settings, nextRecordingTarget, retainedVoiceTarget } = native;
   const available = (id: string | null, source: VoiceRecordingTarget["source"]): VoiceRecordingTarget | undefined => {
     const thread = threads.find(thread => thread.id === id && thread.available &&
-      (thread.inventoryState === "active" || thread.inventoryState === "settled"));
+      (thread.inventoryState === "active" || thread.inventoryState === "parked"));
     return thread ? { threadId: thread.id, threadTitle: thread.title.text, source } : undefined;
   };
   if (nextRecordingTarget) return available(nextRecordingTarget.threadId, "explicit");

@@ -1070,7 +1070,7 @@ function composeCapabilities(input: {
       | "recover_uncertain"
       | "discard_fork"
       | "archive"
-      | "settle"
+      | "park"
       | "acknowledge_attention"
 ,
     label: string,
@@ -1184,8 +1184,7 @@ function composeCapabilities(input: {
       true,
     ),
     operation(
-      // Shown as Park; the operation id keeps the stored state's name.
-      "settle",
+      "park",
       "Park",
       !archived && !mutationBlocked,
       "Only an inactive, unarchived thread can be parked.",

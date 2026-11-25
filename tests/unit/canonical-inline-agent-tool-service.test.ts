@@ -306,7 +306,7 @@ describe("CanonicalInlineAgentToolService", () => {
       service.invoke(
         {
           toolId: "thread.status",
-          schemaVersion: 5,
+          schemaVersion: 6,
           requestId: "request-3",
           input: { threadId: "target-thread" },
         },
@@ -337,7 +337,7 @@ describe("CanonicalInlineAgentToolService", () => {
       service.invoke(
         {
           toolId: "thread.status",
-          schemaVersion: 5,
+          schemaVersion: 6,
           requestId: "missing",
           input: { threadId: "missing-thread" },
         },
@@ -379,7 +379,7 @@ describe("CanonicalInlineAgentToolService", () => {
     const invocation = service.invoke(
       {
         toolId: "thread.status",
-        schemaVersion: 5,
+        schemaVersion: 6,
         requestId: "in-flight-cancel",
         input: { threadId: "target-thread" },
       },
@@ -463,7 +463,7 @@ describe("CanonicalInlineAgentToolService", () => {
       const invocation = service.invoke(
         {
           toolId: "thread.status",
-          schemaVersion: 5,
+          schemaVersion: 6,
           requestId: "deadline",
           input: { threadId: "target-thread" },
         },
@@ -870,7 +870,7 @@ describe("CanonicalInlineAgentToolService", () => {
       service.invoke(
         {
           toolId: "automation.create",
-          schemaVersion: 2,
+          schemaVersion: 3,
           requestId: "blank-automation-prompt",
           input: {
             name: "Review", initialState: "paused", mutationId: "6ba7b810-9dad-41d1-80b4-00c04fd430c8", misfirePolicy: null,

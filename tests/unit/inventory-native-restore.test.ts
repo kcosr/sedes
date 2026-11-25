@@ -34,12 +34,12 @@ describe("inventory restore maintenance", () => {
   it("does not perform restoration maintenance for unrelated inventory transitions", async () => {
     const run = vi.fn();
     const service = new InventoryService({
-      transitionInventory: vi.fn(() => ({ state: { threadId: "thread", inventoryState: "settled" } })),
+      transitionInventory: vi.fn(() => ({ state: { threadId: "thread", inventoryState: "parked" } })),
     } as never, {
       publishMany: vi.fn(), publishApplicationThread: vi.fn(async () => undefined),
     }, undefined, { run });
     await service.transition(scope, "thread", {
-      change: { action: "settle" }, expectedRevision: 0, mutationId: "settle",
+      change: { action: "park" }, expectedRevision: 0, mutationId: "park",
     });
     expect(run).not.toHaveBeenCalled();
   });

@@ -345,7 +345,7 @@ describe("deriveSidebarLineage", () => {
     expect(result.nodesById.get("automated-source")?.aggregate.failed).toBe(1);
   });
 
-  it.each(["snoozed", "settled", "archived"] as const)(
+  it.each(["snoozed", "parked", "archived"] as const)(
     "keeps an active descendant reachable when its source is %s",
     (inventoryState) => {
       const threads = [
@@ -446,8 +446,8 @@ describe("deriveSidebarLineage", () => {
       thread("a"),
       thread("a-fork", { runState: "running" }),
       thread("a-fork-fork", { pendingQuestionCount: 1 }),
-      thread("b", { inventoryState: "settled" }),
-      thread("b-fork", { inventoryState: "settled" }),
+      thread("b", { inventoryState: "parked" }),
+      thread("b-fork", { inventoryState: "parked" }),
       thread("c", { inventoryState: "snoozed" }),
     ];
     const archived = [

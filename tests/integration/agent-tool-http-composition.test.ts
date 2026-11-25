@@ -163,7 +163,7 @@ function invokeRemoteThreadStatus(
     adapter: "cli",
     request: {
       toolId: "thread.status",
-      schemaVersion: 5,
+      schemaVersion: 6,
       requestId: "cross-environment-request",
       input: { threadId: "remote-thread" },
     },
@@ -275,7 +275,7 @@ firstAuthority, testAgentToolExecutionAuthority);
         adapter: "http",
         request: {
           toolId: "thread.status",
-          schemaVersion: 5,
+          schemaVersion: 6,
           requestId: "pre-restart-active-work",
           input: { threadId: thread.thread.id },
         },
@@ -447,7 +447,7 @@ secondAuthority, testAgentToolExecutionAuthority);
       ).toEqual({ name: "application_threads_agent_execution_target" });
 
       const snapshot = vi.fn(async () => ({
-        thread: { inventoryState: "settled", runState: "waiting_for_input" },
+        thread: { inventoryState: "parked", runState: "waiting_for_input" },
       }));
       const sourceAuthority = new DatabaseAgentToolSourceAuthority(
         database,
@@ -671,7 +671,7 @@ sourceAuthority, testAgentToolExecutionAuthority);
       await associated(request(app).post("/api/agent-tool-invocations"))
         .send({
           toolId: "thread.status",
-          schemaVersion: 5,
+          schemaVersion: 6,
           requestId: "status-request",
           input: { threadId: thread.thread.id },
         })
@@ -680,7 +680,7 @@ sourceAuthority, testAgentToolExecutionAuthority);
           expect(body.output).toEqual({
             threadId: thread.thread.id,
             backend: "pi",
-            lifecycle: "settled",
+            lifecycle: "parked",
             activity: "waiting_for_input",
             pinned: false,
           }),

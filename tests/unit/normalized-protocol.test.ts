@@ -816,7 +816,7 @@ describe("inventory transition confirmation protocol", () => {
     ).toMatchObject({ wakeReminder: "Review this result" });
   });
 
-  for (const action of ["settle", "archive", "archive_family"] as const) {
+  for (const action of ["park", "archive", "archive_family"] as const) {
     it(`requires a confirmed stash count for ${action}`, () => {
       const input = { action, expectedRevision: 0, mutationId };
       expect(inventoryTransitionSchema.safeParse(input).success).toBe(false);
@@ -1396,6 +1396,18 @@ describe("normalized conversation protocol", () => {
         parameters: { kind: "none" },
       }).id,
     ).toBe("recover_uncertain");
+  });
+
+  it("exposes Park as a closed no-parameter capability", () => {
+    const operation = {
+      id: "park",
+      label: { text: "Park" },
+      destructive: false,
+      available: true,
+      parameters: { kind: "none" },
+    };
+    expect(threadOperationDescriptorSchema.parse(operation)).toEqual(operation);
+    expect(threadOperationDescriptorSchema.safeParse({ ...operation, id: "settle" }).success).toBe(false);
   });
 
   it("keeps backend brand marks a closed optional presentation enum", () => {
@@ -2375,7 +2387,7 @@ describe("application sidebar background-work wire contract", () => {
     advisories: [], accountUsages: [], defaultNewThreadTargetId: "target-1", tasks: [],
   };
   it("rejects removed global totals and count-only events", () => {
-    const counts = { active: 1, snoozed: 0, settled: 0, archived: 0 };
+    const counts = { active: 1, snoozed: 0, parked: 0, archived: 0 };
     for (const event of [
       { type: "snapshot", generation: "generation-1", snapshot: { ...snapshot, counts } },
       { type: "thread_upsert", generation: "generation-1", thread, counts },
@@ -2386,8 +2398,18 @@ describe("application sidebar background-work wire contract", () => {
       type: "thread_remove", generation: "generation-1", threadId: thread.id,
     }).success).toBe(true);
   });
+  it("publishes parked inventory without accepting the former settled value", () => {
+    const event = {
+      type: "thread_upsert", generation: "generation-1",
+      thread: { ...thread, inventoryState: "parked" },
+    };
+    expect(normalizedApplicationEventSchema.parse(event)).toMatchObject({ thread: { inventoryState: "parked" } });
+    expect(normalizedApplicationEventSchema.safeParse({
+      ...event, thread: { ...thread, inventoryState: "settled" },
+    }).success).toBe(false);
+  });
   it("carries the same counts through snapshot and thread-upsert events without changing run state", () => {
-    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(180);
+    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(181);
     expect(normalizedApplicationEventSchema.parse({ type: "snapshot", generation: "generation-1", snapshot }))
       .toMatchObject({ snapshot: { threads: [{ runState: "idle", backgroundWork }] } });
     expect(normalizedApplicationEventSchema.parse({ type: "thread_upsert", generation: "generation-1", thread }))

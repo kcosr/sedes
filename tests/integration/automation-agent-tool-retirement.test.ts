@@ -298,7 +298,7 @@ describe("automation agent tools after one-shot retirement", () => {
       upcoming: [],
       retired: true,
     });
-    expect(registry.validatesOutput("automation.update", 2, first)).toBe(true);
+    expect(registry.validatesOutput("automation.update", 3, first)).toBe(true);
     const retired = repository.getDefinition(scope, reminder.id);
     expect(retired.deletedAt).not.toBeNull();
     expect(() => service.get(scope, reminder.id)).toThrow(
@@ -333,7 +333,7 @@ describe("automation agent tools after one-shot retirement", () => {
       upcoming: [],
       retired: true,
     });
-    expect(registry.validatesOutput("automation.set_state", 2, first)).toBe(
+    expect(registry.validatesOutput("automation.set_state", 3, first)).toBe(
       true,
     );
     const retired = repository.getDefinition(scope, reminder.id);
@@ -366,7 +366,7 @@ describe("automation agent tools after one-shot retirement", () => {
       retired: false,
     });
     expect(result.upcoming.length).toBeGreaterThan(0);
-    expect(registry.validatesOutput("automation.set_state", 2, result)).toBe(
+    expect(registry.validatesOutput("automation.set_state", 3, result)).toBe(
       true,
     );
     expect(service.get(scope, daily.id).id).toBe(daily.id);

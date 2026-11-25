@@ -41,9 +41,8 @@ export const threadStatusToolContract = {
         }),
         lifecycle: Type.String({
           maxLength: 8,
-          enum: ["active", "snoozed", "settled", "archived"],
-          description:
-            "Inventory state; settled means parked (stored as settled).",
+          enum: ["active", "snoozed", "parked", "archived"],
+          description: "Thread inventory state.",
         }),
         activity: Type.String({
           maxLength: 17,

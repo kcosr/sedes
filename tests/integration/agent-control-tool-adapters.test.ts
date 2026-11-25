@@ -629,7 +629,7 @@ describe("agent control tools through canonical adapters", () => {
       )
       .send({
         toolId: "thread.status",
-        schemaVersion: 5,
+        schemaVersion: 6,
         requestId: "status-parent",
         input: { threadId: targetThreadId },
       })

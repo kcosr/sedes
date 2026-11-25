@@ -647,8 +647,10 @@ describe("Sedes CLI", () => {
         }
         if (path === SEDES_AGENT_TOOL_CSRF_ROUTE)
           return json({ csrfToken: "csrf" });
-        expect(JSON.parse(String(init?.body)).input).toEqual({
-          threadId: targetThreadId,
+        expect(JSON.parse(String(init?.body))).toMatchObject({
+          toolId: "thread.status",
+          schemaVersion: 6,
+          input: { threadId: targetThreadId },
         });
         return json({
           invocationId: "invocation-status",
@@ -656,9 +658,9 @@ describe("Sedes CLI", () => {
           output: {
             threadId: targetThreadId,
             backend: "codex_app_server",
-            lifecycle: "active",
+            lifecycle: "parked",
             activity: "idle",
-            hasActiveGoal: false,
+            pinned: false,
           },
         });
       },
@@ -675,7 +677,10 @@ describe("Sedes CLI", () => {
     );
 
     expect(exit, output.stderr()).toBe(0);
-    expect(JSON.parse(output.stdout()).threadId).toBe(targetThreadId);
+    expect(JSON.parse(output.stdout())).toMatchObject({
+      threadId: targetThreadId,
+      lifecycle: "parked",
+    });
   });
 
   it("dispatches a catalog-advertised typed thread-messages command", async () => {

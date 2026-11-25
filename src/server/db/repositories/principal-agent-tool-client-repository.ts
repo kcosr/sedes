@@ -2,6 +2,7 @@ import type Database from "better-sqlite3";
 import { DomainError } from "../../domain/errors.js";
 import { environmentAdmitsForegroundOperation } from "../../domain/environment-operational-state.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
+import type { InventoryState } from "./inventory-repository.js";
 
 export const PRINCIPAL_AGENT_TOOL_CLIENT_MAXIMUM_TOOLS = 256;
 export const PRINCIPAL_AGENT_TOOL_CLIENT_MAXIMUM_ENVIRONMENTS = 16;
@@ -540,7 +541,7 @@ export class PrincipalAgentToolClientRepository {
         ) as
         | {
             readonly availability: "available" | "missing" | "quarantined" | "environment_unavailable";
-            readonly inventoryState: "active" | "snoozed" | "settled" | "archived";
+            readonly inventoryState: InventoryState;
           }
         | undefined;
       if (

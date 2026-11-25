@@ -28,7 +28,7 @@ it.skipIf(topology === "ssh" && process.env.SEDES_LIVE_ANTIGRAVITY_SSH !== "1").
       expect(command).toContain(`${f.hostHome}/.local/state/sedes/sidecar/artifacts/sha256/`);
     }
     const prompt = surface === "native"
-      ? `This is a bounded Sedes integration test. Call the Sedes MCP sedes_read tool exactly once with toolId thread.status, schemaVersion 5, input ${JSON.stringify({ threadId })}. Do not run shell commands or use any other tools. Report the backend field returned by this tool, then say SEDES_TOOL_OK.`
+      ? `This is a bounded Sedes integration test. Call the Sedes MCP sedes_read tool exactly once with toolId thread.status, schemaVersion 6, input ${JSON.stringify({ threadId })}. Do not run shell commands or use any other tools. Report the backend field returned by this tool, then say SEDES_TOOL_OK.`
       : `This is a bounded Sedes integration test. Run exactly this one read-only command in the current temporary workspace: ${command}\nDo not run other commands or tools. Report the backend field returned, then say SEDES_TOOL_OK.`;
     expect(["delivery_accepted", "delivery_queued"]).toContain((await f.send(threadId, prompt) as { status: string }).status);
     const deadline = Date.now() + 90_000;

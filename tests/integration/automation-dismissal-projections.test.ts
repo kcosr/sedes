@@ -91,7 +91,7 @@ describe("automation dismissal projections", () => {
     const inventory = new InventoryRepository(database);
     inventory.transitionInventory(scope, sourceId, {
       expectedRevision: inventory.getInventory(scope, sourceId).inventoryRevision,
-      mutationId: randomUUID(), change: { action: "settle" }, now: 1_050,
+      mutationId: randomUUID(), change: { action: "park" }, now: 1_050,
     });
   };
   const summary = () => readThreadAutomationSummary(database, scope, sourceId);
@@ -147,7 +147,7 @@ describe("automation dismissal projections", () => {
     expect(summary()).toMatchObject({ totalCount: 1, inFlightCount: 0, attentionCount: 0 });
     expect(inventorySummary(target).attention.automationContext).toBe("triggered");
     expect(repository.attentionRun(scope, automation.id)).toBeUndefined();
-    expect(new InventoryRepository(database).getInventory(scope, sourceId).inventoryState).toBe("settled");
+    expect(new InventoryRepository(database).getInventory(scope, sourceId).inventoryState).toBe("parked");
     expect(repository.listRuns(scope, automation.id, { limit: 10, filter: "problems" })).toEqual([]);
     expect(repository.countRuns(scope, automation.id)).toMatchObject({ all: 1, problems: 0 });
 

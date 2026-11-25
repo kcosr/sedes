@@ -442,7 +442,7 @@ const executionWorkspaceArchiveDispositionSchema = z.discriminatedUnion(
 
 export const inventoryTransitionSchema = z.discriminatedUnion("action", [
   z.strictObject({
-    action: z.literal("settle"),
+    action: z.literal("park"),
     expectedRevision: z.number().int().nonnegative(),
     expectedStashedPromptCount: z
       .number()
@@ -454,7 +454,7 @@ export const inventoryTransitionSchema = z.discriminatedUnion("action", [
     expectedOpenTaskSnapshot: openTaskSnapshotSchema.optional(),
   }),
   z.strictObject({
-    action: z.literal("unsettle"),
+    action: z.literal("unpark"),
     expectedRevision: z.number().int().nonnegative(),
     mutationId: mutationIdSchema,
   }),
@@ -559,8 +559,8 @@ export const BULK_INVENTORY_BLOCKER_SUMMARY_LIMIT = 100;
 export const MAXIMUM_BULK_INVENTORY_OPEN_TASKS = 10_000;
 
 export const bulkInventoryActionSchema = z.enum([
-  "settle",
-  "unsettle",
+  "park",
+  "unpark",
   "archive",
 ]);
 export type BulkInventoryAction = z.infer<typeof bulkInventoryActionSchema>;
@@ -691,14 +691,14 @@ export const bulkInventoryMutationRequestSchema = z.discriminatedUnion(
   "action",
   [
     z.strictObject({
-      action: z.literal("settle"),
+      action: z.literal("park"),
       targets: bulkInventoryTargetsSchema,
       mutationId: mutationIdSchema,
       expectedStashedPromptCount:
         confirmedBulkInventoryCountsSchema.expectedStashedPromptCount,
     }),
     z.strictObject({
-      action: z.literal("unsettle"),
+      action: z.literal("unpark"),
       targets: bulkInventoryTargetsSchema,
       mutationId: mutationIdSchema,
     }),

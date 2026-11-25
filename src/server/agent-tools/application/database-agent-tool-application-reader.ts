@@ -116,14 +116,7 @@ export class DatabaseAgentToolApplicationReader
       threadId: source.id,
       backend: backend.backendKind,
       pinned: backend.pinned === 1,
-      lifecycle:
-        snapshot.thread.inventoryState === "archived"
-          ? "archived"
-          : snapshot.thread.inventoryState === "snoozed"
-            ? "snoozed"
-            : snapshot.thread.inventoryState === "settled"
-              ? "settled"
-              : "active",
+      lifecycle: snapshot.thread.inventoryState,
       activity: activity(snapshot.thread.runState),
     };
   }

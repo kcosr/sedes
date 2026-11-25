@@ -143,7 +143,7 @@ describe("backend-neutral completion observation work", () => {
         VALUES (?, ?, ?, 'unbound', 7000, 'unbound')`).run(f.scope.tenantId, f.scope.principalId, unbound);
       const setState = (threadId: string, state: string) => f.database.prepare(`UPDATE thread_principal_state SET inventory_state = ?
         WHERE tenant_id = ? AND principal_id = ? AND thread_id = ?`).run(state, f.scope.tenantId, f.scope.principalId, threadId);
-      setState(parked, "settled");
+      setState(parked, "parked");
       setState(archived, "archived");
 
       const list = (input: Partial<Parameters<typeof f.completion.listUnresolvedSubmissionThreads>[1]> = {}) =>

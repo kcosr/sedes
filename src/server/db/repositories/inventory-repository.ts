@@ -29,7 +29,7 @@ import {
   serializeTaskReferences,
 } from "../composer-tasks-json.js";
 
-export type InventoryState = "active" | "snoozed" | "settled" | "archived";
+export type InventoryState = "active" | "snoozed" | "parked" | "archived";
 export type InventoryWakeReason =
   "manual" | "deadline" | "completion" | "failure" | "needs-input" | "activity";
 
@@ -337,8 +337,8 @@ export type InventoryThreadAggregate = {
 };
 
 export type InventoryTransition =
-  | { readonly action: "settle" }
-  | { readonly action: "unsettle" }
+  | { readonly action: "park" }
+  | { readonly action: "unpark" }
   | {
       readonly action: "snooze";
       readonly snoozedUntil: number;
@@ -593,12 +593,17 @@ function fingerprint(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
+// Stable hash inputs preserve receipts committed before the inventory rename.
+const parkThreadReceiptSeed = "settle_thread";
+
+function inventoryActionReceiptToken(action: "park" | "unpark"): string {
+  return action === "park" ? "settle" : "unsettle";
+}
+
 /**
- * Archive, settle, and bulk receipts hash the open-task disposition. Moving
+ * Archive, park, and bulk receipts hash the open-task disposition. Moving
  * open tasks up to their thread's project was "move_to_workspace" before
- * projects existed, and receipts are never rewritten, so these persisted
- * derivation inputs keep that token. Only fingerprints use it; the wire
- * value is "move_to_project", with no alias.
+ * projects existed. The persisted request fingerprints keep that token.
  */
 function storedDispositionToken(
   disposition: "move_to_project" | "move_to_global" | "complete" | "keep",
@@ -661,7 +666,9 @@ function bulkInventoryFingerprint(input: {
     .toSorted(([left], [right]) => left.localeCompare(right));
   return fingerprint([
     "bulk_inventory_transition",
-    input.action,
+    input.action === "archive"
+      ? input.action
+      : inventoryActionReceiptToken(input.action),
     canonicalTargets,
     ...(input.expectedStashedPromptCount === undefined
       ? []
@@ -1909,11 +1916,14 @@ export class InventoryRepository {
     readonly state: InventoryPrincipalStateRecord;
     readonly replayed: boolean;
   } {
+    const { change } = input;
     const requestFingerprint = fingerprint([
       "inventory_transition",
       threadId,
       input.expectedRevision,
-      input.change,
+      change.action === "park" || change.action === "unpark"
+        ? { action: inventoryActionReceiptToken(change.action) }
+        : change,
     ]);
     return this.database.transaction(() => {
       const receipt = this.#receipt(scope, input.mutationId);
@@ -2046,7 +2056,7 @@ export class InventoryRepository {
 
   // Durable receipts retain movedTaskIds as the field for all task disposition
   // changes (including completion), preserving committed replay identities.
-  settleThread(
+  parkThread(
     scope: RequestScope,
     threadId: string,
     input: {
@@ -2067,7 +2077,7 @@ export class InventoryRepository {
   } {
     const disposition = input.openTaskDisposition ?? "keep";
     const requestFingerprint = fingerprint([
-      "settle_thread",
+      parkThreadReceiptSeed,
       threadId,
       input.expectedRevision,
       storedDispositionToken(disposition),
@@ -2084,7 +2094,7 @@ export class InventoryRepository {
         this.#assertReceipt(
           receipt,
           threadId,
-          "settle_thread",
+          "park_thread",
           requestFingerprint,
         );
         const replay = JSON.parse(receipt.resultJson) as {
@@ -2100,7 +2110,7 @@ export class InventoryRepository {
           "The thread inventory changed in another client.",
         );
       }
-      this.#assertTransitionNotBlocked(scope, threadId, { action: "settle" });
+      this.#assertTransitionNotBlocked(scope, threadId, { action: "park" });
       this.#assertStashedPromptCount(
         scope,
         [threadId],
@@ -2112,7 +2122,7 @@ export class InventoryRepository {
       input.assertOpenTasks?.([threadId]);
       const next = this.#nextInventory(
         current,
-        { action: "settle" },
+        { action: "park" },
         input.now,
       );
       if (next !== current) {
@@ -2129,7 +2139,7 @@ export class InventoryRepository {
         scope,
         threadId,
         input.mutationId,
-        "settle_thread",
+        "park_thread",
         requestFingerprint,
         { state, movedTaskIds },
         input.now,
@@ -2429,13 +2439,13 @@ export class InventoryRepository {
       });
       const affectedStates = currentStates.filter((state) => {
         switch (input.action) {
-          case "settle":
+          case "park":
             return (
               state.inventoryState === "active" ||
               state.inventoryState === "snoozed"
             );
-          case "unsettle":
-            return state.inventoryState === "settled";
+          case "unpark":
+            return state.inventoryState === "parked";
           case "archive":
             return true;
         }
@@ -2450,7 +2460,7 @@ export class InventoryRepository {
       }
 
       if (
-        (input.action === "settle" || input.action === "archive") &&
+        (input.action === "park" || input.action === "archive") &&
         affectedThreadIds.some((threadId) =>
           input.blockedThreadIds.has(threadId),
         )
@@ -2460,7 +2470,7 @@ export class InventoryRepository {
           "The stack cannot be changed while one of its affected threads has active or unresolved work.",
         );
       }
-      if (input.action === "settle" || input.action === "archive") {
+      if (input.action === "park" || input.action === "archive") {
         this.#assertBulkThreadsDurablyInactive(scope, affectedThreadIds);
       }
       this.#assertStashedPromptCount(
@@ -3099,8 +3109,8 @@ export class InventoryRepository {
       stateChangedAt: now,
     };
     switch (change.action) {
-      case "settle":
-        if (current.inventoryState === "settled") return current;
+      case "park":
+        if (current.inventoryState === "parked") return current;
         if (
           current.inventoryState !== "active" &&
           current.inventoryState !== "snoozed"
@@ -3112,7 +3122,7 @@ export class InventoryRepository {
         }
         return {
           ...base,
-          inventoryState: "settled",
+          inventoryState: "parked",
           snoozedAt: null,
           snoozedUntil: null,
           wokeAt: null,
@@ -3120,9 +3130,9 @@ export class InventoryRepository {
           wakeAcknowledgedAt: null,
           wakeReminderText: null,
         };
-      case "unsettle":
+      case "unpark":
         if (current.inventoryState === "active") return current;
-        if (current.inventoryState !== "settled") {
+        if (current.inventoryState !== "parked") {
           throw new DomainError(
             "invalid_transition",
             "Only a parked thread can be unparked.",

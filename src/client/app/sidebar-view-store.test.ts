@@ -87,21 +87,21 @@ describe("sidebar view preferences read path", () => {
     localStorage.setItem(
       SIDEBAR_VIEW_STORAGE_KEY,
       JSON.stringify({
-        version: 2,
+        version: SIDEBAR_VIEW_DEFAULTS.version,
         groupBy: "galaxy",
         lastAltGroupBy: "state",
         modes: {
           time: { sortBy: "magic", density: "card" },
           bogus: { sortBy: "alpha" },
         },
-        show: { snoozed: false, settled: false, drafts: "yes" },
+        show: { snoozed: false, parked: false, drafts: "yes" },
         groupForks: "flat",
         showThreadDetailCards: "true",
       }),
     );
     invalidateSnapshot();
     expect(getSidebarViewPreferences()).toEqual({
-      version: 2,
+      version: SIDEBAR_VIEW_DEFAULTS.version,
       environmentFilterId: null,
       targetFilterId: null,
       projectFilterId: null,
@@ -114,7 +114,7 @@ describe("sidebar view preferences read path", () => {
       stackBy: "none",
       lastAltGroupBy: "state",
       modes: { time: { density: "card" } },
-      show: { snoozed: false, settled: false, drafts: true },
+      show: { snoozed: false, parked: false, drafts: true },
       groupForks: true,
       showBackendIcons: true,
       showThreadDetailCards: false,
@@ -137,13 +137,13 @@ describe("sidebar view preferences read path", () => {
             density: "card",
           },
         },
-        show: { snoozed: false, settled: false, drafts: false },
+        show: { snoozed: false, parked: false, drafts: false },
       }),
     );
     invalidateSnapshot();
     const preferences = getSidebarViewPreferences();
     expect(preferences).toMatchObject({
-      version: 2,
+      version: SIDEBAR_VIEW_DEFAULTS.version,
       environmentFilterId: "environment-1",
       targetFilterId: "target-1",
       projectFilterId: "project-1",
@@ -155,7 +155,7 @@ describe("sidebar view preferences read path", () => {
           density: "card",
         },
       },
-      show: { snoozed: false, settled: false, drafts: false },
+      show: { snoozed: false, parked: false, drafts: false },
     });
     expect(resolveModePreferences(preferences, "time").pinnedOnly).toBe(false);
   });
@@ -400,16 +400,16 @@ describe("sidebar view preference mutations", () => {
         ...older,
         projectFilterName: "sedes",
         groupBy: "state",
-        show: { snoozed: false, settled: true, drafts: true },
+        show: { snoozed: false, parked: true, drafts: true },
       }),
     );
     invalidateSnapshot();
     expect(getSidebarViewPreferences()).toMatchObject({
-      version: 2,
+      version: SIDEBAR_VIEW_DEFAULTS.version,
       projectFilterId: null,
       projectFilterName: "sedes",
       groupBy: "state",
-      show: { snoozed: false, settled: true, drafts: true },
+      show: { snoozed: false, parked: true, drafts: true },
     });
 
     // Unrelated writes keep the pending hint.
@@ -618,7 +618,7 @@ describe("sidebar view preference mutations", () => {
 
   it("persists detail cards across reloads, grouping changes, and view resets", () => {
     localStorage.setItem(SIDEBAR_VIEW_STORAGE_KEY, JSON.stringify({
-      version: 2,
+      version: SIDEBAR_VIEW_DEFAULTS.version,
       modes: { time: { density: "card", peek: true } },
     }));
     invalidateSnapshot();
@@ -644,30 +644,47 @@ describe("sidebar view preference mutations", () => {
     window.removeEventListener(changedEvent, listener);
   });
 
-  it("keeps a saved Show parked choice under its stored key", () => {
-    // Park was called Settle; the key mirrors the stored inventory state, so
-    // a view saved before the rename keeps hiding parked threads.
+  it("migrates the saved Show parked choice and preserves the other preferences", () => {
     localStorage.setItem(
       SIDEBAR_VIEW_STORAGE_KEY,
       JSON.stringify({
         ...SIDEBAR_VIEW_DEFAULTS,
-        show: { snoozed: true, settled: false, drafts: true },
+        version: 2,
+        groupBy: "state",
+        showThreadDetailCards: true,
+        show: { snoozed: false, settled: false, drafts: true },
       }),
     );
     invalidateSnapshot();
-    expect(getSidebarViewPreferences().show.settled).toBe(false);
+    const migrated = {
+      version: SIDEBAR_VIEW_DEFAULTS.version,
+      groupBy: "state",
+      showThreadDetailCards: true,
+      show: { snoozed: false, parked: false, drafts: true },
+    };
+    expect(getSidebarViewPreferences()).toMatchObject(migrated);
+    expect(readBlob()).toMatchObject(migrated);
+    expect(readBlob()).not.toHaveProperty("show.settled");
 
-    setSidebarShowFilter("settled", true);
-    expect(
-      JSON.parse(localStorage.getItem(SIDEBAR_VIEW_STORAGE_KEY)!).show,
-    ).toEqual({ snoozed: true, settled: true, drafts: true });
+    setSidebarShowFilter("parked", true);
+    invalidateSnapshot();
+    expect(getSidebarViewPreferences().show).toEqual({ snoozed: false, parked: true, drafts: true });
+  });
+
+  it("ignores the old Show parked key in the current version", () => {
+    localStorage.setItem(SIDEBAR_VIEW_STORAGE_KEY, JSON.stringify({
+      version: SIDEBAR_VIEW_DEFAULTS.version,
+      show: { settled: false },
+    }));
+    invalidateSnapshot();
+    expect(getSidebarViewPreferences().show.parked).toBe(true);
   });
 
   it("setSidebarShowFilter updates one filter and keeps the others", () => {
-    setSidebarShowFilter("settled", false);
+    setSidebarShowFilter("parked", false);
     expect(getSidebarViewPreferences().show).toEqual({
       snoozed: true,
-      settled: false,
+      parked: false,
       drafts: true,
     });
   });
@@ -681,7 +698,7 @@ describe("sidebar view preference mutations", () => {
       groupFilterId: "group-2",
     });
     setSidebarShowFilter("snoozed", false);
-    setSidebarShowFilter("settled", false);
+    setSidebarShowFilter("parked", false);
     setSidebarHasOpenTasks(true);
     setSidebarGroupBy("time");
     updateSidebarModePreferences("time", {

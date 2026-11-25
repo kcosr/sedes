@@ -408,14 +408,16 @@ Automation recovery stays under user control: acknowledging failures and marking
 uncertain runs as failed are available in the UI and authenticated management
 API, but have no agent-tool operation. This applies to all compiled backends
 across all supported tool presentations.
-`automation.update@2` and `automation.set_state@2` report `retired: true` when
+`automation.update@3` and `automation.set_state@3` report `retired: true` when
 the change retired a finished one-time reminder, so the definition they return
 has left the collection; a replay of the same mutation returns the same result.
 
-`thread.status@5` and `thread.list@9` include the current principal's read-only
+`thread.status@6` and `thread.list@10` include the current principal's read-only
 `pinned` flag. Along with `agent.context@5`, their backend
 field distinguishes native `pi_native` from embedded `pi`. There is no
-thread-pin mutation tool.
+thread-pin mutation tool. Thread reads and `automation.list@2`,
+`automation.get@3`, `automation.create@3`, `automation.update@3`, and
+`automation.set_state@3` report parked inventory as `parked`.
 
 `image.show@1` reads an absolute PNG, JPEG, GIF, or WebP path through the source
 thread's Files access and retains a snapshot for inline display. Its optional

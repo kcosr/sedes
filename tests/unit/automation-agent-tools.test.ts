@@ -370,7 +370,7 @@ describe("automation canonical tool service", () => {
     const invocation = executor.invoke(
       {
         toolId: "automation.create",
-        schemaVersion: 2,
+        schemaVersion: 3,
         requestId: "cancel-clone-read",
         input: {
           name: "Review",
@@ -537,6 +537,7 @@ describe("automation canonical tool service", () => {
     };
     const setup = fixture({
       definition: definition({
+        source: { ...definition().source, inventoryState: "parked" },
         lastRun: {
           ...lastRun,
           turn: { outcome: "failed", endedAt: "2026-08-08T00:09:00.000Z" },
@@ -561,18 +562,20 @@ describe("automation canonical tool service", () => {
     ]) {
       expect(result.lastRun).toEqual(lastRun);
     }
-    // The current v2 contracts retain bounded run details and require identity.
     await expect(
       canonical(setup).invoke(
         {
           toolId: "automation.get",
-          schemaVersion: 2,
+          schemaVersion: 3,
           requestId: "frozen-definition-shape",
           input: { automationId },
         },
         invocationSource,
       ),
-    ).resolves.toMatchObject({ state: "completed", output: { lastRun } });
+    ).resolves.toMatchObject({
+      state: "completed",
+      output: { lastRun, source: { inventoryState: "parked" } },
+    });
   });
 
   it("rejects every unadmitted target before automation state or model work", async () => {
@@ -677,14 +680,14 @@ describe("automation canonical tool service", () => {
       uncertainExternalOutcome: true,
     });
     expect(
-      registry.validatesInput("automation.update", 2, {
+      registry.validatesInput("automation.update", 3, {
         automationId,
         expectedRevision: 4,
         precheck: null,
       }),
     ).toBe(true);
     expect(
-      registry.validatesInput("automation.create", 2, {
+      registry.validatesInput("automation.create", 3, {
         prompt: "Review",
         runMode: "same_thread",
         schedule: {
@@ -701,7 +704,7 @@ describe("automation canonical tool service", () => {
       canonical(fixture()).invoke(
         {
           toolId: "automation.update",
-          schemaVersion: 2,
+          schemaVersion: 3,
           requestId: "no-change",
           input: { expectedRevision: 4, automationId: targetAutomationId },
         },
@@ -720,7 +723,7 @@ describe("automation canonical tool service", () => {
       executor.invoke(
         {
           toolId: "automation.create",
-          schemaVersion: 2,
+          schemaVersion: 3,
           requestId: "invalid-timestamp",
           input: {
             name: "Review",
@@ -739,7 +742,7 @@ describe("automation canonical tool service", () => {
       executor.invoke(
         {
           toolId: "automation.create",
-          schemaVersion: 2,
+          schemaVersion: 3,
           requestId: "invalid-precheck",
           input: {
             name: "Review",
@@ -770,7 +773,7 @@ describe("automation canonical tool service", () => {
     const createFailure = executor.invoke(
       {
         toolId: "automation.create",
-        schemaVersion: 2,
+        schemaVersion: 3,
         requestId: "too-frequent-cron",
         input: {
           name: "Review",
@@ -806,7 +809,7 @@ describe("automation canonical tool service", () => {
       executor.invoke(
         {
           toolId: "automation.update",
-          schemaVersion: 2,
+          schemaVersion: 3,
           requestId: "invalid-timezone",
           input: {
             automationId,
@@ -862,7 +865,7 @@ describe("automation canonical tool service", () => {
       canonical(setup).invoke(
         {
           toolId: "automation.update",
-          schemaVersion: 2,
+          schemaVersion: 3,
           requestId: "stale-revision",
           input: { automationId, expectedRevision: 3, prompt: "Changed" },
         },
@@ -878,7 +881,7 @@ describe("automation canonical tool service", () => {
       canonical(setup).invoke(
         {
           toolId: "automation.create",
-          schemaVersion: 2,
+          schemaVersion: 3,
           requestId: "escaped-prompt",
           input: {
             name: "Review",
@@ -919,7 +922,7 @@ describe("automation canonical tool service", () => {
       canonical(escaped).invoke(
         {
           toolId: "automation.get",
-          schemaVersion: 2,
+          schemaVersion: 3,
           requestId: "escaped-definition",
           input: { automationId },
         },
@@ -933,7 +936,7 @@ describe("automation canonical tool service", () => {
     const result = await executor.invoke(
       {
         toolId: "automation.list",
-        schemaVersion: 1,
+        schemaVersion: 2,
         requestId: "list",
         input: {},
       },
@@ -968,7 +971,7 @@ describe("automation canonical tool service", () => {
       executor.invoke(
         {
           toolId: "automation.get",
-          schemaVersion: 2,
+          schemaVersion: 3,
           requestId: "missing-id",
           input: {},
         },
@@ -979,9 +982,9 @@ describe("automation canonical tool service", () => {
       executor.invoke(
         {
           toolId: "automation.get",
-          schemaVersion: 1,
+          schemaVersion: 2,
           requestId: "old-version",
-          input: { threadId: sourceThreadId },
+          input: { automationId },
         },
         invocationSource,
       ),
@@ -1003,7 +1006,7 @@ describe("automation canonical tool service", () => {
       executor.invoke(
         {
           toolId: "automation.create",
-          schemaVersion: 2,
+          schemaVersion: 3,
           requestId: "no-key",
           input,
         },
@@ -1025,7 +1028,7 @@ describe("automation canonical tool service", () => {
       await executor.invoke(
         {
           toolId: "automation.create",
-          schemaVersion: 2,
+          schemaVersion: 3,
           requestId,
           input: { ...input, mutationId: firstMutationId },
         },
@@ -1154,13 +1157,13 @@ describe("automation canonical tool service", () => {
   it("uses the persisted 160-character name bound on create, update, and output schemas", async () => {
     const setup=fixture(), executor=canonical(setup), longName="n".repeat(160);
     const input={name:longName,initialState:"paused",prompt:"Review",runMode:"same_thread",schedule:{kind:"date_time",runAt:"2026-08-09T00:00:00.000Z"},misfirePolicy:null,mutationId:firstMutationId};
-    expect(executor.registry.validatesInput("automation.create",2,input)).toBe(true);
-    expect(executor.registry.validatesInput("automation.create",2,{...input,name:longName+"n"})).toBe(false);
-    expect(executor.registry.validatesInput("automation.update",2,{automationId,expectedRevision:4,name:longName})).toBe(true);
-    expect(executor.registry.validatesInput("automation.update",2,{automationId,expectedRevision:4,name:longName+"n"})).toBe(false);
+    expect(executor.registry.validatesInput("automation.create",3,input)).toBe(true);
+    expect(executor.registry.validatesInput("automation.create",3,{...input,name:longName+"n"})).toBe(false);
+    expect(executor.registry.validatesInput("automation.update",3,{automationId,expectedRevision:4,name:longName})).toBe(true);
+    expect(executor.registry.validatesInput("automation.update",3,{automationId,expectedRevision:4,name:longName+"n"})).toBe(false);
     const result=await setup.service.get({automationId},context());
-    expect(executor.registry.validatesOutput("automation.get",2,{...result,name:longName})).toBe(true);
-    expect(executor.registry.validatesOutput("automation.get",2,{...result,name:longName+"n"})).toBe(false);
+    expect(executor.registry.validatesOutput("automation.get",3,{...result,name:longName})).toBe(true);
+    expect(executor.registry.validatesOutput("automation.get",3,{...result,name:longName+"n"})).toBe(false);
   });
 
 });

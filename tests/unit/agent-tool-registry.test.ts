@@ -521,6 +521,8 @@ describe("AgentToolRegistry", () => {
         ...expectedFilenames,
         "automation.create.v1.json",
         "thread.list.v6.json",
+        "thread.list.v9.json",
+        "thread.status.v5.json",
         "removed.tool.v1.json",
         "legacy.json",
         "README.json.tmp",
@@ -555,13 +557,14 @@ describe("AgentToolRegistry", () => {
     expect(registry.resolveAdapterName("cli", "thread.status").id).toBe(
       "thread.status",
     );
-    expect(registry.artifact("thread.status", 5)).toMatchObject({
+    expect(registry.artifact("thread.status", 6)).toMatchObject({
       deployment: { eligible: true },
       adapters: {
         http: { invocation: "inline" },
         cli: { command: "thread.status" },
       },
     });
+    expect(() => registry.get("thread.status", 5)).toThrow();
   });
 
   it("names every MCP presentation like its Pi native tool", () => {
@@ -574,7 +577,7 @@ describe("AgentToolRegistry", () => {
     expect(
       registry.resolveAdapterName("mcp", "sedes_thread_status").id,
     ).toBe("thread.status");
-    expect(registry.artifact("thread.status", 5)).toMatchObject({
+    expect(registry.artifact("thread.status", 6)).toMatchObject({
       exposure: { adapters: ["cli", "http", "mcp", "pi_rpc", "pi_sdk"] },
       adapters: { mcp: { name: "sedes_thread_status" } },
       execution: { adapterWaitCeilingMilliseconds: { mcp: 30_000 } },

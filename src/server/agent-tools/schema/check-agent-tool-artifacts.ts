@@ -31,18 +31,32 @@ const artifactUrls = Object.freeze(
 );
 const historicalArtifactHashes: Readonly<Record<string, string>> =
   Object.freeze({
+    "thread.status.v5.json":
+      "ecf7628f2898b5587e8b94cef78e2f4ee8e87851f27fc28998035f6c7c823f07",
     "thread.list.v6.json":
       "e5c223751b3bf821218ae9939224994a0c6e68670ca8f3e7a74e6ff7d35ca536",
+    "thread.list.v9.json":
+      "d4d2c91e216fd37951eafedddb2bf8842431fd277e9ce04bd8766f1a61f52001",
     "automation.get.v1.json":
       "3e37d2c4fa9e97979332aa856bc1451c51ca869074935ef76ed719b46abc4f3f",
+    "automation.get.v2.json":
+      "0843ac8b107092428e07551fe5828d40651cde7c8d93c8b516bbfcac03d988b2",
+    "automation.list.v1.json":
+      "6dd14cec26d16dc6f098ad3b57258880e6bd01f3243497ac2c7e18784baadb16",
     "automation.runs.v1.json":
       "8456a0bd29db93abb392dfc5dd15516b2db6d54456bc1f535ef8f41b7c398fab",
     "automation.create.v1.json":
       "40f1e2b66351e60b6677e587e401347c2d2c140898e270968db7441362ba9ef1",
+    "automation.create.v2.json":
+      "a444a6b0942b48f474bbd83f8d93a5a29ae0a7fee24e104f9b7028576a3a06a8",
     "automation.update.v1.json":
       "30d4adeccf10025de54ab89227e38df729dca33298f6eec3f4b71fe5c8f0aec8",
+    "automation.update.v2.json":
+      "96ee49be0e0b08a755cf3866afbb12cff37e00b0435425704743e60fb84e438f",
     "automation.set_state.v1.json":
       "d773d278a682cc832b7a6429fb9b6fd9596b5efa57fffcb4d586553fefdd33b2",
+    "automation.set_state.v2.json":
+      "e647582e982b914cf4022d4f4b01b107ad3ab78fe5869b5f6d217493d7d9bc8c",
     "automation.run_now.v1.json":
       "1739021a12b25e44bf66bb5f3356e9e57bbc208781aca55496e09b38cbed4ec9",
   });
