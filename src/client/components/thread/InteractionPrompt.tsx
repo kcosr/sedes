@@ -39,7 +39,6 @@ export function InteractionPrompt({
   externallyPending = false,
   actionError,
   onDismissError,
-  canInterrupt = false,
   unavailable = false,
   unavailableReason,
   returnFocusTarget,
@@ -51,7 +50,6 @@ export function InteractionPrompt({
   externallyPending?: boolean;
   actionError?: string;
   onDismissError?: () => void;
-  canInterrupt?: boolean;
   unavailable?: boolean;
   unavailableReason?: string;
   returnFocusTarget?: HTMLElement | null;
@@ -253,12 +251,6 @@ export function InteractionPrompt({
             key={request.id}
             request={request}
             pending={controlsDisabled}
-            canInterrupt={canInterrupt}
-            onInterrupt={() => {
-              void store
-                .stopActiveTurn()
-                .catch((error: unknown) => setLocalError(messageFrom(error)));
-            }}
             onRespond={(answers) =>
               void respond({ kind: "questionnaire", answers })
             }
@@ -517,14 +509,10 @@ function ActionMenu({
 function QuestionnairePrompt({
   request,
   pending,
-  canInterrupt,
-  onInterrupt,
   onRespond,
 }: {
   readonly request: QuestionnaireInteraction;
   readonly pending: boolean;
-  readonly canInterrupt: boolean;
-  readonly onInterrupt: () => void;
   readonly onRespond: (
     answers: Extract<InteractionResponse, { kind: "questionnaire" }>["answers"],
   ) => void;
@@ -753,9 +741,6 @@ function QuestionnairePrompt({
     } else if (event.key === "Backspace" || event.key === "Delete") {
       event.preventDefault();
       updateDraft({ selectedOptionId: undefined });
-    } else if (event.key === "Escape" && canInterrupt && !pending) {
-      event.preventDefault();
-      onInterrupt();
     }
   };
 
@@ -781,12 +766,9 @@ function QuestionnairePrompt({
       questionnaireRef.current
         ?.querySelector<HTMLElement>("[data-testid='questionnaire-options']")
         ?.focus();
-      return;
     }
-    if (canInterrupt && !pending) {
-      event.preventDefault();
-      onInterrupt();
-    }
+    // Escape never stops the turn from a questionnaire; Stop remains the
+    // explicit control for that.
   };
 
   return (

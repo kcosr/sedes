@@ -928,6 +928,13 @@ export const Transcript = memo(function Transcript({
       // Complete each keyboard hop immediately so repeats and reversals use
       // the new viewport position rather than an in-flight smooth scroll.
       scrollToHistoryItem(nearestItemId, "auto");
+      return;
+    }
+    // Past the last prompt, Down continues to the latest output exactly as
+    // Jump to latest does. A focused turn hides that control, so it stays put.
+    if (direction === "next" && focusTurnId === undefined) {
+      setLocallySelectedTurnId(undefined);
+      scrollToLatest("auto", "keyboard_next");
     }
   };
 

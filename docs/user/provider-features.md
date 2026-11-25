@@ -98,10 +98,9 @@ counts as an answer. Invocation parameters, when provided, remain read-only
 and separate from the information you submit.
 
 Secret fields are masked while editing and use the ephemeral response path;
-their contents are excluded from notices and diagnostics. Escape interrupts
-the active turn when that operation is available—it never manufactures blank
-answers. A visible note or Other editor may consume Escape first to close or
-clear itself.
+their contents are excluded from notices and diagnostics. Escape never stops
+the active turn or manufactures blank answers; use **Stop** to stop the turn. A
+visible note or Other editor consumes Escape to close or clear itself.
 
 Focus enters the panel once, is not trapped there, and returns to the prior
 meaningful control after the final request resolves. Desktop uses a compact
