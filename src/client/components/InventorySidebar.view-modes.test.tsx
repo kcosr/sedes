@@ -22,7 +22,12 @@ import {
   SIDEBAR_VIEW_STORAGE_KEY,
   type SidebarViewPreferences,
 } from "../app/sidebar-view-model.js";
-import { clearActiveSidebarFilters, hasActiveSidebarFilters, setSidebarInventoryScope } from "../app/sidebar-view-store.js";
+import {
+  clearActiveSidebarFilters,
+  hasActiveSidebarFilters,
+  setSidebarInventoryScope,
+  setSidebarShowThreadDetailCards,
+} from "../app/sidebar-view-store.js";
 import type {
   ApplicationClientState,
   ApplicationClientStore,
@@ -611,7 +616,7 @@ describe("InventorySidebar view modes", () => {
   it("keeps the first organized member as the stack face when another member is selected", async () => {
     const user = userEvent.setup();
     const onSelectThread = vi.fn();
-    seedViewPreferences({ groupBy: "time", stackBy: "group" });
+    seedViewPreferences({ groupBy: "time", stackBy: "group", showThreadDetailCards: true });
     const older = makeThread("thread-older", "Older selected", {
       groupId,
       lastActivityAt: isoAtNoon(-2),
@@ -4447,7 +4452,7 @@ describe("InventorySidebar view modes", () => {
     await waitFor(() =>
       expect(screen.queryByTestId("thread-row-rename")).toBeNull(),
     );
-    // Scope to the row: the pointer travel above can open the hover peek,
+    // Scope to the row: when enabled, pointer travel can open the detail card,
     // which repeats the title in its own overlay.
     expect(screen.getByTestId("flat-thread-row")).toHaveTextContent(
       "Today thread",
@@ -4925,7 +4930,7 @@ describe("InventorySidebar view modes", () => {
     }
   });
 
-  it("opens peek from mouse hover and hides it on pointer leave", async () => {
+  it("opens the detail card on mouse hover only after opting in", async () => {
     vi.useFakeTimers();
     try {
       seedViewPreferences({ groupBy: "none", lastAltGroupBy: "none" });
@@ -4938,9 +4943,25 @@ describe("InventorySidebar view modes", () => {
       await act(async () => {
         await vi.advanceTimersByTimeAsync(200);
       });
+      expect(screen.queryByTestId("thread-peek")).toBeNull();
+      fireEvent.pointerLeave(item, { pointerType: "mouse" });
+
+      act(() => setSidebarShowThreadDetailCards(true));
+      fireEvent.pointerEnter(item, { pointerType: "mouse" });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(200);
+      });
       expect(screen.getByTestId("thread-peek")).toBeInTheDocument();
 
       fireEvent.pointerLeave(item, { pointerType: "mouse" });
+      expect(screen.queryByTestId("thread-peek")).toBeNull();
+
+      fireEvent.pointerEnter(item, { pointerType: "mouse" });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(200);
+      });
+      expect(screen.getByTestId("thread-peek")).toBeInTheDocument();
+      act(() => setSidebarShowThreadDetailCards(false));
       expect(screen.queryByTestId("thread-peek")).toBeNull();
     } finally {
       vi.useRealTimers();
@@ -4950,7 +4971,7 @@ describe("InventorySidebar view modes", () => {
   it("closes the peek when the row's context menu opens", async () => {
     vi.useFakeTimers();
     try {
-      seedViewPreferences({ groupBy: "none", lastAltGroupBy: "none" });
+      seedViewPreferences({ groupBy: "none", lastAltGroupBy: "none", showThreadDetailCards: true });
       renderSidebar([makeThread("thread-1", "Menu peek")]);
       const item = document.querySelector<HTMLElement>(
         '[data-thread-id="thread-1"]',
@@ -4976,7 +4997,7 @@ describe("InventorySidebar view modes", () => {
   it("does not peek at a row hidden under an open modal surface", async () => {
     vi.useFakeTimers();
     try {
-      seedViewPreferences({ groupBy: "none", lastAltGroupBy: "none" });
+      seedViewPreferences({ groupBy: "none", lastAltGroupBy: "none", showThreadDetailCards: true });
       const { container } = renderSidebar([
         makeThread("thread-1", "Hidden peek"),
       ]);
@@ -4996,7 +5017,7 @@ describe("InventorySidebar view modes", () => {
     }
   });
 
-  it("opens peek only for keyboard-visible focus and hides it on blur", async () => {
+  it("opens the detail card on keyboard-visible focus only after opting in", async () => {
     vi.useFakeTimers();
     try {
       seedViewPreferences({ groupBy: "none", lastAltGroupBy: "none" });
@@ -5010,6 +5031,14 @@ describe("InventorySidebar view modes", () => {
         selector === ":focus-visible" ? true : nativeMatches(selector),
       );
 
+      fireEvent.focus(link);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(200);
+      });
+      expect(screen.queryByTestId("thread-peek")).toBeNull();
+      fireEvent.blur(link);
+
+      act(() => setSidebarShowThreadDetailCards(true));
       fireEvent.focus(link);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(200);
@@ -5034,7 +5063,7 @@ describe("InventorySidebar view modes", () => {
     );
     vi.useFakeTimers();
     try {
-      seedViewPreferences({ groupBy: "none", lastAltGroupBy: "none" });
+      seedViewPreferences({ groupBy: "none", lastAltGroupBy: "none", showThreadDetailCards: true });
       renderSidebar([makeThread("thread-1", "Touch menu")]);
       const item = document.querySelector<HTMLElement>(
         '[data-thread-id="thread-1"]',
@@ -5078,7 +5107,7 @@ describe("InventorySidebar view modes", () => {
   it("never opens a peek when the full-screen mobile drawer disables it", async () => {
     vi.useFakeTimers();
     try {
-      seedViewPreferences({ groupBy: "none", lastAltGroupBy: "none" });
+      seedViewPreferences({ groupBy: "none", lastAltGroupBy: "none", showThreadDetailCards: true });
       renderSidebar([makeThread("thread-1", "Mobile row")], {}, false);
       const item = document.querySelector<HTMLElement>(
         '[data-thread-id="thread-1"]',
@@ -5140,7 +5169,7 @@ describe("sidebar background work authority", () => {
   it("clears a visible peek's stale counts when application authority is lost", async () => {
     vi.useFakeTimers();
     try {
-      seedViewPreferences({ groupBy: "none", lastAltGroupBy: "none" });
+      seedViewPreferences({ groupBy: "none", lastAltGroupBy: "none", showThreadDetailCards: true });
       const threads = [makeThread("agents", "Agent work", { backgroundWork: { agents: 1, commands: 0, other: 0 } })];
       const view = renderSidebar(threads);
       fireEvent.pointerEnter(view.container.querySelector('[data-thread-id="agents"]')!, { pointerType: "mouse" });

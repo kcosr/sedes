@@ -100,7 +100,11 @@ test("sidebar prioritizes turns, unseen completion, subagents, and background co
   await page.setViewportSize({ width: 1720, height: 900 });
   await openSedesWorkspace(page);
   await page.getByRole("button", { name: "Switch to Timeline", exact: true }).click();
-  await page.getByTestId("desktop-sidebar").getByTestId("new-thread-trigger").click();
+  const sidebar = page.getByTestId("desktop-sidebar");
+  await sidebar.getByTestId("view-options-trigger").click();
+  await page.getByRole("menuitemcheckbox", { name: "Show thread detail cards" }).click();
+  await page.keyboard.press("Escape");
+  await sidebar.getByTestId("new-thread-trigger").click();
   await page.getByRole("textbox", { name: "Thread name" }).fill("Background work priority");
   await selectCustomNewThreadTarget(page, "Claude subscription · Claude");
   const created = page.waitForResponse(response => response.request().method() === "POST"
@@ -108,7 +112,7 @@ test("sidebar prioritizes turns, unseen completion, subagents, and background co
   await page.getByRole("button", { name: "Create thread" }).click();
   const { threadId } = await (await created).json() as { threadId: string };
   await expect(page).toHaveURL(new RegExp(`/threads/${threadId}$`));
-  const row = page.getByTestId("desktop-sidebar").getByTestId("flat-thread-row")
+  const row = sidebar.getByTestId("flat-thread-row")
     .filter({ has: page.getByText("Background work priority", { exact: true }) });
   const glyph = row.locator(".flat-row-glyph");
   const advance = async (stage: string) => {

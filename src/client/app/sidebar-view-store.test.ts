@@ -20,6 +20,7 @@ import {
   setSidebarScopeCollapsed,
   setSidebarShowBackendIcons,
   setSidebarShowFilter,
+  setSidebarShowThreadDetailCards,
   setSidebarStackBy,
   setSidebarTargetFilterId,
   updateSidebarModePreferences,
@@ -55,6 +56,7 @@ describe("sidebar view preferences read path", () => {
   it("returns defaults when nothing is stored, without writing a blob", () => {
     expect(getSidebarViewPreferences()).toEqual(SIDEBAR_VIEW_DEFAULTS);
     expect(getSidebarViewPreferences().groupBy).toBe("time");
+    expect(getSidebarViewPreferences().showThreadDetailCards).toBe(false);
     expect(localStorage.getItem(SIDEBAR_VIEW_STORAGE_KEY)).toBeNull();
   });
 
@@ -89,11 +91,12 @@ describe("sidebar view preferences read path", () => {
         groupBy: "galaxy",
         lastAltGroupBy: "state",
         modes: {
-          time: { sortBy: "magic", density: "card", peek: false },
+          time: { sortBy: "magic", density: "card" },
           bogus: { sortBy: "alpha" },
         },
         show: { snoozed: false, settled: false, drafts: "yes" },
         groupForks: "flat",
+        showThreadDetailCards: "true",
       }),
     );
     invalidateSnapshot();
@@ -110,10 +113,11 @@ describe("sidebar view preferences read path", () => {
       groupBy: "time",
       stackBy: "none",
       lastAltGroupBy: "state",
-      modes: { time: { density: "card", peek: false } },
+      modes: { time: { density: "card" } },
       show: { snoozed: false, settled: false, drafts: true },
       groupForks: true,
       showBackendIcons: true,
+      showThreadDetailCards: false,
     });
   });
 
@@ -131,7 +135,6 @@ describe("sidebar view preferences read path", () => {
             sortBy: "alpha",
             direction: "asc",
             density: "card",
-            peek: false,
           },
         },
         show: { snoozed: false, settled: false, drafts: false },
@@ -150,7 +153,6 @@ describe("sidebar view preferences read path", () => {
           sortBy: "alpha",
           direction: "asc",
           density: "card",
-          peek: false,
         },
       },
       show: { snoozed: false, settled: false, drafts: false },
@@ -185,7 +187,6 @@ describe("sidebar view preferences read path", () => {
             sortBy: "alpha",
             direction: "asc",
             density: "card",
-            peek: false,
             pinnedOnly: true,
           },
         },
@@ -203,7 +204,6 @@ describe("sidebar view preferences read path", () => {
           sortBy: "alpha",
           direction: "asc",
           density: "card",
-          peek: false,
           pinnedOnly: true,
         },
       },
@@ -212,7 +212,6 @@ describe("sidebar view preferences read path", () => {
       sortBy: "alpha",
       direction: "asc",
       density: "card",
-      peek: false,
       pinnedOnly: true,
     });
   });
@@ -227,7 +226,6 @@ describe("sidebar view preferences read path", () => {
             sortBy: "alpha",
             direction: "asc",
             density: "card",
-            peek: false,
           },
         },
       }),
@@ -611,11 +609,31 @@ describe("sidebar view preference mutations", () => {
 
   it("resetSidebarMode removes only that mode's entry", () => {
     updateSidebarModePreferences("time", { density: "card" });
-    updateSidebarModePreferences("state", { peek: false });
+    updateSidebarModePreferences("state", { pinnedOnly: true });
     resetSidebarMode("time");
     const preferences = getSidebarViewPreferences();
     expect(preferences.modes.time).toBeUndefined();
-    expect(preferences.modes.state).toEqual({ peek: false });
+    expect(preferences.modes.state).toEqual({ pinnedOnly: true });
+  });
+
+  it("persists detail cards across reloads, grouping changes, and view resets", () => {
+    localStorage.setItem(SIDEBAR_VIEW_STORAGE_KEY, JSON.stringify({
+      version: 2,
+      modes: { time: { density: "card", peek: true } },
+    }));
+    invalidateSnapshot();
+    expect(getSidebarViewPreferences().showThreadDetailCards).toBe(false);
+    expect(getSidebarViewPreferences().modes.time).toEqual({ density: "card" });
+
+    setSidebarShowThreadDetailCards(true);
+    resetSidebarMode("time");
+    setSidebarGroupBy("state");
+    invalidateSnapshot();
+    expect(getSidebarViewPreferences().showThreadDetailCards).toBe(true);
+
+    setSidebarShowThreadDetailCards(false);
+    invalidateSnapshot();
+    expect(getSidebarViewPreferences().showThreadDetailCards).toBe(false);
   });
 
   it("resetSidebarMode without an entry writes nothing", () => {

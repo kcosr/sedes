@@ -91,7 +91,6 @@ function parseFlatModeEntry(value: unknown): Partial<SidebarModePreferences> {
     sortBy?: SidebarSortBy;
     direction?: SidebarSortDirection;
     density?: SidebarDensity;
-    peek?: boolean;
     pinnedOnly?: boolean;
   } = {};
   const sortBy = pickOptionalEnum(entry.sortBy, sortByValues);
@@ -100,7 +99,6 @@ function parseFlatModeEntry(value: unknown): Partial<SidebarModePreferences> {
   if (direction !== undefined) parsed.direction = direction;
   const density = pickOptionalEnum(entry.density, densityValues);
   if (density !== undefined) parsed.density = density;
-  if (typeof entry.peek === "boolean") parsed.peek = entry.peek;
   if (typeof entry.pinnedOnly === "boolean") {
     parsed.pinnedOnly = entry.pinnedOnly;
   }
@@ -241,6 +239,10 @@ function parsePreferences(raw: string): SidebarViewPreferences {
       typeof blob.showBackendIcons === "boolean"
         ? blob.showBackendIcons
         : SIDEBAR_VIEW_DEFAULTS.showBackendIcons,
+    showThreadDetailCards:
+      typeof blob.showThreadDetailCards === "boolean"
+        ? blob.showThreadDetailCards
+        : SIDEBAR_VIEW_DEFAULTS.showThreadDetailCards,
   };
 }
 
@@ -504,6 +506,12 @@ export function setSidebarGroupForks(value: boolean): void {
 export function setSidebarShowBackendIcons(value: boolean): void {
   const current = getSidebarViewPreferences();
   persist({ ...current, showBackendIcons: value });
+}
+
+export function setSidebarShowThreadDetailCards(value: boolean): void {
+  const current = getSidebarViewPreferences();
+  if (current.showThreadDetailCards === value) return;
+  persist({ ...current, showThreadDetailCards: value });
 }
 
 function subscribe(listener: () => void): () => void {
