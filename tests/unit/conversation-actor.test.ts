@@ -162,7 +162,7 @@ class FakeHandle {
   readonly binding = binding;
   retirementBlocked = false;
   archiveRetirementSafe = false;
-  providerServiceReplacementSafe = false;
+  providerServiceReplacementSafe: boolean | undefined = undefined;
   readonly close = vi.fn(async () => undefined);
   readonly submit = vi.fn(async (_input: SubmitTurnInput) => ({
     accepted: true as const,
@@ -1046,6 +1046,8 @@ describe("ConversationActorManager", () => {
     try {
       expect(acquired.actor.canEvict).toBe(false);
       expect(acquired.actor.canRetireAfterProviderReplacement).toBe(false);
+      handle.providerServiceReplacementSafe = false;
+      expect(acquired.actor.canRetireAfterProviderReplacement).toBe(false);
       handle.providerServiceReplacementSafe = true;
       expect(acquired.actor.canRetireAfterProviderReplacement).toBe(true);
       // The vouch applies to provider replacement only.
@@ -1056,6 +1058,28 @@ describe("ConversationActorManager", () => {
       await expect(retire("archive")).rejects.toThrow();
       expect(handle.close).not.toHaveBeenCalled();
       await expect(retire("provider_replaced")).resolves.toBe("provider_replaced");
+      expect(handle.close).toHaveBeenCalledOnce();
+    } finally { acquired.release(); await manager.close(); }
+  });
+
+  it("lets a handle's unresolved obligations veto provider replacement while the runtime still appears settled", async () => {
+    const { manager, handle, driver } = fixture(undefined, undefined, 60_000);
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    const retire = (kind: "idle" | "provider_replaced") => manager.runWithRuntimeRetired({ scope,
+      applicationThreadId: binding.applicationThreadId, disposition: { kind },
+      detachCoordinatorRuntime: async () => undefined, operation: async () => kind });
+    try {
+      expect(acquired.actor.timeline.runState).toBe("idle");
+      // A handle that declares nothing keeps the ordinary settled path.
+      expect(acquired.actor.canRetireAfterProviderReplacement).toBe(true);
+      // Management can observe the successor before the observer reports it.
+      handle.providerServiceReplacementSafe = false;
+      expect(acquired.actor.canEvict).toBe(true);
+      expect(acquired.actor.canRetireAfterProviderReplacement).toBe(false);
+      acquired.release();
+      await expect(retire("provider_replaced")).rejects.toThrow();
+      expect(handle.close).not.toHaveBeenCalled();
+      await expect(retire("idle")).resolves.toBe("idle");
       expect(handle.close).toHaveBeenCalledOnce();
     } finally { acquired.release(); await manager.close(); }
   });

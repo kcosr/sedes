@@ -455,9 +455,15 @@ export class ConversationActor {
    * local release. Any unresolved Sedes or provider work keeps the fence.
    */
   get canRetireAfterProviderReplacement(): boolean {
+    if (!this.#started || this.#closing || this.#closed) return false;
+    // A history reader owns no provider work.
+    if (this.readOnly) return true;
+    // The replaced runtime can never settle obligations it still held. A
+    // handle that reports them vetoes even a settled or self-closed runtime,
+    // which may not have observed the replacement yet.
+    if (this.#handle.providerServiceReplacementSafe === false) return false;
     if (this.#canRetire(false)) return true;
-    if (!this.#started || this.#closing || this.#closed || !this.#snapshotState || this.#projectionRecoveryRequired) return false;
-    if (this.#handle.providerServiceReplacementSafe !== true) return false;
+    if (this.#handle.providerServiceReplacementSafe !== true || !this.#snapshotState || this.#projectionRecoveryRequired) return false;
     const timeline = this.#projector.timeline();
     return (
       timeline.runState === "disconnected" &&

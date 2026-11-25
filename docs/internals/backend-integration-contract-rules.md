@@ -1182,9 +1182,11 @@ A successor starts only after the bootstrap retires its predecessor and every
 process the predecessor launched. Module replacement therefore retires loaded
 threads with the `provider_replaced` disposition, and its precheck asks that
 disposition rather than counting every non-idle run state. Settled and
-self-closed (`provider_handle_closed`) runtimes retire as usual. A runtime left
-`disconnected` also retires when its handle sets `providerServiceReplacementSafe`
-and the actor has no in-progress turn, interaction, background work, retirement
+self-closed (`provider_handle_closed`) runtimes retire as usual unless their
+handle sets `providerServiceReplacementSafe` to false: a runtime can still
+appear settled before it observes the replacement. A runtime left
+`disconnected` also retires when its handle sets the property to true and the
+actor has no in-progress turn, interaction, background work, retirement
 blocker, or uncertain submission. Anything else keeps the fence until an
 explicit Stop or Restart. A handle that sets the property must close without a
 provider effect, prove release without the retired service, and withhold it

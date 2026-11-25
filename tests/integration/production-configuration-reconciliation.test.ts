@@ -621,6 +621,18 @@ describe("production configuration reconciliation", () => {
         await writeFile(marker, `${JSON.stringify({ version: 1, identity: lockIdentity(path.join(sessionDirectory, path.basename(identity.sessionFile))),
           ownerToken: randomUUID(), hostPid: 4_194_000, bootId: bootId ? bootId.toLowerCase() : null })}\n`, { mode: 0o600 });
       }
+      const observe = () => service.impact(scope, { resourceKind: "environment", resourceId: environmentId, action: "restart",
+        expectedRevision: service.repository.get(scope).revision });
+      // An explicit impact waits on the host queue behind the maintenance pass.
+      const reconcile = async () => { await vi.advanceTimersByTimeAsync(30_000); await observe(); };
+      if (disposition === "uncertain_receipt") {
+        // Management can observe the successor before the old observer fails.
+        await observe();
+        await reconcile();
+        expect((await loaded())?.runState).toBe("idle");
+        expect(blockers).toHaveLastReturnedWith([threadId]);
+        expect(modules).toHaveLength(1);
+      }
       if (disposition === "carrier") await original.carrier.close();
       else {
         await original.crash();
@@ -629,10 +641,6 @@ describe("production configuration reconciliation", () => {
         await vi.waitFor(async () => expect((await loaded())?.runState).toBe("disconnected"));
         expect(await skills()).toMatchObject({ status: 409, body: { error: { code: "backend_submission_unknown" } } });
       }
-      const observe = () => service.impact(scope, { resourceKind: "environment", resourceId: environmentId, action: "restart",
-        expectedRevision: service.repository.get(scope).revision });
-      // An explicit impact waits on the host queue behind the maintenance pass.
-      const reconcile = async () => { await vi.advanceTimersByTimeAsync(30_000); await observe(); };
       await observe();
       await reconcile();
       const review = { status: 200, body: { skills: [expect.objectContaining({ reference: "/skill:review" })] } };

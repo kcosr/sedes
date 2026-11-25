@@ -736,9 +736,10 @@ export interface ConversationHandle {
    * release is provable without the retired service. Such a successor starts
    * only after its predecessor and every process it launched are retired.
    * The handle also reports no backend-local obligation, such as an
-   * unverified submission receipt or a pending tool call. The actor still
-   * requires its own settled evidence. Omission keeps a disconnected runtime
-   * fenced until explicit Stop or Restart.
+   * unverified submission receipt or a pending tool call. False vetoes
+   * replacement retirement even while the runtime still appears settled.
+   * The actor still requires its own settled evidence. Omission keeps a
+   * disconnected runtime fenced until explicit Stop or Restart.
    */
   readonly providerServiceReplacementSafe?: boolean;
 
