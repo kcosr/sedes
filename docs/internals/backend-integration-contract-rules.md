@@ -1172,11 +1172,27 @@ module generation even when saved configuration is unchanged. Replace only
 through the existing actor, provider-work, namespace and cleanup gates; retain
 uncertain operation receipts and never replay input. Carrier or controller-epoch
 changes within the same service do not invalidate the module, and unreachable
-hosts provide no replacement proof. Pi, Codex, Claude and OpenCode implement
-this shared composition rule for their remote provider runtimes. Pi SDK's
-main-owned runtime and local-only Grok do not acquire remote provider authority
-and retain their existing lifetimes. Provider-native handle identity checks
-remain authoritative across every replacement.
+hosts provide no replacement proof. Pi, Codex, Claude, OpenCode and Antigravity
+implement this shared composition rule for their remote provider runtimes. Pi
+SDK's main-owned runtime and local-only Grok do not acquire remote provider
+authority and retain their existing lifetimes. Provider-native handle identity
+checks remain authoritative across every replacement.
+
+A successor starts only after the bootstrap retires its predecessor and every
+process the predecessor launched. Module replacement therefore retires loaded
+threads with the `provider_replaced` disposition, and its precheck asks that
+disposition rather than counting every non-idle run state. Settled and
+self-closed (`provider_handle_closed`) runtimes retire as usual. A runtime left
+`disconnected` also retires when its handle sets `providerServiceReplacementSafe`
+and the actor has no in-progress turn, interaction, background work, retirement
+blocker, or uncertain submission. Anything else keeps the fence until an
+explicit Stop or Restart. A handle that sets the property must close without a
+provider effect and prove release without the retired service. Dispositions:
+Pi sets it and releases replaced-service handles locally. Claude and OpenCode
+remote handles close themselves after finding the successor. Codex handles
+remain `reconciling`, and Antigravity handles remain `disconnected` with a
+release that targets the retired service. Both leave loaded threads fenced
+until explicit Restart; this is intentionally unsupported for now.
 
 The runtime owns everything it starts: SDK clients, daemons, sockets, SSH
 forwards, subprocesses, watchers, and temporary secrets. Startup is bounded;

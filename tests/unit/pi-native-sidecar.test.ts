@@ -115,6 +115,25 @@ function recoveryContext(lease: SidecarRuntimeLease): BackendRuntimeRecoveryCont
 }
 
 describe("native Pi persistent sidecar", () => {
+  it("releases handles of a replaced service locally and fences every other operation", async () => {
+    const original = await fixture(), first = await attachment(original);
+    let current = first.lease;
+    const runtime = { acquire: vi.fn(async () => current), acquireExisting: vi.fn(async () => current) } satisfies SidecarRuntimeProvider;
+    const port = new PiNativeRemotePort({ configuration, sidecarRuntime: runtime });
+    cleanup.push(() => port.close());
+    const { handleId } = await port.attach(identity);
+    await first.disconnect();
+    const successor = await fixture(), second = await attachment(successor);
+    current = second.lease;
+    expect(second.lease.serviceIncarnation).not.toBe(first.lease.serviceIncarnation);
+    await expect(port.inspect()).rejects.toMatchObject({ code: "pi_native_runtime_incarnation_changed" });
+    await expect(port.release({ handleId: "unknown-handle" })).rejects.toThrow("pi_native_runtime_incarnation_changed");
+    await expect(port.release({ handleId })).resolves.toBeUndefined();
+    // The successor never receives the old handle or ensures a runtime for it.
+    expect(successor.createHost).not.toHaveBeenCalled();
+    await expect(port.release({ handleId })).rejects.toThrow("pi_native_runtime_incarnation_changed");
+  });
+
   it("publishes idle and unsettled native Pi resources through service status", async () => {
     const f = await fixture(), connection = await attachment(f), { port } = proxy(connection.lease);
     const initial = await port.inspect();

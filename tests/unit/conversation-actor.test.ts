@@ -162,6 +162,7 @@ class FakeHandle {
   readonly binding = binding;
   retirementBlocked = false;
   archiveRetirementSafe = false;
+  providerServiceReplacementSafe = false;
   readonly close = vi.fn(async () => undefined);
   readonly submit = vi.fn(async (_input: SubmitTurnInput) => ({
     accepted: true as const,
@@ -1034,6 +1035,56 @@ describe("ConversationActorManager", () => {
       expect(handle.close).toHaveBeenCalledOnce();
     } finally { acquired.release(); await manager.close(); }
   });
+
+  it("retires a settled runtime disconnected by provider service replacement only when its handle vouches", async () => {
+    const { manager, handle, driver } = fixture(undefined, undefined, 60_000);
+    handle.establishmentSnapshots[0] = { ...snapshot(), runState: "disconnected" };
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    const retire = (kind: "idle" | "archive" | "provider_replaced") => manager.runWithRuntimeRetired({ scope,
+      applicationThreadId: binding.applicationThreadId, disposition: { kind },
+      detachCoordinatorRuntime: async () => undefined, operation: async () => kind });
+    try {
+      expect(acquired.actor.canEvict).toBe(false);
+      expect(acquired.actor.canRetireAfterProviderReplacement).toBe(false);
+      handle.providerServiceReplacementSafe = true;
+      expect(acquired.actor.canRetireAfterProviderReplacement).toBe(true);
+      // The vouch applies to provider replacement only.
+      expect(acquired.actor.canEvict).toBe(false);
+      expect(acquired.actor.canRetireForArchive).toBe(false);
+      acquired.release();
+      await expect(retire("idle")).rejects.toThrow();
+      await expect(retire("archive")).rejects.toThrow();
+      expect(handle.close).not.toHaveBeenCalled();
+      await expect(retire("provider_replaced")).resolves.toBe("provider_replaced");
+      expect(handle.close).toHaveBeenCalledOnce();
+    } finally { acquired.release(); await manager.close(); }
+  });
+
+  it.each(["interrupted_turn", "running", "reconciling", "background", "pending_outcome", "uncertain_receipt", "not_vouched"] as const)(
+    "keeps provider-replacement retirement blocked by %s", async blocker => {
+      const { manager, handle, driver } = fixture(undefined, undefined, 60_000);
+      handle.providerServiceReplacementSafe = blocker !== "not_vouched";
+      handle.establishmentSnapshots[0] = blocker === "interrupted_turn" ? snapshot("disconnected")
+        : blocker === "running" || blocker === "reconciling" ? snapshot(blocker)
+        : { ...snapshot(), runState: blocker === "uncertain_receipt" ? "idle" : "disconnected",
+          ...(blocker === "background" ? { backgroundActivity: { state: "known" as const, agents: 1, commands: 0, other: 0 } } : {}) };
+      const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+      try {
+        if (blocker === "pending_outcome") handle.retirementBlocked = true;
+        if (blocker === "uncertain_receipt") {
+          handle.submit.mockRejectedValueOnce(new BackendError({ category: "unavailable", retryable: true,
+            crossedSubmissionBoundary: true, safeMessage: "Submission outcome is unknown." }));
+          await expect(acquired.actor.submit({ applicationOperationId: "uncertain", source: { kind: "user" },
+            mutationId: "uncertain", reconciliationToken: "uncertain", text: "Hello", contextExcerpts: [], attachments: [], taskContexts: [],
+          })).rejects.toMatchObject({ crossedSubmissionBoundary: true });
+          handle.emit(0, { type: "run_state_changed", state: "disconnected" }, 0);
+          await vi.waitFor(() => expect(acquired.actor.timeline.runState).toBe("disconnected"));
+        }
+        expect(acquired.actor.canRetireAfterProviderReplacement).toBe(false);
+        expect(await acquired.actor.closeIfSafeAfterProviderReplacement()).toBe(false);
+        expect(handle.close).not.toHaveBeenCalled();
+      } finally { acquired.release(); await manager.close(); }
+    });
 
   it.each(["running", "reconciling", "background", "pending_outcome", "proof_revoked"] as const)(
     "keeps archive retirement blocked by %s despite the archive opt-in", async blocker => {

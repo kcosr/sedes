@@ -187,10 +187,17 @@ For remote environments, the persistent sidecar owns Pi processes. Main-server
 restart, SSH carrier loss, or outbound connector loss does not end accepted
 work. Reconnection must reach the same runtime and session generation;
 Sedes does not replay a mutation merely because its response was lost.
-When an idle sidecar is replaced, Sedes recreates its idle backend connection
-after proving local cleanup, so saved Pi conversations can be opened again.
-An SSH reconnect to the same service keeps the existing backend connection.
-Active work and unproven cleanup continue to block automatic replacement.
+When a sidecar is replaced, for example after the host container restarts,
+Sedes recreates its backend connection once the replacement is ready. Pi
+threads that were open but idle are reattached to the new runtime, so they and
+new Pi requests work without restarting the backend. A replacement sidecar
+starts only after the previous one and its Pi processes have exited. Session
+writer locks still guard every session file.
+An SSH reconnect to the same service keeps the existing backend connection. An
+open idle thread whose session the host closed while disconnected reattaches
+when it is next used.
+Active or interrupted work, unresolved input, and unproven cleanup continue to
+block automatic replacement; review them, then restart the Pi backend.
 Unresolved input receipts are preserved; saved inputs are never replayed to
 recover a connection.
 For local environments, stopping main Sedes also stops its owned runtime.

@@ -71,6 +71,16 @@ keep a port pinned to a retired service. Carrier and controller-epoch changes
 within the same service preserve the module. The old port still rejects changed
 runtime identities, so retained handles and unknown operations never cross into
 the replacement. An unavailable peer supplies no replacement authority.
+A loaded thread that the replacement left disconnected does not block it when
+its handle has no unverified receipt, Sedes tool call, Stop reconciliation, or
+control-only recovery. The actor separately requires no interrupted turn,
+interaction, background work, or uncertain submission. Its old port then
+releases the handle locally: the successor exists only after its predecessor
+and every launched process were retired, so the old handle is never sent to
+it. The successor's attachment acquires the session writer lock as usual.
+A controller change within one service can let the host retire an idle, fully
+acknowledged session. The observer then requests handle replacement instead
+of reporting a permanent disconnect, and close accepts that retired handle.
 
 Failed cleanup retains ownership and reports `cleanup_unproven`.
 Live and recovered administration use the same normalization for positively

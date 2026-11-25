@@ -39,6 +39,12 @@ import { PiNativeHost } from "../../src/server/backends/pi/native/host/native-ho
 import { PiNativeHostRegistry } from "../../src/server/backends/pi/native/host/host-registry.js";
 import { registerPiNativeHost } from "../../src/server/backends/pi/native/sidecar/register-host.js";
 import type { ExecutionEnvironmentChannelProvider } from "../../src/server/execution/environment-channel.js";
+import type { PiNativeSessionLauncher } from "../../src/server/backends/pi/native/host/native-host.js";
+import { assessPiRuntimeVersion } from "../../src/server/backends/pi/native/runtime-release.js";
+import { piManagedConfigurationDigest } from "../../src/server/backends/pi/native/rpc/pi-managed-protocol.js";
+import { serializePiNativeBindingDetail } from "../../src/server/backends/pi/native/driver/driver.js";
+import { PiNativeThreadRepository } from "../../src/server/backends/pi/native/pi-native-thread-repository.js";
+import { RemoteExecutionEnvironment } from "../../src/server/execution/remote-execution-environment.js";
 import { openCodeRuntimeCommandSchema, openCodeRuntimeOperations, type OpenCodeRuntimeInfo } from "../../src/server/backends/opencode/opencode-runtime-wire.js";
 
 let application: RunningApplication | undefined;
@@ -432,6 +438,225 @@ describe("production configuration reconciliation", () => {
       for (const carrier of carriers) await carrier.close();
     }
   }, 15_000);
+
+  it.each(["idle", "active", "carrier"] as const)("recovers a loaded Pi thread after abrupt sidecar replacement only when nothing is unresolved (%s)", async disposition => {
+    // Periodic host maintenance retries replacement after the successor is observed.
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const { service, scope, snapshot } = await fixture();
+    const environmentId = randomUUID(), backendId = "loaded-native-pi", targetId = "loaded-native-target";
+    const configuration = structuredClone(snapshot.configuration);
+    configuration.executionEnvironments.push({ id: environmentId, kind: "ssh", label: "Pi host", hostAlias: "test-target",
+      connectionCompression: true, workspaceRoots: ["/workspace"], operations: { kind: "none" } });
+    configuration.backends.push({ id: backendId, kind: "pi_native", label: "Pi", enabled: true, modelPolicy: { type: "catalog" },
+      moduleConfiguration: { projectTrusted: false, initializationTimeoutMs: 30_000 } });
+    configuration.targets.push({ id: targetId, kind: "pi_rpc", backendInstanceId: backendId, executionEnvironmentId: environmentId,
+      label: "Pi", enabled: true, moduleConfiguration: { defaults: {} } });
+    const modules: BackendModuleRuntime[] = [];
+    const prepare = compiledBackendModuleCatalog.prepare.bind(compiledBackendModuleCatalog);
+    vi.spyOn(compiledBackendModuleCatalog, "prepare").mockImplementation(input => prepare(input).map(prepared => {
+      if (prepared.backendInstanceId !== backendId) return prepared;
+      const create = prepared.createRuntime.bind(prepared);
+      prepared.createRuntime = context => { const runtime = create(context); modules.push(runtime); return runtime; };
+      return prepared;
+    }));
+    const identity = { sessionId: randomUUID(), sessionFile: "/workspace/.pi/sessions/loaded.jsonl", cwd: "/workspace" };
+    const timestamp = new Date().toISOString();
+    // An active native turn is cut by the replacement. Its outcome stays unresolved.
+    const busy = disposition === "active";
+    const entries = busy ? [{ id: "user-entry", parentId: null, type: "message", timestamp,
+      message: { role: "user", timestamp: Date.parse(timestamp), content: [{ type: "text", text: "Keep working" }] } }] : [];
+    const history = () => ({ ...identity, entries: structuredClone(entries), leafId: busy ? "user-entry" : null, operations: [], toolCalls: [],
+      toolResults: [], inheritedEntryIds: [], inheritance: "none" as const });
+    const writers: string[] = [], sessionLaunches: string[] = [];
+    let catalogLaunches = 0;
+    const launch: PiNativeSessionLauncher = async input => {
+      if (input.session) sessionLaunches.push(input.session.sessionId); else catalogLaunches++;
+      input.onRuntimeVersion?.(assessPiRuntimeVersion("1.4.0"));
+      let end!: () => void;
+      const closed = new Promise<void>(resolve => { end = resolve; });
+      const recorded = history();
+      const state: Record<string, unknown> = { sessionId: recorded.sessionId, sessionFile: recorded.sessionFile, entries: recorded.entries,
+        leafId: recorded.leafId, operations: [], toolCalls: [], toolResults: [],
+        tools: ["read", "write", "bash"].map(name => ({ name, sourceInfo: { source: "builtin", path: `builtin:${name}` } })),
+        activeTools: [], isIdle: !busy, model: { provider: "provider", id: "model" }, thinkingLevel: "low" };
+      const rpc = async (command: Record<string, unknown>) => {
+        if (command.type === "get_state") return { sessionId: state.sessionId, sessionFile: state.sessionFile, thinkingLevel: "low", isStreaming: busy,
+          isCompacting: false, steeringMode: "one-at-a-time", followUpMode: "one-at-a-time", autoCompactionEnabled: true,
+          messageCount: entries.length, pendingMessageCount: 0, model: { provider: "provider", id: "model" } };
+        if (command.type === "get_available_models") return { models: [{ provider: "provider", id: "model", reasoning: true }] };
+        if (command.type === "get_commands") return { commands: [{ name: "skill:review", source: "skill", description: "Review" }] };
+        return {};
+      };
+      const bridge = async (command: Record<string, unknown>) => {
+        if (command.type === "snapshot") return structuredClone(state);
+        if (command.type === "configure_agent_tools") state.manifestDigest = piManagedConfigurationDigest({ tools: command.tools, instructions: command.instructions });
+        if (command.type === "set_policy") state.policyDigest = piManagedConfigurationDigest(command.policy);
+        if (command.type === "set_active_tools") state.activeTools = command.names;
+        if (command.type === "confirm_configuration") return { configurationToken: randomUUID() };
+        return { ok: true };
+      };
+      return { rpc: { request: rpc, respondUI: async () => {}, closed }, bridge: { request: bridge, closed },
+        close: async () => { end(); }, version: "1.4.0" } as unknown as Awaited<ReturnType<PiNativeSessionLauncher>>;
+    };
+    const launchDigest = runtimeLaunchDigest.pi_native({ projectTrusted: false, initializationTimeoutMs: 30_000 });
+    const policy = { roots: [], capabilities: [], backends: [{ id: backendId, kind: "pi_native" as const, generation: 1, launchDigest,
+      targets: [{ id: targetId, generation: 1 }] }] };
+    const peers: Awaited<ReturnType<typeof createPeer>>[] = [];
+    async function createPeer(previous?: { services: PersistentSidecarServiceRegistry; hosts: PiNativeHost[]; registry: PiNativeHostRegistry }) {
+      const carrier = await createSidecarFramedCarrier();
+      const services = previous?.services ?? new PersistentSidecarServiceRegistry({ scope: { ...scope, installationId: "installation", executionEnvironmentId: environmentId },
+        buildId: "persistent-runtime-test", artifactSha256: "a".repeat(64), runtimeWireVersion: SIDECAR_WIRE_VERSION,
+        configuration: { environmentRevision: 0, operationsRevision: 0 } });
+      const hosts: PiNativeHost[] = previous?.hosts ?? [];
+      const registry = previous?.registry ?? new PiNativeHostRegistry({ scope, executionEnvironmentId: environmentId,
+        channels: {} as ExecutionEnvironmentChannelProvider, environment: {}, serviceDirectory: path.join(directory!, randomUUID()), services,
+        createHost: (runtime, authenticationKey) => {
+          const host = new PiNativeHost({ configuration: runtime, authenticationKey, channels: {} as ExecutionEnvironmentChannelProvider,
+            environment: {}, launch, observationWaitMs: 1,
+            // Native writer protection stays on the successor's attach path.
+            acquireWriter: async sessionFile => { writers.push(sessionFile); return { release: async () => {} }; },
+            store: { resolveSessionDirectory: async () => "/workspace/.pi/sessions", create: async () => identity, fork: async () => identity,
+              reconcileFork: async () => null, listSessions: async () => ({ sessions: [] }), readHistory: async () => history() } });
+          hosts.push(host); return host;
+        } });
+      const controllerEpoch = attachFixturePolicy(services, { environmentRevision: 0, operationsRevision: 0 }, "normal", policy);
+      const detach = registerPiNativeHost({ registry: carrier.hostRegistry, channel: carrier.hostChannel, hosts: registry, services, controllerEpoch,
+        getExecutionPolicy: () => services.executionPolicy(controllerEpoch), isRecoveryController: () => services.recoveryController });
+      await carrier.start();
+      return { carrier, services, hosts, registry,
+        lease: () => ({ session: { runtimeChannel: carrier.mainChannel, closed: carrier.mainTransport.closed,
+          negotiatedCapabilities: carrier.hostRegistry.capabilities(), close: async () => {} },
+          serviceStatus: services.status(), carrierGeneration: 1, release() {} }),
+        // The container restart ends the carrier before the service's processes.
+        async crash() { await carrier.close(); detach(); for (const host of hosts) await host.close(); },
+        async close() { detach(); for (const host of hosts) await host.close(); await carrier.close(); } };
+    }
+    try {
+      let current = await createPeer(); peers.push(current);
+      const inspectService = vi.spyOn(SidecarRuntimeOwner.prototype, "inspectService").mockImplementation(async () => current.services.status());
+      vi.spyOn(SidecarRuntimeOwner.prototype, "connect").mockImplementation(async () => current.services.status());
+      vi.spyOn(SidecarRuntimeOwner.prototype, "acquireOperation").mockImplementation(async () => current.lease());
+      vi.spyOn(SidecarRuntimeOwner.prototype, "acquireExisting").mockImplementation(async () => current.lease());
+      vi.spyOn(SidecarRuntimeOwner.prototype, "acquireRecovery").mockImplementation(async () => current.lease());
+      // Target admission needs host policy confirmed over the management carrier, a fixture here.
+      vi.spyOn(SidecarRuntimeOwner.prototype, "acquirableTargetGeneration").mockReturnValue(1);
+      vi.spyOn(SidecarRuntimeOwner.prototype, "withTargetAuthorization").mockImplementation(async (_backend, _target, _generation, operation) => operation());
+      vi.spyOn(SidecarRuntimeOwner.prototype, "confirmTargetSelection").mockResolvedValue(true);
+      // This host offers no Sedes CLI endpoint; Pi launches with a scrubbed tool environment.
+      vi.spyOn(SidecarRuntimeOwner.prototype, "acquireAgentTools").mockImplementation(async () =>
+        ({ release() {}, closed: new Promise<void>(() => {}) }) as never);
+      // Remote workspace validation has its own coverage; lease the bound workspace directly.
+      vi.spyOn(RemoteExecutionEnvironment.prototype, "acquireLease").mockImplementation(async function(this: RemoteExecutionEnvironment, leaseScope, request) {
+        return { scope: leaseScope, environment: this.environment, workspace: request.workspace, release: async () => {} };
+      });
+      const stop = vi.spyOn(SidecarRuntimeOwner.prototype, "controlService");
+      const blockers = vi.spyOn(ThreadRuntimeCoordinator.prototype, "providerReplacementBlockers");
+      const capture = vi.spyOn(ThreadRuntimeCoordinator.prototype, "captureLoadedRuntime");
+      await service.save(scope, { mutationId: randomUUID(), expectedRevision: snapshot.revision, configuration });
+      await vi.waitFor(() => expect(modules).toHaveLength(1));
+
+      const database = service.repository.database;
+      const now = Date.now();
+      const inventory = new InventoryRepository(database);
+      // The connected host's attachment reports availability; its management carrier is a fixture here.
+      inventory.updateEnvironmentAvailability(scope, environmentId, { available: true, now });
+      const root = new ConfigurationProjection(database, {}).hostPolicy(scope, environmentId)!.snapshot.roots[0]!;
+      const workspace = inventory.upsertWorkspace(scope, { environmentId, canonicalPath: identity.cwd, authorityRootId: root.id,
+        displayName: "Pi", project: { kind: "new", name: "Pi" }, available: true, trustState: "trusted", environmentConfigurationRevision: root.generation, now });
+      const profile = database.prepare("SELECT id FROM agent_connection_profiles WHERE tenant_id = ? AND owner_principal_id = ? AND template_id = ?")
+        .get(scope.tenantId, scope.principalId, targetId) as { id: string };
+      const bindings = new ConversationBindingRepository(database);
+      const threadId = bindings.createUnboundThread(scope, { workspaceId: workspace.id, connectionProfileId: profile.id, title: "Loaded Pi", now }).id;
+      bindings.bindDiscoveredConversation(scope, threadId, { backendConversationId: identity.sessionId, now });
+      const piThreads = new PiNativeThreadRepository(database);
+      piThreads.saveBindingDetails(scope, threadId, { backendConversationId: identity.sessionId,
+        opaqueBindingDetail: serializePiNativeBindingDetail(identity), nativeSessionPath: identity.sessionFile });
+      piThreads.initializeSettings(scope, threadId, { modelProvider: "provider", modelId: "model", thinkingLevel: "low", toolMode: "read_only" });
+
+      const address = application!.server.address();
+      if (!address || typeof address === "string") throw new Error("test_server_not_listening");
+      const request = await authenticatedProductionFetch(application!);
+      const api = (route: string) => request(`http://127.0.0.1:${address.port}/api/threads/${threadId}${route}`);
+      const skills = async () => {
+        const response = await api("/skills?refresh=true");
+        return { status: response.status, body: await response.json() as { skills?: { reference: string }[]; error?: { code: string } } };
+      };
+      const open = async () => {
+        const response = await api("?activityDetail=full");
+        expect(response.status).toBe(200);
+        return (await response.json() as { thread: { runState: string } }).thread.runState;
+      };
+      expect(await open()).toBe(busy ? "running" : "idle");
+      // Provider inventory reports the retained session, so impact keeps its thread loaded.
+      const inspectBackend = () => service.impact(scope, { resourceKind: "backend", resourceId: backendId, action: "restart",
+        expectedRevision: service.repository.get(scope).revision });
+      await inspectBackend();
+      const runtimes = capture.mock.contexts.at(-1) as ThreadRuntimeCoordinator;
+      const loaded = () => runtimes.captureLoadedRuntime(scope, threadId);
+      await vi.waitFor(async () => expect((await loaded())?.runState).toBe(busy ? "running" : "idle"));
+      expect(sessionLaunches).toEqual([identity.sessionId]);
+      expect(writers).toEqual([identity.sessionFile]);
+      const runtime = (await modules[0]!.administration!.inspect()).incarnation;
+
+      const first = modules[0]!, close = vi.spyOn(first, "close");
+      const original = current;
+      current = await createPeer(disposition === "carrier" ? original : undefined); peers.push(current);
+      if (disposition === "carrier") await original.carrier.close();
+      else {
+        await original.crash();
+        // The retained handle stays bound to the replaced service, so a fresh
+        // catalog read fails as in the original incident.
+        await vi.waitFor(async () => expect((await loaded())?.runState).toBe("disconnected"));
+        expect(await skills()).toMatchObject({ status: 409, body: { error: { code: "backend_submission_unknown" } } });
+      }
+      const observe = () => service.impact(scope, { resourceKind: "environment", resourceId: environmentId, action: "restart",
+        expectedRevision: service.repository.get(scope).revision });
+      // An explicit impact waits on the host queue behind the maintenance pass.
+      const reconcile = async () => { await vi.advanceTimersByTimeAsync(30_000); await observe(); };
+      await observe();
+      await reconcile();
+      const review = { status: 200, body: { skills: [expect.objectContaining({ reference: "/skill:review" })] } };
+      if (disposition === "idle") {
+        expect(blockers).toHaveLastReturnedWith([]);
+        expect(modules).toHaveLength(2);
+        expect(close).toHaveBeenCalledOnce();
+        expect(await loaded()).toBeUndefined();
+        // Fresh requests reach the successor without a backend restart.
+        expect(await skills()).toMatchObject(review);
+        expect(await open()).toBe("idle");
+        expect((await modules[1]!.administration!.inspect()).incarnation).not.toBe(runtime);
+        // Native writer protection admits the successor's attachment.
+        expect(sessionLaunches).toEqual([identity.sessionId, identity.sessionId]);
+        expect(writers).toEqual([identity.sessionFile, identity.sessionFile]);
+        await reconcile();
+        expect(modules).toHaveLength(2);
+      } else if (disposition === "active") {
+        // An interrupted turn is unresolved: keep the fence for an explicit restart.
+        expect(blockers).toHaveLastReturnedWith([threadId]);
+        expect(modules).toHaveLength(1);
+        expect(close).not.toHaveBeenCalled();
+        expect((await loaded())?.runState).toBe("disconnected");
+        expect(sessionLaunches).toEqual([identity.sessionId]);
+      } else {
+        // A carrier reconnect to the same service keeps the module and runtime.
+        // The host retired the detached idle session, so the thread reattaches.
+        expect(blockers).not.toHaveBeenCalled();
+        expect(modules).toHaveLength(1);
+        expect(close).not.toHaveBeenCalled();
+        expect(await skills()).toMatchObject(review);
+        expect(await open()).toBe("idle");
+        expect((await first.administration!.inspect()).incarnation).toBe(runtime);
+        expect(sessionLaunches).toEqual([identity.sessionId, identity.sessionId]);
+      }
+      expect(inspectService).toHaveBeenCalled();
+      expect(stop).not.toHaveBeenCalled();
+    } finally {
+      // Loaded actors release through the fixture owner before mocks are restored.
+      await application?.close(); application = undefined;
+      vi.restoreAllMocks();
+      for (const peer of peers) await peer.close();
+    }
+  }, 30_000);
 
   it("refreshes a remote OpenCode module whose service identity was captured during deferred startup", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });

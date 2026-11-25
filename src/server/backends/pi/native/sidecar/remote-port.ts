@@ -204,7 +204,15 @@ export class PiNativeRemotePort implements PiNativePort {
     const lease = await this.input.sidecarRuntime.acquireExisting(combined);
     try {
       combined.throwIfAborted(); lease.channel.assertReady();
-      if (lease.serviceIncarnation !== identity.serviceIncarnation) throw new PiNativeError("pi_native_runtime_incarnation_changed", "sent_outcome_unknown");
+      if (lease.serviceIncarnation !== identity.serviceIncarnation) {
+        // A successor service starts only after its predecessor and every
+        // process it launched are retired, so an attachment this port still
+        // holds ended with that service. Never send an old handle to the
+        // successor, and never claim a handle this port does not hold.
+        if (!this.#handles.has(input.handleId)) throw new PiNativeError("pi_native_runtime_incarnation_changed", "sent_outcome_unknown");
+        this.#released(input.handleId);
+        return;
+      }
       if (!piNativeRuntimeOperations.every(operation => lease.channel.supportsOperation(operation))) throw new PiNativeError("pi_native_remote_runtime_unsupported");
       piNativeSuccessSchema.parse(await this.#call(lease, { action: "release", input, runtimeId: identity.runtimeId }, combined));
       this.#released(input.handleId);

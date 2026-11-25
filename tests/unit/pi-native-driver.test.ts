@@ -1772,6 +1772,33 @@ describe("native Pi driver", () => {
     await expect(handle.reconcileInterrupt(stop)).resolves.toEqual({ outcome: "accepted" });
     unsubscribe(); await handle.close();
   });
+  it("replaces an idle observer whose host session was retired after a controller change", async () => {
+    const { driver, fixture } = setup(); let retired = false;
+    const observe = fixture.port.observe;
+    fixture.port.observe = async (input, signal) => {
+      if (retired) throw new PiNativeError("pi_native_session_unknown", "sent_outcome_unknown");
+      return observe(input, signal);
+    };
+    const handle = await driver.attach(conversation);
+    expect(handle.providerServiceReplacementSafe).toBe(true);
+    const events: BackendConversationEvent[] = []; handle.subscribe(event => events.push(event));
+    retired = true;
+    await vi.waitFor(() => expect(events).toContainEqual({ type: "resnapshot_required", reason: "provider_handle_closed" }));
+    expect(events).not.toContainEqual({ type: "run_state_changed", state: "disconnected" });
+    // The host's bounded receipt of that retired handle may have aged out.
+    fixture.port.release = async () => { throw new PiNativeError("pi_native_session_unknown", "sent_outcome_unknown"); };
+    await expect(handle.close()).resolves.toBeUndefined();
+    expect(handle.providerServiceReplacementSafe).toBe(false);
+  });
+  it("keeps an unrelated unknown release failing for a handle whose session was not retired", async () => {
+    const { driver, fixture } = setup();
+    const handle = await driver.attach(conversation);
+    const release = fixture.port.release;
+    fixture.port.release = async () => { throw new PiNativeError("pi_native_session_unknown", "sent_outcome_unknown"); };
+    await expect(handle.close()).rejects.toThrow("pi_native_session_unknown");
+    fixture.port.release = release;
+    await expect(handle.close()).resolves.toBeUndefined();
+  });
   it("keeps existing control alive when an attached observer loses continuity", async () => {
     const { driver, fixture } = setup(); let lost = false;
     fixture.state = { ...fixture.state, entries: [user("u", null)], leafId: "u", isIdle: false };

@@ -501,11 +501,29 @@ export class ThreadRuntimeCoordinator {
     scope: RequestScope,
     applicationThreadId: string,
     operation: () => Promise<Result>,
-    options?: { readonly purpose: "archive" },
+    options?: { readonly purpose: "archive" | "provider_replaced" },
   ): Promise<Result> {
     return this.#runWithRuntimeMaintenance(
       scope, applicationThreadId, { kind: options?.purpose ?? "idle" }, operation,
     );
+  }
+
+  /**
+   * Threads whose loaded runtime retirement after a management-confirmed
+   * provider service replacement would currently reject. Reads without
+   * borrowing or waiting. Retirement cancels a runtime still establishing,
+   * and settles one already retiring, so neither is reported here.
+   */
+  providerReplacementBlockers(
+    scope: RequestScope,
+    applicationThreadIds: readonly string[],
+  ): string[] {
+    return [...new Set(applicationThreadIds)].filter((applicationThreadId) => {
+      const entry = this.#entries.get(scopedKey(scope, applicationThreadId));
+      const runtime = entry?.runtime;
+      if (!entry || entry.eviction || !runtime || runtime.actor.closed || this.#detached.has(runtime)) return false;
+      return !runtime.actor.canRetireAfterProviderReplacement;
+    });
   }
 
   /**
@@ -644,6 +662,7 @@ export class ThreadRuntimeCoordinator {
     disposition:
       | { readonly kind: "idle" }
       | { readonly kind: "archive" }
+      | { readonly kind: "provider_replaced" }
       | {
           readonly kind: "explicit_detach";
           readonly expected: ThreadForceResetConversationRuntimeBlocker | undefined;
@@ -676,7 +695,7 @@ export class ThreadRuntimeCoordinator {
                 : unprojected === disposition.expected.generation && disposition.expected.runState === "starting"
                   ? { kind: "unprojected_detach", expectedGeneration: unprojected }
                   : { kind: "idle" }
-              : { kind: disposition.kind === "archive" ? "archive" : "idle" };
+              : { kind: disposition.kind === "explicit_detach" ? "idle" : disposition.kind };
           return await this.#actors.runWithRuntimeRetired({
             scope,
             applicationThreadId,
@@ -1808,7 +1827,7 @@ export class ThreadRuntimeCoordinator {
     if (this.#entries.get(key) === entry) this.#entries.delete(key);
   }
 
-  async #releaseIdleRuntime(key: string, purpose: "idle" | "archive" = "idle"): Promise<void> {
+  async #releaseIdleRuntime(key: string, purpose: "idle" | "archive" | "provider_replaced" = "idle"): Promise<void> {
     while (true) {
       const entry = this.#entries.get(key);
       if (!entry) return;
@@ -1834,7 +1853,9 @@ export class ThreadRuntimeCoordinator {
         if (this.#entries.get(key) === entry) this.#entries.delete(key);
         continue;
       }
-      if (!(purpose === "archive" ? runtime.actor.canRetireForArchive : runtime.actor.canEvict)) throw new ThreadRuntimeNotIdleError();
+      if (!(purpose === "archive" ? runtime.actor.canRetireForArchive
+        : purpose === "provider_replaced" ? runtime.actor.canRetireAfterProviderReplacement
+        : runtime.actor.canEvict)) throw new ThreadRuntimeNotIdleError();
       await this.#dispose(runtime);
       if (this.#entries.get(key) === entry) this.#entries.delete(key);
     }
