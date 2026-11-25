@@ -511,7 +511,8 @@ User-facing changes are collected here before release. See the
   automatic upgrades. Active or interrupted work, unresolved input, and
   unproven cleanup prevent automatic replacement. See
   [Pi recovery](docs/operator/backends/pi-native.md#ownership-reconnect-and-recovery).
-  ([#130](https://github.com/kcosr/sedes/pull/130))
+  ([#130](https://github.com/kcosr/sedes/pull/130),
+  [#159](https://github.com/kcosr/sedes/pull/159))
 
 - Android High and Low bandwidth dictation finish correctly on codecs that do
   not emit an extra packet at the end of a recording, including automatic
