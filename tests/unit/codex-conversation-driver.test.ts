@@ -21573,6 +21573,31 @@ it("Codex publishes a confirmed Goal pause even when the Stop budget ends just a
   } finally { vi.useRealTimers(); harness.enqueue("thread/unsubscribe", { status: "unsubscribed" }); await handle.close(); }
 });
 
+it.each(["confirmed", "uncertain"] as const)("Codex vetoes provider-replacement retirement only while its automatic Goal pause is unresolved (%s)", async pause => {
+  const harness = new RpcHarness();
+  const goals = new CodexGoalSessionRegistry();
+  const target = driver(harness, connection, new CodexConversationOwnershipRegistry(), catalogModelPolicy, executionSettingsProvider(), goals);
+  let control: import("../../src/server/backends/contracts.js").ConversationControl | undefined;
+  const handle = await target.attach({ ...attachInput(), onControlReady: value => { control = value; } });
+  await establish(harness, handle);
+  harness.enqueue("thread/read", { thread: nativeThread() });
+  try {
+    const input = { applicationOperationId: "goal-stop", deadlineAt: Date.now() + 30_000 };
+    await control!.interrupt(input);
+    const goal = { threadId: "thread-1", objective: "Keep working", status: "active", tokenBudget: null, tokensUsed: 0, timeUsedSeconds: 0, createdAt: 1, updatedAt: 1 };
+    harness.enqueue("thread/goal/get", { goal });
+    harness.enqueue("thread/goal/set", pause === "confirmed" ? { goal: { ...goal, status: "paused", updatedAt: 2 } } : () => {
+      throw new CodexRpcDeliveryError({ code: "goal_response_lost", delivery: "sent_outcome_unknown", generation: 1, method: "thread/goal/set" });
+    });
+    if (pause === "uncertain") harness.enqueue("thread/goal/get", new Error("goal_read_failed"));
+    await expect(control!.mutateProviderFeature!({ featureId: "codex.goal", schemaVersion: 1, actionId: "pause", arguments: {} }))
+      .resolves.toMatchObject({ outcome: pause === "confirmed" ? "accepted" : "uncertain" });
+    harness.facade.updateLifecycle({ state: "unavailable", generation: harness.generation, unavailableReason: "provider_service_replaced" });
+    // The accepted Stop alone never vetoes; its unresolved Goal pause does.
+    expect(handle.providerServiceReplacementSafe).toBe(pause === "confirmed");
+  } finally { await handle.close(); }
+});
+
 it.each([true, false])("Codex replaces stale Goal state after an uncertain pause crosses the Stop deadline (observed=%s)", async observed => {
   const harness = new RpcHarness();
   const goals = new CodexGoalSessionRegistry();

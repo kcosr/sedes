@@ -54,13 +54,12 @@ describe("CodexGoalRecoveryReceipts", () => {
     expect(admitted.finish!(outcome)).toBe(true);
     expect(receipts.hasUnresolved(binding)).toBe(outcome === "uncertain");
   });
-  it("does not treat a prepared feature receipt as an unknown outcome", () => {
+  it("treats a prepared feature receipt as unresolved because it may have been dispatched", () => {
     const { receipts, binding, repository, scope } = fixture();
-    // A proven rejection leaves its receipt prepared; a retry re-runs it.
     repository.prepare(scope, { applicationThreadId: binding.applicationThreadId, mutationId: "tui-start", featureId: "codex.managed_tui",
       schemaVersion: 1, actionId: "start", requestFingerprint: "d".repeat(64), expectedThreadRevision: 5, expectedMutationRevision: 0,
       desiredPostcondition: { lifecycle: "running" }, now: 100 });
-    expect(receipts.hasUnresolved(binding)).toBe(false);
+    expect(receipts.hasUnresolved(binding)).toBe(true);
   });
   it("durably admits a resume once before provider work and uses injected finish time", () => {
     const { receipts, input, repository, scope, advance } = fixture();

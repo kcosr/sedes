@@ -380,8 +380,9 @@ export class CodexConversationHandle implements ConversationHandle {
     if (
       this.#closing || this.#closed || this.#establishing || this.#mutationInFlight ||
       this.#pendingNotificationWork > 0 || this.#pendingControlStart !== undefined ||
-      // An accepted Stop is retained authority; only an unresolved one vetoes.
-      this.#interruptOperations.unresolved ||
+      // An accepted Stop is retained authority; only an unresolved one, or its
+      // unresolved automatic Goal pause, vetoes.
+      this.#interruptOperations.unresolved || this.#goalPauseUnresolved ||
       [...this.#submitOperations.values(), ...this.#steerOperations.values()].some(operation => operation.state === "outcome_unknown") ||
       [...this.#compactOperations.values()].includes("outcome_unknown") ||
       this.#interactions.pendingCount() > 0 || this.#interactions.hasUnresolvedResponses() ||
@@ -572,6 +573,7 @@ export class CodexConversationHandle implements ConversationHandle {
     observedTurnId: string | undefined;
   } | undefined;
   #acceptedStop: InterruptConversationInput | undefined;
+  #goalPauseUnresolved = false;
   readonly #submitOperations = new Map<
     string,
     | {
@@ -2200,7 +2202,12 @@ export class CodexConversationHandle implements ConversationHandle {
             input.schemaVersion !== CODEX_GOAL_FEATURE_REF.schemaVersion || input.actionId !== "pause") {
           return Promise.resolve({ outcome: "rejected" as const });
         }
-        return this.#mutateGoal(input, generation, this.#acceptedStop);
+        // The automatic Goal pause bypasses durable feature receipts. It stays
+        // an unresolved obligation until its outcome is proven either way.
+        this.#goalPauseUnresolved = true;
+        const result = await this.#mutateGoal(input, generation, this.#acceptedStop);
+        this.#goalPauseUnresolved = result.outcome === "uncertain";
+        return result;
       },
     });
   }
