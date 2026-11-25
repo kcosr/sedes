@@ -312,6 +312,7 @@ User-facing changes are collected here before release. See the
   in **View options** applies across Timeline, State, and Flat list on this
   client. Stacks still open their member list on hover. See
   [sidebar organization](docs/user/organize-work.md#choose-a-sidebar-organization).
+  ([#162](https://github.com/kcosr/sedes/pull/162))
 
 - In the chat, pressing Command/Ctrl+Down on the last prompt now jumps to the
   latest output, like **Jump to latest**. Escape in a question prompt no
