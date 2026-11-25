@@ -508,6 +508,7 @@ User-facing changes are collected here before release. See the
   runtime until the backend is restarted. Threads with unresolved work stay
   fenced. See
   [Codex runtime lifetime](docs/operator/backends/codex.md#sedes-owned-stdio).
+  ([#160](https://github.com/kcosr/sedes/pull/160))
 
 - Remote backends recover after their sidecar is replaced, allowing Pi
   conversations to reopen without restarting Sedes. This includes Pi threads
