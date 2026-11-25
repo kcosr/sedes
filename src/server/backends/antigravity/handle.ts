@@ -160,8 +160,12 @@ export class AntigravityHandle implements ConversationHandle {
     if (this.#disconnected) projection.snapshot.runState = "disconnected";
     if (this.#pendingSubmit && projection.snapshot.runState === "idle" && !Object.values(projection.snapshot.turnsById).some(
       turn => turn.completionCorrelations?.includes(this.#pendingSubmit!))) projection.snapshot.runState = "starting";
-    if (this.#disconnected && projection.snapshot.backgroundActivity)
+    if (this.#disconnected && projection.snapshot.backgroundActivity) {
+      // Newer native evidence of background work invalidates the idle proof
+      // taken before the disconnect; it never restores one.
+      if (hasOutstandingBackgroundActivity(projection.snapshot.backgroundActivity)) this.#backgroundBeforeDisconnect = projection.snapshot.backgroundActivity;
       projection.snapshot.backgroundActivity = this.#disconnectedBackground(projection.snapshot.backgroundActivity);
+    }
     if (emit && this.#projection) this.#diff(this.#projection.snapshot, projection.snapshot);
     this.#projection = projection;
     if (projection.snapshot.runState === "idle") this.#streaming = false;

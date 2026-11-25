@@ -244,7 +244,7 @@ describe("Antigravity persistent sidecar", () => {
     expect(f.createHost).toHaveBeenCalledOnce();
   });
   it("releases handles of a replaced service locally without contacting the successor", async () => {
-    const f = await fixture(), first = await attachment(f); let lease = first.lease; const { port } = proxy(f, () => lease);
+    const f = await fixture(), first = await attachment(f); let lease = first.lease; const { port, runtime } = proxy(f, () => lease);
     const identity = await port.create({ cwd: f.cwd, operationId: "create" }); const { handleId } = await port.attach(identity);
     await first.disconnect();
     // The carrier alone does not prove replacement.
@@ -257,6 +257,10 @@ describe("Antigravity persistent sidecar", () => {
     await expect(port.release({ handleId })).resolves.toBeUndefined();
     await expect(port.inspect()).rejects.toMatchObject({ code: "antigravity_runtime_incarnation_changed" });
     expect(call).not.toHaveBeenCalled();
+    // Once proven, release no longer needs any carrier.
+    runtime.acquireExisting.mockRejectedValue(new Error("sidecar_unavailable"));
+    await expect(port.release({ handleId })).resolves.toBeUndefined();
+    await expect(port.release({ handleId: "unknown-handle" })).rejects.toMatchObject({ code: "antigravity_runtime_incarnation_changed" });
     expect(f.createHost).toHaveBeenCalledOnce();
   });
   it("reacquires normal service authority before promoting a retained recovery carrier", async () => {

@@ -108,6 +108,11 @@ export class AntigravityRemotePort implements AntigravityPort {
   get serviceReplaced(): boolean { return this.#serviceReplaced; }
   async release(input: Parameters<AntigravityPort["release"]>[0], signal?: AbortSignal) {
     if (this.#closed) { if (!this.#handles.has(input.handleId)) throw new AntigravityError("antigravity_session_unknown", "sent_outcome_unknown"); return; }
+    if (this.#serviceReplaced) {
+      // Retirement is already proven; the successor's availability is irrelevant.
+      if (!this.#handles.has(input.handleId)) throw new AntigravityError("antigravity_runtime_incarnation_changed", "sent_outcome_unknown");
+      return;
+    }
     try { antigravitySuccessSchema.parse(await this.#invoke("release", input, signal, true)); }
     catch (error) {
       // The attachment of a handle this port holds ended with the replaced

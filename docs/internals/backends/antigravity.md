@@ -53,8 +53,9 @@ operation outcomes and pending interactions independently of carrier lifetime.
 A lease from a different service incarnation proves the bound runtime retired
 with its predecessor. The remote port then releases its own handles locally,
 and a disconnected handle stops polling for the retained owner. Background
-activity confirmed idle before the disconnect becomes known-idle again;
-anything else stays unknown. The handle vouches for provider-replacement
+activity confirmed idle before the disconnect becomes known-idle again unless
+history read while disconnected revealed background work; anything else stays
+unknown. Once replacement is proven, release needs no carrier. The handle vouches for provider-replacement
 retirement only without receipts, permissions, requests or setters in flight.
 
 The saved policy allows one Antigravity instance per execution environment. The
