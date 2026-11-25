@@ -4186,6 +4186,11 @@ describe("CodexConversationBackendDriver", () => {
     const harness = new RpcHarness();
     const handle = await driver(harness).attach(attachInput());
     await establish(harness, handle, nativeThread());
+    // A Stop accepted as an idle no-op is retained authority, not unresolved work.
+    const stop = { applicationOperationId: "idle-stop", deadlineAt: Date.now() + 5_000 };
+    harness.enqueue("thread/read", { thread: nativeThread() });
+    await handle.interrupt(stop);
+    await expect(handle.reconcileInterrupt(stop)).resolves.toEqual({ outcome: "accepted" });
     // A ready runtime declares nothing; ordinary settled retirement applies.
     expect(handle.providerServiceReplacementSafe).toBeUndefined();
     harness.facade.updateLifecycle({ state: "unavailable", generation: harness.generation, unavailableReason: "provider_service_replaced" });

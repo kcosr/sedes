@@ -380,7 +380,8 @@ export class CodexConversationHandle implements ConversationHandle {
     if (
       this.#closing || this.#closed || this.#establishing || this.#mutationInFlight ||
       this.#pendingNotificationWork > 0 || this.#pendingControlStart !== undefined ||
-      this.#acceptedStop !== undefined || this.#interruptOperations.unresolved ||
+      // An accepted Stop is retained authority; only an unresolved one vetoes.
+      this.#interruptOperations.unresolved ||
       [...this.#submitOperations.values(), ...this.#steerOperations.values()].some(operation => operation.state === "outcome_unknown") ||
       [...this.#compactOperations.values()].includes("outcome_unknown") ||
       this.#interactions.pendingCount() > 0 || this.#interactions.hasUnresolvedResponses() ||
