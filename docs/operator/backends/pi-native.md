@@ -192,7 +192,10 @@ Sedes recreates its backend connection once the replacement is ready. Pi
 threads that were open but idle are reattached to the new runtime, so they and
 new Pi requests work without restarting the backend. A replacement sidecar
 starts only after the previous one and its Pi processes have exited. Session
-writer locks still guard every session file.
+writer locks still guard every session file: if the restart killed a Pi
+process before it released its session, that session's writer marker remains
+and its thread stays disconnected until the marker is recovered as described
+below.
 An SSH reconnect to the same service keeps the existing backend connection. An
 open idle thread whose session the host closed while disconnected reattaches
 when it is next used.

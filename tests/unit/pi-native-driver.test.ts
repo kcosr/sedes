@@ -44,6 +44,7 @@ function operationStore(): PiNativeOperations {
     markSubmissionDispatched(_scope, _thread, id, requestHash, prepareAttempt) { const prior = records.get(id);
       if (!prior || prior.state !== "sent" || prior.requestHash !== requestHash || prior.prepareAttempt !== prepareAttempt || prior.receiptJson !== null) throw new Error("operation_not_dispatchable");
       const next = { ...prior, dispatchStarted: true }; records.set(id, next); return next; },
+    hasUnresolvedOperations() { return [...records.values()].some(record => record.state === "sent" || record.state === "unknown"); },
     resetUnsentOperation(_scope, _thread, id, requestHash, prepareAttempt) { const prior = records.get(id);
       if (!prior || prior.state !== "sent" || prior.dispatchStarted || prior.requestHash !== requestHash || prior.prepareAttempt !== prepareAttempt || prior.receiptJson !== null) throw new Error("operation_not_resettable");
       const next = { ...prior, state: "prepared" as const, prepareAttempt: prior.prepareAttempt + 1 }; records.set(id, next); return next; },
@@ -1788,6 +1789,29 @@ describe("native Pi driver", () => {
     // The host's bounded receipt of that retired handle may have aged out.
     fixture.port.release = async () => { throw new PiNativeError("pi_native_session_unknown", "sent_outcome_unknown"); };
     await expect(handle.close()).resolves.toBeUndefined();
+    expect(handle.providerServiceReplacementSafe).toBe(false);
+  });
+  it("withholds provider-replacement safety while a durable receipt is unresolved between calls", async () => {
+    const operations = operationStore();
+    const { driver, fixture } = setup({ operations });
+    const handle = await driver.attach(conversation);
+    expect(handle.providerServiceReplacementSafe).toBe(true);
+    // A lost prepare_submission reply leaves the submission sent but unverified.
+    const request = fixture.port.request;
+    fixture.port.request = async (input, signal) => {
+      const result = await request(input, signal);
+      if (input.command.command.type === "prepare_submission") throw new PiNativeError("pi_native_sidecar_unavailable", "sent_outcome_unknown");
+      return result;
+    };
+    await expect(handle.submit(submission("lost-prepare"))).rejects.toMatchObject({ crossedSubmissionBoundary: true });
+    fixture.port.request = request;
+    expect(operations.getOperation(conversation.scope, "thread", "lost-prepare")?.state).toMatch(/^(sent|unknown)$/u);
+    expect(handle.providerServiceReplacementSafe).toBe(false);
+    operations.completeOperation(conversation.scope, "thread", "lost-prepare", { state: "completed", receiptJson: JSON.stringify({ outcome: "not_applied" }) });
+    expect(handle.providerServiceReplacementSafe).toBe(true);
+    // An uncertain Stop receipt is likewise retained after its call returns.
+    operations.prepareOperation(conversation.scope, "thread", { operationId: "stop", kind: "interrupt", requestHash: "b".repeat(64) });
+    operations.completeOperation(conversation.scope, "thread", "stop", { state: "unknown" });
     expect(handle.providerServiceReplacementSafe).toBe(false);
   });
   it("keeps an unrelated unknown release failing for a handle whose session was not retired", async () => {

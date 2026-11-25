@@ -88,6 +88,8 @@ export interface PiNativeOperations {
   completeOperation(scope: ExecutionScope, threadId: string, operationId: string, input: { state: PiNativeOperationRecord["state"]; receiptJson?: string }): PiNativeOperationRecord;
   markSubmissionDispatched(scope: ExecutionScope, threadId: string, operationId: string, requestHash: string, prepareAttempt: number): PiNativeOperationRecord;
   resetUnsentOperation(scope: ExecutionScope, threadId: string, operationId: string, requestHash: string, prepareAttempt: number): PiNativeOperationRecord;
+  /** A sent or unknown submission, action or Stop receipt awaits native evidence. */
+  hasUnresolvedOperations(scope: ExecutionScope, threadId: string): boolean;
 }
 function reject(code: string, text = "The Pi operation is not available.", crossed = false): BackendError {
   return new BackendError({ category: crossed ? "submission_unknown" : "rejected", retryable: false,
@@ -698,11 +700,12 @@ class PiNativeConversationHandle implements ConversationHandle {
   }
   get port() { return this.driver.options.port; }
   /** A replaced service retired this native owner; release is then local to the port.
-   * Unverified receipts, Sedes tool calls, Stop reconciliation and control-only
-   * recovery are obligations a successor runtime cannot settle. */
+   * Durable or in-flight receipts, Sedes tool calls, Stop reconciliation and
+   * control-only recovery are obligations a successor runtime cannot settle. */
   get providerServiceReplacementSafe(): boolean {
     return !this.#closed && !this.#controlOnly && !this.#draining && !this.#activeSubmissionId && !this.#receiptWaiter &&
-      !this.#pendingTurn && this.#controlStopsInFlight === 0 && this.#interactions.size === 0 && !this.#agentTools?.hasPendingCalls();
+      !this.#pendingTurn && this.#controlStopsInFlight === 0 && this.#interactions.size === 0 && !this.#agentTools?.hasPendingCalls() &&
+      !this.driver.options.operations.hasUnresolvedOperations(this.input.scope, this.binding.applicationThreadId);
   }
   setRecoveryNotice(notice: RuntimeNotice, observed: () => void): void {
     this.#recoveryNotice = { notice, observed };

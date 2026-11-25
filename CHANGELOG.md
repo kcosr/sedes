@@ -506,8 +506,8 @@ User-facing changes are collected here before release. See the
 - Remote backends recover after their sidecar is replaced, allowing Pi
   conversations to reopen without restarting Sedes. This includes Pi threads
   that were open when the host restarted: Pi requests work again without
-  restarting the backend. An open Pi thread also reattaches after an SSH
-  reconnect. Sidecar management recognizes idle native Pi runtimes for
+  restarting the backend, unless a killed Pi process left its session writer
+  marker. An open Pi thread also reattaches after an SSH reconnect. Sidecar management recognizes idle native Pi runtimes for
   automatic upgrades. Active or interrupted work, unresolved input, and
   unproven cleanup prevent automatic replacement. See
   [Pi recovery](docs/operator/backends/pi-native.md#ownership-reconnect-and-recovery).

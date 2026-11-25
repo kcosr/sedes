@@ -31,6 +31,7 @@ function operationStore(onVerified?: (operationId: string) => void): PiNativeOpe
     completeOperation(_scope, thread, id, input) { const key = `${thread}:${id}`; const prior = records.get(key); if (!prior) throw new Error("operation_missing"); const next = { ...prior, ...input }; records.set(key, next);
       if (onVerified && next.state === "completed" && next.receiptJson && JSON.parse(next.receiptJson).phase === "accepted") onVerified(id);
       return next; },
+    hasUnresolvedOperations(_scope, thread) { return [...records].some(([key, record]) => key.startsWith(`${thread}:`) && (record.state === "sent" || record.state === "unknown")); },
     markSubmissionDispatched(_scope, thread, id, requestHash, prepareAttempt) { const key = `${thread}:${id}`; const prior = records.get(key);
       if (!prior || prior.state !== "sent" || prior.requestHash !== requestHash || prior.prepareAttempt !== prepareAttempt || prior.receiptJson !== null) throw new Error("operation_not_dispatchable");
       const next = { ...prior, dispatchStarted: true }; records.set(key, next); return next; },

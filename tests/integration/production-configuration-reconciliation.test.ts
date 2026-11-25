@@ -7,7 +7,7 @@ import { InventoryRepository } from "../../src/server/db/repositories/inventory-
 import { ConversationBindingRepository } from "../../src/server/db/repositories/conversation-binding-repository.js";
 import { SubmissionCompletionRepository } from "../../src/server/db/repositories/submission-completion-repository.js";
 import { DomainError } from "../../src/server/domain/errors.js";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -45,6 +45,9 @@ import { piManagedConfigurationDigest } from "../../src/server/backends/pi/nativ
 import { serializePiNativeBindingDetail } from "../../src/server/backends/pi/native/driver/driver.js";
 import { PiNativeThreadRepository } from "../../src/server/backends/pi/native/pi-native-thread-repository.js";
 import { RemoteExecutionEnvironment } from "../../src/server/execution/remote-execution-environment.js";
+import { acquirePiSessionWriterLock } from "../../src/server/backends/pi/pi-session-writer-lock.js";
+import { lockIdentity } from "../../src/server/security/locks.js";
+import { readBootIdentity } from "../../src/server/runtime/process-table.js";
 import { openCodeRuntimeCommandSchema, openCodeRuntimeOperations, type OpenCodeRuntimeInfo } from "../../src/server/backends/opencode/opencode-runtime-wire.js";
 
 let application: RunningApplication | undefined;
@@ -439,7 +442,7 @@ describe("production configuration reconciliation", () => {
     }
   }, 15_000);
 
-  it.each(["idle", "active", "carrier"] as const)("recovers a loaded Pi thread after abrupt sidecar replacement only when nothing is unresolved (%s)", async disposition => {
+  it.each(["idle", "active", "uncertain_receipt", "stale_writer", "carrier"] as const)("recovers a loaded Pi thread after abrupt sidecar replacement only when nothing is unresolved (%s)", async disposition => {
     // Periodic host maintenance retries replacement after the successor is observed.
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const { service, scope, snapshot } = await fixture();
@@ -459,7 +462,8 @@ describe("production configuration reconciliation", () => {
       prepared.createRuntime = context => { const runtime = create(context); modules.push(runtime); return runtime; };
       return prepared;
     }));
-    const identity = { sessionId: randomUUID(), sessionFile: "/workspace/.pi/sessions/loaded.jsonl", cwd: "/workspace" };
+    const identity = { sessionId: randomUUID(), sessionFile: path.join(directory!, "pi-sessions", "loaded.jsonl"), cwd: "/workspace" };
+    await mkdir(path.dirname(identity.sessionFile), { recursive: true });
     const timestamp = new Date().toISOString();
     // An active native turn is cut by the replacement. Its outcome stays unresolved.
     const busy = disposition === "active";
@@ -502,7 +506,7 @@ describe("production configuration reconciliation", () => {
     const policy = { roots: [], capabilities: [], backends: [{ id: backendId, kind: "pi_native" as const, generation: 1, launchDigest,
       targets: [{ id: targetId, generation: 1 }] }] };
     const peers: Awaited<ReturnType<typeof createPeer>>[] = [];
-    async function createPeer(previous?: { services: PersistentSidecarServiceRegistry; hosts: PiNativeHost[]; registry: PiNativeHostRegistry }) {
+    async function createPeer(previous?: { services: PersistentSidecarServiceRegistry; hosts: PiNativeHost[]; registry: PiNativeHostRegistry }, realWriter = false) {
       const carrier = await createSidecarFramedCarrier();
       const services = previous?.services ?? new PersistentSidecarServiceRegistry({ scope: { ...scope, installationId: "installation", executionEnvironmentId: environmentId },
         buildId: "persistent-runtime-test", artifactSha256: "a".repeat(64), runtimeWireVersion: SIDECAR_WIRE_VERSION,
@@ -514,7 +518,10 @@ describe("production configuration reconciliation", () => {
           const host = new PiNativeHost({ configuration: runtime, authenticationKey, channels: {} as ExecutionEnvironmentChannelProvider,
             environment: {}, launch, observationWaitMs: 1,
             // Native writer protection stays on the successor's attach path.
-            acquireWriter: async sessionFile => { writers.push(sessionFile); return { release: async () => {} }; },
+            acquireWriter: async (sessionFile, options) => {
+              writers.push(sessionFile);
+              return realWriter ? acquirePiSessionWriterLock(sessionFile, options) : { release: async () => {} };
+            },
             store: { resolveSessionDirectory: async () => "/workspace/.pi/sessions", create: async () => identity, fork: async () => identity,
               reconcileFork: async () => null, listSessions: async () => ({ sessions: [] }), readHistory: async () => history() } });
           hosts.push(host); return host;
@@ -572,6 +579,11 @@ describe("production configuration reconciliation", () => {
       piThreads.saveBindingDetails(scope, threadId, { backendConversationId: identity.sessionId,
         opaqueBindingDetail: serializePiNativeBindingDetail(identity), nativeSessionPath: identity.sessionFile });
       piThreads.initializeSettings(scope, threadId, { modelProvider: "provider", modelId: "model", thinkingLevel: "low", toolMode: "read_only" });
+      if (disposition === "uncertain_receipt") {
+        // An earlier Send lost its reply; no native evidence has settled it.
+        piThreads.prepareOperation(scope, threadId, { operationId: "uncertain-send", kind: "submission", requestHash: "c".repeat(64) });
+        piThreads.completeOperation(scope, threadId, "uncertain-send", { state: "unknown" });
+      }
 
       const address = application!.server.address();
       if (!address || typeof address === "string") throw new Error("test_server_not_listening");
@@ -600,7 +612,15 @@ describe("production configuration reconciliation", () => {
 
       const first = modules[0]!, close = vi.spyOn(first, "close");
       const original = current;
-      current = await createPeer(disposition === "carrier" ? original : undefined); peers.push(current);
+      current = await createPeer(disposition === "carrier" ? original : undefined, disposition === "stale_writer"); peers.push(current);
+      const sessionDirectory = await realpath(path.dirname(identity.sessionFile));
+      const marker = path.join(sessionDirectory, `${path.basename(identity.sessionFile)}.sedes-native-writer`);
+      if (disposition === "stale_writer") {
+        // The killed native writer left its marker; the kernel boot is unchanged.
+        const bootId = await readBootIdentity();
+        await writeFile(marker, `${JSON.stringify({ version: 1, identity: lockIdentity(path.join(sessionDirectory, path.basename(identity.sessionFile))),
+          ownerToken: randomUUID(), hostPid: 4_194_000, bootId: bootId ? bootId.toLowerCase() : null })}\n`, { mode: 0o600 });
+      }
       if (disposition === "carrier") await original.carrier.close();
       else {
         await original.crash();
@@ -630,8 +650,18 @@ describe("production configuration reconciliation", () => {
         expect(writers).toEqual([identity.sessionFile, identity.sessionFile]);
         await reconcile();
         expect(modules).toHaveLength(2);
-      } else if (disposition === "active") {
-        // An interrupted turn is unresolved: keep the fence for an explicit restart.
+      } else if (disposition === "stale_writer") {
+        // The backend recovers, but writer protection still fences this session.
+        expect(blockers).toHaveLastReturnedWith([]);
+        expect(modules).toHaveLength(2);
+        expect(close).toHaveBeenCalledOnce();
+        expect(await skills()).toMatchObject(review);
+        expect(await open()).toBe("disconnected");
+        expect(writers).toEqual([identity.sessionFile, identity.sessionFile]);
+        expect(sessionLaunches).toEqual([identity.sessionId]);
+        await expect(readFile(marker, "utf8")).resolves.toContain("ownerToken");
+      } else if (disposition === "active" || disposition === "uncertain_receipt") {
+        // Interrupted or unverified work is unresolved: keep the fence for an explicit restart.
         expect(blockers).toHaveLastReturnedWith([threadId]);
         expect(modules).toHaveLength(1);
         expect(close).not.toHaveBeenCalled();

@@ -1187,7 +1187,8 @@ self-closed (`provider_handle_closed`) runtimes retire as usual. A runtime left
 and the actor has no in-progress turn, interaction, background work, retirement
 blocker, or uncertain submission. Anything else keeps the fence until an
 explicit Stop or Restart. A handle that sets the property must close without a
-provider effect and prove release without the retired service. Dispositions:
+provider effect, prove release without the retired service, and withhold it
+while any durable backend receipt remains unresolved. Dispositions:
 Pi sets it and releases replaced-service handles locally. Claude and OpenCode
 remote handles close themselves after finding the successor. Codex handles
 remain `reconciling`, and Antigravity handles remain `disconnected` with a
