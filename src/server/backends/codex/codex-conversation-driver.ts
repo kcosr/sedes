@@ -387,6 +387,8 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
                 lifecycle.unavailableReason ===
                 "runtime_configuration_unavailable"
                   ? "The Codex runtime configuration is unavailable."
+                  : lifecycle.unavailableReason === "provider_service_replaced"
+                    ? "The Codex runtime ended when its execution host service was replaced. Sedes reconnects once its open threads are settled."
                   : lifecycle.state === "circuit_open"
                     ? "The Codex daemon requires operator attention."
                     : "The Codex daemon is not ready.",

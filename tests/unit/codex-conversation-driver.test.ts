@@ -4182,6 +4182,32 @@ describe("CodexConversationBackendDriver", () => {
     await handle.close();
   });
 
+  it("vouches for retirement after its execution-host service is replaced only without unresolved receipts", async () => {
+    const harness = new RpcHarness();
+    const handle = await driver(harness).attach(attachInput());
+    await establish(harness, handle, nativeThread());
+    // A Stop accepted as an idle no-op is retained authority, not unresolved work.
+    const stop = { applicationOperationId: "idle-stop", deadlineAt: Date.now() + 5_000 };
+    harness.enqueue("thread/read", { thread: nativeThread() });
+    await handle.interrupt(stop);
+    await expect(handle.reconcileInterrupt(stop)).resolves.toEqual({ outcome: "accepted" });
+    // A ready runtime declares nothing; ordinary settled retirement applies.
+    expect(handle.providerServiceReplacementSafe).toBeUndefined();
+    harness.facade.updateLifecycle({ state: "unavailable", generation: harness.generation, unavailableReason: "provider_service_replaced" });
+    expect(handle.providerServiceReplacementSafe).toBe(true);
+    // A durable receipt of the retired runtime still awaits settlement.
+    let pending = true;
+    Object.defineProperty(harness.facade, "replacedServiceReceiptsPending", { value: () => pending });
+    expect(handle.providerServiceReplacementSafe).toBe(false);
+    pending = false;
+    expect(handle.providerServiceReplacementSafe).toBe(true);
+    // An ordinary disconnect is not a replacement.
+    harness.facade.updateLifecycle({ state: "unavailable", generation: harness.generation });
+    expect(handle.providerServiceReplacementSafe).toBeUndefined();
+    await handle.close();
+    expect(harness.requestOptions.map(request => request.method)).not.toContain("thread/unsubscribe");
+  });
+
   it("does not authorize a historical in-progress turn as the live turn", async () => {
     const harness = new RpcHarness();
     const activeThread = nativeThread({
@@ -21545,6 +21571,44 @@ it("Codex publishes a confirmed Goal pause even when the Stop budget ends just a
     const identity = binding();
     expect(goals.projection({ tenantId: identity.tenantId, principalId: identity.ownerPrincipalId }, identity.applicationThreadId)?.state).toMatchObject({ status: "paused" });
   } finally { vi.useRealTimers(); harness.enqueue("thread/unsubscribe", { status: "unsubscribed" }); await handle.close(); }
+});
+
+it.each(["confirmed", "uncertain", "uncertain_then_rejected", "uncertain_then_confirmed"] as const)("Codex vetoes provider-replacement retirement only while its automatic Goal pause is unresolved (%s)", async pause => {
+  const harness = new RpcHarness();
+  const goals = new CodexGoalSessionRegistry();
+  const target = driver(harness, connection, new CodexConversationOwnershipRegistry(), catalogModelPolicy, executionSettingsProvider(), goals);
+  let control: import("../../src/server/backends/contracts.js").ConversationControl | undefined;
+  const handle = await target.attach({ ...attachInput(), onControlReady: value => { control = value; } });
+  await establish(harness, handle);
+  harness.enqueue("thread/read", { thread: nativeThread() });
+  try {
+    const input = { applicationOperationId: "goal-stop", deadlineAt: Date.now() + 30_000 };
+    await control!.interrupt(input);
+    const goal = { threadId: "thread-1", objective: "Keep working", status: "active", tokenBudget: null, tokensUsed: 0, timeUsedSeconds: 0, createdAt: 1, updatedAt: 1 };
+    harness.enqueue("thread/goal/get", { goal });
+    harness.enqueue("thread/goal/set", pause === "confirmed" ? { goal: { ...goal, status: "paused", updatedAt: 2 } } : () => {
+      throw new CodexRpcDeliveryError({ code: "goal_response_lost", delivery: "sent_outcome_unknown", generation: 1, method: "thread/goal/set" });
+    });
+    if (pause !== "confirmed") harness.enqueue("thread/goal/get", new Error("goal_read_failed"));
+    await expect(control!.mutateProviderFeature!({ featureId: "codex.goal", schemaVersion: 1, actionId: "pause", arguments: {} }))
+      .resolves.toMatchObject({ outcome: pause === "confirmed" ? "accepted" : "uncertain" });
+    if (pause === "uncertain_then_rejected" || pause === "uncertain_then_confirmed") {
+      // A later Stop's pause: a failed preflight is a pre-boundary rejection;
+      // an accepted pause proves the goal paused.
+      harness.enqueue("thread/read", { thread: nativeThread() });
+      await control!.interrupt({ applicationOperationId: "second-stop", deadlineAt: Date.now() + 30_000 });
+      if (pause === "uncertain_then_rejected") harness.enqueue("thread/goal/get", new Error("goal_read_failed"));
+      else {
+        harness.enqueue("thread/goal/get", { goal });
+        harness.enqueue("thread/goal/set", { goal: { ...goal, status: "paused", updatedAt: 3 } });
+      }
+      await expect(control!.mutateProviderFeature!({ featureId: "codex.goal", schemaVersion: 1, actionId: "pause", arguments: {} }))
+        .resolves.toMatchObject({ outcome: pause === "uncertain_then_rejected" ? "rejected" : "accepted" });
+    }
+    harness.facade.updateLifecycle({ state: "unavailable", generation: harness.generation, unavailableReason: "provider_service_replaced" });
+    // The accepted Stop alone never vetoes; its unresolved Goal pause does.
+    expect(handle.providerServiceReplacementSafe).toBe(pause === "confirmed" || pause === "uncertain_then_confirmed");
+  } finally { await handle.close(); }
 });
 
 it.each([true, false])("Codex replaces stale Goal state after an uncertain pause crosses the Stop deadline (observed=%s)", async observed => {

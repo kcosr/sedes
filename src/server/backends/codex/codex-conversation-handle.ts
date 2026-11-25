@@ -370,6 +370,28 @@ export interface CodexConversationHandleInput {
  */
 export class CodexConversationHandle implements ConversationHandle {
   readonly automaticEviction = "requires_quiescence" as const;
+
+  /**
+   * A replaced execution-host service retired the runtime this handle used,
+   * and close performs no provider effect while it is unattached. Any receipt
+   * or control the retired runtime can no longer settle vetoes retirement.
+   */
+  get providerServiceReplacementSafe(): boolean | undefined {
+    if (
+      this.#closing || this.#closed || this.#establishing || this.#mutationInFlight ||
+      this.#pendingNotificationWork > 0 || this.#pendingControlStart !== undefined ||
+      // An accepted Stop is retained authority; only an unresolved one, or its
+      // unresolved automatic Goal pause, vetoes.
+      this.#interruptOperations.unresolved || this.#goalPausesInFlight > 0 || this.#goalPauseUncertain ||
+      [...this.#submitOperations.values(), ...this.#steerOperations.values()].some(operation => operation.state === "outcome_unknown") ||
+      [...this.#compactOperations.values()].includes("outcome_unknown") ||
+      this.#interactions.pendingCount() > 0 || this.#interactions.hasUnresolvedResponses() ||
+      this.#goalSessions?.recoveryReceipts?.hasUnresolved(this.binding) === true ||
+      this.#client.replacedServiceReceiptsPending(this.binding.applicationThreadId)
+    ) return false;
+    const lifecycle = this.#client.lifecycleSnapshot();
+    return lifecycle.state === "unavailable" && lifecycle.unavailableReason === "provider_service_replaced" ? true : undefined;
+  }
   readonly #resolveThreadEnvironment: ThreadEnvironmentResolver;
   readonly binding: ConversationBinding;
   readonly #canonicalWorkspacePath: string;
@@ -551,6 +573,8 @@ export class CodexConversationHandle implements ConversationHandle {
     observedTurnId: string | undefined;
   } | undefined;
   #acceptedStop: InterruptConversationInput | undefined;
+  #goalPausesInFlight = 0;
+  #goalPauseUncertain = false;
   readonly #submitOperations = new Map<
     string,
     | {
@@ -2179,7 +2203,17 @@ export class CodexConversationHandle implements ConversationHandle {
             input.schemaVersion !== CODEX_GOAL_FEATURE_REF.schemaVersion || input.actionId !== "pause") {
           return Promise.resolve({ outcome: "rejected" as const });
         }
-        return this.#mutateGoal(input, generation, this.#acceptedStop);
+        // The automatic Goal pause bypasses durable feature receipts. An
+        // uncertain attempt stays unresolved until a later pause is accepted,
+        // which proves the goal paused; a rejection or failure never clears it.
+        this.#goalPausesInFlight++;
+        let result: Awaited<ReturnType<CodexConversationHandle["mutateProviderFeature"]>>;
+        try { result = await this.#mutateGoal(input, generation, this.#acceptedStop); }
+        catch (error) { this.#goalPauseUncertain = true; throw error; }
+        finally { this.#goalPausesInFlight--; }
+        if (result.outcome === "uncertain") this.#goalPauseUncertain = true;
+        else if (result.outcome === "accepted") this.#goalPauseUncertain = false;
+        return result;
       },
     });
   }

@@ -46,6 +46,21 @@ function fixture() {
 }
 
 describe("CodexGoalRecoveryReceipts", () => {
+  it.each(["accepted", "rejected", "uncertain"] as const)("reports an admitted resume unresolved until it finishes %s", outcome => {
+    const { receipts, input, binding } = fixture();
+    expect(receipts.hasUnresolved(binding)).toBe(false);
+    const admitted = receipts.begin(input);
+    expect(receipts.hasUnresolved(binding)).toBe(true);
+    expect(admitted.finish!(outcome)).toBe(true);
+    expect(receipts.hasUnresolved(binding)).toBe(outcome === "uncertain");
+  });
+  it("treats a prepared feature receipt as unresolved because it may have been dispatched", () => {
+    const { receipts, binding, repository, scope } = fixture();
+    repository.prepare(scope, { applicationThreadId: binding.applicationThreadId, mutationId: "tui-start", featureId: "codex.managed_tui",
+      schemaVersion: 1, actionId: "start", requestFingerprint: "d".repeat(64), expectedThreadRevision: 5, expectedMutationRevision: 0,
+      desiredPostcondition: { lifecycle: "running" }, now: 100 });
+    expect(receipts.hasUnresolved(binding)).toBe(true);
+  });
   it("durably admits a resume once before provider work and uses injected finish time", () => {
     const { receipts, input, repository, scope, advance } = fixture();
     const admitted = receipts.begin(input);

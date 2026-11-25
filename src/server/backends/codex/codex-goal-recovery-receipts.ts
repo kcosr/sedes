@@ -14,6 +14,11 @@ export class CodexGoalRecoveryReceipts {
     this.#now = now;
   }
 
+  /** Goal resumes and other provider feature mutations still awaiting native evidence. */
+  hasUnresolved(binding: ConversationBinding): boolean {
+    return this.#receipts.hasUnresolved({ tenantId: binding.tenantId, principalId: binding.ownerPrincipalId }, binding.applicationThreadId);
+  }
+
   begin(input: {
     readonly binding: ConversationBinding;
     readonly mutationId: string;

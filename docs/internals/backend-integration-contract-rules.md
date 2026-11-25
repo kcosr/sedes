@@ -1191,11 +1191,14 @@ blocker, or uncertain submission. Anything else keeps the fence until an
 explicit Stop or Restart. A handle that sets the property must close without a
 provider effect, prove release without the retired service, and withhold it
 while any durable backend receipt remains unresolved. Dispositions:
-Pi sets it and releases replaced-service handles locally. Claude and OpenCode
-remote handles close themselves after finding the successor. Codex handles
-remain `reconciling`, and Antigravity handles remain `disconnected` with a
-release that targets the retired service. Both leave loaded threads fenced
-until explicit Restart; this is intentionally unsupported for now.
+Pi sets it and releases replaced-service handles locally. Codex's supervisor
+recognizes a successor that no longer holds its bound runtime, stops retrying,
+and reports `provider_service_replaced`; its handles then set the property
+from their in-memory, interaction, goal and durable runtime receipts. Claude
+and OpenCode remote handles close themselves after finding the successor.
+Antigravity handles remain `disconnected` with a release that targets the
+retired service, leaving loaded threads fenced until explicit Restart; this
+is intentionally unsupported for now.
 
 The runtime owns everything it starts: SDK clients, daemons, sockets, SSH
 forwards, subprocesses, watchers, and temporary secrets. Startup is bounded;

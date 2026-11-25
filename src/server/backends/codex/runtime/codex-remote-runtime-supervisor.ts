@@ -34,6 +34,7 @@ export class CodexRemoteRuntimeSupervisor {
   #started = false;
   #closed = false;
   #retainedUnavailable = false;
+  #serviceReplaced = false;
   #idleRequested = false;
   #connecting: Promise<void> | undefined;
   #retry: ReturnType<typeof setTimeout> | undefined;
@@ -104,6 +105,7 @@ export class CodexRemoteRuntimeSupervisor {
         },
       }),
       pendingInitialization: () => this.#connecting,
+      replacedServiceReceiptsPending: applicationThreadId => this.#replacedServiceReceiptsPending(applicationThreadId),
       current: () => this.#current, latestGeneration: () => this.#generation,
       retireGeneration: async (generation, reason) => { await this.#remote?.client.retireGeneration(generation, reason); },
       persistentSessions: {
@@ -206,6 +208,7 @@ export class CodexRemoteRuntimeSupervisor {
   }
   async #performConnect(): Promise<void> {
     if (this.#closed) return;
+    if (this.#serviceReplaced) throw new Error("codex_runtime_service_replaced");
     if (this.#retainedUnavailable) throw new Error("codex_retained_runtime_unavailable");
     this.client.updateLifecycle({ state: "reconciling", generation: this.#generation });
     let lease: SidecarRuntimeLease | undefined;
@@ -236,6 +239,16 @@ export class CodexRemoteRuntimeSupervisor {
         this.#lookupConfiguration = desired;
       }
       this.#diagnostic("stage_complete", { stage, controllerEpoch: lease.controllerEpoch, durationMs: performance.now() - stageStarted });
+      const retained = this.#retainedIdentity;
+      if (!runtimeId && !existingOnly && retained && lease.serviceIncarnation !== retained.serviceIncarnation) {
+        // A successor service starts only after its predecessor and every
+        // process it launched are retired. The bound runtime ended with it;
+        // never ensure a replacement under this module's retained identity.
+        connection.close();
+        this.#serviceReplaced = true;
+        this.input.receipts.reconcileRecordedApplicationState({ scope: this.#scope, runtimeId: retained.runtimeId });
+        throw new Error("codex_runtime_service_replaced");
+      }
       if (!runtimeId || (existingOnly && (runtimeId !== this.#retainedIdentity!.runtimeId || lease.serviceIncarnation !== this.#retainedIdentity!.serviceIncarnation))) {
         connection.close();
         throw new Error("codex_retained_runtime_unavailable");
@@ -273,6 +286,10 @@ export class CodexRemoteRuntimeSupervisor {
         durationMs: performance.now() - stageStarted }, error);
       this.#remote?.disconnected();
       if (this.#lease === lease) this.#discardAttachment("connection_failed"); else lease?.release();
+      if (this.#serviceReplaced) {
+        this.client.updateLifecycle({ state: "unavailable", generation: this.#generation, unavailableReason: "provider_service_replaced" });
+        throw error;
+      }
       for (let cause: unknown = error, depth = 0; existingOnly && cause instanceof Error && depth < 8; cause = cause.cause, depth++) {
         if (cause.message === "codex_retained_runtime_unavailable" || cause.message === "sidecar_service_absent") {
           this.#retainedUnavailable = true;
@@ -312,8 +329,14 @@ export class CodexRemoteRuntimeSupervisor {
       executionEnvironmentId: this.#scope.executionEnvironmentId, generation: this.#generation,
       attachmentAttempt: this.#attachmentAttempt, controllerEpoch: this.#lease?.controllerEpoch, ...fields }, error);
   }
+  #replacedServiceReceiptsPending(applicationThreadId: string): boolean {
+    const retained = this.#retainedIdentity;
+    if (!this.#serviceReplaced || !retained) return false;
+    return this.input.receipts.pending({ scope: this.#scope, runtimeId: retained.runtimeId })
+      .some(receipt => receipt.correlation.applicationThreadId === applicationThreadId);
+  }
   #scheduleRetry(): void {
-    if (this.#closed || this.#retainedUnavailable || this.#retry) return;
+    if (this.#closed || this.#retainedUnavailable || this.#serviceReplaced || this.#retry) return;
     this.client.updateLifecycle({ state: "reconciling", generation: this.#generation });
     this.#retry = setTimeout(() => {
       this.#retry = undefined;

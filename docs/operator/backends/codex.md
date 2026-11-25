@@ -221,6 +221,11 @@ closes. Backend configuration stays enabled, and later use starts or reconnects
 the runtime on demand. Creating or attaching another conversation prevents idle
 teardown. Sidecar-hosted work survives main-server and carrier disconnects;
 unacknowledged outcomes and retained remote threads prevent idle retirement.
+If the sidecar itself is replaced, for example after the host container
+restarts, Sedes rebuilds the backend once the replacement is ready and open
+settled threads reattach. Threads with an interrupted turn or an unresolved
+Send, Stop, question or goal action stay disconnected until you review them
+and restart the Codex backend; their inputs are never replayed.
 Remote eviction requires sidecar runtime protocol 8.
 
 #### Stdio store recovery
