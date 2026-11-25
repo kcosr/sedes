@@ -273,3 +273,55 @@ it.each(["retained", "missing", "replaced_service"] as const)("recovers only the
     }
   } finally { await supervisor.close(); vi.useRealTimers(); }
 });
+
+it.each(["replaced", "carrier"] as const)("after a %s reconnect, stops retrying a runtime retired with its service but reattaches to a surviving one", async disposition => {
+  vi.useFakeTimers();
+  // The successor service's registry starts empty; the same service still holds the runtime.
+  const lookup = vi.spyOn(CodexSidecarRuntimeConnection.prototype, "lookup").mockResolvedValueOnce(undefined)
+    .mockResolvedValueOnce(disposition === "replaced" ? undefined : "runtime");
+  const ensure = vi.spyOn(CodexSidecarRuntimeConnection.prototype, "ensure").mockResolvedValue("runtime");
+  const attach = vi.spyOn(CodexSidecarRuntimeConnection.prototype, "attach").mockResolvedValue({
+    protocolVersion: CODEX_RUNTIME_PROTOCOL_VERSION, runtimeId: "runtime",
+    lifecycle: { state: "ready", generation: 1 }, runtimeAssessment: null, outcomes: [], pendingRequests: [] });
+  vi.spyOn(CodexSidecarRuntimeConnection.prototype, "detach").mockResolvedValue();
+  let closeCarrier!: () => void;
+  const lease = (serviceIncarnation: string, closed = new Promise<void>(() => {})) => ({
+    channel: { supportsOperation: () => false } as unknown as SidecarRuntimeChannel,
+    serviceIncarnation, controllerEpoch: 1, closed, release: vi.fn() });
+  const acquire = vi.fn()
+    .mockResolvedValueOnce(lease("first-service", new Promise<void>(resolve => { closeCarrier = resolve; })))
+    .mockResolvedValue(lease(disposition === "replaced" ? "successor-service" : "first-service"));
+  const pending = [{ operationId: "send", method: "turn/start" as const, requestFingerprint: "f", state: "reserved" as const, outcome: null,
+    correlation: { kind: "start" as const, applicationOperationId: "send", applicationThreadId: "uncertain-thread" } }];
+  const receipts = { reserve: () => { throw new Error("unused"); }, recordOutcome: () => "untracked" as const,
+    pending: vi.fn(() => pending), reconcileRecordedApplicationState: vi.fn(() => 0), compactRetiredRuntime: vi.fn(() => 0), releaseRejected: () => false };
+  const supervisor = new CodexRemoteRuntimeSupervisor({
+    scope: { tenantId: "tenant", principalId: "principal", executionEnvironmentId: "remote", backendInstanceId: "backend" },
+    provider: { acquire, acquireExisting: vi.fn() }, configuration: {} as CodexRuntimeConfiguration,
+    serverRequests: new CodexServerRequestRouter(), receipts });
+  try {
+    await supervisor.attachment();
+    expect(supervisor.client.lifecycleSnapshot()).toEqual({ state: "ready", generation: 1 });
+    expect(ensure).toHaveBeenCalledOnce();
+    closeCarrier();
+    await vi.advanceTimersByTimeAsync(1_000);
+    if (disposition === "replaced") {
+      expect(supervisor.client.lifecycleSnapshot()).toEqual({ state: "unavailable", generation: 1, unavailableReason: "provider_service_replaced" });
+      expect(receipts.reconcileRecordedApplicationState).toHaveBeenCalledWith(expect.objectContaining({ runtimeId: "runtime" }));
+      expect(supervisor.client.replacedServiceReceiptsPending("uncertain-thread")).toBe(true);
+      expect(supervisor.client.replacedServiceReceiptsPending("settled-thread")).toBe(false);
+      // The retained identity never ensures a runtime on the successor, and stops retrying.
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(acquire).toHaveBeenCalledTimes(2);
+      expect(ensure).toHaveBeenCalledOnce();
+      expect(receipts.compactRetiredRuntime).not.toHaveBeenCalled();
+      await expect(supervisor.attachment()).rejects.toThrow("codex_runtime_service_replaced");
+    } else {
+      expect(supervisor.client.lifecycleSnapshot()).toMatchObject({ state: "ready" });
+      expect(attach).toHaveBeenCalledTimes(2);
+      expect(ensure).toHaveBeenCalledOnce();
+      expect(supervisor.client.replacedServiceReceiptsPending("uncertain-thread")).toBe(false);
+    }
+    expect(lookup).toHaveBeenCalledTimes(2);
+  } finally { await supervisor.close(); vi.useRealTimers(); }
+});

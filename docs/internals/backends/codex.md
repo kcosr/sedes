@@ -273,6 +273,12 @@ Transport implementations also own their generation boundaries:
   permits an empty idle projection after same-generation metadata confirmation.
   Other read failures remain errors, and reattachment never creates a mutation
   receipt or resumes the session with replacement settings.
+  A successor service that no longer holds the retained runtime proves that
+  runtime retired with its predecessor. The supervisor stops retrying, never
+  ensures a replacement under the old identity, and reports
+  `provider_service_replaced`. A loaded handle then vouches for
+  provider-replacement retirement only while no submit, steer, compact, Stop,
+  interaction, goal-feature or durable runtime receipt remains unresolved.
   If the native subscription must be recreated, resume includes the existing
   thread's saved security settings after checking the current installation
   policy. An idle thread or an entry in native loaded-thread inventory does not

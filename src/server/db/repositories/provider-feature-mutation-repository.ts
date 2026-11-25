@@ -157,6 +157,14 @@ export class ProviderFeatureMutationRepository {
     });
   }
 
+  /** A provider feature mutation whose native outcome is still unknown. */
+  hasUnresolved(scope: RequestScope, applicationThreadId: string): boolean {
+    return this.database.prepare(`SELECT 1 FROM provider_feature_mutation_receipts
+      WHERE tenant_id = ? AND owner_principal_id = ? AND application_thread_id = ? AND force_reset_at IS NULL
+        AND (state = 'prepared' OR (state = 'uncertain' AND json_extract(result_json, '$.outcome') IS NOT 'rejected'))
+      LIMIT 1`).get(scope.tenantId, scope.principalId, applicationThreadId) !== undefined;
+  }
+
   markUncertain(
     scope: RequestScope,
     mutationId: string,

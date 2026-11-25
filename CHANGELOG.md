@@ -503,6 +503,12 @@ User-facing changes are collected here before release. See the
   controls without requiring a page refresh.
   ([#132](https://github.com/kcosr/sedes/pull/132))
 
+- Remote Codex threads that were open when their sidecar was replaced
+  reconnect once the replacement is ready, instead of retrying the retired
+  runtime until the backend is restarted. Threads with unresolved work stay
+  fenced. See
+  [Codex runtime lifetime](docs/operator/backends/codex.md#sedes-owned-stdio).
+
 - Remote backends recover after their sidecar is replaced, allowing Pi
   conversations to reopen without restarting Sedes. This includes Pi threads
   that were open when the host restarted: Pi requests work again without

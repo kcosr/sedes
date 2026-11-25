@@ -304,6 +304,11 @@ export class CodexInteractionBridge {
     return this.#pending.size;
   }
 
+  /** A response has not been confirmed applied by the provider. */
+  hasUnresolvedResponses(): boolean {
+    return [...this.#responses.values()].some(response => response.state !== "accepted");
+  }
+
   pendingInteractions(): readonly DriverInteraction[] {
     return [...this.#pending.values()].map(({ interaction }) =>
       structuredClone(interaction),

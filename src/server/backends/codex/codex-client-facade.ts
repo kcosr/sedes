@@ -45,8 +45,11 @@ export type CodexClientLifecycleState =
 export interface CodexClientLifecycleSnapshot {
   readonly state: CodexClientLifecycleState;
   readonly generation: number;
-  readonly unavailableReason?: "runtime_configuration_unavailable";
+  readonly unavailableReason?: CodexClientUnavailableReason;
 }
+
+/** A replaced service retired the bound runtime; only a rebuilt module can attach again. */
+export type CodexClientUnavailableReason = "runtime_configuration_unavailable" | "provider_service_replaced";
 
 export type CodexLifecycleListener = (
   snapshot: CodexClientLifecycleSnapshot,
@@ -66,6 +69,8 @@ export class CodexSharedClientFacade {
   readonly #current: () => CodexReadyClientGeneration | undefined;
   /** A remote supervisor exposes its current attempt without launching a new one. */
   readonly pendingInitialization: (() => Promise<void> | undefined) | undefined;
+  /** Durable runtime receipts a replaced service can no longer settle for one thread. */
+  readonly replacedServiceReceiptsPending: (applicationThreadId: string) => boolean;
   readonly #latestGeneration: () => number;
   readonly #retireGeneration: (
     generation: number,
@@ -84,6 +89,7 @@ export class CodexSharedClientFacade {
     readonly persistentSessions?: CodexPersistentSessionAccess;
     readonly current: () => CodexReadyClientGeneration | undefined;
     readonly pendingInitialization?: () => Promise<void> | undefined;
+    readonly replacedServiceReceiptsPending?: (applicationThreadId: string) => boolean;
     readonly latestGeneration: () => number;
     readonly retireGeneration: (
       generation: number,
@@ -95,6 +101,7 @@ export class CodexSharedClientFacade {
     this.residency = input.residency;
     this.#current = input.current;
     this.pendingInitialization = input.pendingInitialization;
+    this.replacedServiceReceiptsPending = input.replacedServiceReceiptsPending ?? (() => false);
     this.#latestGeneration = input.latestGeneration;
     this.#retireGeneration = input.retireGeneration;
     this.#onListenerError = input.onListenerError ?? (() => undefined);
@@ -239,7 +246,8 @@ export class CodexSharedClientFacade {
       snapshot.generation < 0 ||
       (snapshot.unavailableReason !== undefined &&
         (snapshot.state !== "unavailable" ||
-          snapshot.unavailableReason !== "runtime_configuration_unavailable"))
+          (snapshot.unavailableReason !== "runtime_configuration_unavailable" &&
+            snapshot.unavailableReason !== "provider_service_replaced")))
     ) {
       throw new Error("codex_client_lifecycle_generation_invalid");
     }

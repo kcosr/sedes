@@ -370,6 +370,26 @@ export interface CodexConversationHandleInput {
  */
 export class CodexConversationHandle implements ConversationHandle {
   readonly automaticEviction = "requires_quiescence" as const;
+
+  /**
+   * A replaced execution-host service retired the runtime this handle used,
+   * and close performs no provider effect while it is unattached. Any receipt
+   * or control the retired runtime can no longer settle vetoes retirement.
+   */
+  get providerServiceReplacementSafe(): boolean | undefined {
+    if (
+      this.#closing || this.#closed || this.#establishing || this.#mutationInFlight ||
+      this.#pendingNotificationWork > 0 || this.#pendingControlStart !== undefined ||
+      this.#acceptedStop !== undefined || this.#interruptOperations.unresolved ||
+      [...this.#submitOperations.values(), ...this.#steerOperations.values()].some(operation => operation.state === "outcome_unknown") ||
+      [...this.#compactOperations.values()].includes("outcome_unknown") ||
+      this.#interactions.pendingCount() > 0 || this.#interactions.hasUnresolvedResponses() ||
+      this.#goalSessions?.recoveryReceipts?.hasUnresolved(this.binding) === true ||
+      this.#client.replacedServiceReceiptsPending(this.binding.applicationThreadId)
+    ) return false;
+    const lifecycle = this.#client.lifecycleSnapshot();
+    return lifecycle.state === "unavailable" && lifecycle.unavailableReason === "provider_service_replaced" ? true : undefined;
+  }
   readonly #resolveThreadEnvironment: ThreadEnvironmentResolver;
   readonly binding: ConversationBinding;
   readonly #canonicalWorkspacePath: string;

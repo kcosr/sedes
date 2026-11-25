@@ -35,6 +35,11 @@ export class ConversationInterruptLedger {
     return prior;
   }
 
+  /** A Stop is still running or its native outcome is unknown. */
+  get unresolved(): boolean {
+    return [...this.#entries.values()].some(entry => entry.outcome === "pending" || entry.outcome === "unknown");
+  }
+
   reconcile(input: InterruptConversationInput): BackendMutationReconciliation {
     const prior = this.#prior(input);
     return { outcome: prior?.outcome === "accepted" ? "accepted" : prior?.outcome === "not_applied" ? "not_applied" : "unknown" };

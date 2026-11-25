@@ -4182,6 +4182,27 @@ describe("CodexConversationBackendDriver", () => {
     await handle.close();
   });
 
+  it("vouches for retirement after its execution-host service is replaced only without unresolved receipts", async () => {
+    const harness = new RpcHarness();
+    const handle = await driver(harness).attach(attachInput());
+    await establish(harness, handle, nativeThread());
+    // A ready runtime declares nothing; ordinary settled retirement applies.
+    expect(handle.providerServiceReplacementSafe).toBeUndefined();
+    harness.facade.updateLifecycle({ state: "unavailable", generation: harness.generation, unavailableReason: "provider_service_replaced" });
+    expect(handle.providerServiceReplacementSafe).toBe(true);
+    // A durable receipt of the retired runtime still awaits settlement.
+    let pending = true;
+    Object.defineProperty(harness.facade, "replacedServiceReceiptsPending", { value: () => pending });
+    expect(handle.providerServiceReplacementSafe).toBe(false);
+    pending = false;
+    expect(handle.providerServiceReplacementSafe).toBe(true);
+    // An ordinary disconnect is not a replacement.
+    harness.facade.updateLifecycle({ state: "unavailable", generation: harness.generation });
+    expect(handle.providerServiceReplacementSafe).toBeUndefined();
+    await handle.close();
+    expect(harness.requestOptions.map(request => request.method)).not.toContain("thread/unsubscribe");
+  });
+
   it("does not authorize a historical in-progress turn as the live turn", async () => {
     const harness = new RpcHarness();
     const activeThread = nativeThread({
