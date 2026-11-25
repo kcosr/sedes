@@ -73,6 +73,8 @@ export interface AntigravityInspection {
 }
 /** Closing a remote proxy releases its attachment, never its persistent host. */
 export interface AntigravityPort {
+  /** A successor execution-host service proves the bound runtime retired with its predecessor. */
+  readonly serviceReplaced?: boolean;
   connect(signal?: AbortSignal): Promise<{ readonly runtimeId: string; readonly version: string }>;
   catalog(input: { readonly cwd: string }, signal?: AbortSignal): Promise<AntigravitySetup>;
   create(input: { readonly cwd: string; readonly operationId: string; readonly title?: string; readonly executionEnvironment?: EnvironmentVariableOverrides; readonly agentTools?: AntigravityAgentTools }, signal?: AbortSignal): Promise<AntigravityIdentity>;

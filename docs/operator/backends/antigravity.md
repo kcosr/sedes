@@ -102,6 +102,11 @@ Remote instances require an execution sidecar advertising
 enabling this backend. There is no local fallback when a remote host is offline.
 Reconnect restores exact retained session authority; it does not replay an
 uncertain submission or silently create another session.
+If the sidecar itself is replaced, for example after the host container
+restarts, Sedes rebuilds the backend once the replacement is ready and open
+settled threads reattach. Threads with a pending permission, unresolved
+operation, or background work that was running before the restart stay
+disconnected until you review them and restart the Antigravity backend.
 
 Attached idle threads continue checking for native changes so background work
 remains observable. Unchanged history reuses its validated snapshot and avoids

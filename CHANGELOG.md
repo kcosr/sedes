@@ -503,23 +503,21 @@ User-facing changes are collected here before release. See the
   controls without requiring a page refresh.
   ([#132](https://github.com/kcosr/sedes/pull/132))
 
-- Remote Codex threads that were open when their sidecar was replaced
-  reconnect once the replacement is ready, instead of retrying the retired
-  runtime until the backend is restarted. Threads with unresolved work stay
-  fenced. See
-  [Codex runtime lifetime](docs/operator/backends/codex.md#sedes-owned-stdio).
-  ([#160](https://github.com/kcosr/sedes/pull/160))
-
-- Remote backends recover after their sidecar is replaced, allowing Pi
-  conversations to reopen without restarting Sedes. This includes Pi threads
-  that were open when the host restarted: Pi requests work again without
-  restarting the backend, unless a killed Pi process left its session writer
-  marker. An open Pi thread also reattaches after an SSH reconnect. Sidecar management recognizes idle native Pi runtimes for
-  automatic upgrades. Active or interrupted work, unresolved input, and
-  unproven cleanup prevent automatic replacement. See
-  [Pi recovery](docs/operator/backends/pi-native.md#ownership-reconnect-and-recovery).
+- Remote backends recover after their sidecar is replaced, for example after
+  the host container restarts, without restarting Sedes or the backend. Open
+  Pi, Codex and Antigravity threads reattach once the replacement is ready, and
+  an open Pi thread also reattaches after an SSH reconnect. Threads with active
+  or interrupted work, unresolved input or actions, background work, or
+  unproven cleanup stay fenced until reviewed and restarted, as does a Pi
+  session whose killed process left its writer marker. Sidecar management
+  recognizes idle native Pi runtimes for automatic upgrades. See
+  [Pi recovery](docs/operator/backends/pi-native.md#ownership-reconnect-and-recovery),
+  [Codex runtime lifetime](docs/operator/backends/codex.md#sedes-owned-stdio),
+  and [Antigravity remote runtime](docs/operator/backends/antigravity.md).
   ([#130](https://github.com/kcosr/sedes/pull/130),
-  [#159](https://github.com/kcosr/sedes/pull/159))
+  [#159](https://github.com/kcosr/sedes/pull/159),
+  [#160](https://github.com/kcosr/sedes/pull/160),
+  [#161](https://github.com/kcosr/sedes/pull/161))
 
 - Android High and Low bandwidth dictation finish correctly on codecs that do
   not emit an extra packet at the end of a recording, including automatic

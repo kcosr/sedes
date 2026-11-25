@@ -50,6 +50,12 @@ settlement. Antigravity owns negotiation and native interpretation. The same
 host implementation runs locally and within the persistent SSH/outbound
 sidecar. Remote adapters borrow exact runtime/owner generations and retain
 operation outcomes and pending interactions independently of carrier lifetime.
+A lease from a different service incarnation proves the bound runtime retired
+with its predecessor. The remote port then releases its own handles locally,
+and a disconnected handle stops polling for the retained owner. Background
+activity confirmed idle before the disconnect becomes known-idle again;
+anything else stays unknown. The handle vouches for provider-replacement
+retirement only without receipts, permissions, requests or setters in flight.
 
 The saved policy allows one Antigravity instance per execution environment. The
 host registry independently reserves that native namespace. An ordinary lookup
