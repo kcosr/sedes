@@ -60,11 +60,26 @@ export interface AcquireConversationActorOptions {
 export type ConversationActorRetirementDisposition =
   | { readonly kind: "idle" }
   | { readonly kind: "archive" }
+  /** Management confirmed a successor to the provider service behind this runtime. */
+  | { readonly kind: "provider_replaced" }
   | { readonly kind: "unprojected_detach"; readonly expectedGeneration: string }
   | {
       readonly kind: "explicit_detach";
       readonly expected: Parameters<ConversationActor["closeIfCurrent"]>[0];
     };
+
+type ConditionalRetirement = "idle" | "archive" | "provider_replaced";
+
+function conditionalRetirement(
+  disposition: ConversationActorRetirementDisposition,
+): disposition is Extract<ConversationActorRetirementDisposition, { readonly kind: ConditionalRetirement }> {
+  return disposition.kind === "idle" || disposition.kind === "archive" || disposition.kind === "provider_replaced";
+}
+
+function retirable(actor: ConversationActor, kind: ConditionalRetirement): boolean {
+  return kind === "archive" ? actor.canRetireForArchive
+    : kind === "provider_replaced" ? actor.canRetireAfterProviderReplacement : actor.canEvict;
+}
 
 export class ConversationActorRetirementStaleError extends Error {
   constructor() {
@@ -1123,7 +1138,7 @@ export class ConversationActorManager {
     while (true) {
       const entry = this.#entries.get(key);
       if (!entry) {
-        if (disposition.kind !== "idle" && disposition.kind !== "archive") {
+        if (!conditionalRetirement(disposition)) {
           throw new ConversationActorRetirementStaleError();
         }
         return;
@@ -1141,8 +1156,8 @@ export class ConversationActorManager {
         continue;
       }
       if (entry.references > 0) {
-        if ((disposition.kind !== "idle" && disposition.kind !== "archive") ||
-            (entry.established && entry.actor && !(disposition.kind === "archive" ? entry.actor.canRetireForArchive : entry.actor.canEvict))) {
+        if (!conditionalRetirement(disposition) ||
+            (entry.established && entry.actor && !retirable(entry.actor, disposition.kind))) {
           throw new ConversationActorRetirementBusyError();
         }
         // Snapshot readers borrow the same actor as mutations. Once admission
@@ -1217,7 +1232,7 @@ export class ConversationActorManager {
           throw new ConversationActorRetirementUnprovenError(error);
         }
       }
-      if (!(disposition.kind === "archive" ? entry.actor.canRetireForArchive : entry.actor.canEvict)) {
+      if (!retirable(entry.actor, disposition.kind)) {
         throw new ConversationActorRetirementBusyError();
       }
       const eviction = this.#beginEntryEviction(key, entry, disposition.kind);
@@ -1340,7 +1355,7 @@ export class ConversationActorManager {
   #beginEntryEviction(
     key: string,
     entry: ActorEntry,
-    disposition: "automatic" | "idle" | "archive" = "automatic",
+    disposition: "automatic" | ConditionalRetirement = "automatic",
   ): Promise<boolean> | undefined {
     const actor = entry.actor;
     if (
@@ -1349,7 +1364,7 @@ export class ConversationActorManager {
       this.#entries.get(key) !== entry ||
       entry.references > 0 ||
       entry.eviction ||
-      !(disposition === "archive" ? actor.canRetireForArchive : disposition === "idle" ? actor.canEvict : actor.canAutomaticallyEvict)
+      !(disposition === "automatic" ? actor.canAutomaticallyEvict : retirable(actor, disposition))
     ) {
       return undefined;
     }
@@ -1359,6 +1374,7 @@ export class ConversationActorManager {
     eviction = (async () => {
       try {
         closed = await (disposition === "archive" ? actor.closeIfSafeForArchive()
+          : disposition === "provider_replaced" ? actor.closeIfSafeAfterProviderReplacement()
           : disposition === "idle" ? actor.closeIfIdle() : actor.closeIfAutomaticallyIdle());
         return closed;
       } catch (error) {

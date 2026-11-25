@@ -448,6 +448,34 @@ export class ConversationActor {
     return this.#canRetire(false, true);
   }
 
+  /**
+   * Retirement after a management-confirmed provider service replacement.
+   * The replaced service's processes are retired, so a runtime left
+   * disconnected by that replacement may close when its handle vouches for
+   * local release. Any unresolved Sedes or provider work keeps the fence.
+   */
+  get canRetireAfterProviderReplacement(): boolean {
+    if (!this.#started || this.#closing || this.#closed) return false;
+    // A history reader owns no provider work.
+    if (this.readOnly) return true;
+    // The replaced runtime can never settle obligations it still held. A
+    // handle that reports them vetoes even a settled or self-closed runtime,
+    // which may not have observed the replacement yet.
+    if (this.#handle.providerServiceReplacementSafe === false) return false;
+    if (this.#canRetire(false)) return true;
+    if (this.#handle.providerServiceReplacementSafe !== true || !this.#snapshotState || this.#projectionRecoveryRequired) return false;
+    const timeline = this.#projector.timeline();
+    return (
+      timeline.runState === "disconnected" &&
+      timeline.activeTurnId === undefined &&
+      !this.#awaitingAuthoritativeIdle &&
+      !this.#handle.retirementBlocked &&
+      this.#pendingInteractions.size === 0 &&
+      !hasOutstandingBackgroundActivity(timeline.backgroundActivity) &&
+      !timeline.orderedTurnIds.some(id => timeline.turnsById[id]?.status === "in_progress")
+    );
+  }
+
   /** A resident native owner may allow idle presentation detachment only. */
   get initialProjectionUnavailable(): boolean {
     return this.#started && !this.#closing && !this.#closed && !this.#snapshotState && this.#projectionRecoveryRequired;
@@ -1351,6 +1379,10 @@ export class ConversationActor {
 
   async closeIfSafeForArchive(): Promise<boolean> {
     return this.#closeConditionally(() => this.canRetireForArchive, true);
+  }
+
+  async closeIfSafeAfterProviderReplacement(): Promise<boolean> {
+    return this.#closeConditionally(() => this.canRetireAfterProviderReplacement, true);
   }
 
   async #closeConditionally(predicate: () => boolean, evicted = false): Promise<boolean> {

@@ -48,7 +48,7 @@ describe("unterminated native Pi records", () => {
       completeOperation: vi.fn((_scope, _threadId, _operationId, input) => {
         record = { ...record, ...input, receiptJson: input.receiptJson ?? null }; return record;
       }),
-      resetUnsentOperation: unexpectedOperation, markSubmissionDispatched: unexpectedOperation };
+      resetUnsentOperation: unexpectedOperation, markSubmissionDispatched: unexpectedOperation, hasUnresolvedOperations: () => false };
     const driver = new PiNativeConversationDriver({ instance, connection, port: host, usage: NO_USAGE_SINK,
       modelPolicy: compileBackendModelPolicy({ type: "catalog" }, "provider_model_effort"),
       settings: { getSettings: () => ({ modelProvider: "provider", modelId: "model", thinkingLevel: "low", toolMode: "read_only", revision: 0 }) },

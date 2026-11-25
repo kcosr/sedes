@@ -900,6 +900,8 @@ export async function startProductionApplication(
     let retireBackendRuntime: BackendRuntimeRetirementAuthority = {
       async run() { throw new Error("backend_retirement_authority_unavailable"); },
     };
+    // Management confirmed a ready successor to the module's provider service.
+    let retireReplacedBackendRuntime = retireBackendRuntime;
     const backendPreparationFailures = new Map<string, unknown>();
     const localBackendCleanupProofs = new Map<string, unknown>();
     const clearBackendPreparationFailure = (id: string): void => {
@@ -1044,7 +1046,7 @@ export async function startProductionApplication(
         .catch(reportBackgroundError(`Backend ${id} startup publication`));
       return outcome;
     };
-    const applyBackendRuntime = async (backendId: string, explicit = false): Promise<void> => {
+    const applyBackendRuntime = async (backendId: string, explicit = false, retirement = retireBackendRuntime): Promise<void> => {
       const configured = backendConfigurationFile.backends.find(item => item.id === backendId);
       if (!configured || !configured.enabled) {
         cancelBackendStartup(backendId);
@@ -1149,7 +1151,7 @@ export async function startProductionApplication(
         const revision = configurationRepository.runtime(scope, "backend", backendId).desiredRevision;
         const startupFingerprint = startupEnvironmentFingerprint(backendId);
         if (prepared.module.startupPolicy === "connect_provider") {
-          const handle = await runtimeModules.reserveStartup(plan, retireBackendRuntime,
+          const handle = await runtimeModules.reserveStartup(plan, retirement,
             { signal: backendStartupAbort.signal, startupTimeoutMs: 90_000 });
           const attempt: BackendStartupAttempt = { handle, fingerprint, environmentId,
             environmentRuntime: environmentRuntimes.get(environmentId)!, startupFingerprint,
@@ -1163,7 +1165,7 @@ export async function startProductionApplication(
             .finally(() => backendStartupTasks.delete(attempt.completion));
           return;
         }
-        const result = await runtimeModules.apply(plan, retireBackendRuntime);
+        const result = await runtimeModules.apply(plan, retirement);
         if (result.status === "failed") throw result.error;
         backendSidecarBindings.set(result.runtime, sidecarBinding);
         recordBackendApplied(backendId, revision, fingerprint, startupFingerprint);
@@ -1597,7 +1599,10 @@ export async function startProductionApplication(
           `Backend health for target ${profile.templateId}`,
         )(error),
     });
-    retireBackendRuntime = {
+    const backendThreadIds = (backendId: string): string[] => (database!.prepare(`SELECT id FROM application_threads
+      WHERE tenant_id = ? AND owner_principal_id = ? AND backend_instance_id = ? ORDER BY id`)
+      .all(scope.tenantId, scope.principalId, backendId) as {id: string}[]).map(row => row.id);
+    const backendRetirement = (purpose?: "provider_replaced"): BackendRuntimeRetirementAuthority => ({
       async run<Result>(runtime: BackendModuleRuntime, change: () => Promise<Result>): Promise<Result> {
         if (runtime.scope.tenantId !== scope.tenantId || runtime.scope.principalId !== scope.principalId) {
           throw new DomainError("not_found", "The runtime is unavailable in this scope.");
@@ -1606,15 +1611,12 @@ export async function startProductionApplication(
         executionTargets.invalidateHealth();
         try {
           await admission.drained;
-          const rows = database!.prepare(`SELECT id FROM application_threads
-            WHERE tenant_id = ? AND owner_principal_id = ? AND backend_instance_id = ? ORDER BY id`)
-            .all(scope.tenantId, scope.principalId, runtime.instance.id) as {id: string}[];
           let operation = change;
-          for (const row of rows.reverse()) {
-            viewedImageCapture.cancelThread(scope, row.id);
-            images.cancelThread(scope, row.id);
+          for (const id of backendThreadIds(runtime.instance.id).reverse()) {
+            viewedImageCapture.cancelThread(scope, id);
+            images.cancelThread(scope, id);
             const next = operation;
-            operation = () => runtimes!.runWithRuntimeRetired(scope, row.id, next);
+            operation = () => runtimes!.runWithRuntimeRetired(scope, id, next, purpose ? {purpose} : undefined);
           }
           return await operation();
         } finally {
@@ -1622,7 +1624,9 @@ export async function startProductionApplication(
           admission.release();
         }
       },
-    };
+    });
+    retireBackendRuntime = backendRetirement();
+    retireReplacedBackendRuntime = backendRetirement("provider_replaced");
     const savedAgentAdapters = runtimeModules.savedAgentAdapters;
     const savedAgentRepository = new SavedAgentRepository(database);
     const savedAgentDomain = new SavedAgentService(
@@ -2458,9 +2462,7 @@ export async function startProductionApplication(
       configurationRepository.assertPrincipal(candidate);
     };
     const backendThreads = async (backendId: string) => {
-      const rows = database!.prepare(`SELECT id FROM application_threads WHERE tenant_id = ? AND owner_principal_id = ? AND backend_instance_id = ? ORDER BY id`)
-        .all(scope.tenantId, scope.principalId, backendId) as {id: string}[];
-      const loaded = await Promise.all(rows.map(row => runtimes!.captureLoadedRuntime(scope, row.id)));
+      const loaded = await Promise.all(backendThreadIds(backendId).map(id => runtimes!.captureLoadedRuntime(scope, id)));
       return loaded.filter((item): item is NonNullable<typeof item> => item !== undefined);
     };
     const backendHasRemoteProvider = (id: string): boolean => {
@@ -3087,9 +3089,16 @@ export async function startProductionApplication(
         if (existing && !replacedService && await existing.startupEnvironmentState?.() !== "not_started") continue;
         if (existing) {
           const observed = await captureAdministrativeResource(record, Boolean(existing.administration));
-          if (observed.runtime.activeResources > 0 || observed.backendObservation?.blockers.length || observationFailures.has(`backend:${id}`)) continue;
+          if (observed.backendObservation?.blockers.length || observationFailures.has(`backend:${id}`)) continue;
+          // The successor retired every process of the replaced service. A
+          // thread that replacement left disconnected is not active work when
+          // its handle can release locally and nothing remains unresolved.
+          if (replacedService
+            ? observed.backendObservation?.state === "active" || observed.backendObservation?.state === "unknown" ||
+              runtimes!.providerReplacementBlockers(scope, backendThreadIds(id)).length > 0
+            : observed.runtime.activeResources > 0) continue;
         }
-        await applyBackendRuntime(id);
+        await applyBackendRuntime(id, false, replacedService ? retireReplacedBackendRuntime : retireBackendRuntime);
       }
       backendAdvisoryEnvironments.clear();
       for (const [id] of moduleRuntimes) {

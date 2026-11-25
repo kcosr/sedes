@@ -731,6 +731,19 @@ export interface ConversationHandle {
   readonly archiveRetirementSafe?: boolean;
 
   /**
+   * After management confirms that a ready successor replaced this handle's
+   * provider service, closing the handle needs no provider effect and its
+   * release is provable without the retired service. Such a successor starts
+   * only after its predecessor and every process it launched are retired.
+   * The handle also reports no backend-local obligation, such as an
+   * unverified submission receipt or a pending tool call. False vetoes
+   * replacement retirement even while the runtime still appears settled.
+   * The actor still requires its own settled evidence. Omission keeps a
+   * disconnected runtime fenced until explicit Stop or Restart.
+   */
+  readonly providerServiceReplacementSafe?: boolean;
+
+  /**
    * Captures a replacement baseline only after the caller has detached the
    * preceding projection subscription. The handle must buffer or journal the
    * gap through `subscribeFromNext`; lifetime-invalidating events remain

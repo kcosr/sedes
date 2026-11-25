@@ -262,6 +262,7 @@ describe("Pi native companion public API boundary", () => {
       completeOperation: (_scope, _thread, id, input) => { const record = { ...records.get(id)!, ...input }; records.set(id, record); return record; },
       resetUnsentOperation: () => { throw new Error("Unexpected submission"); },
       markSubmissionDispatched: () => { throw new Error("Unexpected submission"); },
+      hasUnresolvedOperations: () => false,
     };
     const driver = new PiNativeConversationDriver({ port: host, operations, usage: NO_USAGE_SINK,
       instance: { id: "backend", tenantId: "tenant", kind: "pi_native", label: "Pi", enabled: true, configurationRevision: 1, protocolRelease: "1.4.0" },

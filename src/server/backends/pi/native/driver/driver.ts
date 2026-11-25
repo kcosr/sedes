@@ -88,6 +88,8 @@ export interface PiNativeOperations {
   completeOperation(scope: ExecutionScope, threadId: string, operationId: string, input: { state: PiNativeOperationRecord["state"]; receiptJson?: string }): PiNativeOperationRecord;
   markSubmissionDispatched(scope: ExecutionScope, threadId: string, operationId: string, requestHash: string, prepareAttempt: number): PiNativeOperationRecord;
   resetUnsentOperation(scope: ExecutionScope, threadId: string, operationId: string, requestHash: string, prepareAttempt: number): PiNativeOperationRecord;
+  /** A sent or unknown submission, action or Stop receipt awaits native evidence. */
+  hasUnresolvedOperations(scope: ExecutionScope, threadId: string): boolean;
 }
 function reject(code: string, text = "The Pi operation is not available.", crossed = false): BackendError {
   return new BackendError({ category: crossed ? "submission_unknown" : "rejected", retryable: false,
@@ -678,6 +680,7 @@ class PiNativeConversationHandle implements ConversationHandle {
   #controlStateKey?: string;
   #controlNativeIdle?: boolean;
   #recoveryReplacementRequested = false;
+  #sessionRetired = false;
   readonly #retainedOperationIds: Set<string>;
   readonly #eventCheckpoint: PiNativeEventCheckpoint;
   readonly #readDiagnostics: PiNativeReadDiagnostics;
@@ -696,6 +699,14 @@ class PiNativeConversationHandle implements ConversationHandle {
       reconcileInterrupt: (request: InterruptConversationInput) => this.reconcileInterrupt(request) };
   }
   get port() { return this.driver.options.port; }
+  /** A replaced service retired this native owner; release is then local to the port.
+   * Durable or in-flight receipts, Sedes tool calls, Stop reconciliation and
+   * control-only recovery are obligations a successor runtime cannot settle. */
+  get providerServiceReplacementSafe(): boolean {
+    return !this.#closed && !this.#controlOnly && !this.#draining && !this.#activeSubmissionId && !this.#receiptWaiter &&
+      !this.#pendingTurn && this.#controlStopsInFlight === 0 && this.#interactions.size === 0 && !this.#agentTools?.hasPendingCalls() &&
+      !this.driver.options.operations.hasUnresolvedOperations(this.input.scope, this.binding.applicationThreadId);
+  }
   setRecoveryNotice(notice: RuntimeNotice, observed: () => void): void {
     this.#recoveryNotice = { notice, observed };
   }
@@ -1100,6 +1111,15 @@ class PiNativeConversationHandle implements ConversationHandle {
       } catch (cause) {
         if (this.#closed || this.#lifetime.signal.aborted) return;
         this.#readDiagnostics.failed("observe", cause);
+        if (cause instanceof PiNativeError && cause.code === "pi_native_session_unknown") {
+          // The same runtime no longer holds this handle: a controller change
+          // let the host retire its idle, fully acknowledged session. Only a
+          // replacement attachment can observe the conversation again.
+          this.#sessionRetired = true;
+          this.#requestReplacement("session_retired");
+          this.#lifetime.abort();
+          return;
+        }
         if (cause instanceof PiNativeError && cause.code === "pi_native_observation_continuity_lost") {
           this.#pendingTurn?.clearStreams();
           this.#throughput.invalidate();
@@ -1706,7 +1726,7 @@ class PiNativeConversationHandle implements ConversationHandle {
     if (!this.#controlOnly || !unavailableControl(cause) || this.#recoveryReplacementRequested) return;
     this.#requestReplacement("control_unavailable");
   }
-  #requestReplacement(stage: "observer_closed" | "control_settled" | "control_unavailable"): void {
+  #requestReplacement(stage: "observer_closed" | "control_settled" | "control_unavailable" | "session_retired"): void {
     this.#recoveryReplacementRequested = true;
     attachmentDiagnostic("pi_native_replacement_requested", { ...diagnosticContext(this.binding, this.attachment), stage });
     this.#emit({ type: "resnapshot_required", reason: "provider_handle_closed" });
@@ -1906,7 +1926,14 @@ class PiNativeConversationHandle implements ConversationHandle {
         this.#pendingTurn = undefined; this.#projector?.close(); this.#listeners.clear(); this.#usageAccounting?.close();
         cleanupSucceeded = true;
       } finally {
-        try { await this.port.release({ handleId: this.attachment.handleId }); forgetNativeObservations(this.port, this.attachment.handleId); released = true; }
+        try {
+          try { await this.port.release({ handleId: this.attachment.handleId }); }
+          catch (cause) {
+            // The host's bounded receipt of a retired handle may have aged out.
+            if (!(this.#sessionRetired && cause instanceof PiNativeError && cause.code === "pi_native_session_unknown")) throw cause;
+          }
+          forgetNativeObservations(this.port, this.attachment.handleId); released = true;
+        }
         finally { this.release(cleanupSucceeded && released); }
       }
       this.#cleanupComplete = true;

@@ -114,6 +114,12 @@ export class PiNativeThreadRepository {
     return row ? { ...row, dispatchStarted: row.dispatchStarted === 1 } : undefined;
   }
 
+  hasUnresolvedOperations(scope: RequestScope, applicationThreadId: string): boolean {
+    return this.database.prepare(`SELECT 1 FROM pi_native_operations
+      WHERE tenant_id = ? AND owner_principal_id = ? AND application_thread_id = ? AND state IN ('sent', 'unknown') LIMIT 1`)
+      .get(scope.tenantId, scope.principalId, applicationThreadId) !== undefined;
+  }
+
   /** Persist before the prompt/steer request can leave this process. */
   markSubmissionDispatched(scope: RequestScope, applicationThreadId: string, operationId: string,
     requestHash: string, prepareAttempt: number): PiNativeOperationRecord {
