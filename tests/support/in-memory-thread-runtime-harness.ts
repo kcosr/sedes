@@ -221,6 +221,9 @@ export async function createInMemoryThreadRuntimeHarness(options: {
   readonly onCompletion?: (scope: RequestScope, threadId: string, turnId: string) => void;
   readonly isAutomaticModelRetryPending?: (scope: RequestScope, threadId: string) => boolean;
   readonly onDurableInputChanged?: ConstructorParameters<typeof QueuedInputDispatcher>[0]["onDurableInputChanged"];
+  readonly captureEarlyReply?: ConstructorParameters<typeof ConversationActorManager>[0]["captureEarlyReply"];
+  readonly onLiveProgress?: ConstructorParameters<typeof ConversationActorManager>[0]["onLiveProgress"];
+  readonly onLiveProgressSkipped?: ConstructorParameters<typeof ConversationActorManager>[0]["onLiveProgressSkipped"];
   readonly captureResponseVoiceContext?: NonNullable<ConstructorParameters<typeof ConversationActorManager>[0]["captureResponseVoiceContext"]>;
   readonly onObservedCompletion?: (
     scope: RequestScope,
@@ -381,6 +384,9 @@ export async function createInMemoryThreadRuntimeHarness(options: {
     runtimeBudget: 8,
     onAuthoritativeSubmission: (eventScope, applicationThreadId, input) =>
       observeSubmission?.(eventScope, applicationThreadId, input),
+    captureEarlyReply: options.captureEarlyReply,
+    onLiveProgress: options.onLiveProgress,
+    onLiveProgressSkipped: options.onLiveProgressSkipped,
     captureResponseVoiceContext: options.captureResponseVoiceContext ?? ((eventScope, threadId, correlations) => ({
       ...new UserInputRevisionRepository(database).capture(eventScope, threadId, correlations), subscriberWatermark: 0,
     })),

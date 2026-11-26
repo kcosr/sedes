@@ -1516,7 +1516,7 @@ export class ConversationActorManager {
           if (entry.control !== control && !entry.controlEnded) {
             // An earlier abort listener can install the new control synchronously.
             if (entry.control?.lifetime.aborted) actor?.noteEarlyReplyObservationGap();
-            else actor?.retireEarlyReplyAuthority();
+            else actor?.withdrawEarlyReplyAuthority();
           }
           entry.control = control;
           entry.controlEnded = false;
@@ -1629,8 +1629,11 @@ export class ConversationActorManager {
             });
           }
           if (event.type === "live_progress") {
-            const skip = () => this.#onLiveProgressSkipped?.(input.scope, input.binding.applicationThreadId,
-              event.applicationTurnId, event.applicationItemId);
+            const skip = () => {
+              if (event.phase !== "provisional") return;
+              actor?.resolveEarlyProgress(event.applicationItemId, "settled");
+              this.#onLiveProgressSkipped?.(input.scope, input.binding.applicationThreadId, event.applicationTurnId, event.applicationItemId);
+            };
             try { responseVoice = this.#captureResponseVoiceContext?.(input.scope, input.binding.applicationThreadId, event.backendCorrelations); }
             catch { /* Do not affect provider progress. */ }
             const progressVoice = responseVoice;
@@ -1640,10 +1643,16 @@ export class ConversationActorManager {
             // Delayed observers must never revive progress after the live turn ends.
             observationChain = observationChain.then(() => {
               const timeline = actor?.timeline;
-              if (signal.aborted || entry.controlEnded || entry.control !== progressControl || progressControl?.lifetime.aborted ||
-                  !timeline || timeline.generation !== progressGeneration || timeline.runState !== "running" ||
-                  timeline.activeTurnId !== event.applicationTurnId ||
-                  timeline.turnsById[event.applicationTurnId]?.status !== "in_progress" || !this.#onLiveProgress) return skip();
+              const turn = timeline?.turnsById[event.applicationTurnId];
+              if (signal.aborted || !this.#onLiveProgress || timeline?.runState === "idle" || timeline?.runState === "failed" ||
+                  (turn && turn.status !== "in_progress")) return skip();
+              if (!turn || timeline?.runState !== "running" || timeline.activeTurnId !== event.applicationTurnId ||
+                  entry.controlEnded || entry.control !== progressControl || progressControl?.lifetime.aborted || timeline.generation !== progressGeneration) {
+                // This observation became stale; a later live close of the same item can still qualify.
+                if (event.phase === "provisional") actor?.resolveEarlyProgress(event.applicationItemId, "deferred");
+                return;
+              }
+              if (event.phase === "provisional") actor?.resolveEarlyProgress(event.applicationItemId, "settled");
               this.#onLiveProgress(input.scope, input.binding.applicationThreadId, {
                 ...event, ...(progressVoice ? { responseVoice: {
                   userInputRevision: progressVoice.userInputRevision, superseded: progressVoice.superseded,

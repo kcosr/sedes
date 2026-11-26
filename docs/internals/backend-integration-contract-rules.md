@@ -2954,7 +2954,10 @@ The manager freezes voice recipients before waiting for preceding submission
 observers. Every qualifying provisional item can own its own progress publication.
 Only the first final item can own the turn's completion publication. Rewrites stop
 further offers for that item. A qualified completed progress item hands its
-opening to ordinary progress delivery under the same application item ID. A
+opening to ordinary progress delivery under the same durable application item ID.
+Progress and partial-answer notification keys use the projector's durable item
+identity across refreshes. A temporary loss of early authority stops speech
+offers while preserving the later ordinary decision for that item. A
 definitively skipped publication settles that opening even when the turn ends
 while submission admission is pending. Completed items, baseline items, replay,
 late phase labels, partial answers and passive history handles use ordinary

@@ -450,7 +450,16 @@ export class ConversationActor {
     this.#earlyReply?.projectionGap();
   }
 
-  /** Explicit withdrawal by the actor owner or replacement of a live control supersedes queued terminal evidence. */
+  /** A replacement control withdraws its predecessor's early offers while ordinary progress is still possible. */
+  withdrawEarlyReplyAuthority(): void {
+    this.#earlyReply?.withdrawAuthority();
+  }
+
+  resolveEarlyProgress(itemId: string, disposition: "settled" | "deferred"): void {
+    this.#earlyReply?.resolveProgress(itemId, disposition);
+  }
+
+  /** The actor owner has withdrawn. No more progress can be published through this actor. */
   retireEarlyReplyAuthority(): void {
     this.#earlyReply?.finish("authority_lost");
   }
@@ -1527,6 +1536,7 @@ export class ConversationActor {
       established.snapshot,
       established.handleSequence,
     );
+    this.#earlyReply?.settleInactiveProgress(this.#projector);
     this.#projectionRecoveryRequired = false;
     this.#coalescer.reset(timeline);
     this.#unsubscribeProjection = this.#subscribeEstablished(
@@ -1667,7 +1677,7 @@ export class ConversationActor {
             const backendTurn = this.#projector.backendTurns().find(turn => turn.backendTurnId === nativeEvent.item.backendTurnId);
             if (item && backendTurn?.status === "in_progress" && backendTurn.completionCorrelations?.length &&
                 timeline.activeTurnId === item.turnId && timeline.runState === "running") {
-              progress = { type: "live_progress", applicationTurnId: item.turnId, applicationItemId: item.id,
+              progress = { type: "live_progress", applicationTurnId: item.turnId, applicationItemId: this.#projector.durableItemId(nativeEvent.item),
                 backendCorrelations: backendTurn.completionCorrelations, phase: nativeEvent.item.responsePhase, text: boundText(nativeEvent.item.markdown.text, MAX_LIVE_PROGRESS_BYTES) };
             }
           }
@@ -2022,8 +2032,8 @@ export class ConversationActor {
   }
 
   async #recoverProjection(): Promise<void> {
-    // Reaching recovery in mailbox order means any remaining reply lacked an applied terminal.
-    this.#earlyReply?.finish("authority_lost");
+    // End early offers. A qualifying progress event can still arrive on the replacement projection.
+    this.#earlyReply?.withdrawAuthority();
     if (this.#handleReplacementRequired) {
       this.#failProjectionRecovery(
         new Error("conversation_actor_handle_replacement_required"),

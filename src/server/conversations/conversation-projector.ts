@@ -365,7 +365,7 @@ export class ConversationProjector {
         if (itemIds.has(backendItemId)) {
           throw new Error("backend_snapshot_item_reference_duplicate");
         }
-        const itemId = this.#durableItemId(backendItem);
+        const itemId = this.durableItemId(backendItem);
         itemIds.set(backendItemId, itemId);
         items.set(itemId, this.#projectItem(backendItem, itemId, turnId, 0));
       }
@@ -568,7 +568,7 @@ export class ConversationProjector {
     const lastItemId = backendTurn?.orderedBackendItemIds.filter((id) => this.#itemIds.has(id)).at(-1);
     const lastItem = lastItemId ? this.#backendItems.get(lastItemId) : undefined;
     if (!lastItem) return undefined;
-    return { turnId, afterItemId: this.#durableItemId(lastItem) };
+    return { turnId, afterItemId: this.durableItemId(lastItem) };
   }
 
   refreshApplicationPublications(): ProjectionApplication {
@@ -650,7 +650,7 @@ export class ConversationProjector {
       for (const backendItemId of backendTurn.orderedBackendItemIds) {
         const item = boundedPage.itemsById[backendItemId];
         if (!item) throw new Error("backend_history_item_reference_invalid");
-        itemIds.set(backendItemId, this.#durableItemId(item));
+        itemIds.set(backendItemId, this.durableItemId(item));
       }
       const turn = this.#projectTurnWithItemIds(
         backendTurn,
@@ -727,7 +727,7 @@ export class ConversationProjector {
         if (itemIds.has(backendItemId)) {
           throw new Error("backend_history_item_reference_duplicate");
         }
-        itemIds.set(backendItemId, this.#durableItemId(backendItem));
+        itemIds.set(backendItemId, this.durableItemId(backendItem));
       }
     }
 
@@ -920,7 +920,7 @@ export class ConversationProjector {
     if (!itemId) {
       itemId = this.#provisionalItemId(backendItem);
       this.#itemIds.set(backendItem.backendItemId, itemId);
-      this.#provisionalToDurableItemIds.set(itemId, this.#durableItemId(backendItem));
+      this.#provisionalToDurableItemIds.set(itemId, this.durableItemId(backendItem));
     }
     const priorItem = this.#items.get(itemId);
     const item = this.#projectItem(
@@ -1144,7 +1144,7 @@ export class ConversationProjector {
         ? {
             nonblockingQuestions: {
               ...backendItem.nonblockingQuestions,
-              sourceItemId: this.#durableItemId(backendItem),
+              sourceItemId: this.durableItemId(backendItem),
             },
           }
         : {}),
@@ -1171,7 +1171,7 @@ export class ConversationProjector {
     });
   }
 
-  #durableItemId(item: BackendItem): string {
+  durableItemId(item: BackendItem): string {
     return opaqueId(
       "item",
       this.#backendInstanceId,

@@ -1,3 +1,5 @@
+import { captureTurnEarlyReply } from "../../src/server/domain/capture-turn-early-reply.js";
+import { earlyReplyFrameSchema } from "../../src/shared/protocol/early-reply.js";
 import { UserInputRevisionRepository } from "../../src/server/db/repositories/user-input-revision-repository.js";
 import type { ResponseVoiceFreshness } from "../../src/server/conversations/response-voice-freshness.js";
 import { randomUUID } from "node:crypto";
@@ -33,17 +35,29 @@ async function fixture(observeNotifications = true) {
     provenance: "live" | "recovered";
     responseVoice?: ResponseVoiceFreshness;
   }> = [];
-  let observer: NotificationLifecycleObserver | undefined;
+  let observer: NotificationLifecycleObserver<Promise<VoiceNotificationPublication | undefined>>;
   let notifications: NotificationService;
   const harness = await createInMemoryThreadRuntimeHarness({
     retentionMilliseconds: 60_000,
+    captureEarlyReply: (scope, threadId, source) => captureTurnEarlyReply(notifications, harness.inventoryRepository,
+      completions, new UserInputRevisionRepository(harness.database), harness.mutations.activity, scope, threadId, source),
+    onLiveProgress: (scope, threadId, input) => {
+      const publication = observer.progress(scope, threadId, input);
+      if (input.phase === "provisional") notifications.finishEarlyProgress(scope, threadId, input.applicationTurnId, input.applicationItemId, publication);
+    },
+    onLiveProgressSkipped: (scope, threadId, turnId, itemId) => notifications.finishEarlyProgress(scope, threadId, turnId, itemId),
     captureResponseVoiceContext: (scope, threadId, correlations) => ({
       ...new UserInputRevisionRepository(harness.database).capture(scope, threadId, correlations),
       subscriberWatermark: notifications.captureSubscriberWatermark(),
     }),
     onObservedCompletion(scope, observation, provenance, subscriberWatermark, responseVoice) {
       observations.push({ observation, provenance, responseVoice });
-      if (observeNotifications) observer?.completion(scope, observation, provenance, subscriberWatermark, responseVoice);
+      if (observeNotifications) {
+        const publication = observer.completion(scope, observation, provenance, subscriberWatermark, responseVoice);
+        const turnId = observation.applicationTurnId;
+        if (publication && turnId) void publication.then(receipt =>
+          notifications.finishEarlyReply(scope, observation.applicationThreadId, turnId, receipt));
+      }
     },
   });
   const executor = vi.fn<typeof executeNotificationScript>().mockResolvedValue({
@@ -54,8 +68,10 @@ async function fixture(observeNotifications = true) {
   });
   const publications: Promise<VoiceNotificationPublication | undefined>[] = [];
   observer = new NotificationLifecycleObserver(harness.inventoryRepository, (scope, payload, key, provenance, result, _recognitionThreadId, subscriberWatermark, responseVoice) => {
-    publications.push(notifications.emit(scope, payload, key, provenance, result, () =>
-      harness.mutations.activity.notificationContext(scope, payload.thread!.id, payload.turn!.id), subscriberWatermark, responseVoice));
+    const publication = notifications.emit(scope, payload, key, provenance, result, () =>
+      harness.mutations.activity.notificationContext(scope, payload.thread!.id, payload.turn!.id), subscriberWatermark, responseVoice);
+    publications.push(publication);
+    return publication;
   });
   notifications.update(harness.scope, {
     enabled: true, scriptPath: "/test/notification-script", arguments: [], timeoutSeconds: 1,
@@ -96,6 +112,78 @@ async function fixture(observeNotifications = true) {
 }
 
 describe("live completion notification provenance", { timeout: 30_000 }, () => {
+  it("delivers ordinary progress once after a restored live stream and suppresses the abandoned item at turn settlement", async () => {
+    const current = await fixture();
+    const { harness, notifications } = current;
+    const { driver, scope } = harness;
+    const capabilities = driver.capabilities.bind(driver);
+    vi.spyOn(driver, "capabilities").mockImplementation(revision => ({
+      ...capabilities(revision), liveSpeechStarts: { final: true, provisional: true },
+    }));
+    const responses = vi.spyOn(driver, "scheduleScriptedResponse").mockImplementation(() => {});
+    const { revision, silenced: _silenced, ...settings } = notifications.read(scope);
+    notifications.update(scope, {...settings, expectedRevision: revision, delivery: scriptDelivery(["turn.progress", "turn.completed"])});
+    const frames: string[] = [];
+    notifications.subscribe(scope, frame => frames.push(frame),
+      notifications.reserveVoiceStream(scope, randomUUID(), { enabled: true, revision: 0 }));
+    const earlyFrames = () => frames.filter(frame => frame.startsWith("event: voice_early_reply\n"))
+      .map(frame => earlyReplyFrameSchema.parse(JSON.parse(frame.split("\n")[1]!.slice("data: ".length))));
+    try {
+      const threadId = await current.start();
+      const runtime = await harness.runtimes.acquire(scope, threadId);
+      try {
+        const baseline = await runtime.actor.captureSnapshotState();
+        expect(baseline.backendCapabilities.liveSpeechStarts.provisional).toBe(true);
+        expect(baseline.timeline.runState).toBe("running");
+        const [record, turn] = responses.mock.calls[0]!;
+        const commentary = (id: string, sourceOrder: number) => ({
+          backendTurnId: turn.backendTurnId, backendItemId: id, semanticKind: "assistant_message" as const,
+          responsePhase: "provisional" as const, status: "streaming" as const, sourceOrder,
+          markdown: { text: "Checking " + id + ". More to come." },
+        });
+        const first = commentary("recovering", 1), abandoned = commentary("abandoned", 2);
+        for (const item of [first, abandoned]) {
+          record.snapshot.itemsById[item.backendItemId] = item;
+          turn.orderedBackendItemIds.push(item.backendItemId);
+          driver.emit(record, { type: "item_started", item, liveSpeechStart: "provisional" });
+        }
+        const before = await runtime.actor.captureSnapshotState();
+        await vi.waitFor(() => expect(earlyFrames()).toMatchObject([{kind: "begin"}, {kind: "begin"}]));
+        const [firstId, abandonedId] = earlyFrames().map(frame => frame.replyId);
+        const firstItemId = earlyFrames()[0]!.itemId;
+        driver.emit(record, { type: "resnapshot_required", reason: "history_changed" });
+        const after = await runtime.actor.captureSnapshotState();
+        expect(after.timeline.generation).not.toBe(before.timeline.generation);
+        expect(after.timeline.itemsById[firstItemId]).toMatchObject({kind: "assistant_message", markdown: first.markdown});
+        expect(earlyFrames().filter(frame => frame.kind === "cancel")).toMatchObject([
+          {replyId: firstId, reason: "authority_lost"}, {replyId: abandonedId, reason: "authority_lost"},
+        ]);
+        expect(voiceFrames(frames)).toEqual([]);
+
+        const completed = {...first, status: "completed" as const, markdown: {text: first.markdown.text + " It is ready."}};
+        record.snapshot.itemsById[first.backendItemId] = completed;
+        for (let i = 0; i < 2; i++) driver.emit(record, {type: "item_completed", item: completed, liveProgress: true});
+        await runtime.actor.captureSnapshotState();
+        await vi.waitFor(() => expect(voiceFrames(frames)).toMatchObject([{
+          sourceEventId: firstId, payload: {event: "turn.progress", progress: {itemId: firstItemId, text: completed.markdown.text}},
+        }]));
+        expect(current.executor.mock.calls.map(([call]) => call.payload)).toMatchObject([{
+          event: "turn.progress", progress: {itemId: firstItemId, text: completed.markdown.text},
+        }]);
+
+        const terminal = {...turn, status: "completed" as const, endedBy: "agent_settled" as const};
+        record.snapshot.turnsById[turn.backendTurnId] = terminal;
+        record.snapshot.runState = "idle";
+        delete record.snapshot.activeBackendTurnId;
+        driver.emit(record, {type: "turn_completed", turn: terminal});
+        driver.emit(record, {type: "run_state_changed", state: "idle"});
+        await vi.waitFor(() => expect(earlyFrames().filter(frame => frame.kind === "cancel" && frame.reason === "publication_suppressed"))
+          .toMatchObject([{replyId: abandonedId}]));
+        expect(voiceFrames(frames).map(frame => frame.payload.event)).toEqual(["turn.progress", "turn.completed"]);
+      } finally { runtime.release(); }
+    } finally { await current.close(); }
+  });
+
   it("keeps a running thread snoozed when its accepted reply completes and shows unread attention", async () => {
     const current = await fixture();
     const { harness } = current;

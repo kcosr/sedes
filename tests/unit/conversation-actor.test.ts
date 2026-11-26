@@ -6196,11 +6196,22 @@ describe("ConversationActorManager", () => {
       handle.establishmentSnapshots[0] = baseline;
       handle.backendCapabilities.mockResolvedValue({ ...await handle.backendCapabilities(), liveSpeechStarts: { final: true, provisional } });
       const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "fixture", driver });
-      let sequence = 0;
-      const emit = (event: BackendConversationEvent) => handle.emit(0, event, sequence++);
+      let sequence = 0, rail = 0;
+      const emit = (event: BackendConversationEvent) => handle.emit(rail, event, sequence++);
+      const refresh = async (item: Omit<ReturnType<typeof assistant>, "status"> & {status: "streaming" | "completed"}, idle = false) => {
+        handle.establishmentSnapshots.push({ ...baseline, ...(idle ? { runState: "idle", activeBackendTurnId: undefined } : {}),
+          itemsById: { ...baseline.itemsById, [item.backendItemId]: item },
+          turnsById: { "turn-1": { ...baseline.turnsById["turn-1"]!, status: idle ? "completed" : "in_progress",
+            orderedBackendItemIds: ["item-1", item.backendItemId] } } });
+        emit({ type: "resnapshot_required", reason: "history_changed" });
+        await acquired.actor.captureSnapshotState();
+        rail++;
+        sequence = 0;
+        expect(handle.establishCount).toBe(rail + 1);
+      };
       const completeTurn = (...ids: string[]) => emit({ type: "turn_completed", turn: { ...baseline.turnsById["turn-1"]!,
         orderedBackendItemIds: ["item-1", ...ids], status: "completed" } });
-      return { captures, progress, skipped, completed, emit, completeTurn,
+      return { captures, progress, skipped, completed, emit, refresh, completeTurn,
         drain: () => acquired.actor.captureSnapshotState(), close: async () => { acquired.release(); await manager.close(); } };
     }
 
@@ -6238,7 +6249,7 @@ describe("ConversationActorManager", () => {
       } finally { await run.close(); }
     });
 
-    it.each(["unqualified completion", "turn end", "gap", "rewritten progress", "phase changed to partial"] as const)(
+    it.each(["turn end", "rewritten progress", "phase changed to partial"] as const)(
       "settles the exact item on %s", async disposition => {
         const run = await setup();
         const item = assistant("source", 1);
@@ -6246,9 +6257,7 @@ describe("ConversationActorManager", () => {
           run.emit({ type: "item_started", item, liveSpeechStart: "provisional" });
           await run.drain();
           const sink = run.captures[0]!;
-          if (disposition === "gap") run.emit({ type: "resnapshot_required", reason: "history_changed" });
-          else if (disposition === "turn end") run.completeTurn(item.backendItemId);
-          else if (disposition === "unqualified completion") run.emit({ type: "item_completed", item: { ...item, status: "completed" } });
+          if (disposition === "turn end") run.completeTurn(item.backendItemId);
           else {
             const revised = disposition === "rewritten progress" ? { ...item, markdown: { text: "Corrected commentary." } }
               : { ...item, responsePhase: "partial" as const };
@@ -6270,6 +6279,88 @@ describe("ConversationActorManager", () => {
           expect(sink.finish).toHaveBeenCalledWith("authority_lost");
         } finally { await run.close(); }
       });
+
+    it.each(["projection refresh", "temporarily missing correlation", "unannotated completion"] as const)(
+      "cancels early offers while preserving a later qualified progress for the same durable item after %s", async loss => {
+        const run = await setup();
+        const item = assistant("recoverable", 1);
+        const turn = { backendTurnId: "turn-1", status: "in_progress" as const, orderedBackendItemIds: ["item-1", item.backendItemId] };
+        try {
+          run.emit({ type: "item_started", item, liveSpeechStart: "provisional" });
+          const live = await run.drain();
+          const sink = run.captures[0]!;
+          const anchor = sink.source.applicationItemId;
+          const liveId = live.timeline.turnsById[projectedTurnId]!.orderedItemIds.at(-1);
+          expect(anchor).not.toBe(liveId);
+          if (loss === "projection refresh") {
+            await run.refresh(item);
+            const replaced = await run.drain();
+            expect(replaced.timeline.generation).not.toBe(live.timeline.generation);
+            expect(replaced.timeline.itemsById[anchor]).toMatchObject({ status: "streaming" });
+          } else if (loss === "temporarily missing correlation") {
+            run.emit({ type: "turn_updated", turn: { ...turn, completionCorrelations: [] } });
+            run.emit({ type: "turn_updated", turn: { ...turn, completionCorrelations: ["submitted"] } });
+          } else run.emit({ type: "item_completed", item: { ...item, status: "completed" } });
+          await run.drain();
+          expect(sink.finish.mock.calls).toEqual([["authority_lost"]]);
+          expect(run.skipped).not.toHaveBeenCalled();
+          if (loss !== "unannotated completion") run.emit({ type: "item_updated", item: { ...item, markdown: { text: "updated" } } });
+          run.emit({ type: "item_updated", item: { ...item, status: "completed" }, liveProgress: true });
+          await vi.waitFor(() => expect(run.progress).toHaveBeenCalledOnce());
+          expect(run.progress.mock.calls[0]![2]).toMatchObject({ applicationItemId: anchor, text: item.markdown });
+          expect(sink.observe).toHaveBeenCalledTimes(1);
+          run.completeTurn(item.backendItemId);
+          await vi.waitFor(() => expect(run.completed).toHaveBeenCalledOnce());
+          expect(run.skipped).not.toHaveBeenCalled();
+        } finally { await run.close(); }
+      });
+
+    it.each(["turn end", "idle baseline", "shutdown"] as const)(
+      "settles a withdrawn commentary exactly once on %s when no ordinary progress arrives", async end => {
+        const run = await setup();
+        const item = assistant("abandoned", 1);
+        try {
+          run.emit({ type: "item_started", item, liveSpeechStart: "provisional" });
+          await run.drain();
+          await run.refresh(item);
+          const sink = run.captures[0]!;
+          expect(run.skipped).not.toHaveBeenCalled();
+          if (end === "turn end") run.completeTurn(item.backendItemId);
+          if (end === "idle baseline") await run.refresh(item, true);
+          if (end === "shutdown") await run.close();
+          await vi.waitFor(() => expect(run.skipped).toHaveBeenCalledExactlyOnceWith(scope, binding.applicationThreadId,
+            projectedTurnId, sink.source.applicationItemId));
+          expect(sink.finish.mock.calls).toEqual([["authority_lost"]]);
+        } finally { await run.close(); }
+        expect(run.skipped).toHaveBeenCalledOnce();
+      });
+
+    it("drops a pre-refresh close delayed by submission and permits a genuinely new qualified close after refresh", async () => {
+      let release!: () => void;
+      const wait = new Promise<void>(resolve => { release = resolve; });
+      const submit = vi.fn(() => wait);
+      const run = await setup(submit);
+      const item = assistant("delayed", 1);
+      const completed = { ...item, status: "completed" as const };
+      try {
+        run.emit({ type: "item_started", item, liveSpeechStart: "provisional" });
+        run.emit({ type: "item_completed", item: completed, liveProgress: true });
+        await run.drain();
+        await run.refresh(completed);
+        const sink = run.captures[0]!;
+        expect(run.progress).not.toHaveBeenCalled();
+        release();
+        // The replacement baseline's submission observer runs behind the now-stale progress observation.
+        await vi.waitFor(() => expect(submit).toHaveBeenCalledTimes(2));
+        expect(run.progress).not.toHaveBeenCalled();
+        expect(run.skipped).not.toHaveBeenCalled();
+        expect(sink.finish.mock.calls).toEqual([["item_done"], ["authority_lost"]]);
+        run.emit({ type: "item_updated", item: completed, liveProgress: true });
+        await vi.waitFor(() => expect(run.progress).toHaveBeenCalledOnce());
+        expect(run.progress.mock.calls[0]![2].applicationItemId).toBe(sink.source.applicationItemId);
+        expect(run.skipped).not.toHaveBeenCalled();
+      } finally { release(); await run.close(); }
+    });
 
     it("skips a completed commentary held behind submission when the live turn ends first", async () => {
       let release!: () => void;

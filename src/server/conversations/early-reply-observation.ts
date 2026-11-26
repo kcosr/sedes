@@ -29,6 +29,7 @@ interface ObservedItem {
   readonly generation: string;
   readonly observation: EarlyReplyObservation;
   orderedSettlement?: "received" | "reconciling";
+  pendingProgress: number;
   itemClosed: boolean;
   withdrawn: boolean;
   previousText: string;
@@ -72,7 +73,7 @@ export class LiveSpeechTracker {
 
   projectionGap(): void {
     for (const item of this.#items.values()) {
-      if (!item.orderedSettlement) this.#retire(item, "authority_lost");
+      if (!item.orderedSettlement) this.#withdraw(item, "authority_lost");
       else if (item.orderedSettlement !== "reconciling") {
         item.orderedSettlement = "reconciling";
         if (!item.itemClosed && !item.withdrawn) this.#signal(item, "item_done");
@@ -85,12 +86,48 @@ export class LiveSpeechTracker {
     catch { /* Voice observation cannot invalidate the provider projection. */ }
   }
 
-  #retire(item: ObservedItem, reason: FinishReason, progressScheduled = false): void {
+  #withdraw(item: ObservedItem, reason: "authority_lost" | "source_changed"): void {
+    if (item.phase === "final") return this.#retire(item, reason);
+    // The early lane has lost authority. A later live progress event can still settle this item.
+    if (!item.withdrawn) this.#signal(item, reason);
+    item.withdrawn = true;
+    item.previousText = "";
+  }
+
+  withdrawAuthority(): void {
+    for (const item of this.#items.values()) this.#withdraw(item, "authority_lost");
+  }
+
+  /** A refresh can discover a settled turn without a corresponding live progress or terminal event. */
+  settleInactiveProgress(projector: ConversationProjector): void {
+    for (const item of this.#items.values()) {
+      if (item.phase !== "provisional") continue;
+      const turn = projector.backendTurnById(item.backendTurnId);
+      if (projector.runState === "idle" || projector.runState === "failed" || (turn && turn.status !== "in_progress")) {
+        this.#retire(item, "authority_lost");
+      }
+    }
+  }
+
+  #retire(item: ObservedItem, reason: FinishReason): void {
     this.#items.delete(item.backendItemId);
-    this.#signal(item, reason);
-    if (item.phase === "provisional" && !progressScheduled) {
+    if (!item.withdrawn) this.#signal(item, reason);
+    if (item.phase === "provisional" && !item.pendingProgress) {
       try { this.skipProgress?.(item.source); }
       catch { /* Settlement is a passive side effect. */ }
+    }
+  }
+
+  /** A control or generation can change while a qualified native close awaits submission admission. */
+  resolveProgress(itemId: string, disposition: "settled" | "deferred"): void {
+    for (const item of this.#items.values()) {
+      if (item.phase !== "provisional" || item.source.applicationItemId !== itemId || !item.pendingProgress) continue;
+      if (disposition === "settled") this.#items.delete(item.backendItemId);
+      else {
+        item.pendingProgress--;
+        this.#withdraw(item, "authority_lost");
+      }
+      return;
     }
   }
 
@@ -105,7 +142,7 @@ export class LiveSpeechTracker {
   ): void {
     const itemEvent = event.type === "item_started" || event.type === "item_updated" || event.type === "item_completed" ? event : undefined;
     for (const current of this.#items.values()) {
-      const ownItem = itemEvent?.item.backendItemId === current.backendItemId;
+      const ownItem = itemEvent?.item.backendItemId === current.backendItemId && itemEvent.item.backendTurnId === current.backendTurnId;
       const handoff = ownItem && progressScheduled;
       if ((event.type === "turn_completed" || event.type === "turn_updated") &&
           event.turn.backendTurnId === current.backendTurnId && event.turn.status !== "in_progress") {
@@ -113,12 +150,20 @@ export class LiveSpeechTracker {
           this.#settlesFinal(current, event.turn);
         if (confirmed && current.itemClosed) this.#items.delete(current.backendItemId);
         else this.#retire(current, confirmed ? "item_done" : "authority_lost");
+      } else if (current.phase === "provisional" && (projector.runState === "idle" || projector.runState === "failed")) {
+        this.#retire(current, "authority_lost");
+      } else if (current.phase === "provisional" && handoff && itemEvent) {
+        this.#observe(current, itemEvent.item, true);
+      } else if (current.phase === "provisional" && ownItem && itemEvent && itemEvent.type !== "item_started" &&
+          itemEvent.liveProgress && itemEvent.item.semanticKind === "assistant_message" && itemEvent.item.responsePhase === "partial") {
+        // A qualified partial-answer publication is independent of this commentary opening.
+        this.#retire(current, "source_changed");
       } else if (!(continuous || (current.orderedSettlement === "reconciling" && receivedBeforeGap)) ||
           !capabilities?.[current.phase] || projector.runState !== "running" || current.generation !== projector.generation ||
           activeTurnId !== current.source.applicationTurnId ||
           (event.type === "turn_updated" && event.turn.backendTurnId === current.backendTurnId &&
            !current.source.backendCorrelations.some(id => event.turn.completionCorrelations?.includes(id)))) {
-        this.#retire(current, "authority_lost", handoff);
+        this.#withdraw(current, "authority_lost");
       } else if (ownItem && itemEvent) {
         this.#observe(current, itemEvent.item, handoff);
       } else if (current.phase === "final" && !current.itemClosed && itemEvent?.item.backendTurnId === current.backendTurnId &&
@@ -136,7 +181,7 @@ export class LiveSpeechTracker {
     }
     if (!newItemStart || event.type !== "item_started" || !event.liveSpeechStart || !continuous ||
         !capabilities?.[event.liveSpeechStart] || projector.runState !== "running" ||
-        this.#items.size >= 64) return;
+        this.#items.has(event.item.backendItemId) || this.#items.size >= 64) return;
     const phase = event.liveSpeechStart;
     const { item } = event;
     if (item.semanticKind !== "assistant_message" || item.responsePhase !== phase || item.status !== "streaming") return;
@@ -150,7 +195,7 @@ export class LiveSpeechTracker {
     }
     const source: EarlyReplySource = {
       event: phase === "final" ? "turn.completed" : "turn.progress",
-      applicationTurnId: projectedItem.turnId, applicationItemId: projectedItem.id,
+      applicationTurnId: projectedItem.turnId, applicationItemId: phase === "provisional" ? projector.durableItemId(item) : projectedItem.id,
       backendCorrelations: Object.freeze([...turn.completionCorrelations]),
     };
     let observation: EarlyReplyObservation | null | undefined;
@@ -158,7 +203,7 @@ export class LiveSpeechTracker {
     catch { return; }
     if (!observation) return;
     const observed: ObservedItem = { source, phase, backendItemId: item.backendItemId, backendTurnId: turn.backendTurnId,
-      generation: projector.generation, observation, itemClosed: false, withdrawn: false, previousText: "",
+      generation: projector.generation, observation, pendingProgress: 0, itemClosed: false, withdrawn: false, previousText: "",
       precedingPhases: phase === "final" ? this.#precedingPhases(projector, turn.backendTurnId) : [] };
     this.#items.set(item.backendItemId, observed);
     this.#observe(observed, item, false);
@@ -167,18 +212,22 @@ export class LiveSpeechTracker {
   #observe(current: ObservedItem, item: BackendItem, progressScheduled: boolean): void {
     // Keep only the scanner's bounded prefix plus grapheme lookahead and its limit sentinel.
     const text = item.semanticKind === "assistant_message" ? item.markdown.text.slice(0, MAX_EARLY_REPLY_BYTES + 3) : "";
-    if (item.semanticKind !== "assistant_message" || item.responsePhase !== current.phase || !text.startsWith(current.previousText)) {
-      if (current.phase === "provisional" && item.status === "streaming") {
-        // A later live completion can still publish this item with corrected text. Keep its identity until that decision.
-        if (!current.withdrawn) this.#signal(current, "source_changed");
-        current.withdrawn = true;
-        current.previousText = "";
-      } else this.#retire(current, "source_changed", progressScheduled);
+    const changed = item.semanticKind !== "assistant_message" || item.responsePhase !== current.phase || !text.startsWith(current.previousText);
+    if (current.phase === "provisional" && progressScheduled) {
+      if (changed) this.#withdraw(current, "source_changed");
+      if (!current.itemClosed && !current.withdrawn) this.#signal(current, "item_done");
+      current.itemClosed = true;
+      current.pendingProgress++;
+      return;
+    }
+    if (changed) {
+      this.#withdraw(current, "source_changed");
       return;
     }
     if (current.phase === "provisional" && item.status !== "streaming") {
-      // The qualified live progress publication (or its skipped observer) now owns this exact item.
-      this.#retire(current, progressScheduled ? "item_done" : "authority_lost", progressScheduled);
+      // An unannotated close can still be followed by a genuinely qualified item_updated.
+      if (item.status === "completed") this.#withdraw(current, "authority_lost");
+      else this.#retire(current, "authority_lost");
       return;
     }
     if (current.withdrawn) return;
@@ -192,7 +241,7 @@ export class LiveSpeechTracker {
     } else {
       current.previousText = text;
       try { current.observation.observe(text, current.precedingPhases); }
-      catch { this.#retire(current, "authority_lost"); }
+      catch { this.#withdraw(current, "authority_lost"); }
     }
   }
 }

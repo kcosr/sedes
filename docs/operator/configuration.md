@@ -1223,8 +1223,11 @@ when its metadata alone exceeds the limit.
 Notification schema version 5 adds the independent `turn.partial` event and
 Partial result section. `turn.progress` requires `progress.phase: "provisional"`;
 `turn.partial` requires `progress.phase: "partial"`. These notices retain `progress.itemId`,
-`progress.text`, and optional truncation metadata. It continues to omit unselected
-completion sections. Update consumer scripts with the server. The repository's Assistant hook
+`progress.text`, and optional truncation metadata. Scripts can correlate an item
+across stream recovery using `thread.id`, `turn.id`, and `progress.itemId`.
+The item ID matches the transcript history snapshot. A live transcript row can
+temporarily use a different ID until its next snapshot. The completion payload
+continues to omit unselected completion sections. Update consumer scripts with the server. The repository's Assistant hook
 speaks each supplied nonempty section in **Provisional → Partial → Unclassified → Final**
 order, matching the checkbox row. Missing, null, empty, or whitespace-only
 sections add no speech. OpenCode's confirmed final reply is available under
