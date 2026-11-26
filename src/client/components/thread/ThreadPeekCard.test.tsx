@@ -146,7 +146,7 @@ describe("ThreadPeekCard detail beneath attention and background glyphs", () => 
     },
     {
       name: "parked completion",
-      overrides: { inventoryState: "settled" as const, stateChangedAt: "2026-09-27T11:55:00.000Z" },
+      overrides: { inventoryState: "parked" as const, stateChangedAt: "2026-09-27T11:55:00.000Z" },
       unseen: true,
       glyph: "unseen",
       label: "Finished while you were away · Parked 5m ago",
@@ -291,7 +291,7 @@ describe("ThreadPeekCard automation line", () => {
 
   it("keeps the state row when it says more than Idle, without the automation glyph", () => {
     const container = renderPeek(
-      automated({ enabledCount: 0, pausedCount: 1 }, { inventoryState: "settled", stateChangedAt: "2026-10-06T00:40:00.000Z" }),
+      automated({ enabledCount: 0, pausedCount: 1 }, { inventoryState: "parked", stateChangedAt: "2026-10-06T00:40:00.000Z" }),
     );
     const stateRow = container.querySelector('[data-row="state"]')!;
     expect(stateRow).toHaveTextContent("Parked 3h ago");

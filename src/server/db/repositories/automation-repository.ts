@@ -26,7 +26,7 @@ import { MAXIMUM_ACTIVE_QUEUED_INPUTS } from "./queued-input-repository.js";
 import { ConversationOperationRepository } from "./conversation-operation-repository.js";
 import { DomainError } from "../../domain/errors.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
-import { activateSettledThread } from "./settled-thread-activation.js";
+import { activateParkedThread } from "./parked-thread-activation.js";
 
 const definitionColumns = `
   tenant_id AS tenantId,
@@ -1027,7 +1027,7 @@ export class AutomationRepository {
           run.id,
         );
       if (newProblem && run.state !== "failed") {
-        activateSettledThread(this.database, scope, run.anchorThreadId, input.settledAt);
+        activateParkedThread(this.database, scope, run.anchorThreadId, input.settledAt);
       }
       this.retireFinishedOneShot(scope, run.automationId, input.settledAt);
       return this.getRun(scope, run.automationId, run.id);
@@ -1066,7 +1066,7 @@ export class AutomationRepository {
         )
         .all() as RunRow[]).map(runFromRow);
       for (const run of settled) {
-        if (run.turnOutcome === "failed" && run.state !== "failed") activateSettledThread(
+        if (run.turnOutcome === "failed" && run.state !== "failed") activateParkedThread(
           this.database,
           { tenantId: run.tenantId, principalId: run.ownerPrincipalId },
           run.anchorThreadId,
@@ -2037,7 +2037,7 @@ export class AutomationRepository {
           "The automation run changed in another operation.",
         );
       }
-      // A failed or uncertain run returns a parked (stored as settled) anchor
+      // A failed or uncertain run returns a parked anchor
       // to Active, as accepted input does, so a parked thread cannot hide its
       // own failure. Clone runs return the anchor too. Resolving an uncertain
       // run records the user's decision, not a new failure; that uncertainty
@@ -2046,7 +2046,7 @@ export class AutomationRepository {
         input.state === "uncertain" ||
         (input.state === "failed" && current.state !== "uncertain")
       ) {
-        activateSettledThread(
+        activateParkedThread(
           this.database,
           scope,
           current.anchorThreadId,

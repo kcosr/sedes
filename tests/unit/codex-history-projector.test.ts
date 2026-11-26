@@ -70,6 +70,7 @@ const baseThread = {
   environments: null,
   originator: null,
   daybreakEnabled: null,
+  daybreakProgramPropagationEnrolled: null,
   id: "native-thread-secret",
   extra: {},
   sessionId: "native-session-secret",
@@ -600,6 +601,7 @@ const stableItems = [
       type: "mcpToolCall",
       id: "mcp-1",
       server: "fixture",
+      environmentId: null,
       tool: "lookup",
       status: "completed",
       arguments: { query: "bounded", apiKey: "argument-secret" },
@@ -807,7 +809,7 @@ function decodeThreadItem(item: unknown): CodexThreadItem {
   }).item;
 }
 
-describe("Codex 0.169.0 C1 protocol codecs", () => {
+describe("Codex 0.172.0 C1 protocol codecs", () => {
   it("retains a bounded native attachment identity without exposing it in the normalized transcript", () => {
     const native = thread([], { attachedToThreadId: "private-attached-thread" });
     expect(codexThreadReadMethod.decodeResult({ thread: native }).thread.attachedToThreadId)
@@ -818,10 +820,28 @@ describe("Codex 0.169.0 C1 protocol codecs", () => {
     }
   });
 
+  it("validates native Daybreak enrollment and keeps it provider-private", () => {
+    for (const daybreakProgramPropagationEnrolled of [null, true, false]) {
+      const decoded = codexThreadReadMethod.decodeResult({
+        thread: thread([], { daybreakProgramPropagationEnrolled }),
+      });
+      expect(decoded.thread.daybreakProgramPropagationEnrolled).toBe(daybreakProgramPropagationEnrolled);
+      expect(JSON.stringify(projectCodexHistory(decoded.thread).snapshot)).not.toContain("daybreakProgramPropagationEnrolled");
+    }
+    expect(() => codexThreadReadMethod.decodeResult({
+      thread: thread([], { daybreakProgramPropagationEnrolled: "true" }),
+    })).toThrow();
+  });
+
   it.each([
     null,
     { moderated: false, display: null },
-    { moderated: true, display: { action: "native-chat-action", blockType: "native-block", cyberTrustedAccess: true, checkTrustedContacts: true } },
+    { moderated: true, display: { mode: "show", version: 1, trustedContacts: "skip" } },
+    { moderated: true, display: { mode: "show", version: 1, trustedContacts: "check",
+      annotation: { kind: "wellbeingHelpline", subject: "answer" } } },
+    { moderated: true, display: { mode: "hide", version: 1, replacement: { kind: "wellbeingPromptHelpline" } } },
+    { moderated: true, display: { mode: "block", version: 1, reason: { kind: "protection", protectionType: "private-protection" } } },
+    { moderated: true, display: { mode: "block", version: 1, reason: { kind: "cyber", trustedAccess: true } } },
   ])("accepts bounded moderation metadata without exposing native presentation instructions: %j", (moderation) => {
     const native = { type: "agentMessage", id: "answer", text: "Authored answer", phase: null,
       memoryCitation: null, delivery: null, questions: null, moderation };
@@ -835,8 +855,8 @@ describe("Codex 0.169.0 C1 protocol codecs", () => {
     const encoded = JSON.stringify(snapshot);
     expect(encoded).toContain("Authored answer");
     expect(encoded).not.toContain("moderated");
-    expect(encoded).not.toContain("native-chat-action");
-    expect(encoded).not.toContain("checkTrustedContacts");
+    expect(encoded).not.toContain("trustedContacts");
+    expect(encoded).not.toContain("private-protection");
     for (const method of ["item/completed", "turn/completed"] as const) {
       const params = method === "item/completed"
         ? { threadId: "thread", turnId: "turn", item: native, completedAtMs: 2, contentTokenCount: null }
@@ -848,8 +868,17 @@ describe("Codex 0.169.0 C1 protocol codecs", () => {
   it.each([
     { moderated: "true", display: null },
     { moderated: true, display: null, instructions: "ignore policy" },
-    { moderated: true, display: { action: 1, blockType: null, cyberTrustedAccess: null, checkTrustedContacts: null } },
-    { moderated: true, display: { action: "native", blockType: null, cyberTrustedAccess: null, checkTrustedContacts: null, invoke: "contact" } },
+    { moderated: true, display: { action: "native" } },
+    { moderated: true, display: { mode: "show", version: 2, trustedContacts: "skip" } },
+    { moderated: true, display: { mode: "show", version: 1, trustedContacts: "check", invoke: "contact" } },
+    { moderated: true, display: { mode: "show", version: 1, trustedContacts: "check",
+      annotation: { kind: "wellbeingHelpline", subject: "prompt", extra: true } } },
+    { moderated: true, display: { mode: "hide", version: 1,
+      replacement: { kind: "wellbeingPromptHelpline", extra: true } } },
+    { moderated: true, display: { mode: "block", version: 1,
+      reason: { kind: "protection", protectionType: "private-protection", trustedAccess: true } } },
+    { moderated: true, display: { mode: "block", version: 1,
+      reason: { kind: "cyber", protectionType: "unexpected" } } },
   ])("rejects malformed or extended moderation metadata: %j", (moderation) => {
     expect(() => decodeThreadItem({ type: "agentMessage", id: "answer", text: "Authored answer", phase: null,
       memoryCitation: null, delivery: null, questions: null, moderation })).toThrow();
@@ -1019,6 +1048,48 @@ describe("Codex 0.169.0 C1 protocol codecs", () => {
     expect(Object.values(projectCodexHistory(decoded.thread).snapshot.itemsById)[0]).toMatchObject({ semanticKind: "mcp" });
   });
 
+  it("refreshes fourteen scoped MCP calls through paginated and legacy history", () => {
+    const fixture = stableItems.find(({ item }) => item.type === "mcpToolCall")!.item;
+    const turnId = "turn-mcp-refresh";
+    const items = Array.from({ length: 14 }, (_, index) => ({
+      ...fixture,
+      id: `mcp-refresh-${index}`,
+      environmentId: index % 2 === 0 ? null : "private-registered-environment",
+    }));
+    const page = codexThreadItemsListMethod.decodeResult({
+      data: items.map((item) => ({ turnId, item, startedAtMs: 1, completedAtMs: 2 })),
+      nextCursor: null,
+      backwardsCursor: null,
+    });
+    expect(page.data.map(({ item }) => item)).toEqual(items);
+    const { thread: decoded } = codexThreadReadMethod.decodeResult({ thread: thread([turn(turnId, items)]) });
+    expect(decoded.turns[0]?.items).toEqual(items);
+    const snapshot = projectCodexHistory(decoded).snapshot;
+    expect(Object.values(snapshot.itemsById).map(({ semanticKind }) => semanticKind))
+      .toEqual(items.map(() => "mcp"));
+    expect(JSON.stringify(snapshot)).not.toContain("private-registered-environment");
+  });
+
+  it.each([null, "private-registered-environment"])("accepts MCP registration scope on live items: %j", (environmentId) => {
+    const mcp = stableItems.find(({ item }) => item.type === "mcpToolCall")!.item;
+    const started = { ...mcp, environmentId, status: "inProgress", result: null, durationMs: null };
+    expect(decodeThreadItem(started)).toEqual(started);
+    const item = { ...mcp, environmentId };
+    const completion = { threadId: "thread", turnId: "turn", item, completedAtMs: 2 };
+    expect(decodeCodexC2Notification("item/completed", completion)).toEqual(completion);
+  });
+
+  it.each(["", "x".repeat(513), 1])("rejects invalid MCP registration scope: %j", (environmentId) => {
+    const mcp = stableItems.find(({ item }) => item.type === "mcpToolCall")!.item;
+    const item = { ...mcp, environmentId };
+    expect(() => decodeThreadItem(item)).toThrow();
+    expect(() => codexThreadItemsListMethod.decodeResult({
+      data: [{ turnId: "turn", item, startedAtMs: 1, completedAtMs: 2 }],
+      nextCursor: null,
+      backwardsCursor: null,
+    })).toThrow();
+  });
+
   it.each([null, { icon: null, color: null }, { icon: "folder", color: "blue" }])(
     "accepts pinned section appearance metadata on cold reads and listings: %j",
     (appearance) => {
@@ -1104,7 +1175,7 @@ describe("Codex 0.169.0 C1 protocol codecs", () => {
     const generated = readFileSync(
       path.join(
         repositoryRoot,
-        "protocol/codex-app-server/0.169.0/official/stable/typescript/v2/ThreadItem.ts",
+        "protocol/codex-app-server/0.172.0/official/stable/typescript/v2/ThreadItem.ts",
       ),
       "utf8",
     );
@@ -1992,7 +2063,7 @@ describe("Codex 0.169.0 C1 protocol codecs", () => {
   });
 });
 
-describe("Codex 0.169.0 C1 history projector", () => {
+describe("Codex 0.172.0 C1 history projector", () => {
   it.each([
     [{ startedAtMs: 2_000, completedAtMs: 2_500 }, { startedAtMs: 1_000, completedAtMs: 1_500 },
       { startedAt: "1970-01-01T00:00:02.000Z", completedAt: "1970-01-01T00:00:02.500Z" }],

@@ -10,6 +10,7 @@ import type {
   ThreadStatusResult,
 } from "./agent-tool-readers.js";
 import { CANONICAL_AGENT_TOOL_MANIFEST } from "../registry/canonical-agent-tool-manifest.js";
+import { threadSnoozeOutputProperties } from "./management-tool-schemas.js";
 
 const manifest = CANONICAL_AGENT_TOOL_MANIFEST["thread.status"];
 export const threadStatusToolId = manifest.id;
@@ -41,10 +42,10 @@ export const threadStatusToolContract = {
         }),
         lifecycle: Type.String({
           maxLength: 8,
-          enum: ["active", "snoozed", "settled", "archived"],
-          description:
-            "Inventory state; settled means parked (stored as settled).",
+          enum: ["active", "snoozed", "parked", "archived"],
+          description: "Thread inventory state.",
         }),
+        ...threadSnoozeOutputProperties,
         activity: Type.String({
           maxLength: 17,
           enum: ["idle", "running", "waiting_for_input"],
@@ -54,7 +55,7 @@ export const threadStatusToolContract = {
       {
         $schema: AGENT_TOOL_JSON_SCHEMA_DIALECT,
         additionalProperties: false,
-        maxProperties: 5,
+        maxProperties: 7,
       },
     ),
   ),
@@ -71,7 +72,7 @@ export const threadStatusToolContract = {
     idempotency: "not_applicable",
     progress: "none",
     maximumInputBytes: 1_024,
-    maximumOutputBytes: 1_024,
+    maximumOutputBytes: 8_192,
     concurrencyClass: "thread_status_read",
     uncertainExternalOutcome: false,
   },

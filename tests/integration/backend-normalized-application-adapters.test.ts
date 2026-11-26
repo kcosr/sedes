@@ -1415,7 +1415,7 @@ describe("backend-normalized application adapters", () => {
     }
   });
 
-  it("preserves draft, stash, snooze, settle, archive, and workspace inventory behavior", async () => {
+  it("preserves draft, stash, snooze, park, archive, and workspace inventory behavior", async () => {
     const current = fixture();
     try {
       const repository = new InventoryRepository(current.database);
@@ -1506,17 +1506,17 @@ describe("backend-normalized application adapters", () => {
           inventoryRevision: 2,
         },
       ]);
-      const settled = await service.transition(
+      const parked = await service.transition(
         current.scope,
         current.threadId,
         {
           expectedRevision: 2,
-          mutationId: "settle-operation",
-          change: { action: "settle" },
+          mutationId: "park-operation",
+          change: { action: "park" },
         },
         1_100,
       );
-      expect(settled.inventoryState).toBe("settled");
+      expect(parked.inventoryState).toBe("parked");
       const archived = await service.transition(
         current.scope,
         current.threadId,
@@ -1562,7 +1562,7 @@ describe("backend-normalized application adapters", () => {
       const transition = {
         expectedRevision: 0,
         mutationId: "repair-publication",
-        change: { action: "settle" as const },
+        change: { action: "park" as const },
       };
 
       await expect(
@@ -1573,13 +1573,13 @@ describe("backend-normalized application adapters", () => {
       expect(
         repository.getInventory(current.scope, current.threadId),
       ).toMatchObject({
-        inventoryState: "settled",
+        inventoryState: "parked",
         inventoryRevision: 1,
       });
       await expect(
         service.transition(current.scope, current.threadId, transition, 501),
       ).resolves.toMatchObject({
-        inventoryState: "settled",
+        inventoryState: "parked",
         inventoryRevision: 1,
       });
       expect(publish).toHaveBeenCalledTimes(2);
@@ -1587,7 +1587,7 @@ describe("backend-normalized application adapters", () => {
       await service.wakeForRuntimeSignal(
         current.scope,
         current.threadId,
-        "completion",
+        { kind: "submission_completion", acceptedAt: 500, completionObservedAt: 501, outcome: "completed" },
         502,
       );
       expect(publish).toHaveBeenCalledTimes(2);
@@ -1596,8 +1596,8 @@ describe("backend-normalized application adapters", () => {
         current.threadId,
         {
           expectedRevision: 1,
-          mutationId: "repair-unsettle",
-          change: { action: "unsettle" },
+          mutationId: "repair-unpark",
+          change: { action: "unpark" },
         },
         550,
       );
@@ -1684,7 +1684,7 @@ describe("backend-normalized application adapters", () => {
         {
           expectedRevision: 0,
           mutationId: "single-in-flight-publication",
-          change: { action: "settle" },
+          change: { action: "park" },
         },
         500,
       );
@@ -3929,7 +3929,7 @@ describe("passive lifecycle notification sources", () => {
       await service.wakeForRuntimeSignal(
         current.scope,
         current.threadId,
-        "completion",
+        { kind: "submission_completion", acceptedAt: 1260, completionObservedAt: 1299, outcome: "completed" },
         1300,
       );
       expect(emit).toHaveBeenCalledOnce();

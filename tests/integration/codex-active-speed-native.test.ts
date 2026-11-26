@@ -72,8 +72,8 @@ if (candidate) beforeAll(async () => {
   try {
     version = execFileSync(candidate, ["--version"], { env: probeEnvironment(versionHome), encoding: "utf8", timeout: 10_000 }).trim().replace(/^codex-cli /, "");
   } finally { await rm(versionHome, { recursive: true, force: true }); }
-  expect(version).toBe("0.169.0");
-  const metadata = JSON.parse(await readFile(path.resolve(`protocol/codex-app-server/0.169.0/runtime-compatibility/${version}.json`), "utf8"));
+  expect(version).toBe("0.172.0");
+  const metadata = JSON.parse(await readFile(path.resolve(`protocol/codex-app-server/0.172.0/runtime-compatibility/${version}.json`), "utf8"));
   const sha256 = createHash("sha256").update(await readFile(candidate)).digest("hex");
   expect(sha256).toBe(metadata.platforms.find((platform: { nodePlatform: string; nodeArch: string }) => platform.nodePlatform === process.platform && platform.nodeArch === process.arch).executableSha256);
   process.stdout.write(`Offline Speed qualification: ${JSON.stringify({ version, sha256, platform: process.platform, arch: process.arch, authenticatedProvider: false })}\n`);
@@ -110,6 +110,7 @@ native.each(nativeScenarios)("qualifies real native Speed ($topology/$scenario)"
   const releases: Array<() => void> = [];
   let supervisor: CodexDaemonSupervisor | CodexRuntimeClient | undefined;
   let sidecar: Awaited<ReturnType<typeof createPersistentCodexLiveSidecar>> | undefined;
+  let sidecarConfiguration: Parameters<CodexSidecarRuntimeConnection["ensure"]>[0] | undefined;
   let attachment: Awaited<ReturnType<Awaited<ReturnType<typeof createPersistentCodexLiveSidecar>>["attach"]>> | undefined;
   let actor: ConversationActor | undefined;
   let driver: CodexConversationBackendDriver | undefined;
@@ -192,12 +193,12 @@ child.on('exit', code => process.exit(code ?? 1));
 `);
       await chmod(relayPath, 0o700);
       sidecar = await createPersistentCodexLiveSidecar({ ...f.scope, executionEnvironmentId: connection.executionEnvironmentId });
-      const configuration = { instance, connections: [connection], connection: {
+      sidecarConfiguration = { instance, connections: [connection], connection: {
         ownership: "owned" as const, channel: { type: "process_stdio" as const, executablePath: relayPath, workingDirectory: workspacePath, codexHome: home },
       } };
-      attachment = await sidecar.attach(configuration);
+      attachment = await sidecar.attach(sidecarConfiguration);
       const remote = new CodexSidecarRuntimeConnection(attachment.session.runtimeChannel);
-      const runtimeId = await remote.ensure(configuration);
+      const runtimeId = await remote.ensure(sidecarConfiguration);
       const receipts = new CodexRuntimeReceiptStore(f.database, undefined, (scope, id) => sessions.controller(scope, id)?.publicationChanged());
       const authority = { scope: runtimeScope, runtimeId, controllerId: String(attachment.status.controllerEpoch) };
       sidecarAuthority = authority;
@@ -740,9 +741,10 @@ child.on('exit', code => process.exit(code ?? 1));
       await actor.close(); actor = undefined;
       await supervisor.close(); supervisor = undefined;
       await attachment!.session.close("replace_controller_for_qualification");
-      attachment = await sidecar!.attach();
+      attachment = await sidecar!.attach(sidecarConfiguration!);
       expect(String(attachment.status.controllerEpoch)).not.toBe(sidecarAuthority!.controllerId);
       const replacement = new CodexSidecarRuntimeConnection(attachment.session.runtimeChannel);
+      await expect(replacement.lookup(sidecarConfiguration!)).resolves.toBe(sidecarAuthority!.runtimeId);
       await expect(replacement.inspect({ ...sidecarAuthority!, controllerId: String(attachment.status.controllerEpoch) }))
         .resolves.toMatchObject({ incarnation: expect.any(String) });
       const before = await readFile(ingressPath, "utf8");

@@ -197,7 +197,7 @@ describe("normalized application components", () => {
 
     const parkedThread = {
       ...thread,
-      inventoryState: "settled" as const,
+      inventoryState: "parked" as const,
     };
     rerender(
       <InventorySidebar

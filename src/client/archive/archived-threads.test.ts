@@ -203,7 +203,7 @@ describe("selectArchiveBase", () => {
     const snap = snapshot(
       [
         thread("active", { inventoryState: "active" }),
-        thread("settled", { inventoryState: "settled" }),
+        thread("parked", { inventoryState: "parked" }),
         thread("a", {
           targetId: "t-claude",
           backend: { label: { text: "Claude" }, brand: "claude" },
@@ -373,7 +373,7 @@ describe("projectArchivedThreads scope", () => {
   it("ignores the sidebar Show toggles and pinned-only", () => {
     const projection = project(snap, {
       preferences: {
-        show: { snoozed: false, settled: false, drafts: false },
+        show: { snoozed: false, parked: false, drafts: false },
         modes: { time: { pinnedOnly: true } },
       },
     });

@@ -238,7 +238,7 @@ describe("thread bulk inventory service", () => {
 
   it.each([
     ["missing", "archive"], ["quarantined", "archive"], ["environment_unavailable", "archive"],
-    ["missing", "settle"], ["quarantined", "settle"], ["environment_unavailable", "settle"],
+    ["missing", "park"], ["quarantined", "park"], ["environment_unavailable", "park"],
   ] as const)("changes dormant %s stack members to %s without changing provider evidence", async (availability, action) => {
     const current = fixture();
     try {
@@ -254,10 +254,10 @@ describe("thread bulk inventory service", () => {
         expectedStashedPromptCount: 0,
         ...(action === "archive"
           ? { action: "archive", expectedOpenTaskCount: 0 }
-          : { action: "settle" }),
+          : { action: "park" }),
       });
       for (const id of ids) {
-        expect(current.inventory.getInventory(current.scope, id).inventoryState).toBe(action === "archive" ? "archived" : "settled");
+        expect(current.inventory.getInventory(current.scope, id).inventoryState).toBe(action === "archive" ? "archived" : "parked");
         expect(current.inventory.getThread(current.scope, id).thread.availability).toBe(availability);
       }
     } finally { current.database.close(); }
@@ -268,8 +268,8 @@ describe("thread bulk inventory service", () => {
     try {
       const ids = current.ids.slice(0, 2);
       for (const id of ids) { current.runtimeStates.set(id, "disconnected"); current.archiveSafe.add(id); }
-      const settled = await current.service.impact(current.scope, { action: "settle", threadIds: ids });
-      expect(settled).toMatchObject({ available: false, blockers: { total: 2 } });
+      const parkImpact = await current.service.impact(current.scope, { action: "park", threadIds: ids });
+      expect(parkImpact).toMatchObject({ available: false, blockers: { total: 2 } });
       const impact = await current.service.impact(current.scope, { action: "archive", threadIds: ids });
       expect(impact).toMatchObject({ available: true, blockers: { total: 0 } });
       await current.service.transition(current.scope, {
@@ -331,8 +331,8 @@ describe("thread bulk inventory service", () => {
       const [first, second, third] = current.ids as [string, string, string];
       current.inventory.transitionInventory(current.scope, second, {
         expectedRevision: 0,
-        mutationId: "pre-settle-second",
-        change: { action: "settle" },
+        mutationId: "pre-park-second",
+        change: { action: "park" },
         now: 450,
       });
       const task = current.tasks.create(current.scope, {
@@ -342,11 +342,11 @@ describe("thread bulk inventory service", () => {
         now: 451,
       });
       const impact = await current.service.impact(current.scope, {
-        action: "settle",
+        action: "park",
         threadIds: [third, second, first],
       });
       expect(impact).toMatchObject({
-        action: "settle",
+        action: "park",
         targetCount: 3,
         affectedCount: 2,
         unchangedCount: 1,
@@ -370,9 +370,9 @@ describe("thread bulk inventory service", () => {
       const assertOpenTasks = vi.spyOn(current.tasks, "assertOpenThreadTaskSnapshot");
       const applyOpenTasks = vi.spyOn(current.tasks, "applyOpenThreadTaskDisposition");
       const request = {
-        action: "settle" as const,
+        action: "park" as const,
         targets: impact.targets,
-        mutationId: "bulk-settle-mutation",
+        mutationId: "bulk-park-mutation",
         expectedStashedPromptCount: 0,
       };
       await expect(
@@ -383,7 +383,7 @@ describe("thread bulk inventory service", () => {
       expect(
         current.inventory.getInventory(current.scope, second),
       ).toMatchObject({
-        inventoryState: "settled",
+        inventoryState: "parked",
         inventoryRevision: 1,
       });
       expect(current.tasks.get(current.scope, task.id)).toMatchObject({
@@ -415,16 +415,16 @@ describe("thread bulk inventory service", () => {
     }
   });
 
-  it.each(["settle", "unsettle", "archive"] as const)(
+  it.each(["park", "unpark", "archive"] as const)(
     "applies the task limit only to archive for %s impact",
     async (action) => {
       const current = fixture();
       try {
         const ids = current.ids.slice(0, 2);
-        if (action === "unsettle") {
+        if (action === "unpark") {
           for (const threadId of ids) current.inventory.transitionInventory(current.scope, threadId, {
             expectedRevision: 0, mutationId: `prepare-task-limit-${threadId}`,
-            change: { action: "settle" }, now: 450,
+            change: { action: "park" }, now: 450,
           });
         }
         vi.spyOn(current.tasks, "listOpenThreadTaskSummaries").mockReturnValue({
@@ -438,19 +438,19 @@ describe("thread bulk inventory service", () => {
     },
   );
 
-  it("blocks the complete settle and fences revisions for unchanged targets", async () => {
+  it("blocks the complete park operation and fences revisions for unchanged targets", async () => {
     const current = fixture();
     try {
       const [first, second, third] = current.ids as [string, string, string];
       current.inventory.transitionInventory(current.scope, second, {
         expectedRevision: 0,
-        mutationId: "pre-settle-unchanged",
-        change: { action: "settle" },
+        mutationId: "pre-park-unchanged",
+        change: { action: "park" },
         now: 450,
       });
       current.runtimeStates.set(third, "running");
       const impact = await current.service.impact(current.scope, {
-        action: "settle",
+        action: "park",
         threadIds: [first, second, third],
       });
       expect(impact).toMatchObject({
@@ -459,9 +459,9 @@ describe("thread bulk inventory service", () => {
       });
       await expect(
         current.service.transition(current.scope, {
-          action: "settle",
+          action: "park",
           targets: impact.targets,
-          mutationId: "bulk-settle-blocked",
+          mutationId: "bulk-park-blocked",
           expectedStashedPromptCount: 0,
         }),
       ).rejects.toThrow("active or unresolved work");
@@ -475,15 +475,15 @@ describe("thread bulk inventory service", () => {
       current.runtimeStates.delete(third);
       current.inventory.transitionInventory(current.scope, second, {
         expectedRevision: 1,
-        mutationId: "unsettle-noop-fence",
-        change: { action: "unsettle" },
+        mutationId: "unpark-noop-fence",
+        change: { action: "unpark" },
         now: 460,
       });
       await expect(
         current.service.transition(current.scope, {
-          action: "settle",
+          action: "park",
           targets: impact.targets,
-          mutationId: "bulk-settle-stale-noop",
+          mutationId: "bulk-park-stale-noop",
           expectedStashedPromptCount: 0,
         }),
       ).rejects.toThrow("changed in another client");
@@ -605,20 +605,20 @@ describe("thread bulk inventory service", () => {
     }
   });
 
-  it("unsettles only settled members and reports an all-satisfied stack as unavailable", async () => {
+  it("unparks only parked members and reports an all-satisfied stack as unavailable", async () => {
     const current = fixture();
     try {
       const [first, second, third] = current.ids as [string, string, string];
       for (const [index, threadId] of [first, third].entries()) {
         current.inventory.transitionInventory(current.scope, threadId, {
           expectedRevision: 0,
-          mutationId: `prepare-unsettle-${index}`,
-          change: { action: "settle" },
+          mutationId: `prepare-unpark-${index}`,
+          change: { action: "park" },
           now: 450 + index,
         });
       }
       const impact = await current.service.impact(current.scope, {
-        action: "unsettle",
+        action: "unpark",
         threadIds: [third, second, first],
       });
       expect(impact).toMatchObject({
@@ -628,9 +628,9 @@ describe("thread bulk inventory service", () => {
       });
       await expect(
         current.service.transition(current.scope, {
-          action: "unsettle",
+          action: "unpark",
           targets: impact.targets,
-          mutationId: "bulk-unsettle-mixed",
+          mutationId: "bulk-unpark-mixed",
         }),
       ).resolves.toEqual({ changedThreadIds: [third, first] });
       expect(
@@ -641,7 +641,7 @@ describe("thread bulk inventory service", () => {
       });
 
       const satisfied = await current.service.impact(current.scope, {
-        action: "unsettle",
+        action: "unpark",
         threadIds: [third, second, first],
       });
       expect(satisfied).toMatchObject({
@@ -659,9 +659,9 @@ describe("thread bulk inventory service", () => {
       };
       await expect(
         current.service.transition(current.scope, {
-          action: "unsettle",
+          action: "unpark",
           targets: satisfied.targets,
-          mutationId: "bulk-unsettle-zero-effect",
+          mutationId: "bulk-unpark-zero-effect",
         }),
       ).rejects.toThrow("already has the requested inventory state");
       const generationAfter = current.database
@@ -787,7 +787,7 @@ describe("thread bulk inventory service", () => {
       });
       expect(() =>
         current.inventory.bulkInventoryTransition(current.scope, {
-          action: "settle",
+          action: "park",
           targets: [first, second].map((threadId) => ({
             threadId,
             expectedRevision: 0,

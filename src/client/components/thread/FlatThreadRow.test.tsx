@@ -210,15 +210,15 @@ describe("flatRowGlyphKind ladder", () => {
   it("automation beats parked; parked beats idle", () => {
     expect(
       flatRowGlyphKind(
-        makeThread({ inventoryState: "settled", automations: makeAutomation() }),
+        makeThread({ inventoryState: "parked", automations: makeAutomation() }),
       ),
     ).toBe("automation");
-    expect(flatRowGlyphKind(makeThread({ inventoryState: "settled" }))).toBe(
+    expect(flatRowGlyphKind(makeThread({ inventoryState: "parked" }))).toBe(
       "parked",
     );
     render(
       <FlatThreadRow
-        thread={makeThread({ inventoryState: "settled" })}
+        thread={makeThread({ inventoryState: "parked" })}
         showBackendBrand={false}
         density="compact"
       />,
@@ -488,7 +488,7 @@ describe("status badges and wake indicator", () => {
     rerender(
       <FlatThreadRow
         thread={makeThread({
-          inventoryState: "settled",
+          inventoryState: "parked",
           automations: makeAutomation({ enabledCount: 0, pausedCount: 1, attentionCount: 1 }),
         })}
         showBackendBrand
@@ -593,7 +593,7 @@ describe("parked recession", () => {
       <FlatThreadRow
         showBackendBrand
         thread={makeThread({
-          inventoryState: "settled",
+          inventoryState: "parked",
           queuedInputCount: 4,
           attention: attention({ queueFailure: true, wake: true }),
         })}
@@ -613,7 +613,7 @@ describe("parked recession", () => {
       <FlatThreadRow
         showBackendBrand
         thread={makeThread({
-          inventoryState: "settled",
+          inventoryState: "parked",
           attention: attention({ queueFailure: true }),
         })}
         density="compact"
@@ -656,7 +656,7 @@ describe("thread task indicator", () => {
       <FlatThreadRow
         showBackendBrand
         thread={makeThread({
-          inventoryState: "settled",
+          inventoryState: "parked",
           queuedInputCount: 2,
           attention: attention({ queueFailure: true, wake: true }),
         })}
@@ -759,7 +759,7 @@ describe("wake indicator", () => {
       <FlatThreadRow
         showBackendBrand
         thread={makeThread({
-          inventoryState: "settled",
+          inventoryState: "parked",
           attention: attention({ wake: true }),
         })}
         density="compact"
@@ -770,7 +770,7 @@ describe("wake indicator", () => {
     rerender(
       <FlatThreadRow
         showBackendBrand
-        thread={makeThread({ inventoryState: "settled" })}
+        thread={makeThread({ inventoryState: "parked" })}
         density="compact"
       />,
     );
@@ -1469,7 +1469,7 @@ describe("background work glyph priority", () => {
   it.each([
     { backingState: "unbound" as const },
     { inventoryState: "snoozed" as const },
-    { inventoryState: "settled" as const },
+    { inventoryState: "parked" as const },
     { automations: makeAutomation() },
   ])("puts completion and background work ahead of quiet inventory glyphs: %j", (quiet) => {
     expect(flatRowGlyphKind(makeThread({ ...quiet, backgroundWork, attention: attention({ unseenCompletion: true }) }))).toBe("unseen");

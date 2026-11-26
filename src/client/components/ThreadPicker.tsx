@@ -35,7 +35,7 @@ export function ThreadPicker({ threads, open, onOpenChange, onSelect, pinned, se
   const labelId = useId();
   const titleId = useId();
   const descriptionId = useId();
-  const matching = threads.filter(thread => thread.available && (thread.inventoryState === "active" || thread.inventoryState === "settled") &&
+  const matching = threads.filter(thread => thread.available && (thread.inventoryState === "active" || thread.inventoryState === "parked") &&
     thread.title.text.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()));
   const first = pinned?.threadId ? matching.find(thread => thread.id === pinned.threadId) : undefined;
   const choices = first ? [first, ...matching.filter(thread => thread !== first)] : matching;

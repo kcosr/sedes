@@ -34,7 +34,7 @@ import {
   serializeTaskReferences,
   taskReferencesFromContexts,
 } from "../composer-tasks-json.js";
-import { activateSettledThread } from "./settled-thread-activation.js";
+import { activateParkedThread } from "./parked-thread-activation.js";
 import type { DeliveryInputOrigin } from "../../../shared/protocol/conversation.js";
 import type { BoundedDisplayText } from "../../../shared/protocol/payload.js";
 import { ThreadCompletionCallbackRepository } from "./thread-completion-callback-repository.js";
@@ -914,7 +914,7 @@ export class QueuedInputRepository {
           );
         }
       }
-      activateSettledThread(
+      activateParkedThread(
         this.database,
         scope,
         applicationThreadId,

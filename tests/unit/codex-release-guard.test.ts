@@ -60,8 +60,8 @@ describe("Codex runtime version policy", () => {
   });
 
   it("publishes independent runtime floor and tested-through thresholds", () => {
-    expect(CODEX_RUNTIME_MINIMUM_SUPPORTED_RELEASE).toBe("0.169.0");
-    expect(CODEX_RUNTIME_TESTED_THROUGH_RELEASE).toBe("0.169.0");
+    expect(CODEX_RUNTIME_MINIMUM_SUPPORTED_RELEASE).toBe("0.172.0");
+    expect(CODEX_RUNTIME_TESTED_THROUGH_RELEASE).toBe("0.172.0");
   });
 
   it("accepts the exact generated runtime version", async () => {
@@ -78,15 +78,15 @@ describe("Codex runtime version policy", () => {
 
   it("retains the minimum and assesses tested evidence by precedence", () => {
     for (const version of [
-      "0.169.0",
-      "0.169.0+vendor.7",
+      "0.172.0",
+      "0.172.0+vendor.7",
     ]) {
       expect(verifyCodexRuntimeVersion(version)).toEqual({
         version,
         newerThanTested: false,
       });
     }
-    for (const version of ["0.169.1", "0.170.0", "0.999.999+build.1", "1.0.0"]) {
+    for (const version of ["0.172.1", "0.173.0", "0.999.999+build.1", "1.0.0"]) {
       expect(verifyCodexRuntimeVersion(version)).toEqual({
         version,
         newerThanTested: true,
@@ -97,11 +97,11 @@ describe("Codex runtime version policy", () => {
   it("compares semantic precedence without treating build metadata as identity", () => {
     expect(
       haveSameCodexRuntimeVersionPrecedence(
-        "0.169.0+owned.1",
-        "0.169.0+daemon.2",
+        "0.172.0+owned.1",
+        "0.172.0+daemon.2",
       ),
     ).toBe(true);
-    expect(haveSameCodexRuntimeVersionPrecedence("0.169.0", "0.154.0")).toBe(
+    expect(haveSameCodexRuntimeVersionPrecedence("0.172.0", "0.154.0")).toBe(
       false,
     );
   });
@@ -130,7 +130,9 @@ describe("Codex runtime version policy", () => {
       "0.167.0",
       "0.168.0",
       "0.168.0+vendor.7",
-      "0.169.0-rc.1",
+      "0.169.0",
+      "0.171.0",
+      "0.172.0-rc.1",
     ] as const) {
       const executable = await writeProbeScript(
         `#!/bin/sh\necho 'codex-cli ${version}'\n`,
@@ -160,14 +162,14 @@ describe("Codex runtime version policy", () => {
     await expect(
       verifyCodexRuntimeExecutable(
         await writeProbeScript(
-          "#!/bin/sh\necho 'codex-cli 0.169.0'\necho 'extra'\n",
+          "#!/bin/sh\necho 'codex-cli 0.172.0'\necho 'extra'\n",
         ),
       ),
     ).rejects.toThrow("codex_executable_version_malformed");
 
     await expect(
       verifyCodexRuntimeExecutable(
-        await writeProbeScript("#!/bin/sh\necho 'codex-cli 0.169.0'\nexit 2\n"),
+        await writeProbeScript("#!/bin/sh\necho 'codex-cli 0.172.0'\nexit 2\n"),
       ),
     ).rejects.toThrow("codex_executable_version_probe_nonzero_exit");
 
@@ -193,7 +195,7 @@ describe("Codex runtime version policy", () => {
 
     await expect(
       verifyCodexRuntimeExecutable(
-        await writeProbeScript("#!/bin/sh\necho 'codex-cli 0.169.0'\n"),
+        await writeProbeScript("#!/bin/sh\necho 'codex-cli 0.172.0'\n"),
         { probeTimeoutMilliseconds: 0 },
       ),
     ).rejects.toThrow("codex_executable_version_probe_timeout_invalid");
@@ -247,7 +249,7 @@ describe("Codex runtime version policy", () => {
 
   it("still launches the real version probe through spawn", async () => {
     const executable = await writeProbeScript(
-      "#!/bin/sh\necho 'codex-cli 0.169.0'\n",
+      "#!/bin/sh\necho 'codex-cli 0.172.0'\n",
     );
     const child = spawn(executable, ["--version"], {
       shell: false,
@@ -265,7 +267,7 @@ describe("Codex runtime version policy", () => {
         else reject(new Error(`exit:${String(code)}`));
       });
     });
-    expect(output).toBe("codex-cli 0.169.0");
+    expect(output).toBe("codex-cli 0.172.0");
   });
 
   it("does not reject a group-writable owner path for version verification", async () => {
@@ -274,12 +276,12 @@ describe("Codex runtime version policy", () => {
     );
     temporaryRoots.push(root);
     const executable = path.join(root, "codex");
-    await writeFile(executable, "#!/bin/sh\necho 'codex-cli 0.169.0'\n", {
+    await writeFile(executable, "#!/bin/sh\necho 'codex-cli 0.172.0'\n", {
       mode: 0o755,
     });
     await chmod(root, 0o775);
     const verified = await verifyCodexRuntimeExecutable(executable);
-    expect(verified.version).toBe("0.169.0");
+    expect(verified.version).toBe("0.172.0");
     expect(verified.newerThanTested).toBe(false);
   });
 });

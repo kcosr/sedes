@@ -241,7 +241,7 @@ describe("SidebarViewControls", () => {
     await user.click(screen.getByRole("menuitemcheckbox", { name: "Drafts" }));
     expect(handlers.onShowToggle.mock.calls).toEqual([
       ["snoozed"],
-      ["settled"],
+      ["parked"],
       ["drafts"],
     ]);
 
@@ -341,7 +341,7 @@ describe("SidebarViewControls", () => {
 
     // ...and any Show filter turned off dirties it too.
     renderControls({
-      show: { snoozed: true, settled: false, drafts: true },
+      show: { snoozed: true, parked: false, drafts: true },
     });
     expect(screen.getByTestId("view-options-dirty-dot")).toBeInTheDocument();
   });

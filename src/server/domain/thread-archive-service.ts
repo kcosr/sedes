@@ -314,7 +314,7 @@ export class ThreadArchiveService {
     );
   }
 
-  async settle(
+  async park(
     scope: RequestScope,
     threadId: string,
     input: {
@@ -327,7 +327,7 @@ export class ThreadArchiveService {
   ): Promise<void> {
     const now = this.input.now?.() ?? Date.now();
     const disposition = input.openTaskDisposition ?? "keep";
-    const result = this.input.inventory.settleThread(scope, threadId, {
+    const result = this.input.inventory.parkThread(scope, threadId, {
       ...input,
       now,
       assertOpenTasks: (ids) =>

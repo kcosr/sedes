@@ -23,7 +23,7 @@ const CODEX_C2_OPERATION_IDS = new Set([
   "compact",
   "interrupt",
   "archive",
-  "settle",
+  "park",
   "snooze",
   "acknowledge_attention",
   "recover_uncertain",

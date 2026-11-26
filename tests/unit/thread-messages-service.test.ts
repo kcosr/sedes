@@ -364,7 +364,7 @@ describe("ThreadMessagesService", () => {
         messages: harness.rawService,
         send: { sendDirect: vi.fn() },
         forks: { forkAgent: vi.fn(), forkPrincipalClient: vi.fn() },
-        inventory: { archive: vi.fn(), restore: vi.fn() },
+        inventory: { archive: vi.fn(), restore: vi.fn(), setState: vi.fn() },
       });
       const registry = new AgentToolRegistry();
       registry.register(definition);
@@ -402,7 +402,7 @@ describe("ThreadMessagesService", () => {
         messages: harness.rawService,
         send: { sendDirect: vi.fn() },
         forks: { forkAgent: vi.fn(), forkPrincipalClient: vi.fn() },
-        inventory: { archive: vi.fn(), restore: vi.fn() },
+        inventory: { archive: vi.fn(), restore: vi.fn(), setState: vi.fn() },
       });
       const registry = new AgentToolRegistry();
       registry.register(definition);

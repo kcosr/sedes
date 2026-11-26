@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { SubmissionCompletionRepository } from "../../src/server/db/repositories/submission-completion-repository.js";
-import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
+import { InventoryRepository, type InventoryRuntimeWakeSignal, type InventoryWakeReason } from "../../src/server/db/repositories/inventory-repository.js";
 import { InventoryService } from "../../src/server/domain/inventory-service.js";
 import { applicationSummaryFixture } from "../support/application-summary-fixture.js";
 
@@ -97,25 +97,162 @@ describe("backend-neutral completion observation work", () => {
       const application = vi.fn(async () => undefined);
       const service = new InventoryService(repository, { publishMany: capture, publishApplicationThread: application });
       const threadId = f.ids[0]!;
+      const signal = { kind: "submission_completion", acceptedAt: 650, completionObservedAt: 659, outcome: "completed" } as const;
       const stable = writes(f.database);
-      for (let replay = 0; replay < 10; replay += 1) await service.wakeForRuntimeSignal(f.scope, threadId, "completion", 500 + replay);
+      for (let replay = 0; replay < 10; replay += 1) await service.wakeForRuntimeSignal(f.scope, threadId, signal, 660 + replay);
       expect(writes(f.database)).toBe(stable);
       expect(capture).not.toHaveBeenCalled();
       await service.transition(f.scope, threadId, { expectedRevision: 0, mutationId: "snooze", change: { action: "snooze", snoozedUntil: 10_000 } }, 600);
       capture.mockClear();
       capture.mockRejectedValueOnce(new Error("capture unavailable"));
       const beforeWake = writes(f.database);
-      await expect(service.wakeForRuntimeSignal(f.scope, threadId, "completion", 700)).rejects.toThrow("capture unavailable");
+      await expect(service.wakeForRuntimeSignal(f.scope, threadId, signal, 700)).rejects.toThrow("capture unavailable");
       expect(repository.getInventory(f.scope, threadId)).toMatchObject({ inventoryState: "active", wokeAt: 700, inventoryRevision: 2 });
       expect(writes(f.database)).toBeGreaterThan(beforeWake);
       const afterWake = writes(f.database);
-      await service.wakeForRuntimeSignal(f.scope, threadId, "completion", 701);
+      await service.wakeForRuntimeSignal(f.scope, threadId, signal, 701);
       expect(capture).toHaveBeenCalledTimes(2);
       expect(writes(f.database)).toBe(afterWake);
-      for (let replay = 0; replay < 10; replay += 1) await service.wakeForRuntimeSignal(f.scope, threadId, "completion", 800 + replay);
+      for (let replay = 0; replay < 10; replay += 1) await service.wakeForRuntimeSignal(f.scope, threadId, signal, 800 + replay);
       expect(capture).toHaveBeenCalledTimes(2);
       expect(application).not.toHaveBeenCalled();
       expect(writes(f.database)).toBe(afterWake);
+    } finally { f.database.close(); }
+  });
+
+  it.each<{
+    name: string;
+    signal: InventoryRuntimeWakeSignal;
+    reason: InventoryWakeReason | null;
+  }>([
+    {
+      name: "successful submission accepted before Snooze",
+      signal: { kind: "submission_completion", acceptedAt: 599, completionObservedAt: 650, outcome: "completed" },
+      reason: null,
+    },
+    {
+      name: "successful submission accepted in the same millisecond",
+      signal: { kind: "submission_completion", acceptedAt: 600, completionObservedAt: 650, outcome: "completed" },
+      reason: "completion",
+    },
+    {
+      name: "successful submission accepted after Snooze",
+      signal: { kind: "submission_completion", acceptedAt: 601, completionObservedAt: 650, outcome: "completed" },
+      reason: "completion",
+    },
+    {
+      name: "new blocking input request",
+      signal: { kind: "needs_input" },
+      reason: "needs-input",
+    },
+  ])("applies the wake rule for a $name", async ({ signal, reason }) => {
+    const f = applicationSummaryFixture(1);
+    try {
+      const repository = new InventoryRepository(f.database);
+      const publishMany = vi.fn();
+      const service = new InventoryService(repository, { publishMany, publishApplicationThread() {} });
+      const threadId = f.ids[0]!;
+      await service.transition(f.scope, threadId, {
+        expectedRevision: 0,
+        mutationId: "snooze",
+        change: { action: "snooze", snoozedUntil: 800, wakeReminderText: "Review the reply" },
+      }, 600);
+      publishMany.mockClear();
+      await expect(service.wakeForRuntimeSignal(f.scope, threadId, signal, 700)).resolves.toMatchObject({
+        inventoryState: reason === null ? "snoozed" : "active",
+        inventoryRevision: reason === null ? 1 : 2,
+        wokeAt: reason === null ? null : 700,
+        wakeReason: reason,
+        wakeReminderText: "Review the reply",
+      });
+      expect(publishMany).toHaveBeenCalledTimes(reason === null ? 0 : 1);
+    } finally { f.database.close(); }
+  });
+
+  it.each([
+    { outcome: "failed", reason: "failure" },
+    { outcome: "interrupted", reason: "completion" },
+  ] as const)("wakes on a new $outcome observation and preserves a later snooze on replay", async ({ outcome, reason }) => {
+    const f = applicationSummaryFixture(1);
+    try {
+      const repository = new InventoryRepository(f.database);
+      const publishMany = vi.fn();
+      const service = new InventoryService(repository, { publishMany, publishApplicationThread() {} });
+      const threadId = f.ids[0]!;
+      f.bindings.bindDiscoveredConversation(f.scope, threadId, { backendConversationId: "native", now: 400 });
+      f.completion.recordAccepted(f.scope, threadId, {
+        operationId: "submit", acceptedAt: 450, backendCorrelation: "submit",
+      });
+      await service.transition(f.scope, threadId, {
+        expectedRevision: 0, mutationId: "snooze",
+        change: { action: "snooze", snoozedUntil: 1_000 },
+      }, 500);
+      const terminal = {
+        backendCorrelation: "submit",
+        completionIdentity: "terminal",
+        applicationTurnId: "application-turn",
+        outcome,
+        result: { text: "" },
+        classifiedResult: null,
+      };
+      const first = f.completion.observeBackendCompletion(f.scope, threadId, {
+        ...terminal, observedAt: 550,
+      });
+      expect(first).toMatchObject({ changed: true, record: { completionObservedAt: 550 } });
+      await expect(service.wakeForRuntimeSignal(f.scope, threadId, {
+        kind: "submission_completion",
+        acceptedAt: first!.record.acceptedAt,
+        completionObservedAt: first!.record.completionObservedAt,
+        outcome,
+      }, 560)).resolves.toMatchObject({ inventoryState: "active", wakeReason: reason, wokeAt: 560 });
+
+      const snoozed = await service.transition(f.scope, threadId, {
+        expectedRevision: 2, mutationId: "snooze-again",
+        change: { action: "snooze", snoozedUntil: 1_100 },
+      }, 600);
+      publishMany.mockClear();
+      const replay = f.completion.observeBackendCompletion(f.scope, threadId, {
+        ...terminal, observedAt: 700,
+      });
+      expect(replay).toEqual({ changed: false, record: first!.record });
+      await expect(service.wakeForRuntimeSignal(f.scope, threadId, {
+        kind: "submission_completion",
+        acceptedAt: replay!.record.acceptedAt,
+        completionObservedAt: replay!.record.completionObservedAt,
+        outcome,
+      }, 710)).resolves.toEqual(snoozed);
+      expect(publishMany).not.toHaveBeenCalled();
+    } finally { f.database.close(); }
+  });
+
+  it("uses the renewed snooze timestamp and preserves a deadline wake on completion replay", async () => {
+    const f = applicationSummaryFixture(1);
+    try {
+      const repository = new InventoryRepository(f.database);
+      const publishMany = vi.fn();
+      const service = new InventoryService(repository, { publishMany, publishApplicationThread() {} });
+      const threadId = f.ids[0]!;
+      await service.transition(f.scope, threadId, {
+        expectedRevision: 0, mutationId: "snooze",
+        change: { action: "snooze", snoozedUntil: 800 },
+      }, 600);
+      await service.transition(f.scope, threadId, {
+        expectedRevision: 1, mutationId: "renew-snooze",
+        change: { action: "snooze", snoozedUntil: 900 },
+      }, 750);
+      const signal = { kind: "submission_completion", acceptedAt: 700, completionObservedAt: 775, outcome: "completed" } as const;
+      await expect(service.wakeForRuntimeSignal(f.scope, threadId, signal, 800)).resolves.toMatchObject({
+        inventoryState: "snoozed", snoozedAt: 750, snoozedUntil: 900,
+      });
+      await expect(service.wakeDue(899)).resolves.toEqual([]);
+      await expect(service.wakeDue(900)).resolves.toEqual([
+        expect.objectContaining({ inventoryState: "active", wakeReason: "deadline", wokeAt: 900 }),
+      ]);
+      publishMany.mockClear();
+      await expect(service.wakeForRuntimeSignal(f.scope, threadId, signal, 901)).resolves.toMatchObject({
+        inventoryState: "active", inventoryRevision: 3, wakeReason: "deadline", wokeAt: 900,
+      });
+      expect(publishMany).not.toHaveBeenCalled();
     } finally { f.database.close(); }
   });
 
@@ -143,7 +280,7 @@ describe("backend-neutral completion observation work", () => {
         VALUES (?, ?, ?, 'unbound', 7000, 'unbound')`).run(f.scope.tenantId, f.scope.principalId, unbound);
       const setState = (threadId: string, state: string) => f.database.prepare(`UPDATE thread_principal_state SET inventory_state = ?
         WHERE tenant_id = ? AND principal_id = ? AND thread_id = ?`).run(state, f.scope.tenantId, f.scope.principalId, threadId);
-      setState(parked, "settled");
+      setState(parked, "parked");
       setState(archived, "archived");
 
       const list = (input: Partial<Parameters<typeof f.completion.listUnresolvedSubmissionThreads>[1]> = {}) =>

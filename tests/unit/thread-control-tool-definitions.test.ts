@@ -12,6 +12,7 @@ import {
   createThreadMessagesToolDefinition,
   createThreadRestoreToolDefinition,
   createThreadSendToolDefinition,
+  createThreadSetStateToolDefinition,
 } from "../../src/server/agent-tools/tools/thread-control-tools.js";
 
 function services(): AgentThreadControlToolServices {
@@ -45,6 +46,10 @@ function services(): AgentThreadControlToolServices {
         archivedThreadCount: input.includeDescendants ? 3 : 1,
       })),
       restore: vi.fn(async (_scope, input) => ({ threadId: input.threadId })),
+      setState: vi.fn(async (_scope, input) => ({
+        threadId: input.threadId ?? input.environmentAuthority.defaults.threadId!,
+        lifecycle: input.lifecycle,
+      })),
     },
   };
 }
@@ -117,7 +122,7 @@ function context(): TrustedToolInvocationContext {
 }
 
 describe("thread control tool definitions", () => {
-  it("registers exactly the five canonical contracts with truthful effects", () => {
+  it("registers exactly the six canonical contracts with truthful effects", () => {
     const value = services();
     const definitions: AgentToolDefinition[] = [
       createThreadMessagesToolDefinition(value),
@@ -125,6 +130,7 @@ describe("thread control tool definitions", () => {
       createThreadForkToolDefinition(value),
       createThreadArchiveToolDefinition(value),
       createThreadRestoreToolDefinition(value),
+      createThreadSetStateToolDefinition(value),
     ];
     const registry = new AgentToolRegistry();
     definitions.forEach((definition) => registry.register(definition));
@@ -137,6 +143,7 @@ describe("thread control tool definitions", () => {
       ["thread.fork", 1],
       ["thread.archive", 2],
       ["thread.restore", 1],
+      ["thread.set_state", 1],
     ]);
     expect(definitions.map(({ effects }) => effects)).toEqual([
       { application: "read", modelUsage: "none", external: "none" },
@@ -150,6 +157,7 @@ describe("thread control tool definitions", () => {
         modelUsage: "none",
         external: "durable_side_effect",
       },
+      { application: "write", modelUsage: "none", external: "none" },
       { application: "write", modelUsage: "none", external: "none" },
       { application: "write", modelUsage: "none", external: "none" },
     ]);
@@ -193,7 +201,15 @@ describe("thread control tool definitions", () => {
         http: 30_000,
         cli: 30_000,
       },
+      {
+        pi_sdk: 30_000,
+        pi_rpc: 30_000,
+        mcp: 30_000,
+        http: 30_000,
+        cli: 30_000,
+      },
     ]);
+    expect(definitions.at(-1)?.execution.concurrencyClass).toBe("thread_inventory_write");
   });
 
   it("keeps public inputs closed and enforces the messages and send bounds", () => {
@@ -204,6 +220,7 @@ describe("thread control tool definitions", () => {
     registry.register(createThreadForkToolDefinition(value));
     registry.register(createThreadArchiveToolDefinition(value));
     registry.register(createThreadRestoreToolDefinition(value));
+    registry.register(createThreadSetStateToolDefinition(value));
 
     expect(
       registry.validatesInput("thread.messages", 5, {
@@ -252,6 +269,29 @@ describe("thread control tool definitions", () => {
         expectedRevision: 4,
       }),
     ).toBe(false);
+    expect(
+      registry.validatesInput("thread.set_state", 1, { lifecycle: "active" }),
+    ).toBe(true);
+    expect(
+      registry.validatesInput("thread.set_state", 1, {
+        lifecycle: "snoozed",
+        until: "2099-01-01T00:00:00.000Z",
+        reminder: "x".repeat(1_000),
+      }),
+    ).toBe(true);
+    for (const input of [
+      { lifecycle: "archived" },
+      { lifecycle: "settled" },
+      { lifecycle: "parked", expectedRevision: 4 },
+      { lifecycle: "parked", expectedStashedPromptCount: 0 },
+      {
+        lifecycle: "snoozed",
+        until: "2099-01-01T00:00:00.000Z",
+        reminder: "x".repeat(1_001),
+      },
+    ]) {
+      expect(registry.validatesInput("thread.set_state", 1, input)).toBe(false);
+    }
     expect(
       registry.validatesInput("thread.fork", 1, {
         threadId: "thread-1",

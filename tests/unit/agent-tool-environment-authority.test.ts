@@ -201,7 +201,7 @@ describe("agent-tool environment authority", () => {
   });
 
   it("declares an explicit disposition for the complete canonical catalog", () => {
-    expect(CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES).toHaveLength(88);
+    expect(CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES).toHaveLength(89);
     expect(
       CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES.every(
         ({ environmentAuthority }) => environmentAuthority.kind.length > 0,
@@ -441,6 +441,34 @@ describe("agent-tool environment authority", () => {
         .targetEnvironmentIds,
     ).toEqual([]);
     expect(resolver.resolve({...request("environment.list",{}), defaults:{kind:"principal_client",environmentId:"env-a"},admittedEnvironmentIds:["env-a"]}).targetEnvironmentIds).toEqual([]);
+  });
+
+  it("defaults thread lifecycle changes to the caller and enforces scope", () => {
+    const resolver = new AgentToolEnvironmentAuthorityResolver(reader);
+    const change = request("thread.set_state", { lifecycle: "parked" });
+    const resourceScope = { allowOtherEnvironments: false, allowOtherProjects: false };
+    expect(resolver.resolve({ ...change, resourceScope }).resolvedResourceRefs)
+      .toMatchObject([{ kind: "thread", id: "thread-a" }]);
+    expect(() => resolver.resolve({
+      ...change, resourceScope,
+      input: { threadId: "thread-b", lifecycle: "parked" },
+    })).toThrow(expect.objectContaining({ code: "permission_denied" }));
+
+    const principal = {
+      ...change,
+      defaults: {
+        kind: "principal_client" as const,
+        environmentId: "env-a",
+        workspaceId: "workspace-a",
+        threadId: "thread-a",
+      },
+      admittedEnvironmentIds: ["env-a"],
+    };
+    expect(resolver.resolve(principal).resolvedResourceRefs)
+      .toMatchObject([{ kind: "thread", id: "thread-a" }]);
+    expect(() => resolver.resolve({
+      ...principal, defaults: { kind: "principal_client", environmentId: "env-a" },
+    })).toThrow(expect.objectContaining({ code: "invalid_input" }));
   });
 
   it("keeps descriptive saved Agent updates neutral and resolves configuration authoring context", () => {

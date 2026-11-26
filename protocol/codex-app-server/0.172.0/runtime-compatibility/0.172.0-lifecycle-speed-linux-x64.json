@@ -1,0 +1,209 @@
+{
+  "release": "0.172.0",
+  "parserRelease": "0.172.0",
+  "platform": "linux/x64",
+  "executableSha256": "ad83b94c093f0cdd8176a6bc8005a461bdf23a759863e157d40f562b8a9d664d",
+  "verifiedAt": "2026-11-26T01:34:15.699Z",
+  "command": "vitest run tests/integration/codex-active-speed-native.test.ts tests/integration/codex-runtime-native.test.ts",
+  "passed": 13,
+  "nativeProviderForkAndLifecycleCases": 2,
+  "liveProviderVerified": false,
+  "speedFullScenarios": [
+    {
+      "topology": "local",
+      "statuses": [
+        "published",
+        "published",
+        "published"
+      ],
+      "modelRequests": 18,
+      "serviceTiers": [
+        "omitted",
+        "priority",
+        "omitted",
+        "ultrafast",
+        "priority",
+        "omitted",
+        "omitted",
+        "omitted",
+        "priority",
+        "omitted",
+        "omitted",
+        "ultrafast",
+        "priority",
+        "priority",
+        "priority",
+        "ultrafast",
+        "priority",
+        "omitted"
+      ],
+      "subagents": {
+        "firstChildInitialTier": "omitted",
+        "firstChildNextStepTier": "omitted",
+        "laterChildInitialTier": "priority",
+        "parentAfterFirstSpawnTier": "priority",
+        "parentAfterSecondSpawnTier": "ultrafast"
+      },
+      "replayNativePublications": 0,
+      "completedTargetNativePublications": 0,
+      "liveProviderVerified": false
+    },
+    {
+      "topology": "external",
+      "statuses": [
+        "published",
+        "published",
+        "published"
+      ],
+      "modelRequests": 18,
+      "serviceTiers": [
+        "omitted",
+        "priority",
+        "omitted",
+        "ultrafast",
+        "priority",
+        "omitted",
+        "omitted",
+        "omitted",
+        "priority",
+        "omitted",
+        "omitted",
+        "ultrafast",
+        "priority",
+        "priority",
+        "priority",
+        "ultrafast",
+        "priority",
+        "omitted"
+      ],
+      "subagents": {
+        "firstChildInitialTier": "omitted",
+        "firstChildNextStepTier": "omitted",
+        "laterChildInitialTier": "priority",
+        "parentAfterFirstSpawnTier": "priority",
+        "parentAfterSecondSpawnTier": "ultrafast"
+      },
+      "replayNativePublications": 0,
+      "completedTargetNativePublications": 0,
+      "liveProviderVerified": false
+    },
+    {
+      "topology": "sidecar",
+      "statuses": [
+        "published",
+        "published",
+        "published"
+      ],
+      "modelRequests": 19,
+      "serviceTiers": [
+        "omitted",
+        "priority",
+        "omitted",
+        "ultrafast",
+        "priority",
+        "omitted",
+        "omitted",
+        "omitted",
+        "priority",
+        "omitted",
+        "omitted",
+        "ultrafast",
+        "priority",
+        "ultrafast",
+        "priority",
+        "priority",
+        "ultrafast",
+        "priority",
+        "omitted"
+      ],
+      "subagents": {
+        "firstChildInitialTier": "omitted",
+        "firstChildNextStepTier": "omitted",
+        "laterChildInitialTier": "priority",
+        "parentAfterFirstSpawnTier": "priority",
+        "parentAfterSecondSpawnTier": "ultrafast"
+      },
+      "replayNativePublications": 0,
+      "completedTargetNativePublications": 0,
+      "liveProviderVerified": false
+    }
+  ],
+  "speedAdditionalChecks": [
+    {
+      "topology": "sidecar",
+      "scenario": "framed-order-and-stale-controller",
+      "status": "passed",
+      "firstPublishedTiers": [
+        "priority",
+        "default",
+        "ultrafast"
+      ],
+      "staleControllerNativeFrames": 0
+    },
+    {
+      "topology": "local",
+      "scenario": "no-fast",
+      "status": "passed",
+      "modelRequests": 2,
+      "nativeSpeedPublications": 1,
+      "nextStepTier": "ultrafast"
+    },
+    {
+      "topology": "local",
+      "scenario": "no-ultrafast",
+      "status": "passed",
+      "modelRequests": 2,
+      "nativeSpeedPublications": 1,
+      "nextStepTier": "priority"
+    },
+    {
+      "topology": "local",
+      "scenario": "no-tiers",
+      "status": "passed",
+      "modelRequests": 2,
+      "nativeSpeedPublications": 0,
+      "nextStepTier": "default"
+    },
+    {
+      "topology": "local",
+      "scenario": "fallback-only",
+      "status": "passed",
+      "modelRequests": 2,
+      "nativeSpeedPublications": 0,
+      "nextStepTier": "default"
+    },
+    {
+      "topology": "local",
+      "scenario": "non-advertising",
+      "status": "passed",
+      "modelRequests": 2,
+      "nativeSpeedPublications": 0,
+      "nextStepTier": "default"
+    },
+    {
+      "topology": "local",
+      "scenario": "stale-gate",
+      "status": "passed",
+      "modelRequests": 2,
+      "nativeSpeedPublications": 1,
+      "nextStepTier": "default"
+    },
+    {
+      "topology": "external",
+      "scenario": "restart",
+      "status": "passed",
+      "generationChangedDuringPublication": true,
+      "nativeRecoveryTier": "default",
+      "explicitSuccessorTier": "priority",
+      "graceBoundMilliseconds": 30000
+    },
+    {
+      "topology": "external",
+      "scenario": "recovery-link",
+      "status": "passed",
+      "activeDefaultWritePreservesInterruptedSnapshot": true,
+      "nativeRecoveryObserved": true,
+      "recoveredTier": "default"
+    }
+  ]
+}

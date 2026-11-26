@@ -208,7 +208,7 @@ function threadInventoryStateInWords(
       ? `Snoozed · wakes ${futureTimeLabel(thread.snoozedUntil)}`
       : "Snoozed";
   }
-  if (thread.inventoryState === "settled") {
+  if (thread.inventoryState === "parked") {
     const relative = shortRelativeTime(thread.stateChangedAt);
     return relative === "now" ? "Parked just now" : `Parked ${relative} ago`;
   }
@@ -286,7 +286,7 @@ function stateRowGlyphKind(
   ) {
     return glyphKind;
   }
-  if (thread.inventoryState === "settled") return "parked";
+  if (thread.inventoryState === "parked") return "parked";
   return thread.runState === "disconnected" ? "disconnected" : "idle";
 }
 

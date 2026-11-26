@@ -739,6 +739,7 @@ describe("thread agent tool policy persistence", () => {
         "thread.fork",
         "thread.archive",
         "thread.restore",
+        "thread.set_state",
         "thread.tool_settings.get",
         "thread.tool_settings.update",
         "thread_template.list",

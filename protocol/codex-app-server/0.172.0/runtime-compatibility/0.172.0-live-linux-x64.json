@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "release": "0.172.0",
+  "platform": "linux/x64",
+  "executableSha256": "ad83b94c093f0cdd8176a6bc8005a461bdf23a759863e157d40f562b8a9d664d",
+  "verifiedOn": "2026-11-26",
+  "model": "gpt-5.6-luna",
+  "reasoningEffort": "low",
+  "runtimeSuite": {
+    "command": "npm run test:real-codex",
+    "initialPassed": 13,
+    "initialFailed": 1,
+    "generatedImageCaseSkipped": true,
+    "covered": [
+      "local fixtures",
+      "authenticated external UDS",
+      "managed TUI",
+      "persistent runtime reattachment"
+    ]
+  },
+  "steerStopRerun": {
+    "command": "npm run test:real-codex -- -t 'returns every real Luna steer'",
+    "passed": 1,
+    "materialized": 0,
+    "notAccepted": 3,
+    "initialObservation": "A consumed input matched the exact interrupted turn in both native and normalized history. Its paginated reconciliation confirmed accepted without a projected turn, which the existing contract permits. The rerun uses that contract and preserves the exact history checks."
+  },
+  "agentToolSuite": {
+    "command": "npm run test:real-codex-agent-tools",
+    "passed": 4,
+    "covered": [
+      "CLI skill",
+      "native progressive and full MCP exposure",
+      "native screenshot content"
+    ]
+  },
+  "limits": [
+    "Temporary native homes and scoped conversations only.",
+    "No generated-image canary, production SSH/WSS endpoint, macOS execution or Windows execution."
+  ]
+}

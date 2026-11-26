@@ -113,6 +113,10 @@ order and fenced against newer events and responses completed during the read.
 Application abandonment can release an exact scoped terminal provider receipt,
 but cannot establish native non-consumption or discard a pending callback.
 
+Client protocol 181 uses `parked` in normalized thread inventory and `park` and
+`unpark` for inventory actions. All compiled backends use the same
+principal-scoped inventory projection and mutations.
+
 Client protocol 180 allows a turn bookmark without a user-prompt preview. A
 bookmark for a turn with no durable user message, such as a provider
 continuation after background work, must carry an assistant preview instead.
@@ -140,9 +144,13 @@ Pi SDK, native Pi, Codex, Claude, OpenCode, and Antigravity share this applicati
 path without provider-specific changes. Grok intentionally does not advertise
 Steer; the lookup grants no new delivery capability.
 
-The Codex 0.169.0 compatibility update is provider-private. Its single generated
-profile validates native moderation, completion-token, executor-environment and
-audio-reference metadata without granting browser or additional-executor authority.
+The Codex 0.172.0 compatibility update is provider-private. Its single generated
+profile validates version 1 moderation, MCP registration scope, completion-token,
+executor-environment, and audio-reference metadata. Codex keeps the newer active
+turn's residency and control authority when an older turn completes, and records
+the older terminal turn in the transcript. This change adds no browser capability.
+Pi SDK, native Pi, Claude, Grok, OpenCode, and Antigravity preserve their own
+integration and turn lifecycle contracts.
 Runtime admission requires the native provider-specific catalog selector; catalog
 validation retains each thread's saved native provider instead of substituting the
 daemon default. Thread presentation supplies the server-derived binding to catalog
@@ -519,7 +527,7 @@ the complete mutation if any target changes or becomes unavailable. Do not
 reinterpret a browser collection as every member of a persistent Group,
 project, lineage family, or provider-native hierarchy.
 
-Park (`settle`), unpark (`unsettle`), archive, and similar inventory operations
+Park, unpark, archive, and similar inventory operations
 remain application-owned when their meaning is identical across providers. Perform
 an all-or-nothing principal-scoped database mutation with one replay receipt
 and publish only after commit. External execution-workspace deletion cannot be
@@ -3017,6 +3025,16 @@ observation and is never chosen.
 Notification enablement, delivery, and silence do not apply. The read is
 application-owned and identical for every backend: it needs no provider code
 and returns whatever sections that backend's completion froze.
+
+Inventory wake and reply attention are independent. A replay of a completion
+already observed before `snoozed_at` leaves the current snooze in place. For a
+successful completion, an acceptance before the snooze also leaves it in place
+and still records the reply's attention. Failure, interruption, and a newly
+opened blocking interaction can wake the thread. A pending blocking interaction
+must be resolved before the thread can be snoozed.
+The deadline wake follows the existing inventory scheduler. This rule uses
+shared application records for Pi SDK, native Pi, Codex, Claude, Grok,
+OpenCode, and Antigravity.
 
 Notification event consumption is deduplicated per principal and normalized
 thread/turn, separately from UI attention acknowledgment. Wake hooks consume

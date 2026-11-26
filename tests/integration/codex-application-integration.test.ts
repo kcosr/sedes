@@ -398,7 +398,7 @@ function fakeCodexDependencies(
             },
             executable: {
               path: "/usr/bin/false",
-              version: "0.169.0",
+              version: "0.172.0",
               newerThanTested: false,
             },
             workingDirectory: input.connection.channel.workingDirectory,

@@ -19,6 +19,8 @@ import type {
   AgentThreadArchiveResult,
   AgentThreadInventoryControlService,
   AgentThreadRestoreResult,
+  AgentThreadSetStateResult,
+  ThreadSetStateToolInput,
 } from "../application/agent-thread-inventory-control-service.js";
 import type { AgentToolDefinition } from "../contracts/agent-tool-contracts.js";
 import { CANONICAL_AGENT_TOOL_MANIFEST } from "../registry/canonical-agent-tool-manifest.js";
@@ -31,6 +33,7 @@ import {
   isoDateSchema,
   sharedAdapters,
   targetIdentifierSchema,
+  threadSnoozeOutputProperties,
 } from "./management-tool-schemas.js";
 import type { ToolInitiator } from "../contracts/tool-initiator.js";
 
@@ -39,6 +42,7 @@ const sendManifest = CANONICAL_AGENT_TOOL_MANIFEST["thread.send"];
 const forkManifest = CANONICAL_AGENT_TOOL_MANIFEST["thread.fork"];
 const archiveManifest = CANONICAL_AGENT_TOOL_MANIFEST["thread.archive"];
 const restoreManifest = CANONICAL_AGENT_TOOL_MANIFEST["thread.restore"];
+const setStateManifest = CANONICAL_AGENT_TOOL_MANIFEST["thread.set_state"];
 const MAXIMUM_THREAD_SEND_MESSAGE_BYTES = 65_536;
 const threadForkAdapters = {
   pi_sdk: 90_000, pi_rpc: 90_000,
@@ -253,7 +257,7 @@ export interface AgentThreadControlToolServices {
   readonly forks: Pick<ThreadForkService, "forkAgent" | "forkPrincipalClient">;
   readonly inventory: Pick<
     AgentThreadInventoryControlService,
-    "archive" | "restore"
+    "archive" | "restore" | "setState"
   >;
 }
 
@@ -694,6 +698,96 @@ export function createThreadRestoreToolDefinition(
         { tenantId: context.tenantId, principalId: context.principalId },
         {
           threadId: request.threadId,
+          mutationId: context.mutationId,
+          environmentAuthority: context.environmentAuthority,
+        },
+      );
+    },
+  };
+}
+
+export function createThreadSetStateToolDefinition(
+  services: AgentThreadControlToolServices,
+): AgentToolDefinition<ThreadSetStateToolInput, AgentThreadSetStateResult> {
+  const lifecycle = Type.String({
+    enum: ["active", "parked", "snoozed"],
+    maxLength: 7,
+    description: "Set active to unpark or wake a thread.",
+  });
+  return {
+    ...setStateManifest,
+    inputSchema: normalizeCanonicalAgentToolSchema(
+      Type.Object(
+        {
+          threadId: Type.Optional(Type.String({
+            minLength: 1,
+            maxLength: 128,
+            description:
+              "Defaults to the calling thread or the Tool client's configured default thread.",
+          })),
+          lifecycle,
+          until: Type.Optional(Type.String({
+            ...isoDateSchema,
+            minLength: 17,
+            description:
+              "Future ISO timestamp with a time zone. Required only for snoozed.",
+          })),
+          reminder: Type.Optional(Type.String({
+            minLength: 1,
+            maxLength: 1_000,
+            description: "Optional wake reminder. Valid only for snoozed.",
+          })),
+        },
+        {
+          $schema: AGENT_TOOL_JSON_SCHEMA_DIALECT,
+          additionalProperties: false,
+          maxProperties: 4,
+        },
+      ),
+    ),
+    outputSchema: normalizeCanonicalAgentToolSchema(
+      Type.Object(
+        {
+          threadId: identifierSchema,
+          lifecycle,
+          ...threadSnoozeOutputProperties,
+        },
+        {
+          $schema: AGENT_TOOL_JSON_SCHEMA_DIALECT,
+          additionalProperties: false,
+          maxProperties: 4,
+        },
+      ),
+    ),
+    requiredCapabilities: [],
+    execution: {
+      form: "inline",
+      adapterWaitCeilingMilliseconds: sharedAdapters,
+      supportsCancellation: false,
+      idempotency: "not_applicable",
+      progress: "none",
+      maximumInputBytes: 8_192,
+      maximumOutputBytes: 8_192,
+      concurrencyClass: "thread_inventory_write",
+      uncertainExternalOutcome: true,
+    },
+    exposure: { adapters: ["pi_sdk", "pi_rpc", "mcp", "http", "cli"] },
+    adapters: {
+      pi: {
+        name: "sedes_thread_set_state",
+        label: "Set Sedes thread state",
+        promptSnippet:
+          "Park or snooze a Sedes thread, or make a parked or snoozed thread active.",
+      },
+      mcp: { name: "sedes_thread_set_state" },
+      http: { invocation: "inline" },
+      cli: { command: setStateManifest.id },
+    },
+    execute(request, context) {
+      return services.inventory.setState(
+        { tenantId: context.tenantId, principalId: context.principalId },
+        {
+          ...request,
           mutationId: context.mutationId,
           environmentAuthority: context.environmentAuthority,
         },

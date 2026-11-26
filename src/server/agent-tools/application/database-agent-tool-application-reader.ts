@@ -22,6 +22,7 @@ import {
   requireAdmittedResource,
   type TrustedEnvironmentAuthorityGrant,
 } from "../environment/environment-authority.js";
+import { projectAgentThreadSnooze } from "./thread-snooze-presentation.js";
 
 function activity(runState: ThreadRunState): ThreadStatusResult["activity"] {
   if (runState === "waiting_for_input" || runState === "waiting_for_approval") {
@@ -80,10 +81,31 @@ export class DatabaseAgentToolApplicationReader
     this.#assertOpen(signal);
     const source = this.#sources.resolveThread(scope, threadId);
     if (!source) return undefined;
-    const backend = this.database
+    requireAdmittedResource(environmentAuthority, {
+      kind: "thread",
+      id: source.id,
+      environmentId: source.environmentId,
+      projectId: source.projectId,
+      workspaceId: source.workspaceId,
+    });
+    const snapshot = await this.threads.snapshot(scope, threadId);
+    this.#assertOpen(signal);
+    const current = this.#sources.resolveThread(scope, threadId);
+    if (!current) return undefined;
+    requireAdmittedResource(environmentAuthority, {
+      kind: "thread",
+      id: current.id,
+      environmentId: current.environmentId,
+      projectId: current.projectId,
+      workspaceId: current.workspaceId,
+    });
+    const row = this.database
       .prepare(
         `
-          SELECT backend.kind AS backendKind, principal.pinned
+          SELECT backend.kind AS backendKind, principal.pinned,
+            principal.inventory_state AS inventoryState,
+            principal.snoozed_until AS snoozedUntil,
+            principal.wake_reminder_text AS wakeReminderText
           FROM application_threads AS thread
           JOIN thread_principal_state AS principal
             ON principal.tenant_id = thread.tenant_id
@@ -97,33 +119,21 @@ export class DatabaseAgentToolApplicationReader
         `,
       )
       .get(scope.tenantId, scope.principalId, threadId) as
-      { readonly backendKind: BackendKind; readonly pinned: 0 | 1 } | undefined;
-    if (!backend) return undefined;
-    requireAdmittedResource(environmentAuthority, {
-      kind: "thread",
-      id: source.id,
-      environmentId: source.environmentId,
-      projectId: source.projectId,
-      workspaceId: source.workspaceId,
-    });
-    const snapshot = await this.threads.snapshot(scope, threadId);
-    this.#assertOpen(signal);
-    const current = this.#sources.resolveThread(scope, threadId);
-    if (!current) return undefined;
-    requireAdmittedResource(environmentAuthority, {kind:"thread",id:current.id,
-      environmentId:current.environmentId,workspaceId:current.workspaceId,projectId:current.projectId});
+      | {
+          readonly backendKind: BackendKind;
+          readonly pinned: 0 | 1;
+          readonly inventoryState: ThreadStatusResult["lifecycle"];
+          readonly snoozedUntil: number | null;
+          readonly wakeReminderText: string | null;
+        }
+      | undefined;
+    if (!row) return undefined;
     return {
       threadId: source.id,
-      backend: backend.backendKind,
-      pinned: backend.pinned === 1,
-      lifecycle:
-        snapshot.thread.inventoryState === "archived"
-          ? "archived"
-          : snapshot.thread.inventoryState === "snoozed"
-            ? "snoozed"
-            : snapshot.thread.inventoryState === "settled"
-              ? "settled"
-              : "active",
+      backend: row.backendKind,
+      pinned: row.pinned === 1,
+      lifecycle: row.inventoryState,
+      ...projectAgentThreadSnooze(row),
       activity: activity(snapshot.thread.runState),
     };
   }

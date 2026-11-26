@@ -1,5 +1,7 @@
+import type { NormalizedThreadSummary } from "../../../shared/protocol/conversation.js";
 import type { BackendKind } from "../../backends/contracts.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
+import type { AgentThreadSnoozeFields } from "../application/thread-snooze-presentation.js";
 import type { TrustedEnvironmentAuthorityGrant } from "../environment/environment-authority.js";
 
 export interface AgentSourceContext {
@@ -10,10 +12,10 @@ export interface AgentSourceContext {
   readonly backend: BackendKind;
 }
 
-export interface ThreadStatusResult {
+export interface ThreadStatusResult extends AgentThreadSnoozeFields {
   readonly threadId: string;
   readonly backend: BackendKind;
-  readonly lifecycle: "active" | "snoozed" | "settled" | "archived";
+  readonly lifecycle: NormalizedThreadSummary["inventoryState"];
   readonly pinned: boolean;
   readonly activity: "idle" | "running" | "waiting_for_input";
 }

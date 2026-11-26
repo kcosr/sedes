@@ -132,7 +132,7 @@ export function flatRowGlyphKind(
   if (automation) {
     return AUTOMATION_GLYPH_KINDS[automationIdentityGlyph(automation)];
   }
-  if (thread.inventoryState === "settled") return "parked";
+  if (thread.inventoryState === "parked") return "parked";
   if (thread.runState === "disconnected") return "disconnected";
   return "idle";
 }
@@ -458,7 +458,7 @@ export function FlatThreadRow({
   readonly selectAriaExpanded?: boolean;
   readonly selectAriaControls?: string;
 }): React.JSX.Element {
-  const parked = thread.inventoryState === "settled";
+  const parked = thread.inventoryState === "parked";
   const unseen = thread.attention.unseenCompletion;
   const title = thread.title.text || "Untitled thread";
   const glyphKind = flatRowGlyphKind(thread, backgroundWorkCurrent);

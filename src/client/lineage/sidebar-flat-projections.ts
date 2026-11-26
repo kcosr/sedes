@@ -95,7 +95,7 @@ function partitionParked(
   const rest: NormalizedApplicationThreadSummary[] = [];
   const parked: NormalizedApplicationThreadSummary[] = [];
   for (const thread of threads) {
-    if (thread.inventoryState === "settled") parked.push(thread);
+    if (thread.inventoryState === "parked") parked.push(thread);
     else rest.push(thread);
   }
   return { rest, parked };
@@ -110,7 +110,7 @@ function projectParked(
     {
       // The key names the section's saved disclosure; it keeps the stored
       // inventory state's name.
-      key: "settled",
+      key: "parked",
       label: "Parked",
       kind: "parked",
       futureTimes: false,
@@ -130,7 +130,7 @@ export function filterSidebarThreads(
   return threads.filter((thread) => {
     if (thread.inventoryState === "archived") return false;
     if (!show.snoozed && thread.inventoryState === "snoozed") return false;
-    if (!show.settled && thread.inventoryState === "settled") return false;
+    if (!show.parked && thread.inventoryState === "parked") return false;
     if (!show.drafts && thread.backingState === "unbound") return false;
     return true;
   });
@@ -224,9 +224,8 @@ export function resolveTimeBucket(
   };
 }
 
-/** State buckets; Parked keeps its stored name, `settled`, as its key. */
 export type SidebarStateBucketKey =
-  "needs-attention" | "running" | "scheduled" | "snoozed" | "settled" | "idle";
+  "needs-attention" | "running" | "scheduled" | "snoozed" | "parked" | "idle";
 
 /**
  * State-mode bucket by precedence; first match wins, each thread once. The
@@ -252,7 +251,7 @@ export function resolveStateBucket(
   }
   if (ACTIVE_RUN_STATES.has(thread.runState)) return "running";
   if (thread.inventoryState === "snoozed") return "snoozed";
-  if (thread.inventoryState === "settled") return "settled";
+  if (thread.inventoryState === "parked") return "parked";
   if (
     thread.automations.totalCount > 0 &&
     thread.automations.enabledCount > 0 &&
@@ -273,7 +272,7 @@ const STATE_BUCKETS: readonly {
   { key: "scheduled", label: "Scheduled", futureTimes: true },
   { key: "idle", label: "Idle", futureTimes: false },
   { key: "snoozed", label: "Snoozed", futureTimes: true },
-  { key: "settled", label: "Parked", futureTimes: false },
+  { key: "parked", label: "Parked", futureTimes: false },
 ];
 
 function projectTimeline(

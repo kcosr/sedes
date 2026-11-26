@@ -128,7 +128,7 @@ export const automationDefinitionToolOutputSchema =
             ),
             inventoryState: Type.String({
               maxLength: 8,
-              enum: ["active", "snoozed", "settled", "archived"],
+              enum: ["active", "snoozed", "parked", "archived"],
             }),
             inventoryRevision: Type.Integer({
               minimum: 0,
@@ -190,7 +190,7 @@ export const automationDefinitionToolOutputSchema =
   );
 
 /**
- * The `automation.update@2` and `automation.set_state@2` output: the
+ * The `automation.update@3` and `automation.set_state@3` output: the
  * definition the change produced and whether that change retired it. A
  * retired one-time automation no longer exists.
  */

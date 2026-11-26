@@ -72,7 +72,7 @@ const SHOW_FILTERS: ReadonlyArray<{
   readonly label: string;
 }> = [
   { key: "snoozed", label: "Snoozed" },
-  { key: "settled", label: "Parked" },
+  { key: "parked", label: "Parked" },
   { key: "drafts", label: "Drafts" },
 ];
 
@@ -157,7 +157,7 @@ export function SidebarViewControls({
     (flatMode !== undefined && flatMode.pinnedOnly) ||
     preferences.hasOpenTasks ||
     !show.snoozed ||
-    !show.settled ||
+    !show.parked ||
     !show.drafts ||
     stackBy !== "none" ||
     !preferences.showBackendIcons;

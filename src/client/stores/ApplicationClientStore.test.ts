@@ -736,7 +736,7 @@ describe("ApplicationClientStore created-thread workspace handoff", () => {
 
 describe("ApplicationClientStore bulk inventory", () => {
   const impact = {
-    action: "settle" as const,
+    action: "park" as const,
     targets: [
       { threadId: "thread-a", expectedRevision: 3 },
       { threadId: "thread-b", expectedRevision: 7 },
@@ -758,10 +758,10 @@ describe("ApplicationClientStore bulk inventory", () => {
     const store = new ApplicationClientStore(api, {} as EventStreamTransport);
 
     await expect(
-      store.getBulkInventoryImpact("settle", ["thread-b", "thread-a"]),
+      store.getBulkInventoryImpact("park", ["thread-b", "thread-a"]),
     ).resolves.toBe(impact);
     expect(api.getBulkInventoryImpact).toHaveBeenCalledWith({
-      action: "settle",
+      action: "park",
       threadIds: ["thread-b", "thread-a"],
     });
   });
@@ -777,7 +777,7 @@ describe("ApplicationClientStore bulk inventory", () => {
     const request = store.createBulkInventoryMutationRequest(impact);
 
     expect(request).toMatchObject({
-      action: "settle",
+      action: "park",
       targets: impact.targets,
       expectedStashedPromptCount: 2,
       mutationId: expect.any(String),
@@ -830,14 +830,14 @@ describe("ApplicationClientStore bulk inventory", () => {
       openTasks: { snapshot: "a".repeat(64), items: [], total: 10_001, omitted: 10_001 },
     }, { openTaskDisposition: "complete" });
     expect(request).toEqual({
-      action: "settle",
+      action: "park",
       targets: impact.targets,
       expectedStashedPromptCount: impact.stashedPromptCount,
       mutationId: expect.any(String),
     });
   });
 
-  it.each(["settle", "archive"] as const)(
+  it.each(["park", "archive"] as const)(
     "passes the reviewed completion snapshot to a single-thread %s",
     async (action) => {
       const api = {

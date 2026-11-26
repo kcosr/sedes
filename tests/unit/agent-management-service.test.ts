@@ -189,7 +189,7 @@ function discoveryFixture() {
                WHERE tenant_id = ? AND principal_id = ? AND thread_id = ?`,
             )
             .get(current.scope.tenantId, current.scope.principalId, id) as {
-            inventoryState: "active" | "snoozed" | "settled" | "archived";
+            inventoryState: "active" | "snoozed" | "parked" | "archived";
           };
           return {
             ...summaries.get(id)!,
@@ -620,7 +620,7 @@ describe("AgentManagementService discovery", () => {
       current.database
         .prepare(
           `UPDATE thread_principal_state
-           SET inventory_state = 'settled'
+           SET inventory_state = 'parked'
            WHERE tenant_id = ? AND principal_id = ? AND thread_id = ?`,
         )
         .run(
@@ -633,7 +633,7 @@ describe("AgentManagementService discovery", () => {
           current.scope,
           undefined,
           {
-            lifecycle: "settled",
+            lifecycle: "parked",
             pageSize: 10,
           },
           current.environmentAuthority,
@@ -642,7 +642,7 @@ describe("AgentManagementService discovery", () => {
         items: [
           expect.objectContaining({
             id: current.older.id,
-            lifecycle: "settled",
+            lifecycle: "parked",
           }),
         ],
       });
@@ -658,6 +658,60 @@ describe("AgentManagementService discovery", () => {
           current.environmentAuthority,
         ),
       ).resolves.toEqual({ items: [] });
+    } finally {
+      current.database.close();
+    }
+  });
+
+  it("projects snooze details only for snoozed threads", async () => {
+    const current = discoveryFixture();
+    try {
+      const snoozedUntil = 15_000;
+      const snooze = current.database.prepare(
+        `UPDATE thread_principal_state
+         SET inventory_state = 'snoozed', snoozed_at = 6_000,
+           snoozed_until = ?, wake_reminder_text = ?
+         WHERE tenant_id = ? AND principal_id = ? AND thread_id = ?`,
+      );
+      for (const [id, reminder] of [
+        [current.tiedFirst.id, "Review tomorrow"],
+        [current.older.id, null],
+      ] as const) {
+        snooze.run(
+          snoozedUntil,
+          reminder,
+          current.scope.tenantId,
+          current.scope.principalId,
+          id,
+        );
+      }
+      current.database
+        .prepare(
+          `UPDATE thread_principal_state SET wake_reminder_text = 'Earlier reminder'
+           WHERE tenant_id = ? AND principal_id = ? AND thread_id = ?`,
+        )
+        .run(current.scope.tenantId, current.scope.principalId, current.tiedSecond.id);
+
+      const { items } = await current.management.listThreads(
+        current.scope,
+        undefined,
+        { pageSize: 10 },
+        current.environmentAuthority,
+      );
+      expect(items.find(({ id }) => id === current.tiedFirst.id)).toMatchObject({
+        lifecycle: "snoozed",
+        snoozedUntil: new Date(snoozedUntil).toISOString(),
+        wakeReminder: "Review tomorrow",
+      });
+      expect(items.find(({ id }) => id === current.older.id)).toMatchObject({
+        lifecycle: "snoozed",
+        snoozedUntil: new Date(snoozedUntil).toISOString(),
+        wakeReminder: null,
+      });
+      const active = items.find(({ id }) => id === current.tiedSecond.id);
+      expect(active).toMatchObject({ lifecycle: "active" });
+      expect(active).not.toHaveProperty("snoozedUntil");
+      expect(active).not.toHaveProperty("wakeReminder");
     } finally {
       current.database.close();
     }

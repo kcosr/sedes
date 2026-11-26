@@ -366,7 +366,7 @@ describe("thread automation lifecycle", () => {
       expectedRevision: inventory.getInventory(scope, threadId)
         .inventoryRevision,
       mutationId: randomUUID(),
-      change: { action: "settle" },
+      change: { action: "park" },
       now,
     }).state;
   }
@@ -1050,7 +1050,7 @@ describe("thread automation lifecycle", () => {
     expect(contexts()).toEqual([]);
   });
 
-  it("keeps a settled clone anchor settled when its one-shot succeeds", async () => {
+  it("keeps a parked clone anchor parked when its one-shot succeeds", async () => {
     createEnabled(
       {
         prompt: "Clone once",
@@ -1069,7 +1069,7 @@ describe("thread automation lifecycle", () => {
     inventory.transitionInventory(scope, threadId, {
       expectedRevision: 0,
       mutationId: randomUUID(),
-      change: { action: "settle" },
+      change: { action: "park" },
       now: 1_500,
     });
 
@@ -1089,7 +1089,7 @@ describe("thread automation lifecycle", () => {
     });
     expect(run.childThreadId).not.toBe(threadId);
     expect(inventory.getThread(scope, threadId).inventory).toMatchObject({
-      inventoryState: "settled",
+      inventoryState: "parked",
     });
     expect(
       inventory.getThread(scope, run.childThreadId!).inventory,

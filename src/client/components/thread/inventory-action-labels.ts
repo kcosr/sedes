@@ -1,16 +1,13 @@
 import type { BulkInventoryAction } from "../../../shared/index.js";
 
-/**
- * Words for the inventory actions a row or stack offers. Park keeps its
- * original wire name: `settle` parks a thread and `unsettle` unparks it.
- */
+/** Labels for the inventory actions a row or stack offers. */
 export function inventoryActionLabel(
   action: BulkInventoryAction | "wake",
 ): string {
   switch (action) {
-    case "settle":
+    case "park":
       return "Park";
-    case "unsettle":
+    case "unpark":
       return "Unpark";
     case "archive":
       return "Archive";
@@ -22,9 +19,9 @@ export function inventoryActionLabel(
 /** The pending form of a stack action, as in "Parking…". */
 export function inventoryActionProgress(action: BulkInventoryAction): string {
   switch (action) {
-    case "settle":
+    case "park":
       return "Parking";
-    case "unsettle":
+    case "unpark":
       return "Unparking";
     case "archive":
       return "Archiving";

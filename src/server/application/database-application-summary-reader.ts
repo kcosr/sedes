@@ -7,7 +7,10 @@ import type { RequestScope } from "../identity/identity-provider.js";
 import { workspaceFileLinkedWorktreeRootIdSchema } from "../../shared/protocol/workspace-files.js";
 import { boundDisplayText } from "../conversations/payload-policy.js";
 import { BACKEND_BRANDS, type BackendKind } from "../backends/contracts.js";
-import type { InventoryRepository } from "../db/repositories/inventory-repository.js";
+import type {
+  InventoryRepository,
+  InventoryState,
+} from "../db/repositories/inventory-repository.js";
 import type { QueuedInputRepository } from "../db/repositories/queued-input-repository.js";
 import type { SubmissionCompletionRepository } from "../db/repositories/submission-completion-repository.js";
 import type {
@@ -32,7 +35,7 @@ type SummaryRow = ThreadAutomationSummaryRow & {
   readonly backendKind: BackendKind;
   readonly backendLabel: string;
   readonly backingState: "unbound" | "creating" | "bound" | "creation_unknown";
-  readonly inventoryState: "active" | "snoozed" | "settled" | "archived";
+  readonly inventoryState: InventoryState;
   readonly inventoryRevision: number;
   readonly pinned: 0 | 1;
   readonly pinRevision: number;

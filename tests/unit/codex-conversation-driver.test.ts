@@ -126,7 +126,7 @@ import {
 } from "../../src/server/provider-protocol/bindings/codex-app-server/codex-app-server-binding.js";
 import { createInMemoryOutputArtifactPublisher } from "../helpers/output-artifact-publisher.js";
 import * as codexBindingModule from "../../src/server/provider-protocol/bindings/codex-app-server/codex-app-server-binding.js";
-import { codexServerNotificationRegistry } from "../../src/server/provider-protocol/bindings/codex-app-server/generated/0.169.0/route-registry.js";
+import { codexServerNotificationRegistry } from "../../src/server/provider-protocol/bindings/codex-app-server/generated/0.172.0/route-registry.js";
 
 const scope = { tenantId: "tenant-1", principalId: "principal-1" };
 const instance: AgentBackendInstance = {
@@ -136,7 +136,7 @@ const instance: AgentBackendInstance = {
   label: "Codex",
   enabled: true,
   configurationRevision: 1,
-  protocolRelease: "0.169.0",
+  protocolRelease: "0.172.0",
 };
 const toolProvenanceKey = new Uint8Array(32).fill(0x43);
 const agentToolSourceCapability =
@@ -308,7 +308,7 @@ function nativeThread(
       status: { type: "idle" },
       path: "/private/rollout.jsonl",
       cwd: "/workspace",
-      cliVersion: "0.169.0",
+      cliVersion: "0.172.0",
       source: "appServer",
       canAcceptDirectInput: true,
       threadSource: null,
@@ -8128,6 +8128,68 @@ describe("CodexConversationHandle", () => {
     await handle.close();
   });
 
+  it.each(["legacy", "paginated"] as const)("settles an earlier %s turn without replacing the observed active head", async historyMode => {
+    const harness = new RpcHarness();
+    const handle = await attachIdle(harness);
+    if (historyMode === "paginated") {
+      harness.enqueue("thread/read", { thread: paginatedThread() });
+      harness.enqueue("thread/resume", paginatedResumeResult({ shells: [notLoadedTurn(0)] }));
+      harness.enqueue("thread/items/list", paginatedItems(0));
+    }
+    const established = historyMode === "legacy"
+      ? await establish(harness, handle)
+      : await handle.establishProjection({ signal: new AbortController().signal });
+    const events: SequencedBackendEvent[] = [];
+    established.subscribeFromNext(event => events.push(event));
+    const earlier = nativeTurn(1);
+    const later = nativeTurn(2);
+    for (const turn of [earlier, later]) {
+      harness.notify("turn/started", { threadId: "thread-1", turn: {
+        ...turn, items: [], status: "inProgress", completedAt: null, durationMs: null,
+      } });
+    }
+    const earlierBackendId = codexBackendTurnId("thread-1", earlier.id);
+    const laterBackendId = codexBackendTurnId("thread-1", later.id);
+    const callsBeforeCompletion = harness.calls.length;
+    harness.notify("turn/completed", { threadId: "thread-1", turn: earlier });
+    await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ event: {
+      type: "turn_completed", turn: expect.objectContaining({ backendTurnId: earlierBackendId, status: "completed" }),
+    } })));
+    expect(harness.calls).toHaveLength(callsBeforeCompletion);
+    expect((await handle.readCurrent()).snapshot).toMatchObject({
+      runState: "running", activeBackendTurnId: laterBackendId,
+      turnsById: { [earlierBackendId]: { status: "completed" }, [laterBackendId]: { status: "in_progress" } },
+    });
+    const application = new ConversationProjector({
+      backendInstanceId: instance.id, bindingIdentity: binding().applicationThreadId,
+    });
+    application.replace(established.snapshot, established.handleSequence);
+    for (const event of events) expect(application.apply(event).kind).not.toBe("resnapshot_required");
+
+    const approve = harness.serverRequests.handlersForGeneration(1)["item/commandExecution/requestApproval"]!;
+    const approval = approve(attestedServerRequest({
+      generation: 1, sequence: ++harness.sequence, id: "newer-turn-approval", method: "item/commandExecution/requestApproval",
+      params: { threadId: "thread-1", turnId: later.id, itemId: "newer-command", environmentId: null,
+        startedAtMs: Date.parse("2026-07-31T00:00:00.000Z"),
+        command: "npm test", cwd: "/workspace", availableDecisions: ["accept", "cancel"] },
+      signal: new AbortController().signal,
+    } satisfies CodexInboundServerRequest));
+    await vi.waitFor(() => expect(events.some(({ event }) => event.type === "interaction_opened")).toBe(true));
+    const opened = events.find(({ event }) => event.type === "interaction_opened")?.event;
+    if (opened?.type !== "interaction_opened") throw new Error("Newer turn did not retain approval authority");
+    const response = handle.respond({ applicationOperationId: "respond-to-newer-turn", interactionId: opened.interaction.backendInteractionId,
+      kind: "decision", selectedActionId: "cancel" });
+    await expect(approval).resolves.toEqual({ decision: "cancel" });
+    harness.notify("serverRequest/resolved", { threadId: "thread-1", requestId: "newer-turn-approval" });
+    await expect(response).resolves.toBeUndefined();
+
+    harness.enqueue("turn/interrupt", {});
+    await expect(handle.interrupt({ applicationOperationId: "stop-newer-turn", deadlineAt: Date.now() + 30_000 })).resolves.toBeUndefined();
+    expect(harness.calls.at(-1)).toEqual({ method: "turn/interrupt", params: { threadId: "thread-1", turnId: later.id } });
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
   it("keeps a completed paginated refresh idle despite an abandoned older turn", async () => {
     const harness = new RpcHarness();
     const handle = await attachIdle(harness);
@@ -9829,6 +9891,9 @@ describe("CodexConversationHandle", () => {
     for (const threadId of ["unrelated-thread", null]) {
       harness.notify("mcpServer/startupStatus/updated", { ...params, threadId });
     }
+    for (const environmentId of ["", "x".repeat(513), 1]) {
+      harness.notify("mcpServer/startupStatus/updated", { ...params, environmentId });
+    }
     harness.notify("mcpServer/startupStatus/updated", { threadId: "thread-1" });
     harness.notify("mcpServer/startupStatus/updated", params, ++harness.sequence, false);
     harness.notifyUndecodable("mcpServer/startupStatus/updated", "thread-1");
@@ -9902,6 +9967,28 @@ describe("CodexConversationHandle", () => {
     expect(JSON.stringify(events)).not.toContain("private-secret");
     expect(harness.calls.filter(({ method }) => method === "thread/resume")).toHaveLength(1);
     expect(harness.retirements).toEqual([]);
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
+  it("tracks same-named MCP startup failures by registration scope during resume", async () => {
+    const harness = new RpcHarness();
+    const handle = await attachIdle(harness);
+    harness.after("thread/resume", () => {
+      const params = { threadId: "thread-1", name: "node_repl", status: "failed", error: null, failureReason: null };
+      for (const environmentId of [null, "private-scope-1", "private-scope-2", "private-scope-3"]) {
+        harness.notify("mcpServer/startupStatus/updated", { ...params, environmentId });
+      }
+      for (const environmentId of [null, "private-scope-1"]) {
+        harness.notify("mcpServer/startupStatus/updated", { ...params, environmentId, status: "ready" });
+      }
+    });
+    const established = await establish(harness, handle);
+    const events: BackendConversationEvent[] = [];
+    established.subscribeFromNext(({ event }) => events.push(event));
+    expect(events).toHaveLength(2);
+    expect(events.every(event => event.type === "notice" && event.notice.message.text.includes('"node_repl"'))).toBe(true);
+    expect(JSON.stringify(events)).not.toContain("private-scope");
     harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
     await handle.close();
   });

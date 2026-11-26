@@ -29,11 +29,12 @@ User-facing changes are collected here before release. See the
   See [native Pi setup](docs/operator/backends/pi-native.md).
   ([#143](https://github.com/kcosr/sedes/pull/143))
 
-- Codex app-servers and managed TUI commands now require **0.169.0 or newer**.
-  Upgrade every execution host and rebuild execution sidecars with the server.
-  Remove the retired native Guardian configuration keys before startup. See
+- Codex app-servers, managed TUI, and Codex CLI research now require **0.172.0 or
+  newer**. Upgrade the Codex commands, the server, and execution sidecars in the
+  same maintenance window. Remove the retired native Guardian configuration
+  keys before startup. See
   [Codex upgrade requirements](docs/operator/backends/codex.md#version-compatibility).
-  ([#136](https://github.com/kcosr/sedes/pull/136))
+  ([#136](https://github.com/kcosr/sedes/pull/136)) ([#164](https://github.com/kcosr/sedes/pull/164))
 
 - Android now requires Android 10 (API 29) or newer for native Opus encoding.
   ([#128](https://github.com/kcosr/sedes/pull/128))
@@ -52,7 +53,9 @@ User-facing changes are collected here before release. See the
   ([#121](https://github.com/kcosr/sedes/pull/121))
 
 - Upgrade server and browser/packaged clients together for client protocol
-  **180**. Turn bookmarks may omit the user prompt for replies that continue
+  **181**. Thread inventory uses `parked` with `park` and `unpark` actions.
+  Existing parked threads and saved sidebar visibility preferences carry over.
+  Turn bookmarks may omit the user prompt for replies that continue
   without one. Clients can verify exact abandoned inputs after Force Reset.
   Antigravity targets add a normalized brand and execution configuration.
   Chat excerpts captured from highlighted questions retain their quote
@@ -67,9 +70,12 @@ User-facing changes are collected here before release. See the
   outside requests are denied. Legacy thread-only policies are disabled for
   review rather than broadened. Saved Agent `list/get/options/create/update`
   contracts advance to version 7 and thread-create to version 6. Agent context
-  and thread status advance to version 5, and thread listing to version 9.
+  advances to version 5, thread status to version 6, and thread listing to version 10.
+  Automation tools that return thread inventory advance to `list@2` and
+  `get/create/update/set_state@3`. See [agent tool contracts](docs/internals/agent-tools.md#catalog-and-effects).
   Thread-message transcripts advance to version 5 to identify automatic follow-ups. See [tool policy sets](docs/user/tool-policies.md).
   ([#96](https://github.com/kcosr/sedes/pull/96), [#112](https://github.com/kcosr/sedes/pull/112), [#116](https://github.com/kcosr/sedes/pull/116), [#142](https://github.com/kcosr/sedes/pull/142), [#156](https://github.com/kcosr/sedes/pull/156))
+  ([#163](https://github.com/kcosr/sedes/pull/163))
 
 - Upgrade execution sidecars with the server for runtime wire version **17**
   and negotiated traffic compression. Incompatible active services retain the
@@ -112,6 +118,11 @@ User-facing changes are collected here before release. See the
   ([#81](https://github.com/kcosr/sedes/pull/81), [#83](https://github.com/kcosr/sedes/pull/83), [#87](https://github.com/kcosr/sedes/pull/87), [#88](https://github.com/kcosr/sedes/pull/88), [#92](https://github.com/kcosr/sedes/pull/92), [#95](https://github.com/kcosr/sedes/pull/95), [#111](https://github.com/kcosr/sedes/pull/111))
 
 ### Added
+
+- Grant `thread.set_state` to let agents park, unpark, snooze, and wake threads
+  within their tool scope. Thread status and list show the snooze deadline and
+  reminder. See [Sedes tools](docs/user/provider-features.md#let-an-agent-use-sedes-tools).
+  ([#163](https://github.com/kcosr/sedes/pull/163))
 
 - Thread agents can manage execution environments, backends, variables,
   runtime lifecycle, tool-policy sets/defaults and other threads' or templates'
@@ -308,6 +319,12 @@ User-facing changes are collected here before release. See the
 
 ### Changed
 
+- Snoozing a running thread keeps it snoozed when that submission completes
+  successfully. The reply still appears as unread. Resolve pending input or
+  approval before snoozing. See
+  [Snooze work until later](docs/user/organize-work.md#snooze-work-until-later).
+  ([#163](https://github.com/kcosr/sedes/pull/163))
+
 - Sidebar thread detail cards are off by default. **Show thread detail cards**
   in **View options** applies across Timeline, State, and Flat list on this
   client. Stacks still open their member list on hover. See
@@ -446,6 +463,12 @@ User-facing changes are collected here before release. See the
   ([#81](https://github.com/kcosr/sedes/pull/81))
 
 ### Fixed
+
+- Codex can refresh saved threads with MCP tool results and display live tool
+  activity and elicitation on 0.172.0. The sidecar rejects unsupported
+  interactions before they can block cleanup. Late completions and resume
+  status hints preserve newer active work.
+  ([#164](https://github.com/kcosr/sedes/pull/164))
 
 - After a server restart, threads whose recent turn kept running or finished
   while the server was down show their spinner or unread dot without being

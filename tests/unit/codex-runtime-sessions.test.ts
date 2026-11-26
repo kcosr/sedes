@@ -25,6 +25,14 @@ function resumed() {
     multiAgentMode: "explicitRequestOnly", initialTurnsPage: null, turnsBackwardsCursor: null, itemsBackwardsCursor: null,
   });
 }
+function resumedWithActiveHead(turnId: string) {
+  return {
+    ...resumed(), thread: { ...thread("thread", true), turns: [{
+      id: turnId, rootTurnId: turnId, items: [], itemsView: "full", status: "inProgress",
+      startedAt: null, completedAt: null, durationMs: null, error: null,
+    }] },
+  };
+}
 function updatedSettings(): OfficialCodexServerNotificationParams<"thread/settings/updated"> {
   return {
     threadId: "thread",
@@ -101,6 +109,105 @@ describe("persistent Codex native session recovery", () => {
     pending.close();
     f.sessions.evict("thread", 1);
     expect(f.sessions.canIdle()).toBe(method === "turn/completed");
+  });
+
+  it.each(["retained", "pending-resume", "resume-head"] as const)("preserves the exact newer turn in %s across late completion and idle hints", async source => {
+    const f = fixture(method => { expect(method).toBe("turn/interrupt"); return {}; });
+    if (source === "retained") f.sessions.observeResult("thread/resume", resumed(), 1);
+    const pending = source === "retained" ? undefined : f.sessions.trackResume("thread", 1);
+    const notifyTurn = (method: "turn/started" | "turn/completed", id: string, sequence: number) =>
+      f.sessions.observeNotification({ kind: "decoded_notification", generation: 1, sequence,
+        method, params: { threadId: "thread", turn: { id } } });
+    if (source !== "resume-head") {
+      notifyTurn("turn/started", "older", 11);
+      notifyTurn("turn/started", "newer", 12);
+    }
+    for (const [sequence, status] of [[13, { type: "active", activeFlags: [] }], [14, { type: "idle" }]] as const) {
+      f.sessions.observeNotification({ kind: "decoded_notification", generation: 1, sequence,
+        method: "thread/status/changed", params: { threadId: "thread", status } });
+    }
+    notifyTurn("turn/completed", "older", 15);
+    const result = source === "resume-head"
+      ? resumedWithActiveHead("newer")
+      : resumed();
+    pending?.apply({ result, generation: 1, inboundSequence: 10 });
+    pending?.close();
+    f.sessions.evict("thread", 1);
+    expect(f.sessions.canIdle()).toBe(false);
+
+    await f.sessions.interruptKnownActiveTurns();
+    if (source === "resume-head") expect(f.request).not.toHaveBeenCalled();
+    else expect(f.request).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ method: "turn/interrupt" }),
+      { threadId: "thread", turnId: "newer" }, expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    notifyTurn("turn/completed", "newer", 16);
+    expect(f.sessions.canIdle()).toBe(true);
+  });
+
+  it.each([{ type: "idle" }, { type: "active", activeFlags: [] }] as const)(
+    "keeps the exact turn from a resume receipt after a buffered $type hint and a later unrelated completion",
+    status => {
+      const f = fixture(() => ({}));
+      const pending = f.sessions.trackResume("thread", 1);
+      f.sessions.observeNotification({ kind: "decoded_notification", generation: 1, sequence: 11,
+        method: "thread/status/changed", params: { threadId: "thread", status } });
+      pending.apply({ result: resumedWithActiveHead("newer"), generation: 1, inboundSequence: 10 });
+      pending.close();
+      f.sessions.evict("thread", 1);
+      expect(f.sessions.canIdle()).toBe(false);
+
+      const notifyCompletion = (id: string, sequence: number) => f.sessions.observeNotification({
+        kind: "decoded_notification", generation: 1, sequence,
+        method: "turn/completed", params: { threadId: "thread", turn: { id } },
+      });
+      notifyCompletion("older", 12);
+      expect(f.sessions.canIdle()).toBe(false);
+      notifyCompletion("newer", 13);
+      expect(f.sessions.canIdle()).toBe(true);
+    },
+  );
+
+  it.each([9, 11].flatMap(completionSequence =>
+    [false, true].map(bufferIdle => ({ completionSequence, bufferIdle })),
+  ))("keeps the exact resume turn after completion $completionSequence and buffered idle=$bufferIdle", ({
+    completionSequence, bufferIdle,
+  }) => {
+    const f = fixture(() => ({}));
+    const pending = f.sessions.trackResume("thread", 1);
+    const complete = (id: string, sequence: number) => f.sessions.observeNotification({
+      kind: "decoded_notification", generation: 1, sequence,
+      method: "turn/completed", params: { threadId: "thread", turn: { id } },
+    });
+    complete("older", completionSequence);
+    f.sessions.observeNotification({
+      kind: "decoded_notification", generation: 1, sequence: 12,
+      method: "thread/status/changed", params: { threadId: "thread", status: { type: "active", activeFlags: [] } },
+    });
+    if (bufferIdle) f.sessions.observeNotification({
+      kind: "decoded_notification", generation: 1, sequence: 13,
+      method: "thread/status/changed", params: { threadId: "thread", status: { type: "idle" } },
+    });
+    pending.apply({ result: resumedWithActiveHead("newer"), generation: 1, inboundSequence: 10 });
+    pending.close();
+    f.sessions.evict("thread", 1);
+    expect(f.sessions.canIdle()).toBe(false);
+
+    complete("unrelated", 14);
+    expect(f.sessions.canIdle()).toBe(false);
+    complete("newer", 15);
+    expect(f.sessions.canIdle()).toBe(true);
+  });
+
+  it("preserves matching terminal proof when a buffered idle hint follows it", () => {
+    const f = fixture(() => ({}));
+    const pending = f.sessions.trackResume("thread", 1);
+    f.sessions.observeNotification({ kind: "decoded_notification", generation: 1, sequence: 11,
+      method: "turn/completed", params: { threadId: "thread", turn: { id: "newer" } } });
+    f.sessions.observeNotification({ kind: "decoded_notification", generation: 1, sequence: 12,
+      method: "thread/status/changed", params: { threadId: "thread", status: { type: "idle" } } });
+    pending.apply({ result: resumedWithActiveHead("newer"), generation: 1, inboundSequence: 10 });
+    pending.close();
+    f.sessions.evict("thread", 1);
+    expect(f.sessions.canIdle()).toBe(true);
   });
 
   it("does not override a resume response with older activity or a stale generation", () => {
@@ -387,6 +494,41 @@ describe("persistent Codex native session recovery", () => {
     await f.sessions.refreshActivity();
     expect(f.sessions.activity()).toBe("active");
     expect(f.request.mock.calls.filter(([method]) => method.method === "thread/loaded/list")).toHaveLength(4);
+  });
+
+  it("does not treat a newer inventoried turn as idle after an older completion", async () => {
+    const f = fixture(method => method === "thread/loaded/list" ? { data: ["thread"], nextCursor: null }
+      : method === "thread/read" ? { thread: thread() } : { goal: null });
+    await f.sessions.refreshActivity();
+    expect(f.sessions.activity()).toBe("idle");
+    const notifyTurn = (method: "turn/started" | "turn/completed", id: string, sequence: number) =>
+      f.sessions.observeNotification({ kind: "decoded_notification", generation: 1, sequence,
+        method, params: { threadId: "thread", turn: { id } } });
+    notifyTurn("turn/started", "older", 10);
+    notifyTurn("turn/started", "newer", 11);
+    f.sessions.observeNotification({ kind: "decoded_notification", generation: 1, sequence: 12,
+      method: "thread/status/changed", params: { threadId: "thread", status: { type: "idle" } } });
+    notifyTurn("turn/completed", "older", 13);
+    expect(f.sessions.activity()).toBe("active");
+    notifyTurn("turn/completed", "newer", 14);
+    expect(f.sessions.activity()).toBe("idle");
+  });
+
+  it("refuses an inventory read that races newer turn activity", async () => {
+    let lists = 0;
+    const f = fixture(method => {
+      if (method === "thread/loaded/list") {
+        if (++lists === 2) f.sessions.observeNotification({ kind: "decoded_notification", generation: 1,
+          sequence: 4, method: "turn/started", params: { threadId: "thread", turn: { id: "newer" } } });
+        return { data: ["thread"], nextCursor: null };
+      }
+      return method === "thread/read" ? { thread: thread() } : { goal: null };
+    });
+    f.sessions.observeResult("thread/resume", resumed(), 1);
+    f.sessions.evict("thread", 1);
+    await expect(f.sessions.refreshActivity()).rejects.toThrow("inventory_changed");
+    expect(f.sessions.activity()).toBe("unknown");
+    expect(f.sessions.canIdle()).toBe(false);
   });
 
   it("proves an empty external inventory idle and refuses repeated cursors instead of truncating", async () => {

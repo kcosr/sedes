@@ -11,7 +11,7 @@ function validInput(): BackendModuleConfigurationInput {
     backend: {
       id: "codex-primary",
       kind: "codex_app_server",
-      protocolRelease: "0.169.0",
+      protocolRelease: "0.172.0",
       enabled: true,
       modelPolicy: {
         type: "allowlist",
@@ -103,7 +103,7 @@ describe("Codex backend configuration", () => {
 
     expect(result).toMatchObject({
       backendInstanceId: "codex-primary",
-      protocolRelease: "0.169.0",
+      protocolRelease: "0.172.0",
       configuration: {
         connection: {
           ownership: "owned",
@@ -180,7 +180,7 @@ describe("Codex backend configuration", () => {
   });
 
   it("uses the exact generated protocol profile", () => {
-    expect(parsed().protocolRelease).toBe("0.169.0");
+    expect(parsed().protocolRelease).toBe("0.172.0");
   });
 
   it("retains a disabled backend without admitting it", () => {
@@ -191,7 +191,7 @@ describe("Codex backend configuration", () => {
       }
     });
 
-    expect(disabled.protocolRelease).toBe("0.169.0");
+    expect(disabled.protocolRelease).toBe("0.172.0");
     expect(disabled.connections.every(({ enabled }) => !enabled)).toBe(true);
 
     expect(() =>

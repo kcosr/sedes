@@ -55,12 +55,12 @@ function isAffected(
   state: InventoryPrincipalStateRecord,
 ): boolean {
   switch (action) {
-    case "settle":
+    case "park":
       return (
         state.inventoryState === "active" || state.inventoryState === "snoozed"
       );
-    case "unsettle":
-      return state.inventoryState === "settled";
+    case "unpark":
+      return state.inventoryState === "parked";
     case "archive":
       return state.inventoryState !== "archived";
   }
@@ -108,7 +108,7 @@ export class ThreadBulkInventoryService {
     const inspection = await this.#inspectThreads(
       scope,
       affectedThreadIds,
-      input.action !== "unsettle",
+      input.action !== "unpark",
       input.action === "archive",
     );
     const blocked = inspection.blocked;
@@ -186,7 +186,7 @@ export class ThreadBulkInventoryService {
       );
     }
     const blocked =
-      input.action === "unsettle"
+      input.action === "unpark"
         ? new Map<string, BulkInventoryBlockerReason>()
         : (await this.#inspectThreads(scope, affectedThreadIds, true, input.action === "archive")).blocked;
     const disposition =

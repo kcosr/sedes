@@ -1,13 +1,14 @@
 import { launchAdmission } from "../../src/server/backends/provider-policy-admission.js";
 import {attachFixturePolicy} from "../helpers/execution-policy-fixture.js";
 import { describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import { SIDECAR_WIRE_VERSION } from "../../src/internal/sidecar-protocol/envelopes.js";
 import { SidecarFrameWriteError, SidecarOperationRegistry, SidecarProtocolPeer, controlHelloOperation, registerControlV3Operations, type SidecarFrame, type SidecarFrameSendOptions, type SidecarFrameTransport, type SidecarTransportClosure } from "../../src/internal/sidecar-protocol/index.js";
 import { SidecarRuntimeChannel } from "../../src/server/sidecar/runtime-channel.js";
 import { PersistentSidecarServiceRegistry } from "../../src/server/sidecar/persistent-sidecar-service-registry.js";
 import { CodexRuntimeHost } from "../../src/server/backends/codex/runtime/codex-runtime-host.js";
 import type { CodexRuntimeHostRegistry } from "../../src/server/backends/codex/runtime/codex-runtime-host-registry.js";
-import { CodexSidecarRuntimeConnection, codexRuntimeEnsureOperation, registerCodexRuntimeHost } from "../../src/server/backends/codex/runtime/codex-sidecar-runtime.js";
+import { CodexSidecarRuntimeConnection, codexRuntimeEnsureOperation, codexRuntimeLookupOperation, registerCodexRuntimeHost } from "../../src/server/backends/codex/runtime/codex-sidecar-runtime.js";
 import { recoverCodexRuntimeAdministration } from "../../src/server/backends/codex/runtime/codex-runtime-administration.js";
 import { BackendRuntimeControlRejectedError } from "../../src/server/backends/runtime-control.js";
 import { CodexRuntimeClient } from "../../src/server/backends/codex/runtime/codex-runtime-client.js";
@@ -40,6 +41,27 @@ it.each([1, 2])("reports protocol %s mismatch through the actual sidecar wire pa
     expect(proxy.client.lifecycleSnapshot().state).not.toBe("ready");
   } finally { await proxy.close(); await f.close(); }
 });
+
+it.each([codexRuntimeEnsureOperation, codexRuntimeLookupOperation])(
+  "rejects the previous Codex profile on the wire for $operation",
+  async (operation) => {
+    const fixture = await diagnosticAttachment();
+    try {
+      // An older controller can encode its own profile at this operation version.
+      const previousControllerOperation = { ...operation, requestSchema: z.unknown() };
+      await expect(fixture.channel.call(previousControllerOperation, {
+        configuration: {
+          ...runtimeConfiguration,
+          instance: { ...runtimeConfiguration.instance, protocolRelease: "0.169.0" },
+        },
+      })).rejects.toMatchObject({ code: "sidecar_request_payload_invalid", retryable: false });
+      await expect(fixture.connection.lookup(runtimeConfiguration)).resolves.toBe(fixture.host.runtimeId);
+    } finally {
+      await fixture.close();
+      fixture.host.dispose();
+    }
+  },
+);
 
 it("rejects unadvertised human approvals before sidecar retention while preserving unowned commands", async () => {
   const f = await threadFixture();
@@ -80,6 +102,72 @@ it("rejects unadvertised human approvals before sidecar retention while preservi
   } finally {
     controller.abort();
     await ordinary?.catch(() => {});
+    await proxy.close();
+    await f.close();
+  }
+});
+
+it("rejects unsupported or invalid MCP elicitation before retention and replays valid pending requests", async () => {
+  const f = await threadFixture();
+  const proxy = new CodexRuntimeClient({
+    connection: f.connection, authority: f.authority, generationOffset: 41,
+    receipts: {
+      reserve: () => { throw new Error("unused"); },
+      recordOutcome: () => "untracked",
+      pending: () => [],
+      reconcileRecordedApplicationState: () => 0,
+      compactRetiredRuntime: () => 0,
+      releaseRejected: () => false,
+    },
+  });
+  const controller = new AbortController();
+  const method = "mcpServer/elicitation/request";
+  const handler = f.host.serverRequests.handlersForGeneration(1)[method]!;
+  const base = { threadId: "thread-b", turnId: "turn", serverName: "catalog", environmentId: "executor-1" };
+  const form = { mode: "form", message: "Allow catalog?", requestedSchema: { type: "object", properties: {} } };
+  const url = { mode: "url", message: "Open catalog?", url: "https://example.invalid/", elicitationId: "external" };
+  const rejected = [
+    { params: { ...form, mode: "openaiForm" }, code: "codex_mcp_openai_elicitation_unadvertised" },
+    { params: { ...form, mode: "openai/form" }, code: "codex_mcp_openai_elicitation_unadvertised" },
+    {
+      params: { mode: "openai/userVerification", title: "Verify", description: "Verification", challenge: "challenge" },
+      code: "codex_mcp_openai_elicitation_unadvertised",
+    },
+    { params: { ...form, environmentId: "x".repeat(513) }, code: "native_id_bound" },
+  ];
+  const invoke = (id: string, params: object) => {
+    const response = Promise.resolve(handler({
+      generation: 1, sequence: 1, id, method, signal: controller.signal,
+      params: decodeCodexServerRequestParams(method, { ...base, ...params }),
+    }));
+    void response.catch(() => {});
+    return response;
+  };
+  const valid: Promise<unknown>[] = [];
+  try {
+    await proxy.start();
+    valid.push(invoke("form", form), invoke("url", url));
+    expect(f.host.pendingInteractionCount()).toBe(2);
+    for (const connectionState of ["attached", "detached"]) {
+      if (connectionState === "detached") await proxy.close();
+      for (const [index, { params, code }] of rejected.entries()) {
+        const response = invoke(`${connectionState}-${index}`, params);
+        expect(f.host.pendingInteractionCount()).toBe(2);
+        await expect(response).rejects.toThrow(code);
+      }
+    }
+
+    const replay = await f.connection.attach(f.authority, () => {});
+    expect(replay.pendingRequests.map(({ id }) => id)).toEqual(["form", "url"]);
+    const result = { action: "decline", content: null, _meta: null };
+    for (const requestId of ["form", "url"]) {
+      await f.connection.respond(f.authority, { generation: 1, requestId, result });
+    }
+    await expect(Promise.all(valid)).resolves.toEqual([result, result]);
+    expect(f.host.pendingInteractionCount()).toBe(0);
+  } finally {
+    controller.abort();
+    await Promise.allSettled(valid);
     await proxy.close();
     await f.close();
   }
@@ -407,7 +495,7 @@ it("keeps another runtime and acknowledgements responsive while preserving same-
 
 function metadata(threadId: string): OfficialCodexClientRequestResult<"thread/read"> {
   return { readState: null, thread: {
-    environments: null, originator: null, daybreakEnabled: null,
+    environments: null, originator: null, daybreakEnabled: null, daybreakProgramPropagationEnrolled: null,
     id: threadId, extra: {}, sessionId: "session", forkedFromId: null, attachedToThreadId: null, parentThreadId: null,
     preview: "A thread", ephemeral: false, section: null, sectionEnteredAt: null,
     projectId: null, historyMode: "paginated", modelProvider: "openai", model: null,
@@ -705,7 +793,7 @@ async function diagnosticAttachment() {
 }
 
 const runtimeConfiguration = {
-    instance: { id: scope.backendInstanceId, tenantId: scope.tenantId, kind: "codex_app_server" as const, label: "Codex", enabled: false, configurationRevision: 0, protocolRelease: "0.169.0" as const },
+    instance: { id: scope.backendInstanceId, tenantId: scope.tenantId, kind: "codex_app_server" as const, label: "Codex", enabled: false, configurationRevision: 0, protocolRelease: "0.172.0" as const },
     connections: [{ id: "connection", tenantId: scope.tenantId, ownerPrincipalId: scope.principalId, templateId: "template", kind: "codex_app_server" as const, backendInstanceId: scope.backendInstanceId, executionEnvironmentId: scope.executionEnvironmentId, label: "Codex", enabled: false, configurationRevision: 0 }],
     connection: { ownership: "external" as const, channel: { type: "unix_websocket" as const, socketPath: "/provider/codex.sock" } },
   };

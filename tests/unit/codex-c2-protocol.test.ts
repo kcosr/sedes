@@ -84,7 +84,10 @@ describe("Codex C2 pinned protocol", () => {
     }
   });
 
-  it.each(["flexUnavailable", "tooManyDenials"])("accepts the official %s error category", (codexErrorInfo) => {
+  it.each([
+    "flexUnavailable", "tooManyDenials", "bioPolicy",
+    "apiKeySpendLimitExceeded", "projectSpendLimitExceeded", "organizationSpendLimitExceeded",
+  ])("accepts the official %s error category", (codexErrorInfo) => {
     const params = { threadId: "thread-1", turnId: "turn-1", willRetry: false,
       error: { message: "Provider could not continue", codexErrorInfo, additionalDetails: null } };
     expect(decodeCodexC2Notification("error", params)).toEqual(params);
@@ -296,7 +299,7 @@ describe("Codex C2 pinned protocol", () => {
     ).toThrow();
   });
 
-  it("validates and strips 0.148 model catalog compatibility metadata", () => {
+  it("validates and strips provider-private model catalog metadata", () => {
     const model = {
       id: "gpt-5.6",
       model: "gpt-5.6",
@@ -323,6 +326,7 @@ describe("Codex C2 pinned protocol", () => {
       additionalSpeedTiers: [],
       serviceTiers: [],
       defaultServiceTier: null,
+      availableAccessPrograms: { cyber: [], daybreakAvailability: "enrollmentRequired" },
       isDefault: true,
     } as const;
     const decoded = codexModelListMethod.decodeResult({
@@ -330,6 +334,7 @@ describe("Codex C2 pinned protocol", () => {
       nextCursor: null,
     });
     expect(decoded.data[0]).not.toHaveProperty("multiAgentVersion");
+    expect(decoded.data[0]).not.toHaveProperty("availableAccessPrograms");
     expect(decoded.data[0]?.upgradeInfo).toEqual({
       model: "gpt-5.7",
       upgradeCopy: "Upgrade available",
@@ -340,6 +345,7 @@ describe("Codex C2 pinned protocol", () => {
       upgradeInfo: _upgradeInfo,
       multiAgentVersion: _multiAgentVersion,
       availabilityNux: _availabilityNux,
+      availableAccessPrograms: _availableAccessPrograms,
       ...modelWithoutOptionalMetadata
     } = model;
     const decodedWithoutOptionalMetadata = codexModelListMethod.decodeResult({
@@ -353,6 +359,12 @@ describe("Codex C2 pinned protocol", () => {
         data: [{ ...model, multiAgentVersion: "v3" }],
         nextCursor: null,
       } as never),
+    ).toThrow("codex_app_server_client_request_result_invalid");
+    expect(() =>
+      codexModelListMethod.decodeResult({
+        data: [{ ...model, availableAccessPrograms: { ...model.availableAccessPrograms, daybreakAvailability: true } }],
+        nextCursor: null,
+      }),
     ).toThrow("codex_app_server_client_request_result_invalid");
     expect(() =>
       codexModelListMethod.decodeResult({
@@ -483,6 +495,7 @@ describe("Codex C2 pinned protocol", () => {
         threadId: "thread-1",
         turnId: null,
         serverName: "provider",
+        environmentId: null,
         mode: "url",
         _meta: null,
         message: "Authenticate",
@@ -1156,6 +1169,7 @@ describe("Codex C2 pinned protocol", () => {
       threadId: "thread-1",
       turnId: null,
       serverName: "server",
+      environmentId: null,
       mode: "form",
       _meta: { unsafe: Number.MAX_SAFE_INTEGER + 1 },
       message: "question",
@@ -1197,11 +1211,34 @@ describe("Codex C2 pinned protocol", () => {
     })).toThrow();
   });
 
+  it.each([
+    { mode: "form", requestedSchema: { type: "object", properties: {} } },
+    { mode: "url", url: "https://example.test/elicitation", elicitationId: "elicitation-1" },
+  ])("validates MCP registration scope on $mode elicitation", (elicitation) => {
+    const method = "mcpServer/elicitation/request";
+    const base = {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      serverName: "provider",
+      _meta: null,
+      message: "Confirm",
+      ...elicitation,
+    };
+    for (const environmentId of [null, "registered-environment", "x".repeat(512)]) {
+      const params = { ...base, environmentId };
+      expect(decodeCodexC2ServerRequest(method, params)).toEqual({ method, params });
+    }
+    for (const environmentId of ["", "x".repeat(513), 1]) {
+      expect(() => decodeCodexC2ServerRequest(method, { ...base, environmentId })).toThrow();
+    }
+  });
+
   it("recognizes but fails closed on unadvertised openai elicitation forms", () => {
     const params = {
       threadId: "thread-1",
       turnId: "turn-1",
       serverName: "provider",
+      environmentId: "registered-environment",
       mode: "openaiForm",
       _meta: null,
       message: "Configure the provider",

@@ -391,7 +391,8 @@ The canonical catalog groups operations under:
 - **Files** — source-thread linked-worktree discovery and thread worktree
   preference selection;
 - **Threads** — inventory, status, messages, creation, send, fork,
-  archive/restore, thread/template tool settings, and related controls;
+  park/unpark, snooze/wake, archive/restore, thread/template tool settings, and
+  related controls;
 - **Execution** — environment/backend configuration, runtime lifecycle,
   default connections and tool-policy administration;
 - **Client controls** — current-client navigation, interaction completion,
@@ -408,14 +409,35 @@ Automation recovery stays under user control: acknowledging failures and marking
 uncertain runs as failed are available in the UI and authenticated management
 API, but have no agent-tool operation. This applies to all compiled backends
 across all supported tool presentations.
-`automation.update@2` and `automation.set_state@2` report `retired: true` when
+`automation.update@3` and `automation.set_state@3` report `retired: true` when
 the change retired a finished one-time reminder, so the definition they return
 has left the collection; a replay of the same mutation returns the same result.
 
-`thread.status@5` and `thread.list@9` include the current principal's read-only
+`thread.status@6` and `thread.list@10` include the current principal's read-only
 `pinned` flag. Along with `agent.context@5`, their backend
 field distinguishes native `pi_native` from embedded `pi`. There is no
-thread-pin mutation tool.
+thread-pin mutation tool. Thread reads and `automation.list@2`,
+`automation.get@3`, `automation.create@3`, `automation.update@3`, and
+`automation.set_state@3` report parked inventory as `parked`.
+`thread.status@6` and `thread.list@10` include `snoozedUntil` as an ISO timestamp
+and `wakeReminder` as text or null for snoozed threads.
+
+`thread.set_state@1` (`sedes_thread_set_state`) changes an admitted thread's
+lifecycle to `parked`, `snoozed`, or `active`. Omit `threadId` to target the
+calling thread or a Tool client's configured default. Snoozing requires a
+future ISO `until` and accepts an optional `reminder` up to 1,000 characters.
+Set a parked thread to `active` before snoozing it. The active transition
+unparks or wakes the thread according to its current lifecycle. A thread
+already in the requested state keeps its current state and
+snooze details. Single-thread Park can run during the caller's turn and
+retains running and queued work, Tasks, and stashes. Use `thread.restore` for
+an archived thread. The named CLI command is `sedes thread set-state`.
+
+The tool uses the shared principal-scoped inventory mutation and the same
+presentations as archive and restore. Pi SDK and native Pi use their supported
+Native and CLI presentations, Codex, Claude, and Antigravity use Native MCP
+and CLI, Grok uses CLI, and OpenCode uses Native Progressive or eligible
+owned CLI. Existing presentation and topology eligibility applies.
 
 `image.show@1` reads an absolute PNG, JPEG, GIF, or WebP path through the source
 thread's Files access and retains a snapshot for inline display. Its optional

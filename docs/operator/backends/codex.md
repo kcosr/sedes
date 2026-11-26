@@ -105,13 +105,15 @@ can apply. The detailed authority rules are in
 
 ## Version compatibility
 
-Sedes supplies the exact generated `0.169.0` app-server protocol profile from
+Sedes supplies the exact generated `0.172.0` app-server protocol profile from
 its compiled Codex backend. Operators do not select that profile in Settings.
-Sedes independently probes and admits stable Codex app-server executables at or
-above **0.169.0**. Upgrade each execution host's app-server and managed TUI
-command before upgrading Sedes. Build metadata does not affect version precedence;
-prereleases, malformed versions, versions below the floor, and explicitly
-excluded known-bad releases are rejected.
+Sedes independently probes and admits stable Codex executables at or above
+**0.172.0** for app-server, managed TUI, and Codex CLI research. Settle active
+Codex work before upgrading. Update each execution host's Codex command, the
+Sedes server, and its execution sidecars in the same maintenance window. Older
+Sedes parsers can reject MCP history emitted by Codex 0.171.0 and newer. Build
+metadata does not affect version precedence. Prereleases, malformed versions,
+versions below the floor, and explicitly excluded releases are rejected.
 
 The minimum provides native provider-specific model discovery. Restored threads
 and forks keep the source thread's saved native provider when the native default
@@ -121,7 +123,7 @@ provider rather than forking existing work. Older app-servers can ignore the
 provider selector and return the wrong catalog, so they are rejected rather than
 admitted with ambiguous settings.
 
-Releases newer than the 0.169.0 tested-through threshold are admitted with an
+Releases newer than the 0.172.0 tested-through threshold are admitted with an
 installation advisory. They do not gain capabilities merely because of their
 version. Managed TUI uses `moduleConfiguration.tuiExecutablePath` when present;
 otherwise it resolves the first `codex` on the execution environment account's
@@ -135,9 +137,10 @@ routes. Reviewed experimental directions remain provider-private and do not
 change the normalized browser contract or any other backend.
 
 Native item timestamps remain available in the existing transcript timing fields.
-Completion token counts, moderation/display hints, section changes, read-state
-metadata, and executor-environment metadata are validated without adding browser
-controls or granting additional execution authority. Native sections do not move
+Completion token counts, version 1 moderation display metadata, MCP registration
+scope, section changes, read-state metadata, and executor environments remain
+provider-private. MCP registration scope keeps warnings for identically named
+servers independent. Native sections do not move
 Sedes threads between groups; read-state does not replace Sedes completion
 attention. Audio URL/file references, including function-output audio, remain
 metadata only: playback and audio attachment submission are unsupported. Required
@@ -145,12 +148,15 @@ human command approval and additional native executor environments remain
 unsupported. Inline generated PNG images remain available; file-backed generated
 images remain unavailable without native byte-retrieval authority.
 
-Codex 0.169.0 removes `auto_review.extra_policy` and
+Codex 0.169.0 removed `auto_review.extra_policy` and
 `auto_review.experimental_policy_template`. Sedes launches owned app-servers and
 managed TUI commands with `--strict-config`, so retaining either key prevents
 startup. Remove the template override; move enforced additional review rules to
 `guardian_extra_policy` in managed `requirements.toml`. Sedes does not rewrite
-operator-owned native configuration or authentication.
+operator-owned native configuration or authentication. The stock 0.172.0
+app-server also requires a host time provider for the experimental
+`features.current_time_reminder.clock_source = "external"` setting. Use the
+native clock on execution hosts where that experimental override was set.
 
 Provider executables remain separately installed. Updating Sedes or an execution
 sidecar does not update the operator-owned Codex executable. Upgrade Codex
@@ -555,7 +561,7 @@ mutation safe to repeat.
 | WebSocket URL is rejected                                    | Plain `ws://` accepts only literal loopback. `wss://` requires platform-trusted TLS, hostname verification, and TLS 1.2 or newer. Use a persistent-sidecar target for a remote execution environment.                                                                                                                        |
 | External daemon is unavailable or reports a version mismatch | Inspect the daemon independently, compare it with the admitted stable range, correct the operator-owned service, and restart it yourself. Sedes does not manage external lifecycle.                                                                                                                      |
 | Models appear but a thread cannot run or fork                | Check model/effort, service tier, sandbox, network, approval policy, and reviewer against the live catalog and configured ceiling. Sedes does not invent or substitute an unconfirmed value.                                                                                                             |
-| An unsupported-effort error persists after changing reasoning | Sedes restores the selected model and effort on cold resume, but Codex 0.169.0 can retain an invalid request-level effort in an already-loaded session. After settling active work, arrange an operator-controlled cold reload of that native session; restarting only Sedes may leave it retained by another Codex client. See [execution settings](../../internals/codex-thread-execution-settings.md#desired-effective-and-unresolved-state). |
+| An unsupported-effort error persists after changing reasoning | Sedes restores the selected model and effort on cold resume, but a prewarmed Codex 0.172.0 session can retain an invalid request-level effort even after a turn selects a supported effort. After settling active work, arrange an operator-controlled cold reload of that native session; restarting only Sedes may leave it retained by another Codex client. See [execution settings](../../internals/codex-thread-execution-settings.md#desired-effective-and-unresolved-state). |
 | Managed TUI is missing                                       | It requires an external UDS/TCP Codex connection—local, or hosted by a persistent sidecar whose runtime channel negotiated the managed-TUI operations—plus one completed first submission, healthy endpoint and PTY support on the hosting environment, a compatible operator-installed CLI there, fully representable settings, and catalog model policy. Set canonical `moduleConfiguration.tuiExecutablePath` to override normal `PATH` resolution. |
 | Sedes CLI tools are missing                                  | Check thread provenance, network policy, built CLI availability, proven isolation, and—on SSH—the `agent_tools_cli` sidecar capability.                                                                                                                                                                  |
 | A viewed image row cannot be expanded                        | Confirm the environment is local or its sidecar has `workspace_files`, the file's directory is within an allowed root, and the file is a PNG, JPEG, GIF, or WebP of at most 16 MiB with a matching extension, outside sensitive paths. Codex-native additional executors are unsupported. Automatic retries are bounded; a later history read or reattach may retry. A captured snapshot is never replaced. |

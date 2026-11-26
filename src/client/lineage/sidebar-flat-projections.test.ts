@@ -110,7 +110,7 @@ describe("filterSidebarThreads", () => {
     expect(
       filterSidebarThreads(threads, {
         snoozed: true,
-        settled: true,
+        parked: true,
         drafts: true,
       }).map(({ id }) => id),
     ).toEqual(["a"]);
@@ -120,19 +120,19 @@ describe("filterSidebarThreads", () => {
     }
   });
 
-  it("excludes settled threads only when the settled filter is off", () => {
-    const threads = [thread("a"), thread("b", { inventoryState: "settled" })];
+  it("excludes parked threads only when the parked filter is off", () => {
+    const threads = [thread("a"), thread("b", { inventoryState: "parked" })];
     expect(
       filterSidebarThreads(threads, {
         snoozed: true,
-        settled: true,
+        parked: true,
         drafts: true,
       }),
     ).toHaveLength(2);
     expect(
       filterSidebarThreads(threads, {
         snoozed: true,
-        settled: false,
+        parked: false,
         drafts: true,
       }).map(({ id }) => id),
     ).toEqual(["a"]);
@@ -143,19 +143,19 @@ describe("filterSidebarThreads", () => {
     expect(
       filterSidebarThreads(threads, {
         snoozed: true,
-        settled: true,
+        parked: true,
         drafts: true,
       }),
     ).toHaveLength(2);
     expect(
       filterSidebarThreads(threads, {
         snoozed: true,
-        settled: true,
+        parked: true,
         drafts: false,
       }).map(({ id }) => id),
     ).toEqual(["a"]);
     const groups = project("none", threads, {
-      show: { snoozed: true, settled: true, drafts: false },
+      show: { snoozed: true, parked: true, drafts: false },
     });
     expect(groups.flatMap(idsOf)).toEqual(["a"]);
   });
@@ -165,14 +165,14 @@ describe("filterSidebarThreads", () => {
     expect(
       filterSidebarThreads(threads, {
         snoozed: true,
-        settled: true,
+        parked: true,
         drafts: true,
       }),
     ).toHaveLength(2);
     expect(
       filterSidebarThreads(threads, {
         snoozed: false,
-        settled: true,
+        parked: true,
         drafts: true,
       }).map(({ id }) => id),
     ).toEqual(["a"]);
@@ -203,12 +203,12 @@ describe("pinned projection", () => {
         thread("pinned", { pinned: true }),
         thread("hidden-pinned", {
           pinned: true,
-          inventoryState: "settled",
+          inventoryState: "parked",
         }),
       ],
       {
         modes: { state: { pinnedOnly: true } },
-        show: { snoozed: true, settled: false, drafts: true },
+        show: { snoozed: true, parked: false, drafts: true },
       },
     );
     expect(keysOf(groups)).toEqual(["pinned"]);
@@ -360,24 +360,24 @@ describe("timeline and flat Parked section", () => {
   it("extracts unpinned parked threads below time buckets", () => {
     const groups = project("time", [
       thread("active-today"),
-      thread("settled-today", {
-        inventoryState: "settled",
+      thread("parked-today", {
+        inventoryState: "parked",
         lastActivityAt: at(2026, 6, 1),
         stateChangedAt: TODAY_MORNING,
       }),
-      thread("settled-yesterday", {
-        inventoryState: "settled",
+      thread("parked-yesterday", {
+        inventoryState: "parked",
         lastActivityAt: at(2026, 7, 11, 10),
         stateChangedAt: at(2026, 7, 11, 10),
       }),
     ]);
-    expect(keysOf(groups)).toEqual(["today", "settled"]);
+    expect(keysOf(groups)).toEqual(["today", "parked"]);
     expect(idsOf(groupFor(groups, "today"))).toEqual(["active-today"]);
-    expect(idsOf(groupFor(groups, "settled"))).toEqual([
-      "settled-today",
-      "settled-yesterday",
+    expect(idsOf(groupFor(groups, "parked"))).toEqual([
+      "parked-today",
+      "parked-yesterday",
     ]);
-    expect(groupFor(groups, "settled")).toMatchObject({
+    expect(groupFor(groups, "parked")).toMatchObject({
       label: "Parked",
       kind: "parked",
       futureTimes: false,
@@ -386,19 +386,19 @@ describe("timeline and flat Parked section", () => {
 
   it("keeps a parked automation out of Upcoming", () => {
     const groups = project("time", [
-      thread("settled-automation", {
-        inventoryState: "settled",
+      thread("parked-automation", {
+        inventoryState: "parked",
         automations: automations({ nextRunAt: at(2026, 7, 12, 18) }),
       }),
       thread("upcoming-automation", {
         automations: automations({ nextRunAt: at(2026, 7, 12, 18) }),
       }),
     ]);
-    expect(keysOf(groups)).toEqual(["upcoming", "settled"]);
+    expect(keysOf(groups)).toEqual(["upcoming", "parked"]);
     expect(idsOf(groupFor(groups, "upcoming"))).toEqual([
       "upcoming-automation",
     ]);
-    expect(idsOf(groupFor(groups, "settled"))).toEqual(["settled-automation"]);
+    expect(idsOf(groupFor(groups, "parked"))).toEqual(["parked-automation"]);
   });
 
   it("leaves snoozed threads in Upcoming rather than the Parked section", () => {
@@ -407,20 +407,20 @@ describe("timeline and flat Parked section", () => {
         inventoryState: "snoozed",
         snoozedUntil: at(2026, 7, 14, 9),
       }),
-      thread("settled", { inventoryState: "settled" }),
+      thread("parked", { inventoryState: "parked" }),
     ]);
-    expect(keysOf(groups)).toEqual(["upcoming", "settled"]);
+    expect(keysOf(groups)).toEqual(["upcoming", "parked"]);
     expect(idsOf(groupFor(groups, "upcoming"))).toEqual(["snoozed"]);
-    expect(idsOf(groupFor(groups, "settled"))).toEqual(["settled"]);
+    expect(idsOf(groupFor(groups, "parked"))).toEqual(["parked"]);
   });
 
   it("keeps pinned parked threads in Pinned and omits an empty section", () => {
     const groups = project("time", [
-      thread("pinned-settled", { pinned: true, inventoryState: "settled" }),
+      thread("pinned-parked", { pinned: true, inventoryState: "parked" }),
       thread("plain"),
     ]);
     expect(keysOf(groups)).toEqual(["pinned", "today"]);
-    expect(idsOf(groupFor(groups, "pinned"))).toEqual(["pinned-settled"]);
+    expect(idsOf(groupFor(groups, "pinned"))).toEqual(["pinned-parked"]);
   });
 
   it("extracts parked threads below the flat working list", () => {
@@ -429,72 +429,72 @@ describe("timeline and flat Parked section", () => {
         lastActivityAt: at(2026, 7, 11, 9),
         stateChangedAt: at(2026, 7, 11, 9),
       }),
-      thread("settled-older", {
-        inventoryState: "settled",
+      thread("parked-older", {
+        inventoryState: "parked",
         lastActivityAt: at(2026, 7, 10, 9),
         stateChangedAt: at(2026, 7, 10, 9),
       }),
       thread("newer"),
-      thread("settled-newer", { inventoryState: "settled" }),
+      thread("parked-newer", { inventoryState: "parked" }),
       thread("snoozed", { inventoryState: "snoozed" }),
     ]);
-    expect(keysOf(groups)).toEqual(["all", "settled"]);
+    expect(keysOf(groups)).toEqual(["all", "parked"]);
     expect(idsOf(groupFor(groups, "all"))).toEqual([
       "newer",
       "snoozed",
       "older",
     ]);
-    expect(idsOf(groupFor(groups, "settled"))).toEqual([
-      "settled-newer",
-      "settled-older",
+    expect(idsOf(groupFor(groups, "parked"))).toEqual([
+      "parked-newer",
+      "parked-older",
     ]);
     expect(groupFor(groups, "all")?.kind).toBe("all");
-    expect(groupFor(groups, "settled")?.kind).toBe("parked");
+    expect(groupFor(groups, "parked")?.kind).toBe("parked");
   });
 
   it("sorts the Parked section by the resolved axis", () => {
     const threads = [
-      thread("settled-b", {
-        inventoryState: "settled",
+      thread("parked-b", {
+        inventoryState: "parked",
         title: { text: "Beta" },
         lastActivityAt: at(2026, 7, 12, 8),
         stateChangedAt: at(2026, 7, 12, 8),
       }),
-      thread("settled-a", {
-        inventoryState: "settled",
+      thread("parked-a", {
+        inventoryState: "parked",
         title: { text: "Alpha" },
         lastActivityAt: at(2026, 7, 12, 14),
         stateChangedAt: at(2026, 7, 12, 14),
       }),
     ];
-    expect(idsOf(groupFor(project("time", threads), "settled"))).toEqual([
-      "settled-a",
-      "settled-b",
+    expect(idsOf(groupFor(project("time", threads), "parked"))).toEqual([
+      "parked-a",
+      "parked-b",
     ]);
     const alphabetical = project("none", threads, {
       modes: { none: { sortBy: "alpha", direction: "asc" } },
     });
-    expect(idsOf(groupFor(alphabetical, "settled"))).toEqual([
-      "settled-a",
-      "settled-b",
+    expect(idsOf(groupFor(alphabetical, "parked"))).toEqual([
+      "parked-a",
+      "parked-b",
     ]);
   });
 
   it("does not extract parked threads out of State buckets", () => {
     const groups = project("state", [
       thread("idle-1"),
-      thread("settled-1", { inventoryState: "settled" }),
-      thread("failed-settled", {
-        inventoryState: "settled",
+      thread("parked-1", { inventoryState: "parked" }),
+      thread("failed-parked", {
+        inventoryState: "parked",
         runState: "failed",
       }),
     ]);
-    expect(keysOf(groups)).toEqual(["needs-attention", "idle", "settled"]);
+    expect(keysOf(groups)).toEqual(["needs-attention", "idle", "parked"]);
     expect(idsOf(groupFor(groups, "needs-attention"))).toEqual([
-      "failed-settled",
+      "failed-parked",
     ]);
-    expect(idsOf(groupFor(groups, "settled"))).toEqual(["settled-1"]);
-    expect(groupFor(groups, "settled")?.kind).toBe("state");
+    expect(idsOf(groupFor(groups, "parked"))).toEqual(["parked-1"]);
+    expect(groupFor(groups, "parked")?.kind).toBe("state");
   });
 });
 
@@ -650,22 +650,22 @@ describe("state buckets", () => {
     for (const pendingQuestionCount of [3, 1]) {
       const groups = project("state", [
         thread("running", { runState: "running", pendingQuestionCount }),
-        thread("settled", { inventoryState: "settled", pendingQuestionCount }),
+        thread("parked", { inventoryState: "parked", pendingQuestionCount }),
         thread("idle"),
       ]);
       expect(keysOf(groups)).toEqual(["needs-attention", "idle"]);
       expect(idsOf(groupFor(groups, "needs-attention"))).toEqual([
+        "parked",
         "running",
-        "settled",
       ]);
     }
 
     const resolved = project("state", [
       thread("running", { runState: "running", pendingQuestionCount: 0 }),
-      thread("settled", { inventoryState: "settled", pendingQuestionCount: 0 }),
+      thread("parked", { inventoryState: "parked", pendingQuestionCount: 0 }),
       thread("idle"),
     ]);
-    expect(keysOf(resolved)).toEqual(["running", "idle", "settled"]);
+    expect(keysOf(resolved)).toEqual(["running", "idle", "parked"]);
     expect(
       resolveStateBucket(thread("failed", { runState: "failed", pendingQuestionCount: 0 })),
     ).toBe("needs-attention");
@@ -764,7 +764,7 @@ describe("state buckets", () => {
     ["running", { runState: "stopping" }],
     ["running", { runState: "reconciling" }],
     ["snoozed", { inventoryState: "snoozed", snoozedUntil: at(2026, 7, 14, 9) }],
-    ["settled", { inventoryState: "settled" }],
+    ["parked", { inventoryState: "parked" }],
     ["scheduled", { automations: automations({ nextRunAt: at(2026, 7, 13, 6) }) }],
   ] as const)("keeps unseen completion above %s until acknowledged (%j)", (bucket, input) => {
     const completed = thread("completed", input);
@@ -787,7 +787,7 @@ describe("state buckets", () => {
   });
 
   it("keeps pinned unseen completions in Pinned before and after acknowledgement", () => {
-    const pinned = thread("pinned", { pinned: true, inventoryState: "settled" });
+    const pinned = thread("pinned", { pinned: true, inventoryState: "parked" });
     const unseen = {
       ...pinned,
       attention: { ...pinned.attention, unseenCompletion: true },
@@ -835,13 +835,13 @@ describe("state buckets", () => {
     expect(
       resolveStateBucket(
         thread("t", {
-          inventoryState: "settled",
+          inventoryState: "parked",
           automations: automations({ nextRunAt: at(2026, 7, 13, 6) }),
         }),
       ),
-    ).toBe("settled");
-    expect(resolveStateBucket(thread("t", { inventoryState: "settled" }))).toBe(
-      "settled",
+    ).toBe("parked");
+    expect(resolveStateBucket(thread("t", { inventoryState: "parked" }))).toBe(
+      "parked",
     );
     expect(
       resolveStateBucket(
@@ -866,16 +866,16 @@ describe("state buckets", () => {
         automations: automations({ nextRunAt }),
       }),
       thread("parked-automation", {
-        inventoryState: "settled",
+        inventoryState: "parked",
         automations: automations({ nextRunAt }),
       }),
       thread("parked-running", {
-        inventoryState: "settled",
+        inventoryState: "parked",
         runState: "running",
         automations: automations({ nextRunAt }),
       }),
       thread("parked-failed", {
-        inventoryState: "settled",
+        inventoryState: "parked",
         runState: "failed",
         automations: automations({ nextRunAt }),
       }),
@@ -885,7 +885,7 @@ describe("state buckets", () => {
       "running",
       "scheduled",
       "snoozed",
-      "settled",
+      "parked",
     ]);
     expect(idsOf(groupFor(groups, "needs-attention"))).toEqual([
       "parked-failed",
@@ -893,18 +893,18 @@ describe("state buckets", () => {
     expect(idsOf(groupFor(groups, "running"))).toEqual(["parked-running"]);
     expect(idsOf(groupFor(groups, "scheduled"))).toEqual(["scheduled"]);
     expect(idsOf(groupFor(groups, "snoozed"))).toEqual(["snoozed-automation"]);
-    expect(groupFor(groups, "settled")).toMatchObject({
+    expect(groupFor(groups, "parked")).toMatchObject({
       label: "Parked",
       futureTimes: false,
     });
-    expect(idsOf(groupFor(groups, "settled"))).toEqual(["parked-automation"]);
+    expect(idsOf(groupFor(groups, "parked"))).toEqual(["parked-automation"]);
   });
 
   it("emits groups in display order and omits empty ones", () => {
     const groups = project("state", [
       thread("idle-1"),
       thread("snoozed-1", { inventoryState: "snoozed" }),
-      thread("settled-1", { inventoryState: "settled" }),
+      thread("parked-1", { inventoryState: "parked" }),
       thread("scheduled-1", {
         automations: automations({ nextRunAt: at(2026, 7, 13, 6) }),
       }),
@@ -917,7 +917,7 @@ describe("state buckets", () => {
       "scheduled",
       "idle",
       "snoozed",
-      "settled",
+      "parked",
     ]);
     expect(groups.map(({ label }) => label)).toEqual([
       "Needs attention",

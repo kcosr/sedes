@@ -10,7 +10,7 @@ export function defaultThreadStorageKey(scope: ConnectionScope): string {
   return `sedes.default-thread.v1:${connectionScopeKey(scope)}`;
 }
 export function canUseDefaultThread(thread: NormalizedApplicationThreadSummary): boolean {
-  return thread.available && (thread.inventoryState === "active" || thread.inventoryState === "settled");
+  return thread.available && (thread.inventoryState === "active" || thread.inventoryState === "parked");
 }
 interface DefaultThreadControls {
   readonly threadId: string | null;

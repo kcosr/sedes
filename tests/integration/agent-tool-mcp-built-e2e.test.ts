@@ -152,7 +152,7 @@ describe("built Sedes MCP server", () => {
              tenant_id, id, kind, label, enabled, protocol_release,
              created_at, updated_at, owner_principal_id
            ) VALUES (?, 'codex-primary', 'codex_app_server', 'Codex', 1,
-             '0.169.0', 250, 250, ?)`,
+             '0.172.0', 250, 250, ?)`,
         )
         .run(scope.tenantId, scope.principalId);
       database
@@ -356,7 +356,7 @@ sourceAuthority, testAgentToolExecutionAuthority),
         name: "sedes_read",
         arguments: {
           toolId: "thread.status",
-          schemaVersion: 5,
+          schemaVersion: 6,
           input: { threadId: source.thread.id },
         },
       });

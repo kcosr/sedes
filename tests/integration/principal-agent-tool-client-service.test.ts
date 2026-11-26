@@ -196,7 +196,7 @@ function replacement(
 
 const statusRequest = {
   toolId: "thread.status",
-  schemaVersion: 5,
+  schemaVersion: 6,
   requestId: "principal-client-status",
   input: { threadId: "target-thread" },
 } as const;
@@ -260,7 +260,7 @@ describe("principal agent-tool client persistence and admission", () => {
       ).toEqual(["workspace.list", "thread.status"]);
       expect(
         value.service().describeMany(created.credential, ["thread.status"])[0],
-      ).toMatchObject({ id: "thread.status", schemaVersion: 5 });
+      ).toMatchObject({ id: "thread.status", schemaVersion: 6 });
       expect(() =>
         value.service().describeMany(created.credential, ["agent.context"]),
       ).toThrowError(expect.objectContaining({ code: "not_found" }));
@@ -455,7 +455,8 @@ describe("principal agent-tool client persistence and admission", () => {
       expect(new Set(optionIds)).toEqual(
         value.repository.eligibility.eligibleToolIds,
       );
-      expect(optionIds).toHaveLength(36);
+      expect(optionIds).toHaveLength(37);
+      expect(optionIds).toContain("thread.set_state");
       expect(optionIds).not.toContain("agent.context");
       expect(optionIds).not.toContain("automation.resolve");
       expect(optionIds).not.toContain("automation.acknowledge");
@@ -852,7 +853,7 @@ describe("principal agent-tool client persistence and admission", () => {
       expect(() =>
         value.service().admitInvocation(created.credential, {
           toolId: "thread.list",
-          schemaVersion: 9,
+          schemaVersion: 10,
           requestId: "principal-client-default-workspace",
           input: { scope: { kind: "default_workspace" } },
         }),
@@ -860,7 +861,7 @@ describe("principal agent-tool client persistence and admission", () => {
       expect(() =>
         value.service().admitInvocation(created.credential, {
           toolId: "automation.list",
-          schemaVersion: 1,
+          schemaVersion: 2,
           requestId: "principal-client-default-thread",
           input: {},
         }),
@@ -887,7 +888,7 @@ describe("principal agent-tool client persistence and admission", () => {
       expect(() =>
         value.service().admitInvocation(created.credential, {
           toolId: "thread.list",
-          schemaVersion: 9,
+          schemaVersion: 10,
           requestId: "principal-client-removed-default-workspace",
           input: { scope: { kind: "default_workspace" } },
         }),

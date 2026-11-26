@@ -383,7 +383,7 @@ function renderSidebar(
     }),
     getBulkInventoryImpact: vi.fn(
       async (
-        action: "settle" | "unsettle" | "archive",
+        action: "park" | "unpark" | "archive",
         threadIds: string[],
       ) => ({
         action,
@@ -410,7 +410,7 @@ function renderSidebar(
       ) => ({
         action: impact.action,
         targets: impact.targets,
-        ...(impact.action === "unsettle"
+        ...(impact.action === "unpark"
           ? {}
           : {
               expectedStashedPromptCount: impact.stashedPromptCount,
@@ -808,17 +808,17 @@ describe("InventorySidebar view modes", () => {
     const user = userEvent.setup();
     seedViewPreferences({ groupBy: "none", stackBy: "group" });
     const active = makeThread("thread-active", "Active member", { groupId });
-    const settled = makeThread("thread-settled", "Parked member", {
+    const parked = makeThread("thread-parked", "Parked member", {
       groupId,
-      inventoryState: "settled",
+      inventoryState: "parked",
       lastActivityAt: isoAtNoon(-1),
     });
-    const { store } = renderSidebar([active, settled], { groups: [group] });
+    const { store } = renderSidebar([active, parked], { groups: [group] });
     const stack = screen.getByTestId("thread-group-stack");
 
     for (const [action, label, count] of [
-      ["settle", "Park", 1],
-      ["unsettle", "Unpark", 1],
+      ["park", "Park", 1],
+      ["unpark", "Unpark", 1],
       ["archive", "Archive", 2],
     ] as const) {
       await user.click(
@@ -831,10 +831,10 @@ describe("InventorySidebar view modes", () => {
       });
       expect(store.getBulkInventoryImpact).toHaveBeenLastCalledWith(action, [
         active.id,
-        settled.id,
+        parked.id,
       ]);
       expect(store.mutateBulkInventory).toHaveBeenCalledTimes(
-        action === "settle" ? 0 : action === "unsettle" ? 1 : 2,
+        action === "park" ? 0 : action === "unpark" ? 1 : 2,
       );
       await user.click(within(dialog).getByRole("button", { name: label }));
       await waitFor(() =>
@@ -849,11 +849,11 @@ describe("InventorySidebar view modes", () => {
     const user = userEvent.setup();
     seedViewPreferences({ groupBy: "none", stackBy: "group" });
     const active = makeThread("thread-active", "Active member", { groupId });
-    const settled = makeThread("thread-settled", "Parked member", {
+    const parked = makeThread("thread-parked", "Parked member", {
       groupId,
-      inventoryState: "settled",
+      inventoryState: "parked",
     });
-    const { store } = renderSidebar([active, settled], { groups: [group] });
+    const { store } = renderSidebar([active, parked], { groups: [group] });
 
     fireEvent.contextMenu(
       within(screen.getByTestId("thread-group-stack")).getByTestId(
@@ -875,7 +875,7 @@ describe("InventorySidebar view modes", () => {
     ).toBeInTheDocument();
     expect(store.getBulkInventoryImpact).toHaveBeenCalledWith("archive", [
       active.id,
-      settled.id,
+      parked.id,
     ]);
   });
 
@@ -3396,7 +3396,7 @@ describe("InventorySidebar view modes", () => {
         groupBy,
         hasOpenTasks: true,
         groupFilterId: "group-1",
-        show: { snoozed: false, settled: false, drafts: false },
+        show: { snoozed: false, parked: false, drafts: false },
         modes: groupBy === "project" ? {} : { [groupBy]: { pinnedOnly: true } },
       });
       const matching = { pinned: true, groupId: "group-1" };
@@ -3406,7 +3406,7 @@ describe("InventorySidebar view modes", () => {
         makeThread("other-group", "Match other group", { pinned: true }),
         makeThread("other-search", "Other open work", matching),
         makeThread("snoozed", "Match snoozed work", { ...matching, inventoryState: "snoozed" }),
-        makeThread("parked", "Match parked work", { ...matching, inventoryState: "settled" }),
+        makeThread("parked", "Match parked work", { ...matching, inventoryState: "parked" }),
         makeThread("draft", "Match draft work", { ...matching, backingState: "unbound" }),
         makeThread("unpinned", "Match unpinned work", { groupId: "group-1" }),
       ];
@@ -3446,15 +3446,15 @@ describe("InventorySidebar view modes", () => {
       makeThread("scheduled-plain", "Scheduled plain work", { automations }),
       makeThread("snoozed-open", "Snoozed open work", { inventoryState: "snoozed" }),
       makeThread("snoozed-plain", "Snoozed plain work", { inventoryState: "snoozed" }),
-      makeThread("parked-open", "Parked open work", { inventoryState: "settled" }),
-      makeThread("parked-plain", "Parked plain work", { inventoryState: "settled" }),
+      makeThread("parked-open", "Parked open work", { inventoryState: "parked" }),
+      makeThread("parked-plain", "Parked plain work", { inventoryState: "parked" }),
     ];
     renderSidebar(threads, {
       tasks: threads.filter(({ id }) => id.endsWith("-open")).map(({ id }) =>
         makeTask(`task-${id}`, { kind: "thread", threadId: id }),
       ),
     });
-    for (const [shelf, prefix] of [["automations", "Scheduled"], ["snoozed", "Snoozed"], ["settled", "Parked"]]) {
+    for (const [shelf, prefix] of [["automations", "Scheduled"], ["snoozed", "Snoozed"], ["parked", "Parked"]]) {
       const section = document.querySelector<HTMLElement>(`[data-shelf="${shelf}"]`)!;
       expect(section).toHaveTextContent("· 1");
       expect(within(section).getByText(`${prefix} open work`)).toBeInTheDocument();
@@ -3563,7 +3563,7 @@ describe("InventorySidebar view modes", () => {
 
   it("explains an empty active section while open-task matches remain in project shelves", () => {
     seedViewPreferences({ groupBy: "project", hasOpenTasks: true });
-    const parked = makeThread("parked", "Parked task work", { inventoryState: "settled" });
+    const parked = makeThread("parked", "Parked task work", { inventoryState: "parked" });
     renderSidebar([parked], {
       tasks: [makeTask("parked-task", { kind: "thread", threadId: parked.id })],
     });
@@ -4212,8 +4212,8 @@ describe("InventorySidebar view modes", () => {
     seedViewPreferences({ groupBy: "time", lastAltGroupBy: "time" });
     renderSidebar([
       makeThread("today-1", "Active thread"),
-      makeThread("settled-1", "Parked exploration", {
-        inventoryState: "settled" as const,
+      makeThread("parked-1", "Parked exploration", {
+        inventoryState: "parked" as const,
         lastActivityAt: isoAtNoon(-1),
         stateChangedAt: isoAtNoon(-1),
       }),
@@ -4222,7 +4222,7 @@ describe("InventorySidebar view modes", () => {
     const groups = screen.getAllByTestId("flat-group");
     expect(groups.map((group) => group.getAttribute("data-group"))).toEqual([
       "today",
-      "settled",
+      "parked",
     ]);
     expect(groups[1]).toHaveTextContent("Parked · 1");
     expect(within(groups[0]!).queryByText("Parked exploration")).toBeNull();
@@ -4233,15 +4233,15 @@ describe("InventorySidebar view modes", () => {
     seedViewPreferences({ groupBy: "none", lastAltGroupBy: "none" });
     renderSidebar([
       makeThread("today-1", "Active thread"),
-      makeThread("settled-1", "Parked exploration", {
-        inventoryState: "settled" as const,
+      makeThread("parked-1", "Parked exploration", {
+        inventoryState: "parked" as const,
       }),
     ]);
 
     const groups = screen.getAllByTestId("flat-group");
     expect(groups.map((group) => group.getAttribute("data-group"))).toEqual([
       "all",
-      "settled",
+      "parked",
     ]);
     expect(groups[1]).toHaveTextContent("Parked · 1");
     expect(within(groups[0]!).getByText("Active thread")).toBeVisible();
@@ -4253,8 +4253,8 @@ describe("InventorySidebar view modes", () => {
     seedViewPreferences({ groupBy: "time", lastAltGroupBy: "time" });
     renderSidebar([
       makeThread("today-1", "Active thread"),
-      makeThread("settled-1", "Parked exploration", {
-        inventoryState: "settled" as const,
+      makeThread("parked-1", "Parked exploration", {
+        inventoryState: "parked" as const,
       }),
     ]);
     expect(screen.getByText("Parked exploration")).toBeInTheDocument();
@@ -4272,7 +4272,7 @@ describe("InventorySidebar view modes", () => {
     seedViewPreferences({ groupBy: "state", lastAltGroupBy: "state" });
     const threads = [
       makeThread("idle-1", "Finished thread"),
-      makeThread("parked-1", "Finished parked thread", { inventoryState: "settled" }),
+      makeThread("parked-1", "Finished parked thread", { inventoryState: "parked" }),
       makeThread("pinned-1", "Finished pinned thread", { pinned: true }),
     ];
     const unseen = threads.map((thread) => ({
@@ -4293,7 +4293,7 @@ describe("InventorySidebar view modes", () => {
 
     view.rerenderSidebar(makeState(threads));
     const resolved = screen.getAllByTestId("flat-group");
-    expect(resolved.map((group) => group.dataset.group)).toEqual(["pinned", "idle", "settled"]);
+    expect(resolved.map((group) => group.dataset.group)).toEqual(["pinned", "idle", "parked"]);
     expect(within(resolved[1]!).getByText("Finished thread")).toBeVisible();
     expect(within(resolved[2]!).getByText("Finished parked thread")).toBeVisible();
     expect(within(resolved[0]!).getByText("Finished pinned thread")).toBeVisible();
@@ -4307,7 +4307,7 @@ describe("InventorySidebar view modes", () => {
     renderSidebar([
       makeThread("scheduled-1", "Nightly audit", { automations }),
       makeThread("parked-1", "Parked audit", {
-        inventoryState: "settled" as const,
+        inventoryState: "parked" as const,
         automations,
       }),
     ]);
@@ -4315,7 +4315,7 @@ describe("InventorySidebar view modes", () => {
     const groups = screen.getAllByTestId("flat-group");
     expect(groups.map((group) => group.getAttribute("data-group"))).toEqual([
       "scheduled",
-      "settled",
+      "parked",
     ]);
     expect(within(groups[0]!).queryByText("Parked audit")).toBeNull();
     expect(groups[1]).toHaveTextContent(/^Parked · 1/u);
@@ -4374,39 +4374,39 @@ describe("InventorySidebar view modes", () => {
     const idleThreads = Array.from({ length: 25 }, (_, index) =>
       makeThread(`idle-${String(index).padStart(3, "0")}`, `Idle ${index}`),
     );
-    const settledThreads = Array.from({ length: 25 }, (_, index) =>
+    const parkedThreads = Array.from({ length: 25 }, (_, index) =>
       makeThread(
-        `settled-${String(index).padStart(3, "0")}`,
+        `parked-${String(index).padStart(3, "0")}`,
         `Parked ${index}`,
-        { inventoryState: "settled" as const },
+        { inventoryState: "parked" as const },
       ),
     );
-    renderSidebar([...idleThreads, ...settledThreads], {
-      selectedThreadId: "settled-024",
+    renderSidebar([...idleThreads, ...parkedThreads], {
+      selectedThreadId: "parked-024",
     });
 
     const groups = screen.getAllByTestId("flat-group");
     const idle = groups.find(
       (group) => group.getAttribute("data-group") === "idle",
     );
-    const settled = groups.find(
-      (group) => group.getAttribute("data-group") === "settled",
+    const parked = groups.find(
+      (group) => group.getAttribute("data-group") === "parked",
     );
     expect(idle).toBeDefined();
-    expect(settled).toBeDefined();
+    expect(parked).toBeDefined();
     expect(within(idle!).getAllByTestId("flat-thread-row")).toHaveLength(20);
     expect(
       within(idle!).getByRole("button", { name: "5 more…" }),
     ).toBeVisible();
-    expect(within(settled!).getAllByTestId("flat-thread-row")).toHaveLength(21);
-    expect(within(settled!).getByText("Parked 24")).toBeVisible();
+    expect(within(parked!).getAllByTestId("flat-thread-row")).toHaveLength(21);
+    expect(within(parked!).getByText("Parked 24")).toBeVisible();
     expect(
-      within(settled!).getByRole("button", { name: "4 more…" }),
+      within(parked!).getByRole("button", { name: "4 more…" }),
     ).toBeVisible();
 
     await user.click(within(idle!).getByRole("button", { name: "5 more…" }));
     expect(within(idle!).getAllByTestId("flat-thread-row")).toHaveLength(25);
-    expect(within(settled!).getAllByTestId("flat-thread-row")).toHaveLength(21);
+    expect(within(parked!).getAllByTestId("flat-thread-row")).toHaveLength(21);
   });
 
   it("does not cap flat groups while search is active", () => {
@@ -4688,16 +4688,16 @@ describe("InventorySidebar view modes", () => {
 
   it("hides the Parked shelf and parked roots in project view when Show parked is off", () => {
     seedViewPreferences({
-      show: { snoozed: true, settled: false, drafts: true },
+      show: { snoozed: true, parked: false, drafts: true },
     });
     renderSidebar([
       makeThread("active-1", "Active thread"),
-      makeThread("settled-1", "Parked exploration", {
-        inventoryState: "settled" as const,
+      makeThread("parked-1", "Parked exploration", {
+        inventoryState: "parked" as const,
       }),
     ]);
 
-    expect(document.querySelector('[data-shelf="settled"]')).toBeNull();
+    expect(document.querySelector('[data-shelf="parked"]')).toBeNull();
     expect(screen.queryByText("Parked exploration")).toBeNull();
     expect(screen.getByText("Active thread")).toBeInTheDocument();
     // The other shelves are untouched by the parked filter.
@@ -4707,7 +4707,7 @@ describe("InventorySidebar view modes", () => {
 
   it("hides the Snoozed shelf and snoozed roots in project view when Show snoozed is off", () => {
     seedViewPreferences({
-      show: { snoozed: false, settled: true, drafts: true },
+      show: { snoozed: false, parked: true, drafts: true },
     });
     renderSidebar([
       makeThread("active-1", "Active thread"),
@@ -4719,7 +4719,7 @@ describe("InventorySidebar view modes", () => {
     expect(document.querySelector('[data-shelf="snoozed"]')).toBeNull();
     expect(screen.queryByText("Snoozed exploration")).toBeNull();
     expect(screen.getByText("Active thread")).toBeInTheDocument();
-    expect(document.querySelector('[data-shelf="settled"]')).toHaveTextContent(
+    expect(document.querySelector('[data-shelf="parked"]')).toHaveTextContent(
       /^Parked · 0Nothing parked\.$/u,
     );
     expect(document.querySelector('[data-shelf="automations"]')).not.toBeNull();
@@ -4756,11 +4756,11 @@ describe("InventorySidebar view modes", () => {
         makeThread("child-alpha", "Alpha child"),
         makeThread("automation-zeta", "Zeta automation", { automations }),
         makeThread("automation-alpha", "Alpha automation", { automations }),
-        makeThread("settled-zeta", "Zeta parked", {
-          inventoryState: "settled",
+        makeThread("parked-zeta", "Zeta parked", {
+          inventoryState: "parked",
         }),
-        makeThread("settled-alpha", "Alpha parked", {
-          inventoryState: "settled",
+        makeThread("parked-alpha", "Alpha parked", {
+          inventoryState: "parked",
         }),
       ],
       {
@@ -4784,7 +4784,7 @@ describe("InventorySidebar view modes", () => {
 
     for (const [shelf, expected] of [
       ["automations", ["automation-alpha", "automation-zeta"]],
-      ["settled", ["settled-alpha", "settled-zeta"]],
+      ["parked", ["parked-alpha", "parked-zeta"]],
     ] as const) {
       const ids = [
         ...document.querySelectorAll(
@@ -4897,7 +4897,7 @@ describe("InventorySidebar view modes", () => {
 
   it("shows the empty state when the Show filters hide the only draft", () => {
     seedViewPreferences({
-      show: { snoozed: true, settled: true, drafts: false },
+      show: { snoozed: true, parked: true, drafts: false },
     });
     renderSidebar([
       makeThread("draft-1", "Draft idea", { backingState: "unbound" }),
@@ -5339,7 +5339,7 @@ describe("View all automations", () => {
     const shelf = (kind: string) =>
       shelves.find((element) => element.dataset.shelf === kind)!;
     expect(viewAllIn(shelf("snoozed"))).toBeNull();
-    expect(viewAllIn(shelf("settled"))).toBeNull();
+    expect(viewAllIn(shelf("parked"))).toBeNull();
     await expectViewAll(shelf("automations"), onNavigate);
   });
 

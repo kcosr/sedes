@@ -202,9 +202,9 @@ export function ThreadStackActionDialog({
               })
             }
           >
-            {action === "settle" ? (
+            {action === "park" ? (
               <ArrowDownToDot />
-            ) : action === "unsettle" ? (
+            ) : action === "unpark" ? (
               <ArrowUpFromDot />
             ) : (
               <Archive />

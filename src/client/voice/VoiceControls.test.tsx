@@ -1264,14 +1264,14 @@ describe("listening target shortcut", () => {
     await screen.findByRole("group", { name: "Voice controls" });
     expect(shortcut()).toBeNull();
   });
-  it.each(["active", "settled", "archiving", "restoring", "unavailable"] as const)("uses viewed inventory state %s for visibility", async inventoryState => {
+  it.each(["active", "parked", "archiving", "restoring", "unavailable"] as const)("uses viewed inventory state %s for visibility", async inventoryState => {
     voice.fake.plugin.setConnection.mockResolvedValue(listening({ recognitionThreadId: "long" }));
     navigate(threadPath("named"), { replace: true });
     render(<VoiceProvider profileId={VOICE_CONNECTION.profileId} endpoint={{ baseUrl: VOICE_CONNECTION.serverOrigin }} identity={VOICE_IDENTITY}>
       <VoiceControls threads={threads.map(value => value.id === "named" ? { ...value, inventoryState } as NormalizedApplicationThreadSummary : value)} />
     </VoiceProvider>);
     await screen.findByRole("group", { name: "Voice controls" });
-    expect(shortcut() !== null).toBe(inventoryState === "active" || inventoryState === "settled");
+    expect(shortcut() !== null).toBe(inventoryState === "active" || inventoryState === "parked");
   });
   it.each(["idle", "validating", "announcing", "arming", "recognizing", "submitting", "recovering", "speaking", "cancelling", "recordingRecovery"] as const)
     ("hides during %s even if the recording identity remains in the snapshot", async phase => {

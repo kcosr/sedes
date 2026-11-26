@@ -181,6 +181,11 @@ can inherit named policy sets through Account → Environment → Backend → Ag
 [Tool policy sets](tool-policies.md) for defaults, templates, shared resources,
 and upgrade behavior.
 
+Grant `thread.set_state` to let an agent park, unpark, snooze, or wake a thread
+within its tool scope. With no target, the tool uses the agent's own thread. A
+snooze takes a future wake time and an optional reminder. The `thread.status`
+and `thread.list` reads show the wake time and reminder of snoozed threads.
+
 Delegated work is evaluated under the destination thread's own policy. An
 agent cannot give a newly created thread broader tools or scope than its own.
 See the [Agent-tools contract](../internals/agent-tools.md) for the complete

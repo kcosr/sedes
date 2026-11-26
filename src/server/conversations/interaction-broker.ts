@@ -467,6 +467,10 @@ export class InteractionBroker {
       .map(({ interaction }) => structuredClone(interaction));
   }
 
+  hasPendingForThread(scope: RequestScope, applicationThreadId: string): boolean {
+    return this.#ownerPendingCount(scope, applicationThreadId) > 0;
+  }
+
   /**
    * Force reset: abandon exact pending interactions in Sedes after the durable
    * reset commits, and send each provider-owned one the backend-neutral

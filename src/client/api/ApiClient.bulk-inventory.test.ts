@@ -18,7 +18,7 @@ function session() {
 
 describe("ApiClient bulk inventory", () => {
   const impact = {
-    action: "settle",
+    action: "park",
     targets: [
       {
         threadId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
@@ -52,7 +52,7 @@ describe("ApiClient bulk inventory", () => {
 
     await expect(
       new ApiClient().getBulkInventoryImpact({
-        action: "settle",
+        action: "park",
         threadIds: impact.targets.map(({ threadId }) => threadId),
       }),
     ).resolves.toEqual(impact);
@@ -62,7 +62,7 @@ describe("ApiClient bulk inventory", () => {
     expect(fetchMock.mock.calls[1]![1]).toMatchObject({
       method: "POST",
       body: JSON.stringify({
-        action: "settle",
+        action: "park",
         threadIds: impact.targets.map(({ threadId }) => threadId),
       }),
     });
@@ -79,7 +79,7 @@ describe("ApiClient bulk inventory", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
     const request = {
-      action: "settle" as const,
+      action: "park" as const,
       targets: impact.targets,
       expectedStashedPromptCount: 0,
       mutationId: "11111111-1111-4111-8111-111111111111",

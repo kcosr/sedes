@@ -24,10 +24,10 @@ describe("default thread shortcut", () => {
     expect(openDefaultThread({ resolving: false })).toBe(true);
     expect(navigate).toHaveBeenCalledExactlyOnceWith("/settings/general");
   });
-  it("opens a settled default thread", () => {
-    const thread = { id: "settled", available: true, inventoryState: "settled" } as NormalizedApplicationThreadSummary;
+  it("opens a parked default thread", () => {
+    const thread = { id: "parked", available: true, inventoryState: "parked" } as NormalizedApplicationThreadSummary;
     expect(openDefaultThread({ thread })).toBe(true);
-    expect(openThreadRoute).toHaveBeenCalledExactlyOnceWith("settled");
+    expect(openThreadRoute).toHaveBeenCalledExactlyOnceWith("parked");
     expect(navigate).not.toHaveBeenCalled();
   });
   it.each([

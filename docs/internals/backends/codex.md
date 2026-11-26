@@ -62,26 +62,26 @@ Pi SDK, Pi, Claude, Grok, and OpenCode explicitly contribute no account quota.
 
 ## Protocol and release admission
 
-Sedes pins `@openai/codex` 0.169.0 as its development-time generated protocol
+Sedes pins `@openai/codex` 0.172.0 as its development-time generated protocol
 baseline. Generated TypeScript, JSON Schema, the method
 inventory, hashes, and release evidence live under
-`protocol/codex-app-server/0.169.0`.
+`protocol/codex-app-server/0.172.0`.
 
 Owned Codex processes support Linux x64 and macOS arm64/x64. External
 topologies retain their separate transport and execution-environment
 requirements.
 
-The compiled Codex backend supplies exactly one `0.169.0` generated parser
+The compiled Codex backend supplies exactly one `0.172.0` generated parser
 profile and persists that value for diagnostics and runtime-generation
 integrity. It is not operator configuration and remains separate from
 executable admission. Owned and external runtimes admit stable releases at or
-above 0.169.0. Build metadata is allowed. Prereleases, malformed versions,
+above 0.172.0. Build metadata is allowed. Prereleases, malformed versions,
 versions below the floor, and explicitly excluded known-bad releases are
 rejected.
 
-Releases newer than the 0.169.0 tested-through threshold receive a
+Releases newer than the 0.172.0 tested-through threshold receive a
 provider-private `newerThanTested` assessment for the installation advisory.
-They still use only the pinned 0.169.0 stable and experimental validators and
+They still use only the pinned 0.172.0 stable and experimental validators and
 gain no capabilities from their version. Managed TUI uses the same
 operator-installed command policy in every deployment: an optional canonical
 `tuiExecutablePath` override, otherwise the first `codex` on `PATH`, with the
@@ -110,18 +110,19 @@ is unavailable without probing a native path, treating an ID as a URL, or
 performing a network lookup. Interrupted turns retain meaningful
 native errors as bounded warning notices; an ordinary Stop adds no error notice.
 
-The 0.169.0 profile accepts URL-or-file-reference audio in native user content
+The generated profile accepts URL-or-file-reference audio in native user content
 and function-call output. File identifiers remain bounded provider-private
 metadata; no audio playback, attachment submission, or file retrieval is implied.
 Sedes does not advertise `requiredHumanApproval`; unexpected `humanCommand`
 approvals fail closed.
 
-Assistant moderation/display metadata, item-completion token counts, and
-settings executor environments are exact, bounded native metadata. Display hints
-do not trigger browser actions, token telemetry does not replace aggregate usage,
-and environment metadata does not grant access to additional native executors.
+Sedes validates version 1 assistant moderation display metadata, item-completion
+token counts, native executor environments, and the nullable MCP registration
+scope as bounded provider-private data. MCP tool items and standard form and
+URL elicitations keep their existing normalized projection and authority.
+Additional executor selection stays outside the Codex capability contract.
 
-The runtime minimum and tested-through release are 0.169.0. The single generated
+The runtime minimum and tested-through release are 0.172.0. The single generated
 profile replaces the older tree. Provider-specific `model/list.modelProvider`
 selection is required because earlier executables can ignore that selector and
 return the default provider's catalog. Thread catalog validation retains native
@@ -129,7 +130,7 @@ provider identity within the Codex backend; normalized browser provider identity
 continues to name the Sedes connection. Operator-owned app-servers and managed
 TUI commands are upgraded separately from Sedes.
 
-The [runtime qualification](../../../protocol/codex-app-server/0.169.0/runtime-compatibility/README.md)
+The [runtime qualification](../../../protocol/codex-app-server/0.172.0/runtime-compatibility/README.md)
 records exact exports and Linux x64 execution against isolated mock providers,
 including settings, streaming, restart persistence, fork settings and declined
 command approval. macOS artifacts have integrity evidence only. Authenticated
@@ -234,7 +235,15 @@ Transport loss, owned process replacement, external endpoint replacement, or
 an unrecoverable RPC condition retires the client generation. Stale responses,
 server requests, interactions, and channels from that generation are rejected.
 The replacement initializes independently, and attached actors establish a
-fresh normalized projection.
+fresh normalized projection. The persistent runtime validates the routed
+request before keeping it pending. Valid requests can wait for their owner
+and replay on reattach. Unsupported modes and invalid parameters settle at the
+native connection before they can occupy pending interaction capacity.
+
+During resume, the runtime tracks unscoped status hints independently of
+turn-scoped lifecycle evidence. A snapshot that identifies an active turn
+retains that identity through active or idle hints and unrelated completions.
+Its matching completion can settle the turn without granting new Stop authority.
 
 Only reads with an explicit safe-retry contract are replayed after connection
 loss. A sent mutation stays governed by its method-specific delivery
@@ -848,9 +857,10 @@ Explicit host/backend startup overlays remain authoritative; ambient credentials
 and loader controls remain excluded. Provider-configured MCP servers use that
 account environment independently of the Sedes tool presentation.
 Failed MCP startup advisories publish bounded, thread- and generation-scoped
-warning notices. Failures received while attaching are retained until the
-successful projection is subscribed; recovered or stale-generation entries are
-discarded. Names that cannot be displayed safely receive a generic warning.
+warning notices. Pending notices use the native registration scope and server
+name together. Failures received while attaching are retained until the
+successful projection is subscribed. Recovery clears only the matching scope
+and name, and a generation change discards stale entries. Names that cannot be displayed safely receive a generic warning.
 Advisories never invalidate transcript receipts or expose native error text.
 Native MCP presentation fails closed on Windows
 execution hosts. Principal Tool clients

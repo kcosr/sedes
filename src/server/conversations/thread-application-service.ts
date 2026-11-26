@@ -1008,6 +1008,10 @@ function composeCapabilities(input: {
     inFlight ||
     input.actualRunState === "disconnected" ||
     input.actualRunState === "reconciling";
+  const canSnooze =
+    available &&
+    input.inventory.thread.inventoryState === "active" &&
+    (!mutationBlocked || input.actualRunState === "running");
   const backendTransitioning =
     input.actualRunState === "disconnected" || input.actualRunState === "reconciling";
   const backendCanSubmit =
@@ -1070,7 +1074,7 @@ function composeCapabilities(input: {
       | "recover_uncertain"
       | "discard_fork"
       | "archive"
-      | "settle"
+      | "park"
       | "acknowledge_attention"
 ,
     label: string,
@@ -1184,8 +1188,7 @@ function composeCapabilities(input: {
       true,
     ),
     operation(
-      // Shown as Park; the operation id keeps the stored state's name.
-      "settle",
+      "park",
       "Park",
       !archived && !mutationBlocked,
       "Only an inactive, unarchived thread can be parked.",
@@ -1194,15 +1197,10 @@ function composeCapabilities(input: {
       id: "snooze",
       label: { text: "Snooze" },
       destructive: false,
-      available:
-        available &&
-        input.inventory.thread.inventoryState === "active" &&
-        !mutationBlocked,
+      available: canSnooze,
       ...reason(
-        available &&
-          input.inventory.thread.inventoryState === "active" &&
-          !mutationBlocked,
-        "Only an inactive Active thread can be snoozed.",
+        canSnooze,
+        "Snooze requires an available Active thread without a pending interaction or runtime transition.",
       ),
       parameters: {
         kind: "date_time",

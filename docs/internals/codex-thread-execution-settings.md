@@ -131,13 +131,13 @@ transport. Replaying the pair prevents an inherited `config.toml` effort, such
 as `none`, from conflicting with the selected model. The turn still sends its
 own frozen effort. These overrides never rewrite operator configuration.
 
-An already-loaded Codex 0.169.0 session can retain its initial request-level
-effort for the same model even after `thread/settings/update` or `turn/start`
-selects another effort. Resuming that session while another native subscriber
-retains it does not rebuild the baseline. Sedes preserves that live authority;
-it does not silently unload shared sessions. An invalid baseline must be
-cleared through a cold native reload before the saved session overrides take
-effect.
+On Codex 0.172.0, a prewarmed session can retain its initial request-level
+effort for the same model when `turn/start` selects another effort. The
+[runtime probe](../../protocol/codex-app-server/0.172.0/runtime-compatibility/0.172.0-linux-x64.json)
+reproduced an inherited `none` baseline on a turn that selected `high`. Resuming
+a session that another native subscriber retains preserves the live session.
+If its baseline remains invalid, settle active work and cold-reload the native
+session to apply the saved session overrides.
 
 When a native resume would replay rejected policy or model/effort values on an
 idle or unloaded thread, Sedes opens detached history without subscribing or

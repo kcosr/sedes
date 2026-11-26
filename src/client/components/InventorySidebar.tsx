@@ -755,7 +755,7 @@ export function InventorySidebar({
   );
   const keepShownThread = (thread: NormalizedApplicationThreadSummary) =>
     (viewPreferences.show.snoozed || thread.inventoryState !== "snoozed") &&
-    (viewPreferences.show.settled || thread.inventoryState !== "settled") &&
+    (viewPreferences.show.parked || thread.inventoryState !== "parked") &&
     (viewPreferences.show.drafts || thread.backingState !== "unbound");
   /**
    * The project view honors the global Show filters too: snoozed, parked,
@@ -767,7 +767,7 @@ export function InventorySidebar({
   const projection = useMemo(() => {
     if (!scopedSnapshot || groupBy !== "project") return undefined;
     const { show } = viewPreferences;
-    const filtered = !show.snoozed || !show.settled || !show.drafts;
+    const filtered = !show.snoozed || !show.parked || !show.drafts;
     return deriveSidebarLineage({
       snapshot: filtered
         ? {
@@ -959,9 +959,9 @@ export function InventorySidebar({
         compare: compareSnoozedRoots,
       },
       {
-        key: "settled",
+        key: "parked",
         label: "Parked",
-        visible: viewPreferences.show.settled,
+        visible: viewPreferences.show.parked,
         compare: compareProjectRoots(modePreferences),
       },
     ] as const;
@@ -991,7 +991,7 @@ export function InventorySidebar({
     projectLocations,
     projection,
     scope.projectOptions,
-    viewPreferences.show.settled,
+    viewPreferences.show.parked,
     viewPreferences.show.snoozed,
   ]);
   const stackedProjectGroups = useMemo(
@@ -1482,9 +1482,6 @@ export function InventorySidebar({
   const snoozed = shownThreads.filter(
     ({ inventoryState }) => inventoryState === "snoozed",
   );
-  const settled = shownThreads.filter(
-    ({ inventoryState }) => inventoryState === "settled",
-  );
   const scopedInventoryThreads = scopedSnapshot?.threads ?? [];
   const scopedAutomationCount = scopedInventoryThreads.filter(
     ({ inventoryState, automations }) =>
@@ -1494,7 +1491,7 @@ export function InventorySidebar({
     ({ inventoryState }) => inventoryState === "snoozed",
   ).length;
   const scopedParkedCount = scopedInventoryThreads.filter(
-    ({ inventoryState }) => inventoryState === "settled",
+    ({ inventoryState }) => inventoryState === "parked",
   ).length;
   return (
     <SidebarBackgroundWorkCurrentContext.Provider
@@ -2202,19 +2199,19 @@ export function InventorySidebar({
                       }
                     />
                   )}
-                  {viewPreferences.show.settled && (
+                  {viewPreferences.show.parked && (
                     <Shelf
                       title="Parked"
                       count={scopedParkedCount}
                       nodes={sortProjectNodes(
-                        projection?.rootsByBucket.get("settled") ?? [],
+                        projection?.rootsByBucket.get("parked") ?? [],
                         compareProjectRoots(modePreferences),
                       )}
                       state={state}
                       selectedThreadId={selectedThreadId}
                       onSelectThread={onSelectThread}
                       onNavigate={onNavigate}
-                      kind="settled"
+                      kind="parked"
                       store={store}
                       threadRegistry={threadRegistry}
                       showBackendBrand={viewPreferences.showBackendIcons}
@@ -2563,8 +2560,7 @@ function Shelf({
   selectedThreadId?: string;
   onSelectThread?: SelectThread;
   onNavigate: (options?: { readonly keepDrawerOpen?: boolean }) => void;
-  /** The shelf's bucket; Parked keeps its stored name, `settled`. */
-  kind: "automations" | "snoozed" | "settled";
+  kind: "automations" | "snoozed" | "parked";
   store: ApplicationClientStore;
   threadRegistry?: ThreadStoreRegistry;
   showBackendBrand: boolean;
@@ -2864,10 +2860,10 @@ function ThreadStackItem({
   );
   const memberCount = entry.members.length;
   const parkCount = entry.members.filter(
-    ({ inventoryState }) => inventoryState !== "settled",
+    ({ inventoryState }) => inventoryState !== "parked",
   ).length;
   const unparkCount = entry.members.filter(
-    ({ inventoryState }) => inventoryState === "settled",
+    ({ inventoryState }) => inventoryState === "parked",
   ).length;
   const rosterId = `thread-stack-roster-${entry.stackBy}-${entry.stackId}`;
 
@@ -2950,27 +2946,27 @@ function ThreadStackItem({
   };
 
   const actionAvailable = (action: BulkInventoryAction) =>
-    action === "settle"
+    action === "park"
       ? parkCount > 0
-      : action === "unsettle"
+      : action === "unpark"
         ? unparkCount > 0
         : memberCount > 0;
   const actionCount = (action: BulkInventoryAction) =>
-    action === "settle"
+    action === "park"
       ? parkCount
-      : action === "unsettle"
+      : action === "unpark"
         ? unparkCount
         : memberCount;
   const actionIcon = (action: BulkInventoryAction, size: number) =>
-    action === "settle" ? (
+    action === "park" ? (
       <ArrowDownToDot size={size} strokeWidth={1.8} />
-    ) : action === "unsettle" ? (
+    ) : action === "unpark" ? (
       <ArrowUpFromDot size={size} strokeWidth={1.8} />
     ) : (
       <Archive size={size} strokeWidth={1.8} />
     );
   const stackActionButtons = (surface: "face" | "header") =>
-    (["settle", "unsettle", "archive"] as const).map((action) => (
+    (["park", "unpark", "archive"] as const).map((action) => (
       <button
         key={action}
         type="button"
@@ -3048,7 +3044,7 @@ function ThreadStackItem({
             View threads
           </ContextMenuItem>
           <ContextMenuSeparator />
-          {(["settle", "unsettle", "archive"] as const).map((action) => (
+          {(["park", "unpark", "archive"] as const).map((action) => (
             <ContextMenuItem
               key={action}
               disabled={!actionAvailable(action)}
@@ -3058,7 +3054,7 @@ function ThreadStackItem({
               {inventoryActionLabel(action)} stack
               {!actionAvailable(action) && (
                 <ContextMenuValue aria-hidden="true">
-                  {action === "unsettle" ? "None parked" : "None active"}
+                  {action === "unpark" ? "None parked" : "None active"}
                 </ContextMenuValue>
               )}
             </ContextMenuItem>
@@ -3750,9 +3746,9 @@ function FlatRowItemContent(
   const quickAction =
     thread.inventoryState === "snoozed"
       ? ("wake" as const)
-      : thread.inventoryState === "settled"
-        ? ("unsettle" as const)
-        : ("settle" as const);
+      : thread.inventoryState === "parked"
+        ? ("unpark" as const)
+        : ("park" as const);
   const renameGlyphKind = flatRowGlyphKind(thread, backgroundWorkCurrent);
   const renameGlyphVisible = renameGlyphKind !== "idle";
   // Archive directly when there is nothing to choose; otherwise the choices
@@ -3779,13 +3775,13 @@ function FlatRowItemContent(
     setActionError("");
     archiveAction.start();
   };
-  const runQuickAction = (action: "wake" | "settle" | "unsettle") => {
+  const runQuickAction = (action: "wake" | "park" | "unpark") => {
     if (actionPending.current) return;
     setActionError("");
     actionPending.current = true;
     setPendingAction("quick");
     const mutation =
-      action === "settle"
+      action === "park"
         ? store.getThreadArchiveImpact(thread.id).then((impact) => {
             if (parkNeedsConfirmation(impact)) {
               setParkImpact(impact);
@@ -3817,7 +3813,7 @@ function FlatRowItemContent(
         >
           {quickAction === "wake" ? (
             "Wake"
-          ) : quickAction === "settle" ? (
+          ) : quickAction === "park" ? (
             <ArrowDownToDot size={15} strokeWidth={1.8} />
           ) : (
             <ArrowUpFromDot size={15} strokeWidth={1.8} />
@@ -4022,7 +4018,7 @@ function FlatRowItemContent(
         onOpenChange={setParkChoicesOpen}
         impact={parkImpact}
         loadImpact={() => store.getThreadArchiveImpact(thread.id)}
-        onPark={(options) => store.mutateInventory(thread, "settle", options)}
+        onPark={(options) => store.mutateInventory(thread, "park", options)}
         returnFocusRef={rowLink}
       />
       <SnoozeDialog
@@ -4137,7 +4133,7 @@ function LineageRows({
   }) => void;
   readonly grouped: boolean;
   readonly compact?: boolean;
-  readonly kind?: "automations" | "snoozed" | "settled";
+  readonly kind?: "automations" | "snoozed" | "parked";
   readonly showBackendBrand: boolean;
   readonly locationLabelFor: (
     thread: NormalizedApplicationThreadSummary,
@@ -4215,7 +4211,7 @@ function LineageRow({
   }) => void;
   readonly grouped: boolean;
   readonly compact: boolean;
-  readonly kind?: "automations" | "snoozed" | "settled";
+  readonly kind?: "automations" | "snoozed" | "parked";
   readonly showBackendBrand: boolean;
   readonly locationLabelFor: (
     thread: NormalizedApplicationThreadSummary,
@@ -4262,9 +4258,9 @@ function LineageRow({
   const quickAction =
     kind === "snoozed"
       ? ("wake" as const)
-      : node.thread.inventoryState === "settled"
-        ? ("unsettle" as const)
-        : ("settle" as const);
+      : node.thread.inventoryState === "parked"
+        ? ("unpark" as const)
+        : ("park" as const);
   const tintStyle = environmentTintStyleForWorkspace(node.thread.workspaceId);
 
   return (
@@ -4468,10 +4464,10 @@ function ThreadRow({
   onSelectThread?: SelectThread;
   onNavigate: (options?: { readonly keepDrawerOpen?: boolean }) => void;
   compact?: boolean;
-  kind?: "automations" | "snoozed" | "settled";
+  kind?: "automations" | "snoozed" | "parked";
   showBackendBrand: boolean;
   locationLabel?: string;
-  quickAction?: "wake" | "settle" | "unsettle";
+  quickAction?: "wake" | "park" | "unpark";
   onQuickAction?: (
     thread: NormalizedApplicationThreadSummary,
     options?: { readonly expectedStashedPromptCount?: number },
@@ -4597,7 +4593,7 @@ function ThreadRow({
         >
           {flatRowGlyphIcon(glyphKind)}
         </span>
-      ) : kind === "settled" ? (
+      ) : kind === "parked" ? (
         <Check size={13} strokeWidth={2.2} />
       ) : kind === "snoozed" ? (
         <Clock size={13} strokeWidth={2} />
@@ -4929,7 +4925,7 @@ function ThreadRow({
                   setPendingInventoryAction("quick");
                   setQuickActionError("");
                   const mutation =
-                    quickAction === "settle"
+                    quickAction === "park"
                       ? store
                           .getThreadArchiveImpact(thread.id)
                           .then((impact) => {
@@ -4956,7 +4952,7 @@ function ThreadRow({
               >
                 {quickAction === "wake" ? (
                   "Wake"
-                ) : quickAction === "settle" ? (
+                ) : quickAction === "park" ? (
                   <ArrowDownToDot size={15} strokeWidth={1.8} />
                 ) : (
                   <ArrowUpFromDot size={15} strokeWidth={1.8} />
@@ -5102,7 +5098,7 @@ function ThreadRow({
         onOpenChange={setParkChoicesOpen}
         impact={parkImpact}
         loadImpact={() => store.getThreadArchiveImpact(thread.id)}
-        onPark={(options) => store.mutateInventory(thread, "settle", options)}
+        onPark={(options) => store.mutateInventory(thread, "park", options)}
         returnFocusRef={rowLink}
       />
       <SnoozeDialog

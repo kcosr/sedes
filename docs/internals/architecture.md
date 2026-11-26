@@ -331,7 +331,7 @@ occur.
 Bulk sidebar inventory changes are application-owned rather than provider
 side effects. The server derives tenant/principal scope, freezes revisioned
 targets during authoritative impact calculation, and rechecks runtime and
-durable blockers before commit. Park (`settle`), unpark (`unsettle`), or archive
+durable blockers before commit. Park, unpark, or archive
 changes every eligible target, advances the principal inventory generation,
 and records one replay receipt in one SQLite
 transaction. A stale revision, changed confirmation count, invalid target, or

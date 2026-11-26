@@ -181,7 +181,7 @@ function externalConfiguration(
       label: "Codex",
       enabled: true,
       configurationRevision: 1,
-      protocolRelease: "0.169.0",
+      protocolRelease: "0.172.0",
     },
     executionEnvironmentId: authority.executionEnvironmentId,
     connection: { ownership: "external", channel },
@@ -238,7 +238,7 @@ function launcherChannels() {
     ExecutionEnvironmentChannelProvider["openOwnedProcess"];
   const openOwnedProcess = vi.fn(
     async (..._arguments: Parameters<OpenOwnedProcess>) => {
-      return codexVersionProbeChannel("codex-cli 0.169.0\n");
+      return codexVersionProbeChannel("codex-cli 0.172.0\n");
     },
   );
   const resolveOwnedProcessExecutable = vi.fn(async (_scope, _input) => ({

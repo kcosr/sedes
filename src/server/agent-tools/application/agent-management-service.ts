@@ -36,6 +36,10 @@ import {
   type TrustedEnvironmentAuthorityGrant,
 } from "../environment/environment-authority.js";
 import { CANONICAL_AGENT_TOOL_MANIFEST } from "../registry/canonical-agent-tool-manifest.js";
+import {
+  projectAgentThreadSnooze,
+  type AgentThreadSnoozeFields,
+} from "./thread-snooze-presentation.js";
 
 export const AGENT_MANAGEMENT_DEFAULT_PAGE_SIZE = 50;
 export const AGENT_MANAGEMENT_MAXIMUM_PAGE_SIZE = 100;
@@ -72,7 +76,7 @@ export type AgentWorkspaceListScope =
 
 export type AgentThreadActivity = "idle" | "running" | "waiting_for_input";
 
-export type AgentThreadSummary = {
+export interface AgentThreadSummary extends AgentThreadSnoozeFields {
   readonly id: string;
   readonly title: string;
   readonly lastActivityAt: string;
@@ -85,11 +89,11 @@ export type AgentThreadSummary = {
     readonly label: string;
   };
   readonly backend: BackendKind;
-  readonly lifecycle: "active" | "snoozed" | "settled" | "archived";
+  readonly lifecycle: NormalizedThreadSummary["inventoryState"];
   readonly pinned: boolean;
   readonly activity: AgentThreadActivity;
   readonly automations: AgentThreadAutomations;
-};
+}
 
 export type AgentThreadAutomations = NormalizedThreadSummary["automations"];
 
@@ -474,6 +478,9 @@ export class AgentManagementService {
       .prepare(
         `
           SELECT thread.id, thread.last_activity_at AS sort, principal.pinned,
+            principal.inventory_state AS inventoryState,
+            principal.snoozed_until AS snoozedUntil,
+            principal.wake_reminder_text AS wakeReminderText,
             thread.workspace_id AS workspaceId,
             thread.environment_id AS environmentId,
             backend.kind AS backend, workspace.display_name AS workspaceLabel,
@@ -508,6 +515,9 @@ export class AgentManagementService {
       readonly id: string;
       readonly sort: number;
       readonly pinned: number;
+      readonly inventoryState: AgentThreadSummary["lifecycle"];
+      readonly snoozedUntil: number | null;
+      readonly wakeReminderText: string | null;
       readonly backend: BackendKind;
       readonly workspaceId: string;
       readonly environmentId: string;
@@ -552,7 +562,8 @@ export class AgentManagementService {
             label: row.environmentLabel,
           },
           backend: row.backend,
-          lifecycle: summary.inventoryState,
+          lifecycle: row.inventoryState,
+          ...projectAgentThreadSnooze(row),
           pinned: row.pinned === 1,
           activity: activity(runState),
           automations: summary.automations,

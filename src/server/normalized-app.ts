@@ -2973,8 +2973,8 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
           response.status(204).end();
         }
         return;
-      } else if (body.action === "settle") {
-        await dependencies.threadArchives.settle(requestScope, threadId, {
+      } else if (body.action === "park") {
+        await dependencies.threadArchives.park(requestScope, threadId, {
           expectedRevision: body.expectedRevision,
           mutationId: body.mutationId,
           expectedStashedPromptCount: body.expectedStashedPromptCount,

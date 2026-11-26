@@ -505,7 +505,7 @@ export async function createInMemoryThreadRuntimeHarness(options: {
       );
     },
     publishApplicationThread,
-  });
+  }, undefined, undefined, interactions);
   const mutations = new ThreadMutationGateway({
     bindings,
     actors,
@@ -549,7 +549,12 @@ export async function createInMemoryThreadRuntimeHarness(options: {
           deliverCallbacks: () => undefined,
           publishCompletion: () => threadSnapshots.publishChanged(eventScope, applicationThreadId, observation.changed),
           recoverThread: () => mutations.recoverThread(eventScope, applicationThreadId),
-          wakeThread: () => inventory.wakeForRuntimeSignal(eventScope, applicationThreadId, "completion"),
+          wakeThread: () => inventory.wakeForRuntimeSignal(eventScope, applicationThreadId, {
+            kind: "submission_completion",
+            acceptedAt: observed.acceptedAt,
+            completionObservedAt: observed.completionObservedAt,
+            outcome: input.outcome,
+          }),
         });
       })(),
     );

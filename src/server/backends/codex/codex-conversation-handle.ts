@@ -2272,8 +2272,11 @@ export class CodexConversationHandle implements ConversationHandle {
         this.#controlTurn = { generation: notification.generation, turnId: parsed.turn.id };
         this.#speedSession.observedStart(parsed.turn.id);
       } else if (notification.method === "turn/completed") {
-        if (this.#pendingControlStart) this.#pendingControlStart.blocked = true;
         const parsed = codexC2NotificationSchemas["turn/completed"].parse(notification.params);
+        const pending = this.#pendingControlStart;
+        if (pending && (pending.observedTurnId === undefined || pending.observedTurnId === parsed.turn.id)) {
+          pending.blocked = true;
+        }
         if (!this.#establishing && !this.#replayingPaginatedEstablishmentNotification && parsed.turn.status !== "inProgress") {
           this.#goalRecovery.completed({ generation: notification.generation, turnId: parsed.turn.id,
             outcome: parsed.turn.status === "interrupted" ? "interrupted" : parsed.turn.status === "failed" ? "failed" : "completed" });
@@ -4947,10 +4950,13 @@ export class CodexConversationHandle implements ConversationHandle {
         const parsed = assertCodexAttestedServerNotificationParams(
           "mcpServer/startupStatus/updated", notification.params,
         );
+        const scope = parsed.environmentId ?? null;
+        if (scope !== null && (scope.length === 0 || scope.length > 512)) return;
+        const serverKey = JSON.stringify([scope, parsed.name]);
         // Names are configuration-owned, but still untrusted presentation.
         // Raw provider errors may contain filesystem paths or credentials.
         if (parsed.status !== "failed") {
-          this.#pendingMcpStartupNotices.delete(parsed.name);
+          this.#pendingMcpStartupNotices.delete(serverKey);
           return;
         }
         const serverDescription = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/u.test(parsed.name)
@@ -4968,9 +4974,9 @@ export class CodexConversationHandle implements ConversationHandle {
           },
         };
         if (this.#establishing) {
-          if (this.#pendingMcpStartupNotices.has(parsed.name) ||
+          if (this.#pendingMcpStartupNotices.has(serverKey) ||
               this.#pendingMcpStartupNotices.size < MAXIMUM_PENDING_MCP_STARTUP_NOTICES) {
-            this.#pendingMcpStartupNotices.set(parsed.name, { generation: notification.generation, event });
+            this.#pendingMcpStartupNotices.set(serverKey, { generation: notification.generation, event });
           }
         } else if (notification.generation === this.#establishedGeneration) {
           this.#emit(event);
@@ -5145,8 +5151,15 @@ export class CodexConversationHandle implements ConversationHandle {
           method === "turn/started"
             ? codexC2NotificationSchemas["turn/started"].parse(params)
             : codexC2NotificationSchemas["turn/completed"].parse(params);
+        const currentTurn = thread.turns.find(({ id }) => id === parsed.turn.id);
+        const head = thread.turns.at(-1);
+        const completesEarlierTurn = method === "turn/completed" && currentTurn !== undefined && currentTurn !== head;
+        if (method === "turn/completed" && !currentTurn && head?.status === "inProgress") {
+          // An unobserved turn cannot be inserted behind the active head incrementally.
+          return false;
+        }
         const notificationTurn = materializeNotificationTurn(
-          thread.turns.find(({ id }) => id === parsed.turn.id),
+          currentTurn,
           parsed.turn,
           method,
           this.#streamingNativeItems.get(parsed.turn.id) ?? new Set(),
@@ -5163,9 +5176,11 @@ export class CodexConversationHandle implements ConversationHandle {
           status:
             method === "turn/started"
               ? { type: "active", activeFlags: [] }
-              : notificationTurn.status === "failed"
-                ? { type: "systemError" }
-                : { type: "idle" },
+              : completesEarlierTurn
+                ? thread.status
+                : notificationTurn.status === "failed"
+                  ? { type: "systemError" }
+                  : { type: "idle" },
           turns: replaceById(thread.turns, notificationTurn),
         };
         let paginatedInstallation:
@@ -5178,6 +5193,7 @@ export class CodexConversationHandle implements ConversationHandle {
         const expectedInstallEpoch = this.#projectionInstallEpoch;
         if (
           method === "turn/completed" &&
+          !completesEarlierTurn &&
           notificationUpdated.historyMode === "paginated"
         ) {
           const adapter = this.#paginatedHistoryAdapter;

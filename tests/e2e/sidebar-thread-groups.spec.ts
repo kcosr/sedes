@@ -286,7 +286,7 @@ async function assignExistingGroup(
 async function expectInventoryStates(
   page: Page,
   expected: Readonly<
-    Record<string, "active" | "snoozed" | "settled" | "archived">
+    Record<string, "active" | "snoozed" | "parked" | "archived">
   >,
 ): Promise<void> {
   await expect
@@ -861,8 +861,8 @@ test("thread groups stack on desktop and open as a member sheet on mobile", asyn
   await parkRequest;
   await expect(stackActionDialog).toBeHidden();
   await expectInventoryStates(page, {
-    [selectedId]: "settled",
-    [siblingId]: "settled",
+    [selectedId]: "parked",
+    [siblingId]: "parked",
     [filteredId]: "snoozed",
   });
   const afterPark = await currentSnapshot(page);

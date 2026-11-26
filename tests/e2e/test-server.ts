@@ -2578,6 +2578,7 @@ class CodexE2eRpcFixture {
                   type: "mcpToolCall",
                   id: `mcp-${ordinal}`,
                   server: "fixture",
+                  environmentId: null,
                   tool: "inspect_history",
                   status: "completed",
                   arguments: {
@@ -3069,6 +3070,7 @@ class CodexE2eRpcFixture {
         environments: null,
         originator: "sedes_web",
         daybreakEnabled: null,
+        daybreakProgramPropagationEnrolled: null,
         extra: {},
         sessionId: `e2e-codex-created-session-${threadSource}`,
         forkedFromId: null, attachedToThreadId: null,
@@ -4740,8 +4742,14 @@ async function main(): Promise<void> {
   const threadHubs = new ScopedThreadEventHubRegistry();
   const applicationHubs = new ScopedApplicationEventHubs();
   const interactions = new InteractionBroker({
-    onOpened: (eventScope, interaction) =>
-      notificationLifecycle.interactionOpened(eventScope, interaction),
+    onOpened: (eventScope, interaction) => {
+      notificationLifecycle.interactionOpened(eventScope, interaction);
+      authoritativeCompletionFollowUp.defer(async () => {
+        await inventory.wakeForRuntimeSignal(eventScope, interaction.threadId, {
+          kind: "needs_input",
+        });
+      });
+    },
   });
   const threadInventory = new DatabaseThreadApplicationInventoryReader({
     inventory: inventoryRepository,
@@ -5129,6 +5137,7 @@ async function main(): Promise<void> {
       run: (eventScope, threadId, operation) =>
         runtimes.runWithRuntimeRetired(eventScope, threadId, operation),
     },
+    interactions,
   );
   const tasks = new TaskService(taskRepository, applicationSnapshots);
   const workpads = new WorkpadService(new WorkpadRepository(database), applicationSnapshots);
@@ -5198,7 +5207,12 @@ async function main(): Promise<void> {
       wakeThread: () => inventory.wakeForRuntimeSignal(
         eventScope,
         applicationThreadId,
-        "completion",
+        {
+          kind: "submission_completion",
+          acceptedAt: observed.acceptedAt,
+          completionObservedAt: observed.completionObservedAt,
+          outcome: input.outcome,
+        },
       ),
     }));
   };

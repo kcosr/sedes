@@ -663,7 +663,7 @@ const noParameterOperationIds = [
   "recover_uncertain",
   "discard_fork",
   "archive",
-  "settle",
+  "park",
   "acknowledge_attention",
 ] as const;
 export const threadOperationDescriptorSchema = z.discriminatedUnion("id", [
@@ -1348,7 +1348,7 @@ export const normalizedThreadSummarySchema = z.strictObject({
     brand: backendBrandSchema,
   }),
   backingState: z.enum(["unbound", "creating", "bound", "creation_unknown"]),
-  inventoryState: z.enum(["active", "snoozed", "settled", "archived"]),
+  inventoryState: z.enum(["active", "snoozed", "parked", "archived"]),
   inventoryRevision: z.number().int().nonnegative(),
   threadRevision: z.number().int().nonnegative(),
   runState: threadRunStateSchema,

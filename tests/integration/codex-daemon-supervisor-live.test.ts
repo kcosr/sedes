@@ -2680,16 +2680,23 @@ plugins = false
               .toHaveLength(nativeMatches.length);
             expect(projection.snapshot.turnsById[turnId]?.completionCorrelations?.includes(steer.applicationOperationId) ?? false)
               .toBe(drained);
-            await expect(
-              driver.reconcileSubmission({
-                ...boundInput,
-                applicationOperationId: steer.applicationOperationId,
-                reconciliationToken: steer.reconciliationToken,
-                steerTarget: steer.target,
-              }),
-            ).resolves.toMatchObject(drained
-              ? { status: "accepted", backendTurn: { backendTurnId: turnId, status: "interrupted" } }
+            const reconciliation = await driver.reconcileSubmission({
+              ...boundInput,
+              applicationOperationId: steer.applicationOperationId,
+              reconciliationToken: steer.reconciliationToken,
+              steerTarget: steer.target,
+            });
+            expect(reconciliation).toMatchObject(drained
+              ? { status: "accepted" }
               : { status: "not_accepted", retryable: false });
+            // Paginated reconciliation can confirm an exact saved input
+            // without returning a projected turn. The independent native and
+            // projection checks above still establish which turn consumed it.
+            if (drained && (native.thread.historyMode === "legacy" || "backendTurn" in reconciliation)) {
+              expect(reconciliation).toMatchObject({
+                backendTurn: { backendTurnId: turnId, status: "interrupted" },
+              });
+            }
           }
           process.stdout.write(`Codex live Steer/Stop native evidence: ${JSON.stringify({
             operations: steers.length, materialized, notAccepted: steers.length - materialized,

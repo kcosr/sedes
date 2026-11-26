@@ -164,7 +164,7 @@ describe("AgentToolRegistry", () => {
         ({ id, schemaVersion }) => `${id}@${schemaVersion}`,
       ),
     );
-    expect(CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES).toHaveLength(88);
+    expect(CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES).toHaveLength(89);
   });
 
   it("assembles the complete production catalog only with every domain adapter", () => {
@@ -258,7 +258,7 @@ describe("AgentToolRegistry", () => {
     });
     const summaries = canonical.catalogSummaries("cli", "thread_agent");
 
-    expect(summaries).toHaveLength(88);
+    expect(summaries).toHaveLength(89);
     expect(
       Buffer.byteLength(JSON.stringify({ tools: summaries }), "utf8"),
     ).toBeLessThanOrEqual(AGENT_TOOL_MAXIMUM_CATALOG_SUMMARY_BYTES);
@@ -521,6 +521,8 @@ describe("AgentToolRegistry", () => {
         ...expectedFilenames,
         "automation.create.v1.json",
         "thread.list.v6.json",
+        "thread.list.v9.json",
+        "thread.status.v5.json",
         "removed.tool.v1.json",
         "legacy.json",
         "README.json.tmp",
@@ -555,13 +557,14 @@ describe("AgentToolRegistry", () => {
     expect(registry.resolveAdapterName("cli", "thread.status").id).toBe(
       "thread.status",
     );
-    expect(registry.artifact("thread.status", 5)).toMatchObject({
+    expect(registry.artifact("thread.status", 6)).toMatchObject({
       deployment: { eligible: true },
       adapters: {
         http: { invocation: "inline" },
         cli: { command: "thread.status" },
       },
     });
+    expect(() => registry.get("thread.status", 5)).toThrow();
   });
 
   it("names every MCP presentation like its Pi native tool", () => {
@@ -574,7 +577,7 @@ describe("AgentToolRegistry", () => {
     expect(
       registry.resolveAdapterName("mcp", "sedes_thread_status").id,
     ).toBe("thread.status");
-    expect(registry.artifact("thread.status", 5)).toMatchObject({
+    expect(registry.artifact("thread.status", 6)).toMatchObject({
       exposure: { adapters: ["cli", "http", "mcp", "pi_rpc", "pi_sdk"] },
       adapters: { mcp: { name: "sedes_thread_status" } },
       execution: { adapterWaitCeilingMilliseconds: { mcp: 30_000 } },

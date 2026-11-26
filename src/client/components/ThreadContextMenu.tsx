@@ -87,9 +87,8 @@ import {
   ContextMenuTrigger,
 } from "@client/components/ui/context-menu";
 
-/** Wire inventory actions: `settle` parks a thread and `unsettle` unparks it. */
 type InventoryContextAction =
-  "settle" | "unsettle" | "wake" | "archive" | "restore";
+  "park" | "unpark" | "wake" | "archive" | "restore";
 
 // Match the 240ms dialog exit motion before installing a sibling modal root.
 const SHEET_DIALOG_HANDOFF_DELAY_MS = 260;
@@ -384,16 +383,16 @@ export function ThreadContextMenu({
   };
   const requestPark = () => {
     if (pendingAction) return;
-    setPendingAction("settle");
+    setPendingAction("park");
     setActionError("");
     void store
       .getThreadArchiveImpact(thread.id)
       .then(async (impact) => {
         if (!parkNeedsConfirmation(impact)) {
-          await store.mutateInventory(thread, "settle", {
+          await store.mutateInventory(thread, "park", {
             expectedStashedPromptCount: 0,
           });
-          onAction?.("settle");
+          onAction?.("park");
           return;
         }
         setParkImpact(impact);
@@ -671,8 +670,8 @@ export function ThreadContextMenu({
     </>
   ) : (
     <>
-      {thread.inventoryState === "settled" ? (
-        <ContextMenuItem onSelect={() => mutate("unsettle")}>
+      {thread.inventoryState === "parked" ? (
+        <ContextMenuItem onSelect={() => mutate("unpark")}>
           <ArrowUpFromDot aria-hidden="true" />
           Unpark
         </ContextMenuItem>
@@ -955,7 +954,7 @@ export function ThreadContextMenu({
           impact={parkImpact}
           loadImpact={() => store.getThreadArchiveImpact(thread.id)}
           onPark={(options) =>
-            performMutation("settle", options).then(() => undefined)
+            performMutation("park", options).then(() => undefined)
           }
           returnFocusRef={returnFocusRef}
         />

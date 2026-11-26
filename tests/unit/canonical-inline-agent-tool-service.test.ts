@@ -291,10 +291,14 @@ describe("CanonicalInlineAgentToolService", () => {
   });
 
   it("scopes thread status through the injected reader and bounds its output", async () => {
+    const snoozedUntil = "2026-11-30T00:00:00.000Z";
+    const wakeReminder = "\u0001".repeat(1_000);
     const readThreadStatus = vi.fn(async () => ({
       threadId: "target-thread",
       backend: "codex_app_server" as const,
       lifecycle: "snoozed" as const,
+      snoozedUntil,
+      wakeReminder,
       pinned: false,
       activity: "waiting_for_input" as const,
     }));
@@ -306,7 +310,7 @@ describe("CanonicalInlineAgentToolService", () => {
       service.invoke(
         {
           toolId: "thread.status",
-          schemaVersion: 5,
+          schemaVersion: 6,
           requestId: "request-3",
           input: { threadId: "target-thread" },
         },
@@ -317,6 +321,8 @@ describe("CanonicalInlineAgentToolService", () => {
       output: {
         threadId: "target-thread",
         lifecycle: "snoozed",
+        snoozedUntil,
+        wakeReminder,
         pinned: false,
         activity: "waiting_for_input",
       },
@@ -337,7 +343,7 @@ describe("CanonicalInlineAgentToolService", () => {
       service.invoke(
         {
           toolId: "thread.status",
-          schemaVersion: 5,
+          schemaVersion: 6,
           requestId: "missing",
           input: { threadId: "missing-thread" },
         },
@@ -379,7 +385,7 @@ describe("CanonicalInlineAgentToolService", () => {
     const invocation = service.invoke(
       {
         toolId: "thread.status",
-        schemaVersion: 5,
+        schemaVersion: 6,
         requestId: "in-flight-cancel",
         input: { threadId: "target-thread" },
       },
@@ -463,7 +469,7 @@ describe("CanonicalInlineAgentToolService", () => {
       const invocation = service.invoke(
         {
           toolId: "thread.status",
-          schemaVersion: 5,
+          schemaVersion: 6,
           requestId: "deadline",
           input: { threadId: "target-thread" },
         },
@@ -870,7 +876,7 @@ describe("CanonicalInlineAgentToolService", () => {
       service.invoke(
         {
           toolId: "automation.create",
-          schemaVersion: 2,
+          schemaVersion: 3,
           requestId: "blank-automation-prompt",
           input: {
             name: "Review", initialState: "paused", mutationId: "6ba7b810-9dad-41d1-80b4-00c04fd430c8", misfirePolicy: null,

@@ -1,4 +1,5 @@
 import type { RequestScope } from "../identity/identity-provider.js";
+import type { InteractionBroker } from "../conversations/interaction-broker.js";
 import type { ContextExcerpt } from "../../shared/protocol/context-excerpts.js";
 import { composerAttachmentReferenceArraySchema } from "../../shared/protocol/composer-attachments.js";
 import { composerTaskReferenceIdsSchema } from "../../shared/protocol/tasks.js";
@@ -10,6 +11,7 @@ import {
 import {
   InventoryRepository,
   type InventoryPrincipalStateRecord,
+  type InventoryRuntimeWakeSignal,
   type InventoryTransition,
 } from "../db/repositories/inventory-repository.js";
 import { DomainError } from "./errors.js";
@@ -105,6 +107,7 @@ export class InventoryService {
       state: InventoryPrincipalStateRecord,
     ) => void,
     readonly restoreMaintenance?: InventoryRestoreMaintenance,
+    readonly interactions?: Pick<InteractionBroker, "hasPendingForThread">,
   ) {
     this.#publisher = publisher;
   }
@@ -240,8 +243,18 @@ export class InventoryService {
         "Wake reminder",
       );
     }
+    const assertSnoozeAllowed = input.change.action === "snooze"
+      ? () => {
+          if (this.interactions?.hasPendingForThread(scope, applicationThreadId)) {
+            throw new DomainError(
+              "invalid_transition",
+              "The thread cannot be snoozed while an interaction awaits a response.",
+            );
+          }
+        }
+      : undefined;
     const transition = async () => this.repository.transitionInventory(
-      scope, applicationThreadId, { ...input, now },
+      scope, applicationThreadId, { ...input, now, assertSnoozeAllowed },
     );
     // A successful restore can be retried after execution has started. Only
     // an actual archived-to-active transition needs to retire a runtime;
@@ -364,14 +377,14 @@ export class InventoryService {
   async wakeForRuntimeSignal(
     scope: RequestScope,
     applicationThreadId: string,
-    reason: "completion" | "failure" | "needs-input",
+    signal: InventoryRuntimeWakeSignal,
     now = Date.now(),
   ): Promise<InventoryPrincipalStateRecord> {
     const before = this.repository.getInventory(scope, applicationThreadId);
     const state = this.repository.wakeForRuntimeSignal(
       scope,
       applicationThreadId,
-      reason,
+      signal,
       now,
     );
     if (state.inventoryRevision !== before.inventoryRevision) {

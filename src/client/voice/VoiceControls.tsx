@@ -63,7 +63,7 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
   const composerAvailable = useSyncExternalStore(store.subscribeSubmissionComposers, () => store.hasSubmissionComposer(threadId));
   const viewedThread = threads.find(thread => thread.id === threadId);
   const threadTitle = nativeThreadTitle(viewedThread?.title.text ?? "");
-  const viewedThreadAvailable = viewedThread?.available && (viewedThread.inventoryState === "active" || viewedThread.inventoryState === "settled");
+  const viewedThreadAvailable = viewedThread?.available && (viewedThread.inventoryState === "active" || viewedThread.inventoryState === "parked");
   const targetThisThreadLabel = `Target this thread: ${threadTitle ?? "Untitled thread"}`;
   // Native visibility reconciliation can clear the foreground without a document visibility event.
   // A successful settings write (including Resume) or session readiness change re-sends the current context.

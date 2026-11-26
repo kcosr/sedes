@@ -439,8 +439,8 @@ export async function startProductionApplication(
   const discoveryOperations = new DetachedOperationDrainGate();
   const requestOperations = new HttpRequestOperationGate();
   const longLivedConnections = new LongLivedHttpConnectionRegistry();
-  const authoritativeCompletionFollowUp = new DeferredProductionOperations(
-    reportBackgroundError("Authoritative completion follow-up"),
+  const threadRuntimeFollowUp = new DeferredProductionOperations(
+    reportBackgroundError("Thread runtime follow-up"),
   );
   let database: Database.Database | undefined;
   let server: Server | undefined;
@@ -1363,8 +1363,14 @@ export async function startProductionApplication(
     const threadHubs = new ScopedThreadEventHubRegistry();
     const applicationHubs = new ScopedApplicationEventHubs();
     interactions = new InteractionBroker({
-      onOpened: (eventScope, interaction) =>
-        notificationLifecycle.interactionOpened(eventScope, interaction),
+      onOpened: (eventScope, interaction) => {
+        notificationLifecycle.interactionOpened(eventScope, interaction);
+        threadRuntimeFollowUp.defer(async () => {
+          await inventory.wakeForRuntimeSignal(eventScope, interaction.threadId, {
+            kind: "needs_input",
+          });
+        });
+      },
     });
     resources.defer(
       "interaction broker",
@@ -1518,7 +1524,7 @@ export async function startProductionApplication(
         }
         // Retry is an application-owned run-state overlay. An ordinary
         // application delta intentionally preserves the retained native state.
-        authoritativeCompletionFollowUp.defer(async () => {
+        threadRuntimeFollowUp.defer(async () => {
           await runtimes?.publishAuthoritativeReplacementIfLoaded(eventScope, threadId);
           await publishApplicationThread?.publish(eventScope, threadId);
         });
@@ -1846,6 +1852,7 @@ export async function startProductionApplication(
             return committed;
           }),
       },
+      interactions,
     );
     const turnBookmarks = new ConversationTurnBookmarkService(
       turnBookmarkRepository,
@@ -1950,14 +1957,19 @@ export async function startProductionApplication(
       notificationLifecycle.completion(eventScope, observed, input.provenance, input.voiceSubscriberWatermark, input.responseVoice);
       if (observed.applicationTurnId) void clientControls.complete(eventScope, applicationThreadId, observed.applicationTurnId,
         observed.completionOutcome ?? "interrupted", input.responseVoice?.superseded);
-      authoritativeCompletionFollowUp.defer(() => performCompletionFollowUp({
+      threadRuntimeFollowUp.defer(() => performCompletionFollowUp({
         deliverCallbacks: () => completionCallbackDispatcher.deliverReady(eventScope),
         publishCompletion: () => activeThreadSnapshots.publishChanged(eventScope, applicationThreadId, observation.changed),
         recoverThread: () => mutations?.recoverThread(eventScope, applicationThreadId),
         wakeThread: () => inventory.wakeForRuntimeSignal(
           eventScope,
           applicationThreadId,
-          "completion",
+          {
+            kind: "submission_completion",
+            acceptedAt: observed.acceptedAt,
+            completionObservedAt: observed.completionObservedAt,
+            outcome: input.outcome,
+          },
         ),
       }));
     };
@@ -2005,8 +2017,8 @@ export async function startProductionApplication(
       mode: "ownership_critical",
     });
     resources.defer(
-      "authoritative completion follow-up",
-      () => authoritativeCompletionFollowUp.close(),
+      "thread runtime follow-up",
+      () => threadRuntimeFollowUp.close(),
       { mode: "ownership_critical" },
     );
     threads.bindMutations(mutations);

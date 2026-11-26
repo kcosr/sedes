@@ -58,6 +58,30 @@ function thread(
 }
 
 describe("AgentThreadInventoryControlService", () => {
+  it("rechecks the target's admitted workspace before changing lifecycle", async () => {
+    const getInventory = vi.fn();
+    const park = vi.fn();
+    const transition = vi.fn();
+    const service = new AgentThreadInventoryControlService({
+      inventory: { getInventory },
+      threads: {
+        getThread: vi.fn(() => thread("thread-1", "environment-1", "moved-workspace")),
+      },
+      lineage: { listFamilyThreadIds: vi.fn() },
+      archives: { archive: vi.fn(), park },
+      transitions: { transition },
+    });
+
+    await expect(service.setState(scope, {
+      lifecycle: "parked",
+      mutationId: "mutation-moved-thread",
+      environmentAuthority,
+    })).rejects.toMatchObject({ code: "permission_denied" });
+    expect(getInventory).not.toHaveBeenCalled();
+    expect(park).not.toHaveBeenCalled();
+    expect(transition).not.toHaveBeenCalled();
+  });
+
   it("archives from the current scoped revision and preserves explicit family/task choices", async () => {
     const getInventory = vi.fn(() => ({ inventoryRevision: 7 }) as never);
     const archive = vi.fn(async () => ["thread-1", "thread-2"]);
@@ -68,7 +92,7 @@ describe("AgentThreadInventoryControlService", () => {
       inventory: { getInventory },
       threads: { getThread },
       lineage: { listFamilyThreadIds },
-      archives: { archive },
+      archives: { archive, park: vi.fn() },
       transitions: { transition },
     });
 
@@ -102,7 +126,7 @@ describe("AgentThreadInventoryControlService", () => {
       inventory: { getInventory },
       threads: { getThread },
       lineage: { listFamilyThreadIds: vi.fn(() => ["thread-1"]) },
-      archives: { archive },
+      archives: { archive, park: vi.fn() },
       transitions: { transition },
     });
 
@@ -145,7 +169,7 @@ describe("AgentThreadInventoryControlService", () => {
       inventory: { getInventory },
       threads: { getThread: vi.fn((_scope, id: string) => thread(id)) },
       lineage: { listFamilyThreadIds: vi.fn(() => ["thread-1"]) },
-      archives: { archive },
+      archives: { archive, park: vi.fn() },
       transitions: { transition },
     });
 
@@ -174,7 +198,7 @@ describe("AgentThreadInventoryControlService", () => {
       lineage: {
         listFamilyThreadIds: vi.fn(() => ["thread-1", "thread-2"]),
       },
-      archives: { archive },
+      archives: { archive, park: vi.fn() },
       transitions: { transition: vi.fn() },
     });
 
@@ -207,7 +231,7 @@ describe("AgentThreadInventoryControlService", () => {
       lineage: {
         listFamilyThreadIds: vi.fn(() => ["thread-1", "thread-2"]),
       },
-      archives: { archive },
+      archives: { archive, park: vi.fn() },
       transitions: { transition: vi.fn() },
     });
 

@@ -31,9 +31,9 @@ const fixtures: readonly CompatibilityPolicyFixture[] = [
   {
     backend: "codex",
     minimum: CODEX_RUNTIME_MINIMUM_SUPPORTED_RELEASE,
-    belowMinimum: "0.168.999",
+    belowMinimum: "0.171.999",
     testedThrough: CODEX_RUNTIME_TESTED_THROUGH_RELEASE,
-    compatibleNewer: "0.170.0",
+    compatibleNewer: "0.173.0",
     assess(version) {
       const verified = verifyCodexRuntimeVersion(version);
       return {

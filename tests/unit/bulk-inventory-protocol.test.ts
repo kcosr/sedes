@@ -13,22 +13,42 @@ const secondThreadId = "10000000-0000-4000-8000-000000000002";
 
 describe("bulk inventory protocol", () => {
   it("advances the browser protocol fence", () => {
-    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(180);
+    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(181);
   });
+
+  it.each([["park", "settle"], ["unpark", "unsettle"]] as const)(
+    "accepts %s and rejects the former %s action",
+    (action, formerAction) => {
+      const request = {
+        action,
+        mutationId: "20000000-0000-4000-8000-000000000001",
+        ...(action === "park" ? { expectedStashedPromptCount: 0 } : {}),
+      };
+      const single = { ...request, expectedRevision: 0 };
+      const bulk = {
+        ...request,
+        targets: [firstThreadId, secondThreadId].map((threadId) => ({ threadId, expectedRevision: 0 })),
+      };
+      expect(inventoryTransitionSchema.parse(single)).toEqual(single);
+      expect(inventoryTransitionSchema.safeParse({ ...single, action: formerAction }).success).toBe(false);
+      expect(bulkInventoryMutationRequestSchema.parse(bulk)).toEqual(bulk);
+      expect(bulkInventoryMutationRequestSchema.safeParse({ ...bulk, action: formerAction }).success).toBe(false);
+    },
+  );
 
   it("accepts only strict, unique, bounded impact target sets", () => {
     expect(
       bulkInventoryImpactRequestSchema.parse({
-        action: "settle",
+        action: "park",
         threadIds: [firstThreadId, secondThreadId],
       }),
     ).toEqual({
-      action: "settle",
+      action: "park",
       threadIds: [firstThreadId, secondThreadId],
     });
     expect(() =>
       bulkInventoryImpactRequestSchema.parse({
-        action: "settle",
+        action: "park",
         threadIds: [firstThreadId],
       }),
     ).toThrow();
@@ -50,7 +70,7 @@ describe("bulk inventory protocol", () => {
     ).toThrow();
     expect(() =>
       bulkInventoryImpactRequestSchema.parse({
-        action: "unsettle",
+        action: "unpark",
         threadIds: [firstThreadId, secondThreadId],
         tenantId: "browser-selected",
       }),
@@ -64,20 +84,20 @@ describe("bulk inventory protocol", () => {
     ];
     expect(
       bulkInventoryMutationRequestSchema.parse({
-        action: "unsettle",
+        action: "unpark",
         targets,
         mutationId: "20000000-0000-4000-8000-000000000001",
       }),
-    ).toMatchObject({ action: "unsettle", targets });
+    ).toMatchObject({ action: "unpark", targets });
     expect(() =>
       bulkInventoryMutationRequestSchema.parse({
-        action: "settle",
+        action: "park",
         targets,
         mutationId: "20000000-0000-4000-8000-000000000002",
       }),
     ).toThrow();
     const park = {
-      action: "settle",
+      action: "park",
       targets,
       expectedStashedPromptCount: 0,
       mutationId: "20000000-0000-4000-8000-000000000002",
@@ -110,10 +130,10 @@ describe("bulk inventory protocol", () => {
       expectedStashedPromptCount: 0,
       openTaskDisposition: "complete",
     };
-    for (const action of ["settle", "archive", "archive_family"]) {
+    for (const action of ["park", "archive", "archive_family"]) {
       const request = {
         ...common, action, expectedRevision: 0,
-        ...(action === "settle" ? {} : { executionWorkspaceDisposition: { kind: "keep" } }),
+        ...(action === "park" ? {} : { executionWorkspaceDisposition: { kind: "keep" } }),
       };
       expect(inventoryTransitionSchema.safeParse(request).success).toBe(false);
       expect(inventoryTransitionSchema.safeParse({ ...request, expectedOpenTaskSnapshot: "a".repeat(64) }).success).toBe(true);
@@ -129,7 +149,7 @@ describe("bulk inventory protocol", () => {
 
   it("rejects inconsistent impact counts and availability", () => {
     const base = {
-      action: "settle" as const,
+      action: "park" as const,
       targets: [
         { threadId: firstThreadId, expectedRevision: 1 },
         { threadId: secondThreadId, expectedRevision: 2 },
@@ -166,7 +186,7 @@ describe("bulk inventory protocol", () => {
         available: false,
       }),
     ).toMatchObject({ available: false, openTasks: { total: 10_001 } });
-    for (const action of ["settle", "unsettle"]) {
+    for (const action of ["park", "unpark"]) {
       expect(
         bulkInventoryImpactSchema.parse({
           ...base,

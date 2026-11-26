@@ -143,6 +143,7 @@ export type CodexThreadUnsubscribeResponse = OfficialThreadUnsubscribeResponse;
 export type CodexThreadTokenUsage = OfficialThreadTokenUsage;
 export type CodexThreadTokenUsageUpdatedNotification = OfficialTokenUsageNotification;
 type OfficialAgentMessage = Extract<OfficialThreadItem, { type: "agentMessage" }>;
+type OfficialAgentMessageModeration = NonNullable<OfficialAgentMessage["moderation"]>;
 type CodexNativeAsyncQuestions = {
   readonly questions: NonNullable<OfficialAgentMessage["questions"]>;
 };
@@ -265,11 +266,36 @@ function assertUserInputClosed(input: Extract<OfficialThreadItem, { type: "userM
   }
 }
 
+function assertAgentMessageModerationClosed(moderation: OfficialAgentMessageModeration): void {
+  assertExactKeys(moderation, ["moderated", "display"], "agent_message_moderation");
+  const display = moderation.display;
+  switch (display?.mode) {
+    case "show":
+      assertExactKeys(display, ["mode", "version", "annotation", "trustedContacts"], "agent_message_display");
+      if (display.annotation != null) {
+        assertExactKeys(display.annotation, ["kind", "subject"], "agent_message_display_annotation");
+      }
+      break;
+    case "hide":
+      assertExactKeys(display, ["mode", "version", "replacement"], "agent_message_display");
+      assertExactKeys(display.replacement, ["kind"], "agent_message_display_replacement");
+      break;
+    case "block":
+      assertExactKeys(display, ["mode", "version", "reason"], "agent_message_display");
+      assertExactKeys(
+        display.reason,
+        display.reason.kind === "protection" ? ["kind", "protectionType"] : ["kind", "trustedAccess"],
+        "agent_message_display_reason",
+      );
+      break;
+  }
+}
+
 function assertThreadItemClosed(item: OfficialThreadItem): void {
   const keysByType = {
     userMessage: ["type", "id", "clientId", "content"], hookPrompt: ["type", "id", "fragments"], agentMessage: ["type", "id", "text", "phase", "memoryCitation", "delivery", "questions", "moderation"], functionCallOutput: ["type", "id", "name", "namespace", "output"], plan: ["type", "id", "text"], reasoning: ["type", "id", "summary", "content"],
     commandExecution: ["type", "id", "pluginId", "scriptPath", "command", "cwd", "processId", "source", "status", "commandActions", "aggregatedOutput", "exitCode", "durationMs"], fileChange: ["type", "id", "changes", "status"],
-    mcpToolCall: ["type", "id", "server", "tool", "status", "arguments", "appContext", "mcpAppResourceUri", "mcpAppUi", "pluginId", "readOnlyHint", "result", "error", "durationMs"], dynamicToolCall: ["type", "id", "namespace", "tool", "arguments", "status", "contentItems", "success", "durationMs"],
+    mcpToolCall: ["type", "id", "server", "environmentId", "tool", "status", "arguments", "appContext", "mcpAppResourceUri", "mcpAppUi", "pluginId", "readOnlyHint", "result", "error", "durationMs"], dynamicToolCall: ["type", "id", "namespace", "tool", "arguments", "status", "contentItems", "success", "durationMs"],
     collabAgentToolCall: ["type", "id", "tool", "status", "senderThreadId", "receiverThreadIds", "prompt", "model", "reasoningEffort", "agentsStates"], subAgentActivity: ["type", "id", "kind", "agentThreadId", "agentPath", "model", "reasoningEffort"], webSearch: ["type", "id", "query", "action", "results"], imageView: ["type", "id", "path"], sleep: ["type", "id", "durationMs"], imageGeneration: ["type", "id", "status", "revisedPrompt", "result", "fileId", "transparentBackground", "failure", "savedPath", "inputImages", "generationId"], enteredReviewMode: ["type", "id", "review"], exitedReviewMode: ["type", "id", "review"], contextCompaction: ["type", "id"],
   } as const satisfies Record<OfficialThreadItem["type"], readonly string[]>;
   assertExactKeys(item, [...keysByType[item.type], "startedAtMs", "completedAtMs"], "thread_item");
@@ -281,10 +307,7 @@ function assertThreadItemClosed(item: OfficialThreadItem): void {
       // authority to invoke account/contact actions. Validate them as metadata;
       // the normalized transcript continues to project the authored text only.
       if (item.moderation != null) {
-        assertExactKeys(item.moderation, ["moderated", "display"], "agent_message_moderation");
-        if (item.moderation.display != null) {
-          assertExactKeys(item.moderation.display, ["action", "blockType", "cyberTrustedAccess", "checkTrustedContacts"], "agent_message_display");
-        }
+        assertAgentMessageModerationClosed(item.moderation);
       }
       if (item.memoryCitation !== null) {
         assertExactKeys(item.memoryCitation, ["entries", "threadIds"], "memory_citation");
@@ -460,6 +483,7 @@ function assertThreadItem(item: OfficialThreadItem): void {
       assertSafeCount(item.durationMs, "command_duration");
       break;
     case "mcpToolCall":
+      if (item.environmentId != null) assertNativeId(item.environmentId, "mcp_environment_id");
       if (item.result !== null && item.result.content.length > CODEX_C1_MAX_COLLECTION_ITEMS) throw new Error("mcp_content_count_exceeded");
       assertSafeCount(item.durationMs, "tool_duration");
       break;
@@ -699,6 +723,7 @@ export function projectCodexThread(value: OfficialThread): CodexThread {
     gitInfo: value.gitInfo,
     name: value.name,
     daybreakEnabled: value.daybreakEnabled ?? null,
+    daybreakProgramPropagationEnrolled: value.daybreakProgramPropagationEnrolled ?? null,
     turns,
   };
 }

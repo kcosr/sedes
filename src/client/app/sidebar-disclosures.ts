@@ -9,7 +9,8 @@ const cache = new Map<string, { raw: string | null; state: DisclosureState }>();
 
 function read(category: string): DisclosureState {
   try {
-    const raw = localStorage.getItem(storagePrefix + category);
+    const key = storagePrefix + category;
+    let raw = localStorage.getItem(key);
     const previous = cache.get(category);
     if (previous?.raw === raw) return previous.state;
     let parsed: unknown = {};
@@ -21,6 +22,17 @@ function read(category: string): DisclosureState {
     const state = typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
       ? Object.fromEntries(Object.entries(parsed).filter(([, value]) => typeof value === "boolean"))
       : {};
+    if ((category === "shelves" || category.startsWith("flat:")) && Object.hasOwn(state, "settled")) {
+      state.parked ??= state.settled;
+      delete state.settled;
+      const migrated = JSON.stringify(state);
+      try {
+        localStorage.setItem(key, migrated);
+        raw = migrated;
+      } catch {
+        // Storage unavailable: use the migrated disclosure in memory.
+      }
+    }
     cache.set(category, { raw, state });
     return state;
   } catch {

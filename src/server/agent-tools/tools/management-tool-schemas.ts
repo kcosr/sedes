@@ -17,6 +17,20 @@ export const cursorSchema = Type.String({ minLength: 1, maxLength: 2_048 });
 export const pageSizeSchema = Type.Integer({ minimum: 1, maximum: 100 });
 export const isoDateSchema = Type.String({ minLength: 20, maxLength: 40 });
 export const threadTitleSchema = Type.String({ minLength: 1, maxLength: 240 });
+export const threadSnoozeOutputProperties = {
+  snoozedUntil: Type.Optional(
+    Type.String({
+      minLength: 20,
+      maxLength: 40,
+      description: "ISO timestamp of the wake deadline, present when snoozed.",
+    }),
+  ),
+  wakeReminder: Type.Optional(
+    Type.Union([Type.String({ minLength: 1, maxLength: 1_000 }), Type.Null()], {
+      description: "Reminder text, or null when snoozed without a reminder.",
+    }),
+  ),
+};
 export const taskTitleSchema = Type.String({ minLength: 1, maxLength: 240 });
 export const taskDetailsSchema = Type.String({
   maxLength: TASK_DETAILS_MAX_CHARACTERS,

@@ -109,8 +109,8 @@ describe("ThreadStackActionDialog", () => {
   });
 
   it.each([
-    { action: "settle", progress: "Parking…" },
-    { action: "unsettle", progress: "Unparking…" },
+    { action: "park", progress: "Parking…" },
+    { action: "unpark", progress: "Unparking…" },
     { action: "archive", progress: "Archiving…" },
   ] as const)("names the pending action: $progress", ({ action, progress }) => {
     const initial = props();
@@ -126,8 +126,8 @@ describe("ThreadStackActionDialog", () => {
   });
 
   it.each([
-    { action: "settle", label: "Park" },
-    { action: "unsettle", label: "Unpark" },
+    { action: "park", label: "Park" },
+    { action: "unpark", label: "Unpark" },
   ] as const)("does not offer task changes for $label", async ({ action, label }) => {
     const initial = props();
     render(
@@ -149,7 +149,7 @@ describe("ThreadStackActionDialog", () => {
     expect(initial.onConfirm).toHaveBeenCalledWith({});
   });
 
-  it.each(["settle", "unsettle", "archive"] as const)(
+  it.each(["park", "unpark", "archive"] as const)(
     "applies the task limit only to archive when the action is %s",
     (action) => {
       const initial = props();
@@ -171,7 +171,7 @@ describe("ThreadStackActionDialog", () => {
         expect(screen.getByRole("button", { name: "Archive" })).toBeDisabled();
       } else {
         expect(warning).not.toBeInTheDocument();
-        expect(screen.getByRole("button", { name: action === "settle" ? "Park" : "Unpark" })).toBeEnabled();
+        expect(screen.getByRole("button", { name: action === "park" ? "Park" : "Unpark" })).toBeEnabled();
       }
     },
   );
