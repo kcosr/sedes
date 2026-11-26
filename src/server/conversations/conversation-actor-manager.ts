@@ -1508,6 +1508,7 @@ export class ConversationActorManager {
             if (entry.control === control) {
               entry.control = undefined;
               entry.controlEnded = true;
+              actor?.retireEarlyReplyAuthority();
               this.#publishInputActivity(entry);
             }
           }, { once: true });

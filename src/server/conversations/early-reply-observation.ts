@@ -25,6 +25,7 @@ export class LiveFinalReplyTracker {
     readonly backendTurnId: string;
     readonly generation: string;
     readonly observation: EarlyReplyObservation;
+    itemClosed: boolean;
     previousText: string;
     precedingPhases: NonFinalPhase[];
   };
@@ -58,7 +59,8 @@ export class LiveFinalReplyTracker {
     const current = this.#active;
     if (current && (event.type === "turn_completed" || event.type === "turn_updated") &&
         event.turn.backendTurnId === current.backendTurnId && event.turn.status !== "in_progress") {
-      this.finish(event.turn.status === "completed" ? "item_done" : "authority_lost");
+      if (current.itemClosed && event.turn.status === "completed") this.#active = undefined;
+      else this.finish(event.turn.status === "completed" ? "item_done" : "authority_lost");
       return;
     }
     if (!supported || projector.runState !== "running" ||
@@ -76,7 +78,7 @@ export class LiveFinalReplyTracker {
     if (current && current.backendItemId !== item.backendItemId) {
       // Another section may become nonempty while the first offer is still
       // waiting for durable admission. Refresh that pending offer's phase evidence.
-      if (current.backendTurnId === item.backendTurnId && item.semanticKind === "assistant_message") {
+      if (!current.itemClosed && current.backendTurnId === item.backendTurnId && item.semanticKind === "assistant_message") {
         if (item.responsePhase === "final" && projector.assistantItemsForTurn(current.backendTurnId)
             .find(candidate => candidate.responsePhase === "final")?.backendItemId !== current.backendItemId) {
           this.finish("source_changed");
@@ -116,7 +118,7 @@ export class LiveFinalReplyTracker {
       catch { return; }
       if (!observation) return;
       this.#active = { source, backendItemId: item.backendItemId, backendTurnId: turn.backendTurnId,
-        generation: projector.generation, observation, previousText: "", precedingPhases: this.#precedingPhases(projector, turn.backendTurnId) };
+        generation: projector.generation, observation, itemClosed: false, previousText: "", precedingPhases: this.#precedingPhases(projector, turn.backendTurnId) };
     }
     const active = this.#active!;
     // Two units cover scanner grapheme lookahead. The extra unit reports a
@@ -126,8 +128,18 @@ export class LiveFinalReplyTracker {
       this.finish("source_changed");
       return;
     }
-    if (item.status !== "streaming") {
-      this.finish(item.status === "completed" ? "item_done" : "authority_lost");
+    if (item.status === "completed") {
+      if (!active.itemClosed) {
+        active.itemClosed = true;
+        // Yield buffered output now. Retain cancellation authority until the
+        // turn settles, in case this projection or its owner disappears first.
+        try { active.observation.finish("item_done"); }
+        catch { this.finish("authority_lost"); }
+      }
+      return;
+    }
+    if (item.status !== "streaming" || active.itemClosed) {
+      this.finish("authority_lost");
       return;
     }
     active.previousText = text;
@@ -140,19 +152,19 @@ export class LiveFinalReplyTracker {
 export function afterSubmissionAdmission(
   sink: EarlyReplyObservation, admission: Promise<void>, lifetime: AbortSignal, isCurrent: () => boolean,
 ): EarlyReplyObservation {
-  let ended = false;
+  let finished: Parameters<EarlyReplyObservation["finish"]>[0] | undefined;
   let admitted = false;
   let pending: Parameters<EarlyReplyObservation["observe"]> | undefined;
   const observation: EarlyReplyObservation = {
     observe(text, phases) {
-      if (ended) return;
+      if (finished) return;
       if (!isCurrent()) return observation.finish("authority_lost");
       if (admitted) sink.observe(text, phases);
       else pending = [text, phases];
     },
     finish(reason) {
-      if (ended) return;
-      ended = true;
+      if (finished && (finished !== "item_done" || reason === "item_done")) return;
+      finished = reason;
       pending = undefined;
       lifetime.removeEventListener("abort", retire);
       sink.finish(reason);
@@ -165,7 +177,7 @@ export function afterSubmissionAdmission(
   lifetime.addEventListener("abort", retire, { once: true });
   if (lifetime.aborted) retire();
   void admission.then(() => {
-    if (ended) return;
+    if (finished) return;
     admitted = true;
     if (pending) {
       const [text, phases] = pending;

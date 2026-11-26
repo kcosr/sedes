@@ -444,6 +444,11 @@ export class ConversationActor {
     return this.#handle.automaticEviction;
   }
 
+  /** A provider control can retire independently of its final projection event. */
+  retireEarlyReplyAuthority(): void {
+    this.#earlyReply?.finish("authority_lost");
+  }
+
   get readOnly(): boolean {
     return this.#environmentLease === undefined;
   }

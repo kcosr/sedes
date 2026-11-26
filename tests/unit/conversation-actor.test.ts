@@ -5911,6 +5911,11 @@ describe("ConversationActorManager", () => {
         } else {
           expect(observation.finish).toHaveBeenCalledWith(end);
           expect(observation.observe).not.toHaveBeenCalled();
+          if (end === "item_done") {
+            handle.emit(0, { type: "resnapshot_required", reason: "sequence_gap" }, 4);
+            await acquired.actor.captureSnapshotState();
+            expect(observation.finish.mock.calls.map(args => args[0])).toEqual(["item_done", "authority_lost"]);
+          }
         }
       } finally {
         release();
@@ -5979,6 +5984,33 @@ describe("ConversationActorManager", () => {
     } finally {
       deliver(receipt);
       controls.close();
+      acquired.release();
+      await manager.close();
+    }
+  });
+
+  it("plays a final item already covered by the establishment snapshot only through authoritative completion", async () => {
+    const capture = vi.fn(() => ({ observe: vi.fn(), finish: vi.fn() }));
+    const completion = vi.fn<AuthoritativeCompletionObserver>();
+    const { driver, handle, manager } = fixture(completion, undefined, 10, undefined, 8,
+      undefined, undefined, undefined, undefined, capture);
+    const initial = snapshot("running");
+    initial.turnsById["turn-1"]!.completionCorrelations = ["accepted"];
+    const item = { backendItemId: "item-1", backendTurnId: "turn-1", semanticKind: "assistant_message" as const,
+      responsePhase: "final" as const, status: "streaming" as const, sourceOrder: 0, markdown: { text: "Written during cold start. " } };
+    initial.itemsById["item-1"] = item;
+    handle.establishmentSnapshots[0] = initial;
+    handle.backendCapabilities.mockResolvedValue({ ...await handle.backendCapabilities(), liveFinalAnswer: "supported" });
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    try {
+      const markdown = { text: item.markdown.text + "A later sentence arrives." };
+      handle.emit(0, { type: "item_updated", item: { ...item, markdown } }, 0);
+      handle.emit(0, { type: "item_completed", item: { ...item, markdown, status: "completed" } }, 1);
+      handle.emit(0, { type: "turn_completed", turn: { ...initial.turnsById["turn-1"]!, status: "completed" } }, 2);
+      await vi.waitFor(() => expect(completion).toHaveBeenCalledOnce());
+      expect(capture).not.toHaveBeenCalled();
+      expect(completion.mock.calls[0]![2]).toMatchObject({ provenance: "live", classifiedResult: { final: markdown } });
+    } finally {
       acquired.release();
       await manager.close();
     }

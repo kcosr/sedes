@@ -1203,6 +1203,8 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         clearEarlySession();
         streamGeneration++; if (stream != null) stream.cancel(); stream = null; voiceStreamId = null;
         policyKnown = false; policy = null; policyGeneration = -1;
+        // Deliberately closed streams (service detach or replacement) lose live tail entitlement too.
+        for (NativeEarlyReply reply : new ArrayList<>(earlyReplies.values())) retireOpening(reply, false);
         handler.post(this::drain);
     }
     private void receive(String event, JSONObject value) {
