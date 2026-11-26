@@ -196,8 +196,12 @@ If the backend identifies the answer later, Sedes reads it at turn completion.
 The phrasing targets count UTF-16 units, including spaces between sentences.
 An eligible plain-prose opening can play early. Markdown such as links, code,
 and lists moves the rest of the answer to completion playback. The voice bar
-shows one reply throughout. **Next** skips that reply, including text still being
-written. Between sentences, the microphone stays closed. If a reply yields its
+shows one reply throughout. **Next** skips the whole reply. **Stop** also clears
+queued playback. **Record** replaces playback with a recording for the spoken
+thread. Each action discards buffered audio and later text for that reply,
+including its completion and automatic listening. This decision survives a
+voice-stream reconnect within the same signed-in session and running app.
+Between sentences, the microphone stays closed. If a reply yields its
 queue position, the device can play another notification and return to the
 remaining text when the turn finishes.
 
