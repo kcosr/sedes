@@ -16,7 +16,7 @@ import { electronSpeech } from "../../src/client/voice/electron-speech-plugin.js
 import { SpeechTransport, type AudioChunk } from "../support/electron-speech-transport.js";
 import { OutboundCodexFixture } from "../support/outbound-codex-fixture.js";
 import { notificationSettingsSchema, voiceNotificationSchema } from "../../src/shared/protocol/notification.js";
-import { directInputReceiptSchema, MAX_DIRECT_INPUT_REQUEST_BYTES, threadInputContextSchema } from "../../src/shared/protocol/thread-input.js";
+import { directInputReceiptLookupSchema, directInputReceiptSchema, MAX_DIRECT_INPUT_REQUEST_BYTES, threadInputContextSchema } from "../../src/shared/protocol/thread-input.js";
 import { clientPollResultSchema, registeredClientSchema } from "../../src/shared/protocol/client-controls.js";
 import { startOpenAiSpeechFixture, waitForSpeech } from "../support/openai-speech-fixture.js";
 import { OpenCodeProductionFixture } from "../support/opencode-production-fixture.js";
@@ -490,10 +490,10 @@ describe("native voice production pipeline with loopback providers", () => {
     let output = "";
     try {
       const threadId = await createVoiceCodexThread(app, socketPath, "android-early-codex");
-      const args = { serverOrigin: app.url, threadId, threadTitle: "Early playback qualification",
+      const args = { serverOrigin: app.url, threadId,
         speechEndpoint: speech.endpoint, speechToken: speech.token, pairingCode: app.authentication.createPairing({ kind: "management" }).token,
-        scenario: "early-reply", mode: "speak", initialText: "Describe early and final speech." };
-      device = adb(["shell", "am", "instrument", "-w", "-r", "-e", "class", "dev.sedes.local.NativeVoiceE2eTest#nativeConversationCycle",
+        initialText: "Describe early and final speech." };
+      device = adb(["shell", "am", "instrument", "-w", "-r", "-e", "class", "dev.sedes.local.NativeVoiceE2eTest#nativeBackgroundEarlyReply",
         ...Object.entries(args).flatMap(([key, value]) => ["-e", key, shellArgument(value)]),
         "dev.sedes.local.test/androidx.test.runner.AndroidJUnitRunner"], 300_000);
       device.child.stdout!.on("data", (chunk: Buffer) => { output += chunk.toString(); });
@@ -504,7 +504,10 @@ describe("native voice production pipeline with loopback providers", () => {
       };
       await waitForSpeech(async () => {
         requireRunningDevice();
-        if (!codex.activeTurnConnected) return false;
+        const admission = /^INSTRUMENTATION_STATUS: voiceAdmission=([0-9a-f-]{36})\r?\n/mu.exec(output)?.[1];
+        if (!admission || !codex.activeTurnConnected) return false;
+        const receipt = directInputReceiptLookupSchema.parse(await app.json(`/api/input-receipts/${admission}`));
+        if (receipt.status !== "found" || receipt.receipt.status !== "accepted") return false;
         const context = threadInputContextSchema.parse(await app.json(`/api/threads/${threadId}/input-context`));
         return context.sourceTurnId && context.steer.availability === "available";
       }, 180_000);
@@ -536,7 +539,7 @@ describe("native voice production pipeline with loopback providers", () => {
     } finally {
       await adb(["shell", "am", "force-stop", "dev.sedes.local"]);
       await device?.catch(() => undefined);
-      await writeFile(path.join(artifactDirectory, "android-early-reply.log"), output);
+      await writeFile(path.join(artifactDirectory, "android-early-reply.log"), output + "\nSpeech requests: " + JSON.stringify((await speech.observations()).speech));
       await codex.close();
     }
   }, 330_000);

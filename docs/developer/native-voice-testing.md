@@ -210,19 +210,25 @@ env -u NODE_ENV SEDES_RUN_REAL_OPENCODE=1 \
 ```
 
 Use `-t 'plays a held live Codex reply in the packaged Android background service'`
-to select the early-reply device case. Its first instrumentation checkpoint
-requires the opening audio to drain while the WebView is backgrounded and the
-source turn is still running. The host then releases the final delta and checks
-the remaining audio and request count.
+to select the early-reply device case. Instrumentation pairs through the Sedes
+HTTP API, saves both credentials through the native keystores, and enables
+Responsive playback through the packaged runtime. It backgrounds the Activity
+and waits for Sedes to accept the registered client's input. The fixture sends
+one sentence and withholds the rest until the device reports that its AudioTrack
+consumed all 24,000 PCM frames while the source turn is still running. Startup
+pre-roll is set to zero so frame counts match the fixture audio. After releasing
+the final delta, the host checks the second drain and the two speech requests.
+The device trace and frame counts are saved in `android-early-reply.log`.
 
 An explicit serial is required. The harness verifies that it is an emulator,
 clears `dev.sedes.local` application data between scenarios, installs the
-current APKs, pairs through the bundled UI, and reverses only its owned Sedes
+current APKs, and reverses only its owned Sedes
 and speech-server ports. `SEDES_ADB_EXECUTABLE` selects adb when needed. Each
 concurrent invocation must own its own disposable emulator. Do not disable
 audio when checking AudioRecord or AudioTrack initialization.
 
-The packaged setup chooses **Own speech server**, saves the endpoint, and enters
+The packaged conversation-cycle cases pair through the bundled UI. Their setup
+chooses **Own speech server**, saves the endpoint, and enters
 the fixture bearer token through the native credential dialog. Once authenticated
 discovery is ready, it chooses models and a voice through the Settings pickers.
 Capture receives deterministic 24 kHz PCM; speech uses real AudioTrack. The
