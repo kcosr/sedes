@@ -90,7 +90,7 @@ final class NativeVoiceAudio {
     private AudioRecord recorder;
     private Focus focus;
     private long generation, focusRelease, warmUntil;
-    private String request, submittedRequest;
+    private String request, submittedRequest, drainedRequest;
     private int rate, previousMode;
     private long frames, trackBase;
     private boolean drainPadded;
@@ -234,6 +234,7 @@ final class NativeVoiceAudio {
         drainPadded = false;
         activeSpool = spool;
         submittedRequest = null;
+        drainedRequest = null;
         request = spool.requestId;
         // requestFocus renews the grace period when PCM arrives. A stalled next synthesis does not hold focus.
         lastPlaybackDrainForTest = null;
@@ -337,6 +338,7 @@ final class NativeVoiceAudio {
                     if (playbackDrainsForTest.size() == 32) playbackDrainsForTest.removeFirst();
                     playbackDrainsForTest.addLast(lastPlaybackDrainForTest);
                 }
+                drainedRequest = id;
                 if (drainPadded || !stagedOutputReady()) releaseTrack();
                 spool.close(); activeSpool = null; request = null; releaseFocusLater();
             }
@@ -356,6 +358,8 @@ final class NativeVoiceAudio {
     }
     /** Includes PCM accepted by the device before the runtime handler processes its callback. */
     boolean submitted(String id) { synchronized (lock) { return id != null && id.equals(submittedRequest); } }
+    /** A retirement on the runtime handler can overtake the posted drain callback. */
+    boolean physicallyDrained(String id) { synchronized (lock) { return id != null && id.equals(drainedRequest); } }
     long pendingPcmBytes() { synchronized (lock) { return activeSpool == null ? 0 : activeSpool.available(); } }
     File spoolForTest() { if (!BuildConfig.DEBUG) throw new IllegalStateException("test_audio_unavailable"); synchronized (lock) { return activeSpool == null ? null : activeSpool.file(); } }
     AudioTrack trackForTest() { if (!BuildConfig.DEBUG) throw new IllegalStateException("test_audio_unavailable"); synchronized (lock) { return track; } }

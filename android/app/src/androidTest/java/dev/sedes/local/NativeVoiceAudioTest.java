@@ -364,6 +364,35 @@ public class NativeVoiceAudioTest {
         } finally { audio.stop(); InstrumentationRegistry.getInstrumentation().runOnMainSync(activity::finish); }
     }
 
+    @Test public void physicalDrainRemainsObservableWhenStopOvertakesItsRuntimeCallback() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        MainActivity activity = (MainActivity) InstrumentationRegistry.getInstrumentation().startActivitySync(
+            new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        CountDownLatch entered = new CountDownLatch(1), allowDelivery = new CountDownLatch(1), delivered = new CountDownLatch(1);
+        NativeVoiceAudio audio = new NativeVoiceAudio(context, new Listener() {
+            @Override public void drained(String id) {
+                entered.countDown();
+                try { allowDelivery.await(10, TimeUnit.SECONDS); }
+                catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
+                delivered.countDown();
+            }
+        });
+        try {
+            audio.configure(NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object("startupPreRollMs", 0)));
+            audio.begin("drained-before-stop"); assertFalse(audio.physicallyDrained("drained-before-stop"));
+            audio.pcm("drained-before-stop", 24000, new byte[4800]); audio.end("drained-before-stop");
+            assertTrue(entered.await(5, TimeUnit.SECONDS));
+            audio.stop();
+            assertTrue(audio.physicallyDrained("drained-before-stop"));
+            assertFalse(audio.physicallyDrained("other-request")); assertEquals(1, delivered.getCount());
+            allowDelivery.countDown(); assertTrue(delivered.await(5, TimeUnit.SECONDS));
+            audio.begin("replacement"); assertFalse(audio.physicallyDrained("drained-before-stop"));
+        } finally {
+            allowDelivery.countDown(); audio.stop();
+            InstrumentationRegistry.getInstrumentation().runOnMainSync(activity::finish);
+        }
+    }
+
     @Test public void cancellingAReadySuccessorAfterPhysicalDrainNeverCommitsItsPcm() throws Exception {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         MainActivity activity = (MainActivity) InstrumentationRegistry.getInstrumentation().startActivitySync(

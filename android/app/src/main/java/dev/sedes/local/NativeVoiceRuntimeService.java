@@ -138,7 +138,7 @@ public final class NativeVoiceRuntimeService extends Service {
     static boolean wakeLockNeeded(JSONObject state) {
         String phase = state.optString("phase");
         return state.optJSONObject("active") != null && !phase.equals("recordingRecovery") &&
-            !phase.equals("waiting_for_reply_text") && !phase.equals("idle") && !phase.equals("off") && !phase.equals("error");
+            !phase.equals("idle") && !phase.equals("off") && !phase.equals("error");
     }
     private void mediaAction(String action) {
         if (!foreground) return;

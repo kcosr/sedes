@@ -22,7 +22,12 @@ Native snapshot version 17 includes the device preference `speech.earlyReplyPlay
 and its independent `speech.earlyReplyRevision`. The setter checks the expected
 connection generation and preference revision. An open early reply that has
 caught up to its writer exposes `waiting_for_reply_text`. This phase retains
-the reply's playback controls and never starts automatic listening.
+the reply's playback controls. Android keeps its foreground service's partial
+wake lock while waiting so the runtime can release the queue while the screen
+is off. A pending approval or blocking input shortens that wait to two seconds.
+Otherwise the runtime releases the reply after sixty seconds without an
+eligible span. Audio focus follows its usual post-drain grace period, and
+automatic listening requires an eligible terminal notification.
 The snapshot also includes `speech.audioQuality`, its independent
 `audioQualityRevision`, per-model picker `audioInputFormats`, and
 `active.recording` (ID, Keep listening and
@@ -1398,7 +1403,8 @@ AudioRecordingCallback plus the initial active recording configuration
 detect Android client silencing even while zero PCM continues. Quiet PCM alone is not
 microphone failure. Callbacks are capture-generation fenced and unregistered on
 cleanup. The service renews its bounded ten-minute wake lock every five minutes
-only during active capture/drain; a retained draft holds no wake lock.
+during active voice interactions, including speech waiting for more reply text.
+Idle, retained-draft recovery and service teardown release the lock.
 
 Speech synthesis sends one complete bounded text chunk to `/audio/speech` and
 consumes its raw 24 kHz PCM response incrementally. Outgoing transcription

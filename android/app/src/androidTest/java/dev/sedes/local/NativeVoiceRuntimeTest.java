@@ -2167,6 +2167,173 @@ public class NativeVoiceRuntimeTest {
             assertNotNull(other); assertEquals("Other reply.", other.text); assertEquals(0, f.queued());
         }
     }
+    @Test public void bothReintroducesYieldedReplyWhenQueuedPlaybackReachesSpeakerAfterTerminalArrival() throws Exception {
+        try (Fixture f = new Fixture(false, false)) {
+            f.readyEarlyVoice(); f.settings(NativeVoiceJson.object("speechContent", "both"));
+            String id = "eefa".repeat(16); f.earlySpan(id, 0, 0, "Opening.");
+            SpeechJob title = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(title); assertEquals("Early", title.text);
+            f.runtime.playbackSubmitted(title.id); f.runtime.drained(title.id); f.flush();
+            SpeechJob opening = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(opening);
+            f.runtime.playbackSubmitted(opening.id); f.flush();
+            f.replay(false, f.target, "silent", "Skip me"); f.replay(false, f.target, "audible", "Other reply");
+            JSONObject yield = f.earlyFrame(id, "yield", 1); NativeVoiceJson.put(yield, "reason", "item_done");
+            f.wire(NativeVoiceSse.EARLY_REPLY, yield);
+            f.runtime.drained(opening.id); f.flush(); SpeechJob silent = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(silent);
+            f.earlyTerminal(id, "Opening. Remaining.");
+            assertEquals("The audible replay and A's terminal are waiting", 2, f.queued());
+            String skipped = f.runtime.snapshot().getJSONObject("active").getString("id");
+            assertNull(f.command("skipCurrentPlayback", NativeVoiceJson.object("interactionId", skipped)));
+            SpeechJob other = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(other); assertEquals("Other reply", other.text);
+            f.runtime.playbackSubmitted(other.id); f.runtime.drained(other.id); f.flush();
+            SpeechJob resumed = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(resumed);
+            assertEquals("Early\n\nAgent finished\n\nRemaining.", resumed.text);
+        }
+    }
+    @Test public void approvalsAndBlockingInputReleaseAfterTwoSecondsOrdinaryRepliesWaitSixty() throws Exception {
+        for (String kind : new String[]{"approval.requested", "input.requested", "turn.completed"}) try (Fixture f = new Fixture(false, false)) {
+            f.readyEarlyVoice(); f.settings(NativeVoiceJson.object("speechContent", "both"));
+            java.util.concurrent.atomic.AtomicLong clock = new java.util.concurrent.atomic.AtomicLong(10000);
+            f.onOwner(() -> set(f.runtime, "earlyClock", (java.util.function.LongSupplier)clock::get));
+            String id = "cede".repeat(16); f.earlySpan(id, 0, 0, "Opening.");
+            for (int request = 0; request < 2; request++) {
+                SpeechJob part = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(part);
+                f.runtime.playbackSubmitted(part.id); f.runtime.drained(part.id); f.flush();
+            }
+            assertEquals("waiting_for_reply_text", f.runtime.snapshot().getString("phase"));
+            assertTrue(NativeVoiceRuntimeService.wakeLockNeeded(f.runtime.snapshot()));
+            clock.set(10500);
+            if (kind.equals("turn.completed")) f.receiveReply("Ordinary", false);
+            else {
+                String urgent = UUID.randomUUID().toString();
+                f.wire("notification", NativeVoiceJson.object("sourceEventId", urgent, "generation", f.policyGeneration, "voice", "speak",
+                    "payload", NativeVoiceJson.object("schemaVersion", 5, "notificationId", urgent, "event", kind,
+                        "occurredAt", "2026-11-26T14:00:00Z", "title", "Urgent", "message", "Needs action",
+                        "thread", NativeVoiceJson.object("id", f.target, "title", "Another thread"))));
+            }
+            long deadline = kind.equals("turn.completed") ? 70000 : 12500;
+            clock.set(deadline - 1); f.runtime.deviceAwake(); f.flush();
+            assertEquals(id, f.runtime.snapshot().getJSONObject("active").getString("id")); assertEquals(1, f.queued());
+            assertTrue(f.speech.speechRequests.isEmpty());
+            clock.set(deadline); f.runtime.deviceAwake(); f.flush();
+            SpeechJob next = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(kind, next);
+            assertNotEquals(id, f.runtime.snapshot().getJSONObject("active").getString("id")); assertEquals(0, f.queued());
+            assertTrue(f.speech.transcriptions.isEmpty());
+            f.runtime.drained(next.id); f.flush();
+            assertFalse("Finishing the successor releases the partial wake lock", NativeVoiceRuntimeService.wakeLockNeeded(f.runtime.snapshot()));
+        }
+    }
+    @Test public void idleWriterExpiryAndVoiceTeardownReleaseTheWakeLockWithoutOpeningTheMicrophone() throws Exception {
+        for (boolean teardown : new boolean[]{false, true}) try (Fixture f = new Fixture(false, false)) {
+            f.readyEarlyVoice();
+            java.util.concurrent.atomic.AtomicLong clock = new java.util.concurrent.atomic.AtomicLong(100);
+            f.onOwner(() -> set(f.runtime, "earlyClock", (java.util.function.LongSupplier)clock::get));
+            String id = "ceda".repeat(16); f.earlySpan(id, 0, 0, "Opening.");
+            SpeechJob first = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(first);
+            f.runtime.drained(first.id); f.flush();
+            assertEquals("waiting_for_reply_text", f.runtime.snapshot().getString("phase"));
+            assertTrue(NativeVoiceRuntimeService.wakeLockNeeded(f.runtime.snapshot()));
+            if (teardown) assertNull(f.command("disconnect", new JSONObject()));
+            else { clock.set(60100); f.runtime.deviceAwake(); f.flush(); }
+            assertTrue(f.runtime.snapshot().isNull("active"));
+            assertFalse(NativeVoiceRuntimeService.wakeLockNeeded(f.runtime.snapshot()));
+            assertTrue(f.speech.transcriptions.isEmpty());
+        }
+    }
+    @Test public void inPlaceTerminalChecksAuthoritativeInputWatermarkBeforeSpeakingOrListening() throws Exception {
+        for (boolean waitingForOpeningValidation : new boolean[]{false, true}) try (Fixture f = new Fixture(false, false)) {
+            f.readyEarlyVoice(); f.settings(NativeVoiceJson.object("autoListen", true));
+            String id = "eaba".repeat(16);
+            f.holdPlaybackValidation = waitingForOpeningValidation;
+            f.earlySpan(id, 0, 0, "Opening.");
+            NativeVoiceHttp.Result old = waitingForOpeningValidation ? f.takeClientTarget(f.target) : null;
+            SpeechJob opening = waitingForOpeningValidation ? null : f.speech.speechRequests.poll(10, TimeUnit.SECONDS);
+            if (!waitingForOpeningValidation) assertNotNull(opening);
+            f.holdPlaybackValidation = true;
+            f.earlyTerminal(id, "Opening. Final.", true);
+            if (old != null) { old.done(200, Fixture.inputContext(f.target), null); f.flush(); }
+            else { f.runtime.drained(opening.id); f.flush(); }
+            NativeVoiceHttp.Result authoritative = f.takeClientTarget(f.target);
+            assertTrue("No terminal output before its own check", f.speech.speechRequests.isEmpty());
+            JSONObject newer = Fixture.inputContext(f.target); NativeVoiceJson.put(newer, "userInputRevision", 1);
+            authoritative.done(200, newer, null); f.flush();
+            assertTrue(f.runtime.snapshot().isNull("active")); assertTrue(f.speech.speechRequests.isEmpty());
+            assertTrue(f.contexts.isEmpty()); assertTrue(f.speech.transcriptions.isEmpty());
+        }
+    }
+    @Test public void localAudioFailureReleasesOpeningOrMakesOneOrdinaryAttemptAfterSeal() throws Exception {
+        for (boolean sealed : new boolean[]{false, true}) try (Fixture f = new Fixture(false, false)) {
+            f.readyEarlyVoice();
+            String id = "eaaa".repeat(16); f.earlySpan(id, 0, 0, "First.");
+            SpeechJob early = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(early);
+            if (sealed) f.earlyTerminal(id, "First. Tail.");
+            f.runtime.failed(early.id, "playback_failed"); f.flush(); assertTrue(early.cancelled);
+            if (!sealed) {
+                assertTrue(f.runtime.snapshot().isNull("active")); assertTrue(f.speech.speechRequests.isEmpty());
+                f.earlyTerminal(id, "First. Tail.");
+            }
+            SpeechJob ordinary = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(ordinary);
+            assertEquals("First. Tail.", ordinary.text);
+            f.runtime.failed(early.id, "playback_failed"); f.runtime.failed(ordinary.id, "invalid_pcm"); f.flush();
+            assertTrue(f.runtime.snapshot().isNull("active")); assertTrue(f.speech.speechRequests.isEmpty());
+        }
+    }
+    @Test public void stagedAudioErrorCancelsStagedRequestAndResumesOnlyAtAuthoritativeTerminal() throws Exception {
+        for (boolean drainWins : new boolean[]{false, true}) try (Fixture f = new Fixture(false, false)) {
+            f.readyEarlyVoice(); String id = "cfed".repeat(16);
+            f.earlySpan(id, 0, 0, "First."); SpeechJob first = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(first);
+            f.earlySpan(id, 1, 6, " Second.");
+            SpeechJob staged = f.stageNextWhilePlaying();
+            if (drainWins) {
+                ((NativeVoiceAudio)field(f.runtime, "audio")).discardStaged(staged.id);
+                f.runtime.drained(first.id); f.runtime.failed(staged.id, "invalid_pcm"); f.flush();
+            } else {
+                f.runtime.failed(staged.id, "invalid_pcm"); f.flush();
+                assertNull(field(field(f.runtime, "active"), "stagedTimeout"));
+                assertFalse(first.cancelled); f.earlySpan(id, 2, 14, " Third.");
+                assertTrue(f.speech.speechRequests.isEmpty());
+                f.runtime.drained(first.id); f.flush();
+            }
+            assertTrue(staged.cancelled);
+            assertTrue(f.runtime.snapshot().isNull("active")); assertTrue(f.speech.speechRequests.isEmpty());
+            f.earlyTerminal(id, "First. Second. Third.");
+            SpeechJob suffix = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(suffix);
+            assertEquals("Second. Third.", suffix.text);
+        }
+    }
+    @Test public void sealedStagedAudioErrorPreservesPrecedingChunkAndUsesOrdinaryProviderFailurePolicy() throws Exception {
+        try (Fixture f = new Fixture(false, false)) {
+            f.readyEarlyVoice(); f.settings(NativeVoiceJson.object("speechTextLimit", 8, "autoListen", true));
+            String id = "ddca".repeat(16);
+            f.earlySpan(id, 0, 0, "First."); SpeechJob first = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(first);
+            f.runtime.drained(first.id); f.flush();
+            f.earlyTerminal(id, "First. Second. Third.", true);
+            SpeechJob second = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(second); assertEquals("Second.", second.text.trim());
+            SpeechJob staged = f.stageNextWhilePlaying(); assertEquals("Third.", staged.text.trim());
+            f.runtime.failed(staged.id, "invalid_pcm"); f.flush(); assertTrue(staged.cancelled);
+            assertFalse(second.cancelled); f.runtime.drained(second.id); f.flush();
+            assertTrue(f.runtime.snapshot().isNull("active")); assertTrue(f.speech.speechRequests.isEmpty());
+            assertTrue(f.speech.transcriptions.isEmpty()); assertTrue(f.contexts.isEmpty());
+        }
+    }
+    @Test public void definitiveSuppressionAfterSupersessionLetsOnlySubmittedPhysicalChunkDrain() throws Exception {
+        try (Fixture f = new Fixture(false, false)) {
+            f.readyEarlyVoice(); String id = "ddce".repeat(16);
+            f.earlySpan(id, 0, 0, "First."); SpeechJob first = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(first);
+            f.runtime.playbackSubmitted(first.id); f.flush(); f.receiveReply("Other.", false);
+            f.earlySpan(id, 1, 6, " Unsent.");
+            for (int n = 0; n < 2; n++) {
+                JSONObject cancel = f.earlyFrame(id, "cancel", n + 2);
+                NativeVoiceJson.put(cancel, "reason", n == 0 ? "superseded" : "publication_suppressed");
+                f.wire(NativeVoiceSse.EARLY_REPLY, cancel);
+                assertEquals(id, f.runtime.snapshot().getJSONObject("active").getString("id"));
+                assertFalse(first.cancelled); assertTrue(f.speech.speechRequests.isEmpty());
+            }
+            assertTrue(((java.util.Map<?, ?>)field(f.runtime, "earlyReplies")).isEmpty());
+            f.runtime.drained(first.id); f.flush();
+            SpeechJob other = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(other);
+            assertEquals("Other.", other.text); assertEquals(0, f.queued()); assertTrue(f.speech.transcriptions.isEmpty());
+        }
+    }
     @Test public void nextStopAndRecordConsumeLateSlicesAndSuppressSuccessfulTerminalFollowup() throws Exception {
         for (String command : new String[] {"skipCurrentPlayback", "stopPlayback", "recordDuringPlayback"}) {
             try (Fixture f = new Fixture(false, false)) {
@@ -6798,7 +6965,8 @@ public class NativeVoiceRuntimeTest {
                         Object current = fixtureField(runtime, "active");
                         NativeVoiceQueue.Item notice = current == null ? null : (NativeVoiceQueue.Item) fixtureField(current, "notification");
                         boolean playbackGate = notice != null && notice.hasInputRevision() &&
-                            fixtureField(runtime, "phase").equals("synthesizing") && !(boolean) fixtureField(current, "playbackTargetAccepted");
+                            fixtureField(runtime, "phase").equals("synthesizing") && (!(boolean) fixtureField(current, "playbackTargetAccepted") ||
+                                notice.early != null && !notice.opening() && !(boolean) fixtureField(current, "terminalPrepared"));
                         boolean readyGate = current != null && (boolean) fixtureField(current, "readyValidationStarted") &&
                             fixtureField(runtime, "phase").equals("arming");
                         if (playbackGate && !holdPlaybackValidation || readyGate && !holdReadyValidation) {
@@ -6917,6 +7085,15 @@ public class NativeVoiceRuntimeTest {
             NativeVoiceJson.put(frame, "rawStart", start); NativeVoiceJson.put(frame, "rawEnd", start + text.length());
             NativeVoiceJson.put(frame, "text", text); NativeVoiceJson.put(frame, "paragraphEnd", false);
             wire(NativeVoiceSse.EARLY_REPLY, frame);
+        }
+        SpeechJob stageNextWhilePlaying() throws Exception {
+            // Pin the physical drain so the regression can fail the second spool before it is promoted.
+            onOwner(() -> {
+                Object item = field(runtime, "active");
+                set(item, "speechRequest", null);
+                invoke("prefetch", new Class<?>[]{item.getClass()}, item);
+            });
+            SpeechJob staged = speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(staged); return staged;
         }
         void earlyTerminal(String id, String text) throws Exception { earlyTerminal(id, text, false); }
         void earlyTerminal(String id, String text, boolean followUp) throws Exception {
