@@ -77,7 +77,7 @@ test("Early reply playback keeps one device preference when its voice settings a
   await page.goto("/settings/voice");
   const early = page.getByRole("combobox", { name: "Early reply playback", exact: true });
   await expect(early).toHaveText("Off");
-  await expect(early).toHaveAccessibleDescription(/Otherwise, read when the turn finishes/);
+  await expect(early).toHaveAccessibleDescription(/final answers and enabled progress updates/);
   await early.tap();
   await expect(page.getByRole("listbox").getByRole("option")).toHaveCount(4);
   await expectNoPageOverflow(page);
