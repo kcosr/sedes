@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { electronSpeechText } from "../../src/client/voice/electron-voice-policy.js";
 import { describe, expect, it } from "vitest";
 import { EarlyReplyScanner } from "../../src/server/conversations/early-reply-scanner.js";
 import { type EarlyReplySegment } from "../../src/shared/protocol/early-reply.js";
@@ -31,6 +33,9 @@ describe("incremental final-answer speech boundaries", () => {
     ["    code line. This follows.", [], "markup"],
     ["The address is example.org. Do visit.", [], "markup"],
     ["First sentence. Visit example.xyz. Then stop.", ["First sentence."], "markup"],
+    ["Visit www.example.com。次の文", [], "markup"],
+    ["See http:foo。次の文", [], "markup"],
+    ["Opening. Visit example.org！次の文", ["Opening."], "markup"],
     ["A custom:resource. Next sentence.", [], "markup"],
     ["First sentence.\n1. List item.", ["First sentence."], "markup"],
     ["No markup.\n\n# A heading", ["No markup.\n\n"], "markup"],
@@ -54,6 +59,24 @@ describe("incremental final-answer speech boundaries", () => {
     expect(scanner.update("First part.")).toEqual({ segments: [] });
     expect(scanner.update("First part. What").segments).toEqual([{ text: "First part.", rawStart: 0, rawEnd: 11, paragraphEnd: false }]);
     expect(scanner.update("First part. When")).toEqual({ segments: [], stop: "source_changed" });
+  });
+  it("releases only printable cumulative prefixes from the shared formatter corpus", () => {
+    const corpus: Array<{ name: string; source: string; segments: string[] }> = JSON.parse(
+      readFileSync(new URL("../../android/app/src/test/resources/early-reply-prefixes.json", import.meta.url), "utf8"),
+    );
+    for (const { name, source, segments } of corpus) {
+      const result = scan(source, []);
+      expect(result.segments.map(span => span.text), name).toEqual(segments);
+      for (const clean of [true, false]) {
+        const finalSpeech = electronSpeechText(source, clean);
+        let previous = "";
+        for (const span of result.segments) {
+          const prepared = electronSpeechText(source.slice(0, span.rawEnd), clean);
+          expect(prepared.startsWith(previous) && finalSpeech.startsWith(prepared), name).toBe(true);
+          previous = prepared;
+        }
+      }
+    }
   });
   it("bounds a giant delta and leaves the rest for terminal reconciliation", () => {
     expect(new EarlyReplyScanner().update("a" + "\u0301".repeat(5000))).toEqual({segments: [], stop: "limit"});

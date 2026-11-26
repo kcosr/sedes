@@ -12,7 +12,7 @@ const terminator = /([.!?。！？]+)[”’"')]*$/u;
 const abbreviation = /(?:^(?:[\p{L}]|Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|vs|etc)\.|(?:\p{L}\.){2,})$/iu;
 // Unknown DNS suffixes and URI schemes are as ambiguous as common ones.
 // Check one preceding label character to keep a long plain word linear.
-const looksLikeUrl = /(?:^www\.|^[a-z][a-z\d+.-]*:(?=.)|[\p{L}\p{N}-]\.\p{L}{2,}(?=[.:!?)’”"']|$))/iu;
+const looksLikeUrl = /(?:^www\.|^[a-z][a-z\d+.-]*:(?=.)|[\p{L}\p{N}-]\.\p{L}{2,}(?=[.:!?。！？、，)'’”"]|$))/iu;
 
 function endsSentence(word: string): boolean {
   const end = terminator.exec(word);
@@ -58,12 +58,18 @@ export class EarlyReplyScanner {
       if (this.#bytes > MAX_EARLY_REPLY_BYTES) { this.#stop = "limit"; break; }
       this.#offset = end;
       const word = () => source.slice(this.#wordStart, this.#wordEnd);
-      if (segment === " " || segment === "\n" || segment === "\r" || segment === "\r\n") {
-        if (this.#insideWord && (looksLikeUrl.test(word()) ||
-          (this.#wordStart === this.#lineStart && /^\d+[.)]$/u.test(word())))) {
+      const separator = segment === " " || segment === "\n" || segment === "\r" || segment === "\r\n";
+      const adjacentCjk = this.#insideWord && startsCjk.test(segment) &&
+        cjkEnd.test(source.slice(Math.max(0, start - 8), start));
+      if (this.#insideWord && (separator || adjacentCjk)) {
+        const finishedWord = word();
+        if (looksLikeUrl.test(finishedWord) ||
+            (this.#wordStart === this.#lineStart && /^\d+[.)]$/u.test(finishedWord))) {
           this.#stop = "markup";
           break;
         }
+      }
+      if (separator) {
         this.#insideWord = false;
         if (segment !== " ") {
           if (!this.#lineHasText && this.#lineStart > 0) this.#release(source, end, true, segments);
@@ -77,7 +83,6 @@ export class EarlyReplyScanner {
         break;
       }
       this.#lineHasText = true;
-      const adjacentCjk = this.#insideWord && startsCjk.test(segment) && cjkEnd.test(source.slice(Math.max(0, start - 8), start));
       if (!this.#insideWord || adjacentCjk) {
         if (this.#wordEnd > this.#released && startsWord.test(segment) && endsSentence(word())) {
           this.#release(source, this.#wordEnd, false, segments);
