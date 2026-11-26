@@ -25,6 +25,14 @@ function resumed() {
     multiAgentMode: "explicitRequestOnly", initialTurnsPage: null, turnsBackwardsCursor: null, itemsBackwardsCursor: null,
   });
 }
+function resumedWithActiveHead(turnId: string) {
+  return {
+    ...resumed(), thread: { ...thread("thread", true), turns: [{
+      id: turnId, rootTurnId: turnId, items: [], itemsView: "full", status: "inProgress",
+      startedAt: null, completedAt: null, durationMs: null, error: null,
+    }] },
+  };
+}
 function updatedSettings(): OfficialCodexServerNotificationParams<"thread/settings/updated"> {
   return {
     threadId: "thread",
@@ -119,12 +127,8 @@ describe("persistent Codex native session recovery", () => {
         method: "thread/status/changed", params: { threadId: "thread", status } });
     }
     notifyTurn("turn/completed", "older", 15);
-    const activeHead = {
-      id: "newer", rootTurnId: "newer", items: [], itemsView: "full", status: "inProgress",
-      startedAt: null, completedAt: null, durationMs: null, error: null,
-    };
     const result = source === "resume-head"
-      ? { ...resumed(), thread: { ...thread("thread", true), turns: [activeHead] } }
+      ? resumedWithActiveHead("newer")
       : resumed();
     pending?.apply({ result, generation: 1, inboundSequence: 10 });
     pending?.close();
@@ -136,6 +140,42 @@ describe("persistent Codex native session recovery", () => {
     else expect(f.request).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ method: "turn/interrupt" }),
       { threadId: "thread", turnId: "newer" }, expect.objectContaining({ signal: expect.any(AbortSignal) }));
     notifyTurn("turn/completed", "newer", 16);
+    expect(f.sessions.canIdle()).toBe(true);
+  });
+
+  it.each([{ type: "idle" }, { type: "active", activeFlags: [] }] as const)(
+    "keeps the exact turn from a resume receipt after a buffered $type hint and a later unrelated completion",
+    status => {
+      const f = fixture(() => ({}));
+      const pending = f.sessions.trackResume("thread", 1);
+      f.sessions.observeNotification({ kind: "decoded_notification", generation: 1, sequence: 11,
+        method: "thread/status/changed", params: { threadId: "thread", status } });
+      pending.apply({ result: resumedWithActiveHead("newer"), generation: 1, inboundSequence: 10 });
+      pending.close();
+      f.sessions.evict("thread", 1);
+      expect(f.sessions.canIdle()).toBe(false);
+
+      const notifyCompletion = (id: string, sequence: number) => f.sessions.observeNotification({
+        kind: "decoded_notification", generation: 1, sequence,
+        method: "turn/completed", params: { threadId: "thread", turn: { id } },
+      });
+      notifyCompletion("older", 12);
+      expect(f.sessions.canIdle()).toBe(false);
+      notifyCompletion("newer", 13);
+      expect(f.sessions.canIdle()).toBe(true);
+    },
+  );
+
+  it("preserves matching terminal proof when a buffered idle hint follows it", () => {
+    const f = fixture(() => ({}));
+    const pending = f.sessions.trackResume("thread", 1);
+    f.sessions.observeNotification({ kind: "decoded_notification", generation: 1, sequence: 11,
+      method: "turn/completed", params: { threadId: "thread", turn: { id: "newer" } } });
+    f.sessions.observeNotification({ kind: "decoded_notification", generation: 1, sequence: 12,
+      method: "thread/status/changed", params: { threadId: "thread", status: { type: "idle" } } });
+    pending.apply({ result: resumedWithActiveHead("newer"), generation: 1, inboundSequence: 10 });
+    pending.close();
+    f.sessions.evict("thread", 1);
     expect(f.sessions.canIdle()).toBe(true);
   });
 

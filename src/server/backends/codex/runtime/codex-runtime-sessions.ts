@@ -16,9 +16,10 @@ type SettingsObservation = {
 type TurnActivity = { active: boolean; activeTurn: { id: string; source: "started" | "snapshot" } | null };
 type LoadedActivity = TurnActivity & { activeGoal: boolean };
 type TurnLifecycle = { method: "turn/started" | "turn/completed"; turnId: string };
+type PendingTurnActivity = TurnActivity & { sequence: number; known: boolean; completedTurnId?: string; unscopedStatusOnly?: boolean };
 type PendingResume = {
   generation: number;
-  activity?: TurnActivity & { sequence: number; known: boolean; completedTurnId?: string };
+  activity?: PendingTurnActivity;
   goal?: { sequence: number; active: boolean };
   settings?: SettingsObservation;
   closedSequence?: number;
@@ -78,9 +79,12 @@ export class CodexRuntimeSessions {
         if (pending.settings) this.#applySettings(session, pending.settings);
         const activity = pending.activity;
         const observed = activity ?? (priorSession?.generation === generation ? priorSession : undefined);
-        if (activity && activity.sequence > receipt.inboundSequence &&
-            (activity.completedTurnId === undefined || session.activeTurn === null ||
-              activity.completedTurnId === session.activeTurn.id)) {
+        // The pending observer may not know the exact turn until the receipt
+        // exposes it. An unscoped active or idle hint cannot erase this ID.
+        const conflictsWithSnapshot = session.activeTurn !== null &&
+          (activity?.unscopedStatusOnly === true ||
+            (activity?.completedTurnId !== undefined && activity.completedTurnId !== session.activeTurn.id));
+        if (activity && activity.sequence > receipt.inboundSequence && !conflictsWithSnapshot) {
           session.active = activity.active;
           session.activeTurn = activity.activeTurn;
           session.known = activity.known;
@@ -162,8 +166,14 @@ export class CodexRuntimeSessions {
         }
       } else if (status) {
         const activity = observeThreadActivity(status, prior);
-        if (activity && (pending.activity?.sequence ?? -1) < notification.sequence) {
-          pending.activity = { ...activity, sequence: notification.sequence, known: status === "active" || status === "idle" };
+        const previous = pending.activity;
+        // An idle hint that agrees with a terminal event supplies no newer
+        // turn identity. Preserve the terminal proof for the receipt merger.
+        if (activity && (previous?.sequence ?? -1) < notification.sequence &&
+            (status !== "idle" || previous?.completedTurnId === undefined)) {
+          const known = status === "active" || status === "idle";
+          pending.activity = { ...activity, sequence: notification.sequence, known,
+            unscopedStatusOnly: known && (previous === undefined || previous.unscopedStatusOnly === true) };
         }
       } else if (notification.method === "thread/goal/updated" || notification.method === "thread/goal/cleared") {
         if ((pending.goal?.sequence ?? -1) < notification.sequence) pending.goal = { sequence: notification.sequence,
