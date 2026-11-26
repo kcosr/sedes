@@ -424,6 +424,23 @@ then switches to direct live delivery. Active output therefore does not require
 or wait for a quiet interval. Older pages use `thread/turns/list` plus exact
 per-turn hydration as request-local work and release each page after projection.
 
+When Sedes has followed the active turn through a successful `turn/completed`,
+the terminal notification supplies the final items. A summary-only terminal
+can use the observed items once each streaming item has completed. Sedes
+publishes the turn result at that point. An opening sentence can keep playing
+while Sedes checks the thread's global run state. The terminal voice
+notification still waits for recognition-target settlement when required.
+
+For a visible turn with a known history boundary, a single
+`thread/turns/list` request reads the newest two turn shells. The head
+confirms the completed turn, and its predecessor connects it to the existing
+paging cursor. Sedes reuses the older items. If the head has moved, the
+boundary cannot be verified, or the check times out, Sedes reestablishes
+the projection before advertising a new idle state. A summary that leaves a
+streaming item unresolved, a full terminal view that drops an observed item,
+or a lost provider connection still requires authoritative recovery.
+A failed or interrupted head turn still uses the full refresh.
+
 Older-page reads keep the exact paginated adapter and daemon generation that
 issued their cursor. Ordinary live-tail projection installs do not invalidate
 that authority. Reestablishment, invalidation, close, or a daemon generation

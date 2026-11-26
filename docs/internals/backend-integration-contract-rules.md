@@ -2956,6 +2956,16 @@ replayed starts, late final labels and passive history handles take the ordinary
 completion path. A new backend enables this capability on its live handle when
 it can provide the same item identity, explicit live start and cumulative source text.
 
+A provider can confirm one turn before it knows whether the thread is idle.
+Publish any corrected items before the turn completion. If the actor receives
+a contiguous live success for the same turn, item, and accepted input, a later
+projection gap stops new speech offers and lets the queued completion reconcile
+the opening already playing. Expiration of the provider connection follows the
+same ordering. A gap before that terminal revokes the opening. User interruption,
+policy withdrawal, replacement of a live control, and loss of the actor's
+ownership still retire early playback. Controls that require an idle thread
+continue to wait for evidence of thread-wide settlement.
+
 Live progress is a separate, passive observation of an already projected,
 completed provisional or partial assistant item on an active Sedes-accepted turn. Providers
 must attach `liveProgress: true` to the qualifying live `item_completed` or

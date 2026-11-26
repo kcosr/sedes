@@ -1,5 +1,5 @@
 import { MAX_EARLY_REPLY_BYTES } from "../../shared/protocol/early-reply.js";
-import type { BackendConversationEvent } from "../../shared/protocol/backend.js";
+import type { BackendConversationEvent, BackendTurn } from "../../shared/protocol/backend.js";
 import type { ConversationProjector } from "./conversation-projector.js";
 
 export interface EarlyReplySource {
@@ -25,6 +25,7 @@ export class LiveFinalReplyTracker {
     readonly backendTurnId: string;
     readonly generation: string;
     readonly observation: EarlyReplyObservation;
+    orderedSettlement?: "received" | "reconciling";
     itemClosed: boolean;
     previousText: string;
     precedingPhases: NonFinalPhase[];
@@ -40,6 +41,38 @@ export class LiveFinalReplyTracker {
       }
     }
     return [...phases];
+  }
+
+  #settlesObservedAnswer(turn: BackendTurn): boolean {
+    const current = this.#active;
+    return !!current && turn.status === "completed" && turn.backendTurnId === current.backendTurnId &&
+      turn.orderedBackendItemIds.includes(current.backendItemId) &&
+      current.source.backendCorrelations.some(id => turn.completionCorrelations?.includes(id));
+  }
+
+  /** A later projection gap can race the application of this exact native terminal. */
+  noteOrderedSettlement(turn: BackendTurn): void {
+    if (this.#active && this.#settlesObservedAnswer(turn)) this.#active.orderedSettlement = "received";
+  }
+
+  projectionGap(): void {
+    const current = this.#active;
+    if (current?.orderedSettlement) {
+      // Stop offering text immediately, including offers still awaiting submission admission.
+      // The queued item/turn events can still reject a rewrite or settle this source.
+      if (current.orderedSettlement !== "reconciling") {
+        current.orderedSettlement = "reconciling";
+        if (!current.itemClosed) {
+          try { current.observation.finish("item_done"); } catch { this.finish("authority_lost"); }
+        }
+      }
+      return;
+    }
+    this.finish("authority_lost");
+  }
+
+  get reconcilingOrderedSettlement(): boolean {
+    return this.#active?.orderedSettlement === "reconciling";
   }
 
   finish(reason: Parameters<EarlyReplyObservation["finish"]>[0]): void {
@@ -59,8 +92,10 @@ export class LiveFinalReplyTracker {
     const current = this.#active;
     if (current && (event.type === "turn_completed" || event.type === "turn_updated") &&
         event.turn.backendTurnId === current.backendTurnId && event.turn.status !== "in_progress") {
-      if (current.itemClosed && event.turn.status === "completed") this.#active = undefined;
-      else this.finish(event.turn.status === "completed" ? "item_done" : "authority_lost");
+      const confirmed = (event.type !== "turn_completed" || event.completionProvenance !== "recovered") &&
+        this.#settlesObservedAnswer(event.turn);
+      if (current.itemClosed && confirmed) this.#active = undefined;
+      else this.finish(confirmed ? "item_done" : "authority_lost");
       return;
     }
     if (!supported || projector.runState !== "running" ||

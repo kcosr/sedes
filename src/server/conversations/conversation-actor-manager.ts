@@ -1506,7 +1506,11 @@ export class ConversationActorManager {
         opaqueBindingDetail: input.opaqueBindingDetail,
         onControlReady: control => {
           if (signal.aborted || control.lifetime.aborted || !control.generation) return;
-          if (entry.control !== control) actor?.retireEarlyReplyAuthority();
+          if (entry.control !== control && !entry.controlEnded) {
+            // An earlier abort listener can install the new control synchronously.
+            if (entry.control?.lifetime.aborted) actor?.noteEarlyReplyObservationGap();
+            else actor?.retireEarlyReplyAuthority();
+          }
           entry.control = control;
           entry.controlEnded = false;
           this.#publishInputActivity(entry);
@@ -1514,7 +1518,7 @@ export class ConversationActorManager {
             if (entry.control === control) {
               entry.control = undefined;
               entry.controlEnded = true;
-              actor?.retireEarlyReplyAuthority();
+              actor?.noteEarlyReplyObservationGap();
               this.#publishInputActivity(entry);
             }
           }, { once: true });

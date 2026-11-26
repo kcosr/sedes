@@ -87,9 +87,9 @@ describe("native voice production pipeline with loopback providers", () => {
     expect(observations.transcriptions.at(-1)).toMatchObject({ sampleRate: 16000, bytes: 32000 });
   });
 
-  it("streams a qualified live Codex sentence through the Electron runtime and real speech server before the turn finishes", async () => {
+  it.each(["after-drain", "while-speaking"] as const)("streams a qualified live Codex sentence through the Electron runtime and seals it %s", async timing => {
     await speech.configure({ reset: true, ttsDurationSeconds: 1 });
-    const socketPath = path.join(app.directory, "voice-codex.sock");
+    const socketPath = path.join(app.directory, `voice-${timing}.sock`);
     const codex = await OutboundCodexFixture.start(socketPath, { workspacePath: app.workspace });
     const endpoint = configuredSedesServer(app.url);
     const profileId = randomUUID();
@@ -102,6 +102,8 @@ describe("native voice production pipeline with loopback providers", () => {
       notify(event, value) { if (event === "audioChunk") audioListener?.(value as AudioChunk); },
     });
     const pcm: Buffer[] = [];
+    let releaseOpening: (() => void) | undefined;
+    let openingDrain: Promise<void> | undefined;
     const noopListener = async () => ({ remove: async () => {} });
     const frames: string[] = [];
     const desktop = new ElectronVoiceRuntime({
@@ -122,13 +124,17 @@ describe("native voice production pipeline with loopback providers", () => {
         getWindowState: async () => ({ visible: false }), setAudioActive: async () => {},
       },
       audio: {
-        createPlayback: async () => ({ append: async bytes => { pcm.push(Buffer.from(bytes)); }, finish: async () => {}, cancel() {} }),
+        createPlayback: async () => ({
+          append: async bytes => { pcm.push(Buffer.from(bytes)); },
+          finish: async () => { await openingDrain; },
+          cancel() {},
+        }),
         startCapture: async () => { throw new Error("Early reply opened the microphone"); },
         stopCapture: async () => {}, playCue: async () => {}, listInputDevices: async () => [], dispose: async () => {},
       },
     });
     try {
-      const threadId = await createVoiceCodexThread(app, socketPath, "early-reply-codex");
+      const threadId = await createVoiceCodexThread(app, socketPath, `early-reply-${timing}`);
 
       const { navigationNamespace: identity } = authenticationStatusSchema.parse(await app.json("/api/auth/status"));
       if (!identity) throw new Error("Admitted native client lacks a principal namespace");
@@ -153,28 +159,50 @@ describe("native voice production pipeline with loopback providers", () => {
       const opening = "The first sentence reaches the speaker while the response is still running.";
       const ending = "The remaining sentence arrives after completion.";
       const answer = codex.startAnswer("final_answer");
+      if (timing === "while-speaking") openingDrain = new Promise<void>(resolve => { releaseOpening = resolve; });
       answer.append(opening + " The");
       await expect.poll(() => ({ frames: [...frames], pcmAvailable: pcm.length > 0 }), { timeout: 15_000 }).toMatchObject({
         frames: expect.arrayContaining(["voice_early_reply:begin"]), pcmAvailable: true,
       });
       expect((await app.thread(threadId)).runState).toBe("running");
       expect((await speech.observations()).speech).toEqual([{ text: opening }]);
-      await expect.poll(async () => (await desktop.getState()).phase, { timeout: 15_000 }).toBe("waiting_for_reply_text");
-      expect(Buffer.concat(pcm)).toEqual(speech.pcm);
-      const waiting = await desktop.getState();
-      expect(waiting.active?.threadId).toBe(threadId);
-      expect(waiting.queue.count).toBe(0);
+      const openingPhase = timing === "after-drain" ? "waiting_for_reply_text" : "speaking";
+      await expect.poll(async () => (await desktop.getState()).phase, { timeout: 15_000 }).toBe(openingPhase);
+      const active = (await desktop.getState()).active;
+      expect(active?.threadId).toBe(threadId);
+      expect((await desktop.getState()).queue.count).toBe(0);
 
-      answer.append(ending.slice(3));
+      if (openingDrain) {
+        // As on the Pixel, markup ends early publication while the opening is audible.
+        // Hold the provider's completion-time history read and keep the physical sink playing.
+        answer.append(" **remaining sentence** arrives after completion.");
+        await waitForSpeech(() => frames.includes("voice_early_reply:yield"));
+        codex.holdNextTurnListUntil(openingDrain);
+      } else {
+        expect(Buffer.concat(pcm)).toEqual(speech.pcm);
+        answer.append(ending.slice(3));
+      }
       answer.complete();
+      const completionIndex = codex.requests.length;
       codex.completeTurn();
-      await expect.poll(async () => ({ phase: (await desktop.getState()).phase, frames: [...frames] }), { timeout: 15_000 }).toMatchObject({
-        phase: "idle", frames: expect.arrayContaining(["notification"]),
-      });
+      await waitForSpeech(() => frames.includes("notification") && codex.requests.slice(completionIndex)
+        .some(request => request.method === "thread/turns/list"));
+      expect(frames).not.toContain("voice_early_reply:cancel");
+      if (releaseOpening) {
+        expect(await desktop.getState()).toMatchObject({ active: { id: active!.id }, queue: { count: 0 }, phase: "speaking" });
+        releaseOpening();
+      }
+      await expect.poll(async () => (await desktop.getState()).phase, { timeout: 15_000 }).toBe("idle");
       expect((await speech.observations()).speech).toEqual([{ text: opening }, { text: ending }]);
       expect(Buffer.concat(pcm)).toEqual(Buffer.concat([speech.pcm, speech.pcm]));
       expect((await desktop.getState()).errors).toEqual([]);
+      if (timing === "after-drain") {
+        const historyReads = codex.requests.slice(completionIndex).filter(request =>
+          request.method === "thread/turns/list" || request.method === "thread/items/list");
+        expect(historyReads.map(request => request.method)).toEqual(["thread/turns/list"]);
+      }
     } finally {
+      releaseOpening?.();
       await desktop.disconnect({ expectedConnectionGeneration: (await desktop.getState()).connectionGeneration });
       setEndpointCredential(endpoint, null);
       setEndpointProfile(endpoint, null);

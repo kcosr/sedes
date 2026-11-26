@@ -474,9 +474,11 @@ User-facing changes are collected here before release. See the
 
 ### Fixed
 
-- A steered turn with several accepted inputs now shares one completion
-  publication. Deferred voice actions wait for the correct reply to drain,
-  including when early playback is Off.
+- Codex can finish a continuously observed reply without rereading older
+  turns. A slow history check no longer cuts off the opening sentence and
+  starts the same reply again. A steered turn with several accepted inputs
+  shares one completion publication. Deferred voice actions wait for the
+  correct reply to drain, including when early playback is Off.
   ([#165](https://github.com/kcosr/sedes/pull/165))
 
 - Codex can refresh saved threads with MCP tool results and display live tool

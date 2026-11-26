@@ -114,6 +114,7 @@ import {
 import {
   CodexHistoryProjectionError,
   codexNativeItemCoordinate,
+  codexNativeHistoryVisibleTurnCount,
   codexBackendTurnId,
   materializeCodexGeneratedImagePublications,
   projectCodexItemSlice,
@@ -563,6 +564,7 @@ export class CodexConversationHandle implements ConversationHandle {
   #controlLifetime = new AbortController();
   #controlGeneration = 0;
   #controlObservationRevision = 0;
+  #lastPositiveActivity: { generation: number; sequence: number } | undefined;
   #controlTurn: { generation: number; turnId: string | null } | undefined;
   // Status can become active before turn/start names the accepted turn. Keep
   // that compatible hint separate from evidence that withdraws start authority.
@@ -2270,6 +2272,7 @@ export class CodexConversationHandle implements ConversationHandle {
           pending.observedTurnId = parsed.turn.id;
         }
         if (this.#subagentSpawningTurn?.turnId !== parsed.turn.id) this.#subagentSpawningTurn = undefined;
+        this.#lastPositiveActivity = { generation: notification.generation, sequence: notification.sequence };
         this.#controlTurn = { generation: notification.generation, turnId: parsed.turn.id };
         this.#speedSession.observedStart(parsed.turn.id);
       } else if (notification.method === "turn/completed") {
@@ -2287,6 +2290,9 @@ export class CodexConversationHandle implements ConversationHandle {
         this.#speedSession.completed(parsed.turn.id);
       } else if (notification.method === "thread/status/changed") {
         const parsed = codexC2NotificationSchemas["thread/status/changed"].parse(notification.params);
+        if (parsed.status.type === "active") {
+          this.#lastPositiveActivity = { generation: notification.generation, sequence: notification.sequence };
+        }
         if (parsed.status.type !== "active" && this.#pendingControlStart) this.#pendingControlStart.blocked = true;
         if (parsed.status.type === "idle") { this.#controlTurn = { generation: notification.generation, turnId: null }; this.#speedSession.observedIdle(); }
         else if (this.#controlTurn?.turnId === null) this.#controlTurn = undefined;
@@ -4216,7 +4222,11 @@ export class CodexConversationHandle implements ConversationHandle {
     } as const;
   }
 
-  async #installTerminalizedStreamingProjection(thread: CodexThread) {
+  #hasNewerActivity(generation: number, sequence: number): boolean {
+    return this.#lastPositiveActivity?.generation === generation && this.#lastPositiveActivity.sequence > sequence;
+  }
+
+  async #installTerminalizedStreamingProjection(thread: CodexThread, generation: number, sequence: number) {
     const previousSnapshot = this.#snapshotWindow;
     const previousNativeThread = this.#nativeThread;
     const expectedInstallEpoch = this.#projectionInstallEpoch;
@@ -4225,6 +4235,7 @@ export class CodexConversationHandle implements ConversationHandle {
         thread,
         new Map(),
       );
+    if (thread.status.type === "idle" && this.#hasNewerActivity(generation, sequence)) return undefined;
     if (
       this.#closing ||
       this.#closed ||
@@ -5092,6 +5103,58 @@ export class CodexConversationHandle implements ConversationHandle {
     }
   };
 
+  async #confirmPaginatedCompletion(
+    adapter: CodexPaginatedHistoryAdapter,
+    turn: CodexTurn,
+    generation: number,
+    sequence: number,
+  ): Promise<boolean> {
+    const snapshot = this.#snapshotWindow;
+    const thread = this.#nativeThread;
+    const epoch = this.#projectionInstallEpoch;
+    if (!snapshot || !thread) return false;
+    const current = () => {
+      const lifecycle = this.#client.lifecycleSnapshot();
+      return !this.#closing && !this.#closed && !this.#projectionInvalidated &&
+        this.#projectionInstallEpoch === epoch && this.#snapshotWindow === snapshot &&
+        this.#nativeThread === thread && this.#paginatedHistoryAdapter === adapter &&
+        lifecycle.state === "ready" && lifecycle.generation === generation;
+    };
+    try {
+      const beforeHead = await adapter.readCompletedHeadBoundary(turn, new AbortController().signal);
+      if (!current()) return true;
+      if (!beforeHead) {
+        // The exact turn already settled, but the thread head has not been confirmed.
+        this.#invalidateProjection("history_changed");
+        return true;
+      }
+      const retainedTurnIds = new Set(thread.turns.map(({ id }) => id));
+      adapter.installCompletedHeadBoundary(turn.id, beforeHead, retainedTurnIds);
+      this.#paginatedHistoryPreviousCursor = adapter.cursorAfterCurrentTurns(retainedTurnIds);
+    } catch (error) {
+      if (!current()) return true;
+      // A lost owner or contradictory outcome still revokes the projection.
+      // A rejected read or unusable cursor provides no new turn evidence.
+      if (invalidatesCodexCompletionAuthority(error, generation)) throw error;
+      // Discard even a partially installed paging boundary before exposing
+      // diagnostics or letting another caller request history.
+      this.#invalidateProjection("history_changed");
+      this.#reportError(error);
+      return true;
+    }
+    // Raw activity can arrive while the projection rail awaits this read.
+    // It can precede a known turn id, or the successor may already have finished.
+    if (this.#hasNewerActivity(generation, sequence) ||
+        (this.#controlTurn?.generation === generation && this.#controlTurn.turnId &&
+          this.#controlTurn.turnId !== turn.id)) return true;
+    this.#nativeThread = { ...thread, status: { type: "idle" } };
+    this.#snapshotWindow = { ...snapshot, runState: "idle" };
+    // Only the ASCII run-state value changed. Keep the existing byte ledger.
+    this.#projectionSerializedBytes += "idle".length - snapshot.runState.length;
+    this.#emit({ type: "run_state_changed", state: "idle" });
+    return true;
+  }
+
   async #applyStableNotification(
     generation: number,
     sequence: number,
@@ -5106,7 +5169,7 @@ export class CodexConversationHandle implements ConversationHandle {
           codexC2NotificationSchemas["thread/status/changed"].parse(params);
         if (
           parsed.status.type === "idle" &&
-          thread.turns.at(-1)?.status === "inProgress"
+          (thread.turns.at(-1)?.status === "inProgress" || this.#hasNewerActivity(generation, sequence))
         ) {
           // Codex can publish idle immediately before the authoritative
           // turn/completed notification, including after every item has
@@ -5125,7 +5188,8 @@ export class CodexConversationHandle implements ConversationHandle {
                 liveUpdated,
                 this.#streamingNativeItems,
               )
-            : await this.#installTerminalizedStreamingProjection(liveUpdated);
+            : await this.#installTerminalizedStreamingProjection(liveUpdated, generation, sequence);
+        if (!projection) return true;
         if (parsed.status.type === "active") {
           this.#installProjection(
             projection,
@@ -5190,6 +5254,7 @@ export class CodexConversationHandle implements ConversationHandle {
               readonly page: CodexPaginatedNativePage;
             }
           | undefined;
+        let completionAdapter: CodexPaginatedHistoryAdapter | undefined;
         let updated = notificationUpdated;
         const expectedInstallEpoch = this.#projectionInstallEpoch;
         if (
@@ -5199,33 +5264,42 @@ export class CodexConversationHandle implements ConversationHandle {
         ) {
           const adapter = this.#paginatedHistoryAdapter;
           if (!adapter) return false;
-          const page = await adapter.refreshCurrentHead(
-            SNAPSHOT_TURN_LIMIT,
-            new AbortController().signal,
-          );
-          if (page.thread.status.type === "active") {
-            // The provider head advanced beyond this completion before its
-            // turn/started lifecycle reached Sedes. Installing that turn
-            // would publish an active id with no incremental turn/item
-            // events, so require one atomic replacement instead.
-            return false;
+          if (currentTurn === head && currentTurn?.status === "inProgress" &&
+              notificationTurn.status === "completed" && thread.status.type === "active" &&
+              codexNativeHistoryVisibleTurnCount({ ...thread, turns: [notificationTurn] }, this.#correlationScope) === 1) {
+            // The contiguous lifecycle proves this turn's result before
+            // history can prove the thread's next head or global idle.
+            updated = { ...notificationUpdated, status: thread.status };
+            completionAdapter = adapter;
+          } else {
+            const page = await adapter.refreshCurrentHead(
+              SNAPSHOT_TURN_LIMIT,
+              new AbortController().signal,
+            );
+            if (page.thread.status.type === "active") {
+              // The provider head advanced beyond this completion before its
+              // turn/started lifecycle reached Sedes. Installing that turn
+              // would publish an active id with no incremental turn/item
+              // events, so require one atomic replacement instead.
+              return false;
+            }
+            if (
+              this.#closing ||
+              this.#closed ||
+              this.#projectionInvalidated ||
+              this.#projectionInstallEpoch !== expectedInstallEpoch ||
+              this.#nativeThread !== thread ||
+              this.#client.lifecycleSnapshot().generation !== generation
+            ) {
+              return false;
+            }
+            updated = {
+              ...notificationUpdated,
+              status: page.thread.status,
+              turns: page.thread.turns,
+            };
+            paginatedInstallation = { adapter, page };
           }
-          if (
-            this.#closing ||
-            this.#closed ||
-            this.#projectionInvalidated ||
-            this.#projectionInstallEpoch !== expectedInstallEpoch ||
-            this.#nativeThread !== thread ||
-            this.#client.lifecycleSnapshot().generation !== generation
-          ) {
-            return false;
-          }
-          updated = {
-            ...notificationUpdated,
-            status: page.thread.status,
-            turns: page.thread.turns,
-          };
-          paginatedInstallation = { adapter, page };
         }
         const liveUpdated = materializeLiveThread(
           updated,
@@ -5322,6 +5396,9 @@ export class CodexConversationHandle implements ConversationHandle {
               }
             : {}),
         });
+        if (completionAdapter) {
+          return await this.#confirmPaginatedCompletion(completionAdapter, notificationTurn, generation, sequence);
+        }
         return true;
       }
       case "item/started":
@@ -6778,6 +6855,17 @@ export function normalizeCodexTurnStatuses(thread: CodexThread): CodexThread {
       stale.has(index) ? { ...turn, status: "interrupted" as const } : turn,
     ),
   };
+}
+
+function invalidatesCodexCompletionAuthority(error: unknown, generation: number): boolean {
+  if (error instanceof BackendError) {
+    return error.backendCode === "codex_history_reconciliation_required" ||
+      error.backendCode === "codex_paginated_terminal_outcome_conflict";
+  }
+  if (error instanceof CodexRpcRemoteError) return error.generation !== generation;
+  if (!(error instanceof CodexRpcDeliveryError)) return false;
+  const requestLocal = ["codex_rpc_request_aborted", "codex_rpc_request_timeout", "codex_rpc_pending_capacity_exceeded"];
+  return error.generation !== generation || !requestLocal.includes(error.message);
 }
 
 function activeNativeTurnId(thread: CodexThread): string | undefined {

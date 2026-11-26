@@ -30,6 +30,7 @@ export class OutboundCodexFixture {
   readonly #workspacePath: string;
   #active: { socket: WebSocket; thread: CodexThread; turn: CodexThread["turns"][number] } | undefined;
   #pendingSteer?: Extract<CodexThread["turns"][number]["items"][number], { type: "userMessage" }>;
+  #nextTurnListGate?: Promise<void>;
   #closePromise: Promise<void> | undefined;
 
   private constructor(
@@ -69,7 +70,15 @@ export class OutboundCodexFixture {
           if (request.id === undefined) throw new Error("outbound_codex_fixture_unknown_notification");
           if (request.method !== "initialize" && !initialized) throw new Error("outbound_codex_fixture_uninitialized");
           const result = this.#respond(request, socket);
-          socket.send(JSON.stringify({ id: request.id, result }));
+          const response = JSON.stringify({ id: request.id, result });
+          if (request.method === "thread/turns/list" && this.#nextTurnListGate) {
+            void this.#nextTurnListGate.then(() => {
+              if (socket.readyState === WebSocket.OPEN) socket.send(response);
+            });
+            this.#nextTurnListGate = undefined;
+            return;
+          }
+          socket.send(response);
           if (request.method === "turn/start" && this.#active) {
             const { thread, turn } = this.#active;
             this.#notify("turn/started", { threadId: thread.id, turn });
@@ -156,6 +165,10 @@ export class OutboundCodexFixture {
     const scope = { threadId: thread.id, turnId: turn.id, item };
     this.#notify("item/started", { ...scope, startedAtMs: Date.now() });
     this.#notify("item/completed", { ...scope, completedAtMs: Date.now() });
+  }
+
+  holdNextTurnListUntil(release: Promise<void>): void {
+    this.#nextTurnListGate = release;
   }
 
   completeTurn(): void {

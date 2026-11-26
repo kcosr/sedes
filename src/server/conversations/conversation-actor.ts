@@ -385,8 +385,7 @@ export class ConversationActor {
     this.#started = true;
     this.#unsubscribeHandleEvents = this.#handle.subscribe((event) => {
       if (event.type === "resnapshot_required") {
-        this.#earlyReplyGapRevision += 1;
-        this.#earlyReply?.finish("authority_lost");
+        this.noteEarlyReplyObservationGap();
       }
       if (event.type === "resnapshot_required" && interruptsCompletionObservation(event.reason)) {
         // Raw evidence remains observable while a replacement snapshot has
@@ -444,7 +443,13 @@ export class ConversationActor {
     return this.#handle.automaticEviction;
   }
 
-  /** Actor and provider-control lifetimes can end before the terminal projection event. */
+  /** A provider-control lifetime can expire before its sequenced projection-gap notification arrives. */
+  noteEarlyReplyObservationGap(): void {
+    this.#earlyReplyGapRevision += 1;
+    this.#earlyReply?.projectionGap();
+  }
+
+  /** Explicit withdrawal by the actor owner or replacement of a live control supersedes queued terminal evidence. */
   retireEarlyReplyAuthority(): void {
     this.#earlyReply?.finish("authority_lost");
   }
@@ -1473,7 +1478,6 @@ export class ConversationActor {
     if (this.#handleReplacementRequired) {
       throw new Error("conversation_actor_handle_replacement_required");
     }
-    this.#earlyReply?.finish("authority_lost");
     const earlyReplyGapRevision = this.#earlyReplyGapRevision;
     this.#establishmentEpoch += 1;
     const epoch = this.#establishmentEpoch;
@@ -1595,11 +1599,19 @@ export class ConversationActor {
     established: EstablishedBackendProjection,
     epoch: number,
   ): Unsubscribe {
+    let nextEarlyReplySequence: number | undefined = established.handleSequence + 1;
     return established.subscribeFromNext((event) => {
       if (this.#closing || this.#closed) return;
+      // Only the contiguous rail can settle a reply before a subsequently reported gap.
+      nextEarlyReplySequence = event.handleSequence === nextEarlyReplySequence ? event.handleSequence + 1 : undefined;
+      const earlyReplyGapRevision = this.#earlyReplyGapRevision;
+      if (nextEarlyReplySequence !== undefined && epoch === this.#establishmentEpoch &&
+          earlyReplyGapRevision === this.#earlyReplyBaselineRevision && event.event.type === "turn_completed" &&
+          event.event.completionProvenance !== "recovered") {
+        this.#earlyReply?.noteOrderedSettlement(event.event.turn);
+      }
       if (epoch === this.#establishmentEpoch && event.event.type === "resnapshot_required") {
-        this.#earlyReplyGapRevision += 1;
-        this.#earlyReply?.finish("authority_lost");
+        this.noteEarlyReplyObservationGap();
       }
       if (epoch === this.#establishmentEpoch && event.event.type === "resnapshot_required" &&
           interruptsCompletionObservation(event.event.reason)) {
@@ -1647,7 +1659,9 @@ export class ConversationActor {
             return;
           }
           this.#earlyReply?.accept(nativeEvent, this.#projector, this.#snapshotState?.timeline.activeTurnId,
-            !this.#closing && !this.#handleReplacementRequired && this.#earlyReplyBaselineRevision === this.#earlyReplyGapRevision &&
+            !this.#closing &&
+            ((!this.#handleReplacementRequired && this.#earlyReplyBaselineRevision === this.#earlyReplyGapRevision) ||
+             (this.#earlyReply.reconcilingOrderedSettlement && earlyReplyGapRevision === this.#earlyReplyBaselineRevision)) &&
             this.#snapshotState?.backendCapabilities.liveFinalAnswer === "supported", newFinalStart);
           if ((nativeEvent.type === "item_completed" || nativeEvent.type === "item_updated") && nativeEvent.liveProgress &&
               nativeEvent.item.semanticKind === "assistant_message" && nativeEvent.item.status === "completed" &&
@@ -2007,6 +2021,8 @@ export class ConversationActor {
   }
 
   async #recoverProjection(): Promise<void> {
+    // Reaching recovery in mailbox order means any remaining reply lacked an applied terminal.
+    this.#earlyReply?.finish("authority_lost");
     if (this.#handleReplacementRequired) {
       this.#failProjectionRecovery(
         new Error("conversation_actor_handle_replacement_required"),

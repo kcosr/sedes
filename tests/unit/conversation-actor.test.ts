@@ -5925,7 +5925,7 @@ describe("ConversationActorManager", () => {
     },
   );
 
-  it.each(["owner abort", "control abort", "control replacement", "terminal then owner abort"] as const)(
+  it.each(["owner abort", "control abort", "control replacement", "terminal then owner abort", "replacement during history reconciliation"] as const)(
     "retains authority over yielded speech until true settlement (%s)", async disposition => {
       const observation = { observe: vi.fn(), finish: vi.fn() };
       const { driver, handle, manager } = fixture(undefined, undefined, 10, undefined, 8,
@@ -5953,13 +5953,15 @@ describe("ConversationActorManager", () => {
         await acquired.actor.captureSnapshotState();
         expect(observation.finish.mock.calls).toEqual([["item_done"]]);
 
-        if (disposition === "terminal then owner abort") {
+        if (disposition === "terminal then owner abort" || disposition === "replacement during history reconciliation") {
           handle.emit(0, { type: "turn_completed", turn: { ...initial.turnsById["turn-1"]!,
             orderedBackendItemIds: ["item-1", "final"], status: "completed" } }, 2);
-          await acquired.actor.captureSnapshotState();
+          if (disposition === "replacement during history reconciliation") {
+            handle.emit(0, { type: "resnapshot_required", reason: "history_changed" }, 3);
+          } else await acquired.actor.captureSnapshotState();
         }
         if (disposition === "control abort") controlLifetime.abort();
-        else if (disposition === "control replacement") {
+        else if (disposition === "control replacement" || disposition === "replacement during history reconciliation") {
           attached.onControlReady?.({ ...control, generation: "replacement-control", lifetime: new AbortController().signal });
         } else {
           void manager.close();
@@ -5975,6 +5977,76 @@ describe("ConversationActorManager", () => {
       }
     },
   );
+
+  it.each([
+    ["matching terminal", ["item_done"]],
+    ["queued text before terminal", ["item_done"]],
+    ["corrected terminal text", ["item_done", "source_changed"]],
+    ["replacement turn", ["item_done", "authority_lost"]],
+    ["history before terminal", ["item_done", "authority_lost"]],
+    ["missing sequence before terminal", ["item_done", "authority_lost"]],
+    ["different correlation", ["item_done", "authority_lost"]],
+    ["uncorrelated terminal without a gap", ["item_done", "authority_lost"]],
+    ["recovered terminal", ["item_done", "authority_lost"]],
+    ["rejected terminal", ["item_done", "authority_lost"]],
+    ["contradiction after terminal", ["item_done"]],
+    ["closed handle after terminal", ["item_done"]],
+  ] as const)("applies terminal evidence in order when a history rebuild races early speech (%s)", async (scenario, expected) => {
+    const early = { observe: vi.fn(), finish: vi.fn() };
+    const completion = vi.fn<AuthoritativeCompletionObserver>();
+    const { driver, handle, manager } = fixture(completion, undefined, 10, undefined, 8,
+      undefined, undefined, undefined, undefined, () => early);
+    const turn = { backendTurnId: "turn-1", status: "in_progress" as const,
+      orderedBackendItemIds: [], completionCorrelations: ["accepted"] };
+    const initial: BackendConversationSnapshot = { runState: "running", activeBackendTurnId: turn.backendTurnId,
+      orderedBackendTurnIds: [turn.backendTurnId], turnsById: { [turn.backendTurnId]: turn }, itemsById: {} };
+    const item = { backendItemId: "final", backendTurnId: turn.backendTurnId, sourceOrder: 0, status: "streaming" as const,
+      semanticKind: "assistant_message" as const, responsePhase: "final" as const, markdown: { text: "Original sentence." } };
+    handle.establishmentSnapshots[0] = initial;
+    handle.backendCapabilities.mockResolvedValue({ ...await handle.backendCapabilities(), liveFinalAnswer: "supported" });
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    try {
+      let sequence = 0;
+      const emit = (event: BackendConversationEvent) => handle.emit(0, event, sequence++);
+      emit({ type: "item_started", item, liveFinalStart: true });
+      const open = scenario === "corrected terminal text" || scenario === "queued text before terminal" || scenario === "closed handle after terminal";
+      if (!open) emit({ type: "item_completed", item: { ...item, status: "completed" } });
+      await acquired.actor.captureSnapshotState();
+      expect(early.finish.mock.calls).toEqual(open ? [] : [["item_done"]]);
+
+      // No waits between these notifications: ingress already knows the terminal while the actor still has to apply it.
+      const gap = { type: "resnapshot_required", reason: "history_changed" } as const;
+      if (scenario === "history before terminal") emit(gap);
+      if (scenario === "missing sequence before terminal") sequence++;
+      let finalText = item.markdown.text;
+      if (scenario === "queued text before terminal") {
+        finalText += " More.";
+        emit({ type: "item_updated", item: { ...item, markdown: { text: finalText } } });
+      }
+      if (scenario === "corrected terminal text") finalText = "Corrected answer.";
+      if (open) emit({ type: "item_completed", item: { ...item, status: "completed", markdown: { text: finalText } } });
+      if (scenario === "replacement turn") {
+        emit({ type: "turn_started", turn: { backendTurnId: "next", status: "in_progress", orderedBackendItemIds: [] } });
+        emit({ type: "run_state_changed", state: "running", activeBackendTurnId: "next" });
+      }
+      emit({ type: "turn_completed", ...(scenario === "recovered terminal" ? { completionProvenance: "recovered" } : {}),
+        turn: { ...turn, status: "completed", orderedBackendItemIds: scenario === "rejected terminal" ? ["final", "unseen"] : ["final"],
+          completionCorrelations: [scenario === "different correlation" || scenario === "uncorrelated terminal without a gap" ? "other-input" : "accepted"] } });
+      if (scenario === "contradiction after terminal") emit({ type: "resnapshot_required", reason: "contradictory_state" });
+      else if (scenario === "closed handle after terminal") emit({ type: "resnapshot_required", reason: "provider_handle_closed" });
+      else if (scenario !== "history before terminal" && scenario !== "uncorrelated terminal without a gap") emit(gap);
+      if (scenario === "closed handle after terminal") await vi.waitFor(() => expect(completion).toHaveBeenCalledTimes(1));
+      else await acquired.actor.captureSnapshotState();
+      expect(early.finish.mock.calls.map(([reason]) => reason)).toEqual(expected);
+      if (scenario === "rejected terminal") expect(completion).not.toHaveBeenCalled();
+      if (scenario === "matching terminal" || scenario === "contradiction after terminal" || open) {
+        expect(early.observe.mock.calls.map(([text]) => text)).toEqual([item.markdown.text]);
+        await vi.waitFor(() => expect(completion).toHaveBeenCalledTimes(1));
+        expect(completion.mock.calls[0]![2]).toMatchObject({ provenance: "live", backendCorrelation: "accepted",
+          classifiedResult: { final: { text: finalText } } });
+      }
+    } finally { acquired.release(); await manager.close(); }
+  });
 
   it.each(["on", "off"] as const)("retains one deferred-control receipt for a steered turn with early playback %s", async mode => {
     const controls = new ClientControlService();
@@ -6726,18 +6798,42 @@ describe("ConversationActorManager", () => {
   );
 
   it.each([
-    { completionFirst: true, provenance: "live" },
-    { completionFirst: false, provenance: "recovered" },
-  ] as const)("preserves receipt ordering with a blocked mailbox when completionFirst=$completionFirst", async ({ completionFirst, provenance }) => {
+    { completionFirst: true, provenance: "live", control: "unchanged" },
+    { completionFirst: false, provenance: "recovered", control: "unchanged" },
+    { completionFirst: true, provenance: "live", control: "reconnect" },
+    { completionFirst: false, provenance: "recovered", control: "reconnect" },
+    { completionFirst: true, provenance: "live", control: "reconnect during abort" },
+  ] as const)("preserves receipt ordering with a blocked mailbox when completionFirst=$completionFirst and control=$control", async ({ completionFirst, provenance, control }) => {
     const observed = vi.fn<AuthoritativeCompletionObserver>();
-    const { driver, handle, manager } = fixture(observed);
-    handle.establishmentSnapshots[0] = snapshot("running");
+    const early = { observe: vi.fn(), finish: vi.fn() };
+    const { driver, handle, manager } = fixture(observed, undefined, 10, undefined, 8,
+      undefined, undefined, undefined, undefined, () => early);
+    handle.backendCapabilities.mockResolvedValue({ ...await handle.backendCapabilities(), liveFinalAnswer: "supported" });
+    const controlLifetime = new AbortController();
+    const first = { generation: "original", lifetime: controlLifetime.signal, interrupt: handle.interrupt, reconcileInterrupt: handle.reconcileInterrupt };
+    const next = { ...first, generation: "reconnected", lifetime: new AbortController().signal };
+    let reconnect!: () => void;
+    vi.mocked(driver.attach).mockImplementation(async input => {
+      reconnect = () => input.onControlReady?.(next);
+      if (control === "reconnect during abort") controlLifetime.signal.addEventListener("abort", reconnect, { once: true });
+      input.onControlReady?.(first);
+      return handle as unknown as ConversationHandle;
+    });
+    const initial = snapshot("running");
+    initial.turnsById["turn-1"]!.completionCorrelations = ["accepted-operation"];
+    handle.establishmentSnapshots[0] = initial;
+    const item = { backendItemId: "final", backendTurnId: "turn-1", sourceOrder: 1, status: "streaming" as const,
+      semanticKind: "assistant_message" as const, responsePhase: "final" as const, markdown: { text: "An audible answer." } };
     const terminal = snapshot();
     terminal.turnsById["turn-1"] = {
-      ...terminal.turnsById["turn-1"]!, completionCorrelations: ["accepted-operation"],
+      ...terminal.turnsById["turn-1"]!, orderedBackendItemIds: ["item-1", "final"], completionCorrelations: ["accepted-operation"],
     };
+    terminal.itemsById.final = { ...item, status: "completed" };
     handle.establishmentSnapshots.push(terminal);
     const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    handle.emit(0, { type: "item_started", item, liveFinalStart: true }, 0);
+    await acquired.actor.captureSnapshotState();
+    expect(early.observe).toHaveBeenCalledWith(item.markdown.text, ["unclassified"]);
     let release!: () => void;
     const blocked = new Promise<void>((resolve) => { release = resolve; });
     let reached!: () => void;
@@ -6745,20 +6841,32 @@ describe("ConversationActorManager", () => {
     handle.usage.mockImplementationOnce(async () => { reached(); await blocked; return {}; });
     const reading = acquired.actor.usage();
     await waiting;
-    if (completionFirst) {
-      handle.emit(0, { type: "turn_completed", turn: terminal.turnsById["turn-1"]! }, 0);
-      handle.emit(0, { type: "resnapshot_required", reason: "sequence_gap" }, 1);
-    } else {
-      handle.emit(0, { type: "resnapshot_required", reason: "sequence_gap" }, 0);
-      handle.emit(0, { type: "turn_completed", turn: terminal.turnsById["turn-1"]! }, 1);
-    }
-    release();
+    const disconnect = (sequence: number) => {
+      if (control !== "unchanged") {
+        // Codex expires this control synchronously, then reports its projection gap later.
+        controlLifetime.abort();
+        expect(early.finish.mock.calls).toEqual([[completionFirst ? "item_done" : "authority_lost"]]);
+        if (control === "reconnect") reconnect();
+        expect(early.finish.mock.calls).toEqual([[completionFirst ? "item_done" : "authority_lost"]]);
+      }
+      handle.emit(0, { type: "resnapshot_required", reason: "sequence_gap" }, sequence);
+    };
+    try {
+      handle.emit(0, { type: "item_completed", item: terminal.itemsById.final! }, 1);
+      if (!completionFirst) disconnect(2);
+      handle.emit(0, { type: "turn_completed", turn: terminal.turnsById["turn-1"]! }, completionFirst ? 2 : 3);
+      if (completionFirst) disconnect(3);
+      expect(observed).not.toHaveBeenCalled();
+      expect(early.finish.mock.calls).toEqual([[completionFirst ? "item_done" : "authority_lost"]]);
+    } finally { release(); }
     await reading;
     const expectedPublications = completionFirst ? 2 : 1;
     await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(expectedPublications));
     await acquired.actor.replayAuthoritativeCompletions();
     await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(expectedPublications + 1));
-    expect(observed.mock.calls.every((call) => call[2].provenance === provenance)).toBe(true);
+    expect(early.finish.mock.calls).toEqual([[completionFirst ? "item_done" : "authority_lost"]]);
+    expect(observed.mock.calls.every(([, , completion]) => completion.provenance === provenance &&
+      completion.backendCorrelation === "accepted-operation" && completion.classifiedResult?.final?.text === item.markdown.text)).toBe(true);
     acquired.release();
     await manager.close();
   });

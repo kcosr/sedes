@@ -85,6 +85,7 @@ export class CodexPaginatedHistoryAdapter {
   readonly #cursorKey = randomBytes(32);
   readonly #currentCursorAfterVisibleTurn = new Map<string, string>();
   #currentCursorBeforeSource: string | undefined;
+  #currentNativeHeadId: string | undefined;
   #currentSourceVisibleTurnIds: readonly string[] = [];
 
   constructor(input: {
@@ -268,6 +269,65 @@ export class CodexPaginatedHistoryAdapter {
       async (bounded) =>
         await this.#readDetachedHeadWithinDeadline(visibleLimit, bounded, itemTimestamps),
     );
+  }
+
+  /**
+   * The terminal notification supplies this turn's items. Only the native head
+   * and its predecessor are needed to extend an established paging boundary.
+   * A different predecessor can contain turns we never observed.
+   */
+  async readCompletedHeadBoundary(
+    turn: CodexTurn,
+    signal: AbortSignal,
+  ): Promise<string | undefined> {
+    return await this.#withAcquisitionDeadline(signal, async (bounded) => {
+      const page = await this.#requestTurns(undefined, 2, bounded);
+      const [head, predecessor] = page.data;
+      if (head?.id !== turn.id) return undefined;
+      // The history row may still describe this turn before its observed
+      // completion. Only a different terminal outcome contradicts that result.
+      if (head.status === "inProgress") return undefined;
+      if (head.status !== turn.status) {
+        throw reconciliationError("Codex returned conflicting completion status for the current turn.", "codex_paginated_terminal_outcome_conflict");
+      }
+      // A durable timestamp can refine the live terminal. Reconcile a
+      // changed scalar through the normal atomic history replacement.
+      if ((head.startedAt !== null && head.startedAt !== turn.startedAt) ||
+          (head.completedAt !== null && head.completedAt !== turn.completedAt) ||
+          (head.durationMs !== null && head.durationMs !== turn.durationMs) ||
+          head.rootTurnId !== turn.rootTurnId) return undefined;
+      if (!page.backwardsCursor) {
+        throw reconciliationError("Codex paginated head did not expose a stable cursor.", "codex_paginated_head_cursor_invalid");
+      }
+      if (this.#currentNativeHeadId !== head.id &&
+          (predecessor?.id !== this.#currentNativeHeadId || (!predecessor && page.nextCursor !== null))) {
+        return undefined;
+      }
+      return this.#issueCursor({
+        mode: "paginated", threadId: this.#thread.id, generation: this.#generation,
+        sortDirection: "desc", itemsView: "notLoaded", providerCursor: page.backwardsCursor, skip: 0,
+      });
+    }, CURRENT_HEAD_REFRESH_TIMEOUT_MILLISECONDS);
+  }
+
+  installCompletedHeadBoundary(
+    nativeTurnId: string,
+    beforeHead: string,
+    retainedTurnIds: ReadonlySet<string>,
+  ): void {
+    // The last verified source starts exactly where paging after this new
+    // head should resume. Keep issued cursors usable across later appends.
+    if (nativeTurnId !== this.#currentNativeHeadId && this.#currentSourceVisibleTurnIds.length > 0 && this.#currentCursorBeforeSource) {
+      this.#currentCursorAfterVisibleTurn.set(nativeTurnId, this.#currentCursorBeforeSource);
+    }
+    this.#currentNativeHeadId = nativeTurnId;
+    this.#currentCursorBeforeSource = beforeHead;
+    this.#currentSourceVisibleTurnIds = [nativeTurnId, ...this.#currentSourceVisibleTurnIds.filter(
+      (id) => id !== nativeTurnId && retainedTurnIds.has(id),
+    )];
+    for (const id of this.#currentCursorAfterVisibleTurn.keys()) {
+      if (!retainedTurnIds.has(id)) this.#currentCursorAfterVisibleTurn.delete(id);
+    }
   }
 
   async refreshCurrentHead(
@@ -745,6 +805,7 @@ export class CodexPaginatedHistoryAdapter {
       ),
     );
     const selectedSourceIds = sourceIds.slice(0, selectedNativeCount);
+    this.#currentNativeHeadId = page.source.segments[0]?.nativeTurnIds[0];
     this.#currentCursorAfterVisibleTurn.clear();
     this.#currentCursorBeforeSource = this.#cursorAfterNewestNativeTurns(
       page.source,
