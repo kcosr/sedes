@@ -939,4 +939,75 @@ describe("early Electron reply playback", () => {
     expect((await h.runtime.getState()).active?.id).toBe(key(4096));
   });
 
+  it.each(["yield", "reconnect"] as const)("keeps cleanup and Both attribution frozen across %s", async release => {
+    const h = await setup("balanced", { speechContent: "both", cleanSpeechText: true });
+    h.early(opening); await h.waiting();
+    if (release === "yield") {
+      h.early({ ...common, seq: 1, kind: "yield", reason: "markup" }); await h.idle();
+    } else {
+      await h.runtime.setConnection({ ...BINDING, reconnect: true }); h.emitPolicy();
+    }
+    await h.runtime.updateSettings({ ...await h.command(), expectedRevision: (await h.runtime.getState()).settingsRevision,
+      patch: { speechContent: "messages", cleanSpeechText: false } });
+    h.complete("One. Read [the guide](https://example.test/private).");
+    await h.idle();
+    expect(h.texts()).toEqual(["Thread A", "One.", "Read the guide.", "Done"]);
+  });
+
+  it("honors Input mode at terminal even after an early slice drained in Speak", async () => {
+    const h = await setup(); h.early(opening); await h.waiting();
+    await h.runtime.updateSettings({ ...await h.command(), expectedRevision: (await h.runtime.getState()).settingsRevision,
+      patch: { audioMode: "input", autoListen: true } });
+    h.complete(); await vi.waitFor(() => expect(h.audio.startCapture).toHaveBeenCalledOnce());
+    expect(h.texts()).toEqual(["One."]);
+  });
+
+  it("retains the terminal barrier when expanded pending speech evicts an unsealed opening", async () => {
+    const h = await setup(); await h.foreground(); await h.begin();
+    const opened = vi.fn(); await h.runtime.addListener("openThread", opened);
+    // Five short cleaned links expand to within four bytes of the pending queue limit.
+    const source = "[x](" + "b".repeat(52_423) + ")";
+    for (let i = 0; i < 5; i++) h.complete(source, "other-" + i);
+    h.early(opening);
+    expect((await h.runtime.getState()).queue.count).toBe(6);
+    const command: ClientCommand = { id: crypto.randomUUID(), action: "switch_thread", sourceThreadId: THREAD, sourceTurnId: "turn-1",
+      threadId: OTHER, listen: false, expiresAt: Date.now() + 60_000 };
+    await h.current().callbacks.command(command);
+    await h.current().callbacks.command({ ...command, action: "turn_settled", replyEventId: id, replyStreamIds: [h.current().voiceStreamId!] });
+    const cleanup = async (cleanSpeechText: boolean) => h.runtime.updateSettings({ ...await h.command(),
+      expectedRevision: (await h.runtime.getState()).settingsRevision, patch: { cleanSpeechText } });
+    await cleanup(false); expect((await h.runtime.getState()).queue.count).toBe(5);
+    await cleanup(true);
+    await h.runtime.stopCurrentInteraction({ ...await h.command(), interactionId: (await h.runtime.getState()).active!.id });
+    await h.idle(); expect(opened).not.toHaveBeenCalled();
+    h.early(append); expect((await h.runtime.getState()).queue.count).toBe(0);
+    h.complete(); await h.idle(); await vi.waitFor(() => expect(opened).toHaveBeenCalledOnce());
+    expect(h.texts().at(-1)).toBe("One. Two. Three.");
+  });
+
+  it.each(["finish", "revoke"] as const)("handles continued delivery after a local formatter yield while the speaker drains (%s)", async action => {
+    const h = await setup(), drain = deferred<void>();
+    h.playback.finish.mockImplementationOnce(() => drain.promise);
+    // A later definition reinterprets the already prepared, literal [guide].
+    // The device must stop submitting new speech even if the server still streams.
+    const first = "Read [guide]. ";
+    h.early({ ...opening, text: first, rawEnd: first.length });
+    await vi.waitFor(() => expect(h.playback.finish).toHaveBeenCalledOnce());
+    const suspect = "\n\n[guide]: https://example.test/private\n\nNext.";
+    const end = first.length + suspect.length;
+    h.early({ ...append, text: suspect, rawStart: first.length, rawEnd: end });
+    h.early({ ...append, seq: 2, text: " More.", rawStart: end, rawEnd: end + 6 });
+    h.early({ ...common, seq: 3, kind: "yield", reason: "item_done" });
+    expect((await h.runtime.getState()).active?.id).toBe(id);
+    expect(h.playback.cancel).not.toHaveBeenCalled();
+    expect(h.texts()).toEqual(["Read [guide]."]);
+    if (action === "revoke") {
+      h.early({ ...common, seq: 4, kind: "cancel", reason: "authority_lost" });
+      expect((await h.runtime.getState()).active).toBeNull();
+    }
+    drain.resolve(); await h.idle();
+    h.complete(first + "Authoritative tail."); await h.idle();
+    expect(h.texts()).toEqual(["Read [guide].", action === "finish" ? "Authoritative tail." : "Read [guide]. Authoritative tail."]);
+  });
+
 });

@@ -197,7 +197,13 @@ export class ElectronVoiceConnection implements ElectronVoiceConnectionLike {
       await response.body?.cancel();
       if (!current()) return;
       if (response.status === 204) session.revision = revision;
-      else retry = response.status >= 500 || response.status === 429 || response.status === 408;
+      else if (response.status >= 500 || response.status === 429 || response.status === 408) retry = true;
+      else {
+        // A rejected token/revision cannot converge on this reservation. A fresh
+        // stream declares the current interest in its opening GET and gets a new token.
+        this.#closeNotifications();
+        if (this.#notificationsEnabled && this.registration) this.#startNotifications();
+      }
     } catch { retry = true; }
     finally { if (this.#updatingSession === session) this.#updatingSession = undefined; }
     if (!current()) return;

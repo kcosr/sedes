@@ -26,7 +26,8 @@ export class ElectronEarlyReply {
   raw = "";
   rawBytes = 0;
   retired = false;
-  yielded = false;
+  #yield: "none" | "server" | "presentation" = "none";
+  get yielded(): boolean { return this.#yield !== "none"; }
   suppressed = false;
   attributed = false;
   frontier?: Frontier;
@@ -36,6 +37,7 @@ export class ElectronEarlyReply {
   cancelLookahead?: () => void;
   readonly #frames = new Map<number, string>();
   readonly #ends: Array<{ end: number; paragraph: boolean }> = [];
+  #presentation?: Pick<NativeVoiceSettings, "cleanSpeechText" | "speechContent">;
   #nextSentence = 0;
   #prepared = "";
   #physical: EarlySpeechChunk[] = [];
@@ -45,12 +47,16 @@ export class ElectronEarlyReply {
     this.openedAt = this.lastSpanAt = now;
     this.receive(frame, now);
   }
-  receive(frame: EarlyReplyFrame, now: number): "invalid" | "duplicate" | "accepted" {
+  receive(frame: EarlyReplyFrame, now: number): "invalid" | "ignored" | "accepted" {
     if (frame.threadId !== this.identity.threadId || frame.turnId !== this.identity.turnId ||
         frame.itemId !== this.identity.itemId || frame.generation !== this.identity.generation) return "invalid";
+    // A device formatter can yield while the server still owns a live stream.
+    // Its later spans cannot affect the current speaker, but its cancellation
+    // remains authoritative regardless of how many spans we ignored.
+    if (this.#yield === "presentation") return frame.kind === "cancel" ? "accepted" : "ignored";
     const signature = digest(JSON.stringify(frame));
     const previous = this.#frames.get(frame.seq);
-    if (previous) return previous === signature ? "duplicate" : "invalid";
+    if (previous) return previous === signature ? "ignored" : "invalid";
     if (this.retired || this.yielded && frame.kind !== "cancel" || frame.seq !== this.#frames.size) return "invalid";
     if (frame.kind === "begin" || frame.kind === "append") {
       const bytes = encoder.encode(frame.text).length;
@@ -63,9 +69,15 @@ export class ElectronEarlyReply {
       }
       this.raw += frame.text; this.rawBytes += bytes;
       this.lastSpanAt = now;
-    } else if (frame.kind === "yield") this.yielded = true;
+    } else if (frame.kind === "yield") this.#yield = "server";
     this.#frames.set(frame.seq, signature);
     return "accepted";
+  }
+
+  presentationSettings(settings: NativeVoiceSettings): NativeVoiceSettings {
+    // Input and announcements-only remain authoritative device restrictions.
+    if (!this.#presentation || settings.audioMode !== "speak" || settings.speechContent === "announcements") return settings;
+    return { ...settings, ...this.#presentation };
   }
 
   /** Requests are planned from exact cumulative Markdown, including separators supplied across frames. */
@@ -74,7 +86,7 @@ export class ElectronEarlyReply {
     const first = this.#nextSentence, start = first ? this.#ends[first - 1]!.end : 0;
     let endIndex = first;
     const firstSentence = this.#ends[first];
-    if (!firstSentence || this.retired || mode === "off") return;
+    if (!firstSentence || this.retired || this.#yield === "presentation" || mode === "off") return;
     if (mode === "balanced" && first > 0) {
       while (!this.#ends[endIndex]!.paragraph && this.#ends[endIndex + 1] && this.#ends[endIndex + 1]!.end - start <= 240) endIndex++;
     } else if (mode === "natural") {
@@ -87,7 +99,7 @@ export class ElectronEarlyReply {
     const raw = this.raw.slice(0, end);
     const prepared = electronSpeechText(raw, settings.cleanSpeechText);
     if (!prepared.startsWith(this.#prepared)) {
-      this.yielded = true; this.#nextSentence = this.#ends.length; return;
+      this.#yield = "presentation"; return;
     }
     if (!first && settings.speechContent === "both") {
       const title = electronSpeechText(this.identity.threadTitle, settings.cleanSpeechText);
@@ -106,6 +118,7 @@ export class ElectronEarlyReply {
         preparedHash: digest(prepared.slice(0, offset)) } });
     }
     this.#nextSentence = endIndex + 1; this.#prepared = prepared;
+    if (this.#physical.length) this.#presentation ??= { cleanSpeechText: settings.cleanSpeechText, speechContent: settings.speechContent };
     return this.#physical.shift();
   }
 
@@ -118,7 +131,7 @@ export class ElectronEarlyReply {
   /** Null requests the ordinary context-first completion renderer. Each returned part is already formatted. */
   continuation(notice: VoiceNotification, settings: NativeVoiceSettings, lastAudibleOwner: string | undefined): string[] | null {
     const result = notice.payload.assistantResult, raw = result?.final?.text ?? "";
-    if (settings.speechContent === "announcements" || !this.frontier && !this.attributed ||
+    if (settings.audioMode !== "speak" || settings.speechContent === "announcements" || !this.frontier && !this.attributed ||
         !this.matches(raw, settings.cleanSpeechText)) return null;
     const clean = (text: string) => electronSpeechText(text, settings.cleanSpeechText);
     const remaining = clean(raw).slice(this.frontier?.preparedEnd ?? 0).trimStart();

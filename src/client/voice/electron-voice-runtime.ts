@@ -470,7 +470,7 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
       if (!reply.retired && !this.#earlyEligible(reply)) this.#releaseEarly(reply);
       else reply.changed?.();
     }
-    for (const id of this.#queue.reconfigure(next)) this.#rememberDrained(id);
+    for (const item of this.#queue.reconfigure(next)) this.#discardQueuedItem(item);
     if (old.pinDefaultVoiceThread !== next.pinDefaultVoiceThread || old.voiceThreadId !== next.voiceThreadId) {
       this.#state.retainedVoiceTarget = null; this.#state.idleTargetRevision++;
     }
@@ -821,9 +821,7 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
       reply = new ElectronEarlyReply(frame, performance.now(), this.#connection!.voiceStreamId!);
       if (!this.#earlyEligible(reply)) return;
       const item = { id: frame.replyId, early: reply, event: "turn.completed", threadId: frame.threadId, threadTitle: nativeThreadTitle(frame.threadTitle) };
-      const previous = this.#queue.items.slice();
-      if (!this.#queue.add(item, this.#state.settings)) return;
-      for (const old of previous) if (!this.#queue.items.includes(old)) this.#rememberDrained(old.id);
+      if (!this.#enqueue(item)) return;
       this.#early.set(frame.replyId, reply); this.#trace("early_begin");
       reply.timer = setTimeout(() => this.#releaseEarly(reply!), 600_000);
     } else {
@@ -838,7 +836,7 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
           this.#queue.items.some(item => item.early === reply && item.notification)) return;
       if (!this.#earlyEligible(reply)) { this.#releaseEarly(reply); return; }
       const result = reply.receive(frame, performance.now());
-      if (result === "duplicate") return;
+      if (result === "ignored") return;
       if (result === "invalid" || this.#queue.bytes(this.#state.settings) > 256 * 1024) {
         this.#releaseEarly(reply); return;
       }
@@ -914,9 +912,7 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
       if (!this.#eligible(item) || !voiceItemText(item, this.#state.settings) && !notificationListens(notice, this.#state.settings)) {
         this.#rememberDrained(item.id); this.#queue.drop("ineligible"); this.#scheduleDrain(); this.#publish(); return;
       }
-      const previous = this.#queue.items.map(queued => queued.id);
-      if (this.#active?.item?.id !== item.id && this.#queue.add(item, this.#state.settings)) this.#trace("queued");
-      for (const id of previous) if (!this.#queue.items.some(queued => queued.id === id)) this.#rememberDrained(id);
+      if (this.#active?.item?.id !== item.id && this.#enqueue(item)) this.#trace("queued");
       if (this.#active?.item?.id !== item.id && !this.#queue.items.some(queued => queued.id === item.id)) this.#rememberDrained(item.id);
       this.#active?.item?.early?.changed?.();
       this.#publish(); this.#scheduleDrain();
@@ -932,11 +928,19 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
     if (this.#active?.automatic && !this.#active.finalized) this.#cancelActive();
     this.#scheduleDrain();
   }
+  #discardQueuedItem(item: ElectronVoiceQueueItem): void {
+    // Only an actual terminal delivery can fulfill its stream's drain barrier.
+    if (item.early && !item.notification) item.early.detach();
+    else this.#rememberDrained(item.id);
+  }
+  #enqueue(item: ElectronVoiceQueueItem): boolean {
+    const previous = this.#queue.items.slice();
+    const added = this.#queue.add(item, this.#state.settings);
+    for (const old of previous) if (!this.#queue.items.includes(old)) this.#discardQueuedItem(old);
+    return added;
+  }
   #discardQueuedReplies(): void {
-    for (const item of this.#queue.items.splice(0)) {
-      if (item.early && !item.notification) item.early.detach();
-      else this.#rememberDrained(item.id);
-    }
+    for (const item of this.#queue.items.splice(0)) this.#discardQueuedItem(item);
   }
   async speakReply(input: Parameters<NativeVoicePlugin["speakReply"]>[0]): Promise<NativeVoiceState> {
     const request = replaySchema.parse(input); this.#assertGeneration(request);
@@ -946,7 +950,7 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
       threadTitle: request.threadTitle ?? null, replay: { threadId: request.threadId, turnId: request.turnId,
         threadTitle: request.threadTitle, assistantResult: request.assistantResult } };
     if (!voiceItemText(item, this.#state.settings)) throw new Error("This reply has no text to speak.");
-    this.#queue.add(item, this.#state.settings); this.#scheduleDrain();
+    this.#enqueue(item); this.#scheduleDrain();
     return this.#publish();
   }
   #scheduleDrain(): void {
@@ -970,7 +974,7 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
   }
   async #playItem(active: ActiveInteraction): Promise<void> {
     const item = active.item!;
-    const settings = structuredClone(this.#state.settings);
+    const settings = structuredClone(item.early?.presentationSettings(this.#state.settings) ?? this.#state.settings);
     const revision = item.notification?.userInputRevision ?? item.early?.identity.userInputRevision;
     if (revision !== undefined && item.threadId) {
       this.#state.phase = "synthesizing"; this.#publish();
@@ -1150,11 +1154,8 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
   }
   async stopPlayback(input: Parameters<NativeVoicePlugin["stopPlayback"]>[0]): Promise<NativeVoiceState> {
     const active = this.#assertActive(input);
-    for (const item of [active.item, ...this.#queue.items]) if (item?.early) {
-      item.early.suppressed = true; item.early.detach();
-      if (item.notification) this.#rememberDrained(item.id);
-    }
-    this.#cancelActive(); this.#clearControls(); this.#queue.items.length = 0;
+    for (const item of [active.item, ...this.#queue.items]) if (item?.early && !item.notification) item.early.suppressed = true;
+    this.#cancelActive(); this.#clearControls(); this.#discardQueuedReplies();
     this.#state.retainedVoiceTarget = null; this.#state.idleTargetRevision++; this.#rememberIdleTarget();
     return this.#publish();
   }

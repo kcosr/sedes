@@ -109,6 +109,7 @@ const preparedItems = new WeakMap<ElectronVoiceQueueItem, PreparedVoiceItem>();
 const encoder = new TextEncoder();
 /** Item sources are immutable for their lifetime. Cache only their current presentation, including after dequeue. */
 function preparedVoiceItem(item: ElectronVoiceQueueItem, settings: NativeVoiceSettings): PreparedVoiceItem {
+  if (item.early && item.notification) settings = item.early.presentationSettings(settings);
   const presentation = item.replay ? `replay:${settings.cleanSpeechText}`
     : `${settings.audioMode}:${settings.speechContent}:${settings.cleanSpeechText}`;
   if (item.early && !item.notification) return { presentation, text: item.early.raw, bytes: item.early.rawBytes + encoder.encode(item.threadTitle ?? "").length };
@@ -217,7 +218,7 @@ export class ElectronVoiceQueue {
     }
   }
   /** Settings change presentation only. Rebuild queued text from original sources and reapply the same byte/item bounds. */
-  reconfigure(settings: NativeVoiceSettings): string[] {
+  reconfigure(settings: NativeVoiceSettings): ElectronVoiceQueueItem[] {
     const previous = this.items.splice(0);
     for (const item of previous) {
       if (!voiceItemText(item, settings) && (!item.notification || !notificationListens(item.notification, settings))) {
@@ -229,7 +230,7 @@ export class ElectronVoiceQueue {
       try { this.add(item, settings); }
       catch { /* A queued explicit replay may no longer fit after presentation settings change. */ }
     }
-    return previous.filter(item => !this.items.some(current => current.id === item.id)).map(item => item.id);
+    return previous.filter(item => !this.items.includes(item));
   }
   reset(): void { this.items.length = 0; this.seen.clear(); for (const reason of Object.keys(this.dropped)) delete this.dropped[reason]; }
 }
