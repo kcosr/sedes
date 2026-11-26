@@ -182,6 +182,10 @@ final class NativeVoiceQueue {
             if (!remember(terminal.id)) return true;
             ArrayList<Item> prior = new ArrayList<>(pending);
             pending.clear(); bytes -= item.bytes;
+            for (Iterator<Item> it = prior.iterator(); bytes + terminal.bytes > MAX_BYTES && it.hasNext();) {
+                Item candidate = it.next();
+                if (candidate.progress()) { bytes -= candidate.bytes; it.remove(); drop(candidate, "progress_evicted"); }
+            }
             if (bytes + terminal.bytes > MAX_BYTES) {
                 prior.remove(item); pending.addAll(prior); drop(terminal, "overflow"); return true;
             }

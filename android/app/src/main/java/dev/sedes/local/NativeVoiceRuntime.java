@@ -2052,7 +2052,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         // A speech control may arrive after its follow-up has begun. The immutable
         // interaction still owns that unsent capture, including a held default.
         if (item == null || !item.playbackOrigin || item.admission != null) throw new IllegalStateException("voice_not_speaking");
-        cancelInputContext(item);
+        noteSubmitted(item); cancelInputContext(item);
         if (item.notification != null && item.notification.opening()) item.notification.early.skipped = true;
         discardStaged(item);
         traceActive(NativeVoiceDiagnostics.Event.PLAYBACK_STOPPED, item, "skipped");
@@ -2162,7 +2162,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     }
     private void finishItem(Active item) {
         if (active != item) return;
-        clearSpeechTimeout(item); cancelInputContext(item);
+        noteSubmitted(item); clearSpeechTimeout(item); cancelInputContext(item);
         traceActive(NativeVoiceDiagnostics.Event.INTERACTION_FINISHED, item, null);
         discardStaged(item);
         if (item.notification != null) {
@@ -2394,8 +2394,10 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         });
     }
     private void noteSubmitted(Active item) {
-        if (item.ttsId == null || !audio.submitted(item.ttsId)) return;
-        item.outputSubmitted = true; lastOutputOwner = item.id;
+        if (!audio.submitted(item.lastAudioId)) return;
+        lastOutputOwner = item.id;
+        if (!item.lastAudioId.equals(item.ttsId)) return;
+        item.outputSubmitted = true;
         if (item.earlyPart != null) item.notification.early.submitted(item.earlyPart);
     }
     public void playbackSubmitted(String requestId) { handler.post(() -> {

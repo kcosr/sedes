@@ -92,7 +92,8 @@ final class NativeVoiceAudio {
     private long generation, focusRelease, warmUntil;
     private String request, submittedRequest;
     private int rate, previousMode;
-    private long frames;
+    private long frames, trackBase;
+    private boolean drainPadded;
     private boolean capture, captureFinishing, communication;
     private NativeVoicePcmSpool activeSpool, stagedSpool;
     private float gain = 1f;
@@ -219,11 +220,18 @@ final class NativeVoiceAudio {
             if (stagedSpool != null && stagedSpool.requestId.equals(id)) {
                 stagedSpool.close();
                 stagedSpool = null;
+                if (request == null) releaseTrack();
             }
         }
     }
 
     private void activateSpool(NativeVoicePcmSpool spool) {
+        if (track != null) {
+            // The preceding request drained at its exact PCM frontier on this same-rate track.
+            trackBase += frames;
+            frames = 0;
+        }
+        drainPadded = false;
         activeSpool = spool;
         submittedRequest = null;
         request = spool.requestId;
@@ -293,7 +301,7 @@ final class NativeVoiceAudio {
                         // Hardware warmup only after a cold start; a consecutive track follows recent playback.
                         boolean warm = SystemClock.elapsedRealtime() < warmUntil;
                         openTrack(spool.sampleRate()); if (!warm) warmup = preRoll * spool.sampleRate() / 1000 * 2;
-                    }
+                    } else if (!submitted && !requestFocus(false)) throw new IllegalStateException("audio_focus_unavailable");
                     count = spool.read(buffer);
                 }
                 if (warmup > 0) {
@@ -324,12 +332,13 @@ final class NativeVoiceAudio {
                 if (BuildConfig.DEBUG) {
                     AudioTimestamp timestamp = new AudioTimestamp();
                     boolean timestamped = track.getTimestamp(timestamp) && timestamp.framePosition > 0;
-                    lastPlaybackDrainForTest = new PlaybackDrain(id, rate, frames, track.getPlaybackHeadPosition() & 0xffffffffL,
-                        timestamped ? timestamp.nanoTime - timestamp.framePosition * 1_000_000_000L / rate : 0);
+                    lastPlaybackDrainForTest = new PlaybackDrain(id, rate, frames, (track.getPlaybackHeadPosition() & 0xffffffffL) - trackBase,
+                        timestamped ? timestamp.nanoTime - (timestamp.framePosition - trackBase) * 1_000_000_000L / rate : 0);
                     if (playbackDrainsForTest.size() == 32) playbackDrainsForTest.removeFirst();
                     playbackDrainsForTest.addLast(lastPlaybackDrainForTest);
                 }
-                releaseTrack(); spool.close(); activeSpool = null; request = null; releaseFocusLater();
+                if (drainPadded || !stagedOutputReady()) releaseTrack();
+                spool.close(); activeSpool = null; request = null; releaseFocusLater();
             }
             listener.drained(id);
         } catch (Exception error) {
@@ -339,7 +348,7 @@ final class NativeVoiceAudio {
     private boolean notifyPlaybackStarted(long current, String id) {
         try {
             synchronized (lock) {
-                if (current != generation || track == null || (track.getPlaybackHeadPosition() & 0xffffffffL) == 0) return false;
+                if (current != generation || track == null || (track.getPlaybackHeadPosition() & 0xffffffffL) <= trackBase) return false;
             }
             listener.playbackStarted(id);
             return true;
@@ -374,14 +383,34 @@ final class NativeVoiceAudio {
         if (!BuildConfig.DEBUG) throw new IllegalStateException("test_audio_unavailable");
         synchronized (lock) { nextPlaybackHoldForTest = new CountDownLatch(1); return nextPlaybackHoldForTest; }
     }
+    private boolean stagedOutputReady() {
+        // A retained AudioTrack has a 32-bit frame head. Leave room for the entire following request.
+        return stagedSpool != null && stagedSpool.sampleRate() == rate && stagedSpool.available() > 0 &&
+            trackBase + frames + rate * MAX_STREAM_DURATION_MS / 1000 < 0xffff_ffffL;
+    }
     private long primeDrain(long current, long deadline) throws InterruptedException {
-        AudioTrack output; long target;
+        AudioTrack output; long target, head;
+        boolean continuous;
         synchronized (lock) {
             if (current != generation) return -1;
             if (track == null) throw new IllegalStateException("empty_pcm_stream");
-            output = track; target = frames;
-            if ((output.getPlaybackHeadPosition() & 0xffffffffL) >= target) return target;
+            output = track; target = trackBase + frames;
+            head = output.getPlaybackHeadPosition() & 0xffffffffL;
+            continuous = stagedOutputReady() && head > trackBase;
         }
+        // For a moving track and ready successor, let the real audio drain without queuing any silence.
+        // An underrun or a held/short track falls back to the regular priming path.
+        long lastProgress = SystemClock.elapsedRealtime();
+        while (head < target && continuous && SystemClock.elapsedRealtime() - lastProgress < 120) {
+            Thread.sleep(5);
+            synchronized (lock) {
+                if (current != generation || track != output) return -1;
+                long nextHead = output.getPlaybackHeadPosition() & 0xffffffffL;
+                if (nextHead > head) lastProgress = SystemClock.elapsedRealtime();
+                head = nextHead;
+            }
+        }
+        if (head >= target) return target;
         // A short stream or final tail after underrun may not reach Android's start threshold.
         // Prime one full buffer, but finish at the real PCM target and discard leftover silence.
         long remaining = output.getBufferSizeInFrames() * 2L;
@@ -401,7 +430,10 @@ final class NativeVoiceAudio {
                 }
                 Thread.sleep(10);
             }
-            else remaining -= count;
+            else {
+                synchronized (lock) { if (current == generation && track == output) drainPadded = true; }
+                remaining -= count;
+            }
         }
         return target;
     }
@@ -664,7 +696,7 @@ final class NativeVoiceAudio {
             .setBufferSizeInBytes(Math.max(minimum, sampleRate / 5 * 2)).setTransferMode(AudioTrack.MODE_STREAM).build();
         if (track.getState() != AudioTrack.STATE_INITIALIZED) throw new IllegalStateException("playback_unavailable");
         if (focus.ducked) track.setVolume(0.35f);
-        rate = sampleRate; frames = 0;
+        rate = sampleRate; frames = 0; trackBase = 0;
         playbackHoldForTest = BuildConfig.DEBUG ? nextPlaybackHoldForTest : null;
         nextPlaybackHoldForTest = null;
         if (playbackHoldForTest == null) track.play();
@@ -729,7 +761,12 @@ final class NativeVoiceAudio {
     private void releaseFocusLater() {
         if (focus == null) return;
         long token = ++focusRelease;
-        main.postDelayed(() -> { synchronized (lock) { if (token == focusRelease) abandonFocus(); } }, FOCUS_HOLD_MS);
+        main.postDelayed(() -> { synchronized (lock) {
+            if (token == focusRelease) {
+                if (request == null) releaseTrack();
+                abandonFocus();
+            }
+        } }, FOCUS_HOLD_MS);
     }
     private void releaseCommunication() {
         if (!communication) return;
@@ -757,7 +794,7 @@ final class NativeVoiceAudio {
             old.release();
         }
         playbackHoldForTest = null;
-        frames = 0; rate = 0;
+        frames = 0; trackBase = 0; rate = 0;
     }
     private void failCurrent(long current, String id, String code) {
         synchronized (lock) { if (current != generation) return; stop(); }

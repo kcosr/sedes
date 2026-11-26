@@ -109,6 +109,26 @@ public class NativeEarlyReplyTest {
         assertEquals(2, queue.size()); assertSame(terminal, queue.take()); assertSame(replay, queue.take());
         assertEquals(0, queue.bytes()); assertFalse(queue.add(terminal));
     }
+    @Test public void sealEvictsProvisionalProgressUnderTheSamePressureAsOrdinaryCompletion() {
+        NativeVoiceSettings settings = settings("messages");
+        NativeVoiceQueue queue = new NativeVoiceQueue();
+        NativeEarlyReply reply = new NativeEarlyReply(span(0, 0, "One.", false), 0);
+        assertTrue(queue.addOpening(new NativeVoiceQueue.Item(reply)));
+        JSONObject progress = NativeVoiceJson.copy(terminal("Progress.", null, settings).envelope);
+        NativeVoiceJson.put(progress, "sourceEventId", "progress");
+        JSONObject payload = progress.optJSONObject("payload");
+        NativeVoiceJson.put(payload, "event", "turn.progress");
+        NativeVoiceJson.put(payload, "progress", NativeVoiceJson.object("itemId", "progress", "phase", "provisional", "text", "P".repeat(12000)));
+        assertTrue(queue.add(new NativeVoiceQueue.Item(progress, settings)));
+        for (int n = 0; n < 16; n++) {
+            NativeVoiceQueue.Item replay = NativeVoiceQueue.Item.replay(NativeVoiceJson.object("threadId", THREAD, "turnId", "other" + n,
+                "assistantResult", NativeVoiceJson.object("final", NativeVoiceJson.object("text", "X".repeat(15100)))), "Next", settings);
+            assertTrue(queue.addReplay(replay));
+        }
+        NativeVoiceQueue.Item terminal = terminal("Z".repeat(15000), null, settings); terminal.early = reply;
+        assertTrue(queue.sealPending(terminal)); assertSame(terminal, queue.take());
+        assertFalse(queue.contains("progress")); assertEquals(16, queue.size());
+    }
     @Test public void beforeHandshakeOrDuringAnUpdateOffRevokesExistingEntitlementFirst() {
         NativeEarlyInterest interest = new NativeEarlyInterest();
         interest.open(7, true); assertFalse(interest.needsUpdate());
