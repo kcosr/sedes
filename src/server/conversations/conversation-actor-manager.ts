@@ -119,6 +119,7 @@ export type AuthoritativeCompletionObserver = (
   applicationThreadId: string,
   input: {
     readonly backendCorrelation: string;
+    /** One freshly frozen array per actor fan-out, shared by all its callbacks. */
     readonly backendCorrelations: readonly string[];
     readonly backendTurnId: string;
     readonly applicationTurnId: string;

@@ -5,12 +5,22 @@ import { MAX_DEFERRED_VOICE_PUBLICATIONS, type NotificationService, type VoiceNo
 
 type Completion = Parameters<AuthoritativeCompletionObserver>[2];
 type Publication = Promise<VoiceNotificationPublication | undefined>;
-type PendingCorrelations = { pending: Set<string>; anchored: boolean; expiry: NodeJS.Timeout };
+type PendingCorrelations = {
+  key: string;
+  pending: Set<string>;
+  anchored: boolean;
+  resolved: boolean;
+  expiry: NodeJS.Timeout;
+};
 const CORRELATION_LIFETIME_MS = 60_000;
 
 /** Coordinate one terminal publication across the actor's per-input observers. */
 export class TurnVoiceCompletion {
   readonly #correlations = new Map<string, PendingCorrelations>();
+  // Actor fan-out shares a freshly frozen correlation array across its ordered
+  // callbacks. The actor rail, rather than a timer, owns the factual return
+  // count for that batch. Unreachable/abandoned batches retain no strong key.
+  #actorBatches = new WeakMap<readonly string[], PendingCorrelations>();
   readonly #recent = new Map<string, "published" | "unclaimed">();
   #closed = false;
 
@@ -22,29 +32,37 @@ export class TurnVoiceCompletion {
   close(): void {
     this.#closed = true;
     for (const [key, group] of this.#correlations) this.#retire(key, group);
+    this.#actorBatches = new WeakMap();
     this.#recent.clear();
   }
 
   #retire(key: string, group: PendingCorrelations): void {
     if (this.#correlations.get(key) !== group) return;
     clearTimeout(group.expiry);
-    group.pending.clear();
     this.#correlations.delete(key);
   }
 
   #awaitCorrelations(key: string, input: Completion): PendingCorrelations {
+    const batch = this.#actorBatches.get(input.backendCorrelations);
+    if (batch?.key === key && !batch.resolved) return batch;
     const current = this.#correlations.get(key);
-    if (current) return current;
+    if (current) {
+      this.#actorBatches.set(input.backendCorrelations, current);
+      return current;
+    }
     if (this.#correlations.size >= MAX_DEFERRED_VOICE_PUBLICATIONS) {
       const [oldestKey, oldestGroup] = this.#correlations.entries().next().value!;
       this.#retire(oldestKey, oldestGroup);
     }
     const group: PendingCorrelations = {
+      key,
       pending: new Set(input.backendCorrelations),
+      resolved: false,
       anchored: false,
       expiry: setTimeout(() => this.#retire(key, group), CORRELATION_LIFETIME_MS).unref(),
     };
     this.#correlations.set(key, group);
+    this.#actorBatches.set(input.backendCorrelations, group);
     return group;
   }
 
@@ -65,22 +83,21 @@ export class TurnVoiceCompletion {
     return (publish?: () => Publication | undefined): void => {
       if (returned || this.#closed || owned()) return;
       returned = true;
-      const current = this.#correlations.get(key);
-      if (original === current && !current.pending.delete(input.backendCorrelation)) return;
+      if (original.resolved || !original.pending.delete(input.backendCorrelation)) return;
 
       // Only a durably matched submission supplies publish. This authority
       // also settles an explicitly staged action when ordinary voice is silent.
-      if (publish && current) current.anchored = true;
-      const anchored = publish !== undefined || current?.anchored === true;
+      if (publish) original.anchored = true;
       let publication: Publication | undefined;
       try { publication = publish?.(); } catch { /* Another correlation may still own publication. */ }
-      if (!publication && (current !== original || current.pending.size)) return;
+      if (!publication && original.pending.size) return;
 
-      // Capacity/expiry frees incomplete correlation sets without fabricating a
-      // no-delivery decision. A late admissible callback can still win. Once an
-      // owner exists, its actual publication exclusively governs the barrier,
-      // even if another correlation never returns or the recent window wraps.
-      if (current) this.#retire(key, current);
+      // A miss is definitive only after this actor batch actually returns every
+      // expected correlation. An admitted publication can win immediately.
+      original.resolved = true;
+      original.pending.clear();
+      const registered = this.#correlations.get(key);
+      if (registered) this.#retire(key, registered);
       const controlsSettled = this.#recent.get(key) === "unclaimed";
       this.#remember(key, publication ? "published" : "unclaimed");
       if (controlsSettled && !publication) return;
@@ -94,7 +111,7 @@ export class TurnVoiceCompletion {
       });
       if (!controlsSettled) {
         this.controls.observeNotification(scope, threadId, turnId, finalized);
-        void this.controls.complete(scope, threadId, turnId, input.outcome, !anchored || input.responseVoice?.superseded === true);
+        void this.controls.complete(scope, threadId, turnId, input.outcome, !original.anchored || input.responseVoice?.superseded === true);
       }
     };
   }

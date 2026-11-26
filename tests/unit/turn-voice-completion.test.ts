@@ -130,6 +130,65 @@ it("bounds abandoned correlation sets and protects the winning receipt through r
   } finally { vi.useRealTimers(); }
 });
 
+function reclaimPendingGroup(service: TurnVoiceCompletion, disposition: "expiry" | "capacity"): void {
+  if (disposition === "expiry") {
+    vi.advanceTimersByTime(60_001);
+    return;
+  }
+  for (let index = 0; index < MAX_DEFERRED_VOICE_PUBLICATIONS; index++) {
+    service.observe(scope, threadId, {...input("missing"), applicationTurnId: String(index), completionIdentity: String(index)})();
+  }
+}
+
+it.each(["expiry", "capacity"] as const)("retains each actual actor-batch miss across %s until the last callback returns", async disposition => {
+  vi.useFakeTimers();
+  try {
+    const c = coordinator();
+    const batch = Object.freeze(["delayed", "last"]);
+    const observe = (id: string) => c.service.observe(scope, threadId, {...input(id), backendCorrelations: batch});
+    // The ordered actor cannot start the last callback until the delayed
+    // durable lookup has returned, even if the identity cache retired meanwhile.
+    const first = observe("delayed");
+    reclaimPendingGroup(c.service, disposition);
+    first();
+    first();
+    expect(c.observeNotification).not.toHaveBeenCalled();
+    expect(c.complete).not.toHaveBeenCalled();
+    expect(c.finishEarlyReply).not.toHaveBeenCalled();
+
+    observe("last")();
+    expect(await c.observeNotification.mock.calls[0]![3]).toBeUndefined();
+    expect(c.finishEarlyReply).toHaveBeenCalledExactlyOnceWith(scope, threadId, turnId, undefined);
+    expect(c.complete).toHaveBeenCalledExactlyOnceWith(scope, threadId, turnId, "completed", true);
+    c.service.close();
+  } finally { vi.useRealTimers(); }
+});
+
+it.each(["expiry", "capacity"] as const)("keeps an admissible later actor callback available after %s and an earlier actual miss", async disposition => {
+  vi.useFakeTimers();
+  try {
+    const c = coordinator();
+    const batch = Object.freeze(["unanchored", "anchored"]);
+    const observe = (id: string) => c.service.observe(scope, threadId, {...input(id), backendCorrelations: batch});
+    const first = observe("unanchored");
+    reclaimPendingGroup(c.service, disposition);
+    first();
+    expect(c.complete).not.toHaveBeenCalled();
+    let release!: (receipt: VoiceNotificationPublication) => void;
+    observe("anchored")(() => new Promise(resolve => { release = resolve; }));
+    const lose = vi.fn();
+    observe("unanchored")(lose);
+    expect(lose).not.toHaveBeenCalled();
+    expect(c.finishEarlyReply).not.toHaveBeenCalled();
+    const receipt = {sourceEventId: "reply", voiceStreamIds: ["native"]};
+    release(receipt);
+    expect(await c.observeNotification.mock.calls[0]![3]).toEqual(receipt);
+    expect(c.finishEarlyReply).toHaveBeenCalledExactlyOnceWith(scope, threadId, turnId, receipt);
+    expect(c.complete).toHaveBeenCalledExactlyOnceWith(scope, threadId, turnId, "completed", false);
+    c.service.close();
+  } finally { vi.useRealTimers(); }
+});
+
 it("discards incomplete observers on shutdown and fences their delayed callbacks", () => {
   vi.useFakeTimers();
   try {

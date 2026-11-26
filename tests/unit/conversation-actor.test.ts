@@ -5984,9 +5984,11 @@ describe("ConversationActorManager", () => {
     const publication = new Promise<VoiceNotificationPublication>(resolve => { deliver = resolve; });
     const publish = vi.fn(() => publication);
     const completed: string[] = [];
+    const batches: Array<readonly string[]> = [];
     const completion: AuthoritativeCompletionObserver = (eventScope, threadId, observation) => {
       expect(observation.backendCorrelations).toEqual(["submitted", "steered"]);
       completed.push(observation.backendCorrelation);
+      batches.push(observation.backendCorrelations);
       coordinator.observe(eventScope, threadId, observation)(publish);
     };
     const early = { observe: vi.fn(), finish: vi.fn() };
@@ -6025,6 +6027,10 @@ describe("ConversationActorManager", () => {
       // Re-observation while notification settlement is delayed must preserve the first publication.
       await acquired.actor.replayAuthoritativeCompletions();
       await vi.waitFor(() => expect(completed).toEqual(["submitted", "steered", "submitted", "steered"]));
+      expect(Object.isFrozen(batches[0])).toBe(true);
+      expect(batches[1]).toBe(batches[0]);
+      expect(batches[2]).not.toBe(batches[0]);
+      expect(batches[3]).toBe(batches[2]);
       expect(publish).toHaveBeenCalledOnce();
       expect(finishEarlyReply).not.toHaveBeenCalled();
       const settled = controls.poll(scope, client.connectionToken, undefined, { state, acknowledgements: [] }, new AbortController().signal);
