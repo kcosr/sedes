@@ -202,6 +202,10 @@ export class ClientControlService {
     return { client: this.describe(client), ...result };
   }
 
+  hasPendingNotification(scope: RequestScope, threadId: string, turnId: string): boolean {
+    return this.#notifications.has(scopeKey(scope) + turnKey(threadId, turnId));
+  }
+
   observeNotification(scope: RequestScope, threadId: string, turnId: string, publication: Promise<VoiceNotificationPublication | undefined>) {
     const key = scopeKey(scope) + turnKey(threadId, turnId);
     this.#notifications.set(key, publication);

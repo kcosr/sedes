@@ -566,7 +566,11 @@ export class ConversationActorManager {
         });
         entry = createdEntry;
         this.#entries.set(key, createdEntry);
-        creationAbort.signal.addEventListener("abort", () => this.#publishInputActivity(createdEntry), { once: true });
+        creationAbort.signal.addEventListener("abort", () => {
+          // This owner can be fenced before borrowed controls and actor cleanup drain.
+          createdEntry.actor?.retireEarlyReplyAuthority();
+          this.#publishInputActivity(createdEntry);
+        }, { once: true });
         void createdEntry.promise.catch((error) => {
           if (this.#entries.get(key) === createdEntry) {
             if (error instanceof ConversationActorCreationCleanupError) {
@@ -1501,6 +1505,7 @@ export class ConversationActorManager {
         opaqueBindingDetail: input.opaqueBindingDetail,
         onControlReady: control => {
           if (signal.aborted || control.lifetime.aborted || !control.generation) return;
+          if (entry.control !== control) actor?.retireEarlyReplyAuthority();
           entry.control = control;
           entry.controlEnded = false;
           this.#publishInputActivity(entry);
@@ -1529,10 +1534,10 @@ export class ConversationActorManager {
         ...(this.#captureEarlyReply ? { captureEarlyReply: (source: EarlyReplySource) => {
           const generation = actor?.peekSnapshotState()?.timeline.generation;
           const control = entry.control;
-          const lifetime = control ? AbortSignal.any([signal, control.lifetime]) : signal;
           const isCurrent = () => {
             const state = actor?.peekSnapshotState();
-            return !lifetime.aborted && entry.control === control && !entry.controlEnded && state?.timeline.generation === generation &&
+            return !signal.aborted && !control?.lifetime.aborted && entry.control === control && !entry.controlEnded &&
+              state?.timeline.generation === generation &&
               state?.timeline.runState === "running" && state.timeline.activeTurnId === source.applicationTurnId &&
               state.timeline.turnsById[source.applicationTurnId]?.status === "in_progress" &&
               state.backendCapabilities.liveFinalAnswer === "supported";
@@ -1540,7 +1545,7 @@ export class ConversationActorManager {
           if (!isCurrent()) return;
           // Capture scope, policy, freshness and exact reservations before durable admission can wait.
           const sink = this.#captureEarlyReply!(input.scope, input.binding.applicationThreadId, source);
-          return sink && afterSubmissionAdmission(sink, observationChain, lifetime, isCurrent);
+          return sink && afterSubmissionAdmission(sink, observationChain, isCurrent);
         } } : {}),
         onInputStateChanged: () => this.#publishInputActivity(entry),
         attachmentDelivery: this.#attachmentDelivery,

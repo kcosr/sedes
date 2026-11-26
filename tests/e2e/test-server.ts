@@ -6416,6 +6416,7 @@ async function main(): Promise<void> {
       codexStdioRpc.close();
       await terminalService.close();
       execution.close();
+      terminalVoice.close();
       await notifications.close();
       clientControls.close();
       database.close();

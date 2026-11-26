@@ -1,3 +1,5 @@
+import { ClientControlService } from "../../src/server/domain/client-control-service.js";
+import { TurnVoiceCompletion } from "../../src/server/domain/turn-voice-completion.js";
 import { earlyReplyFrameSchema, earlyReplySessionSchema } from "../../src/shared/protocol/early-reply.js";
 import { notificationSourceId, turnNotificationKey } from "../../src/server/domain/notification-identity.js";
 import { scriptDelivery } from "../support/notification-settings.js";
@@ -1432,6 +1434,66 @@ describe("early reply publication", () => {
     expect(ready.replies()).toHaveLength(3);
     expect(voiceFrames(browser)[0]?.sourceEventId).toBe(notificationSourceId(eventKey));
   });
+  it.each(["winner", "unclaimed"] as const)("settles an actual opened steered reply and its control receipt once (%s)", async scenario => {
+    const {service, executor} = fixture();
+    enableEarly(service);
+    const controls = new ClientControlService();
+    disposals.push(() => controls.close());
+    const barrier = vi.spyOn(controls, "observeNotification");
+    const complete = vi.spyOn(controls, "complete");
+    const coordinator = new TurnVoiceCompletion(service, controls);
+    const opened = native(service);
+    const correlations = ["unanchored", "anchored", "repeated"];
+    const early = service.captureEarlyReply(scope, threadId, {...source, backendCorrelations: correlations}, () => authority)!;
+    early.observe(opening, []);
+    early.finish("item_done");
+    const resolve = (backendCorrelation: string) => coordinator.observe(scope, threadId, {
+      backendCorrelation, backendCorrelations: correlations, applicationTurnId: source.applicationTurnId,
+      backendTurnId: "backend", completionIdentity: "backend:completed", outcome: "completed",
+      result: {text: opening}, classifiedResult: null, provenance: "live",
+    });
+    const payload: NotificationEventPayload = {...event(), thread: {id: threadId, title: "Example"}};
+    let release!: (target: undefined) => void;
+    const settlement = new Promise<undefined>(resolve => { release = resolve; });
+    const publish = vi.fn(() => emitFresh(service, scope, payload, eventKey, "live", undefined, () => ({settlement})));
+    const loser = vi.fn();
+    resolve(correlations[0]!)();
+    expect(barrier).not.toHaveBeenCalled();
+    if (scenario === "winner") {
+      resolve(correlations[1]!)(publish);
+      resolve(correlations[2]!)(loser);
+      resolve(correlations[1]!)(loser);
+    } else {
+      resolve(correlations[1]!)();
+      resolve(correlations[2]!)();
+    }
+    expect(opened.replies().map(frame => frame.kind)).toEqual(["begin", "yield"]);
+    expect(voiceFrames(opened.frames)).toEqual([]);
+    expect(loser).not.toHaveBeenCalled();
+    expect(complete).toHaveBeenCalledOnce();
+    expect(barrier).toHaveBeenCalledOnce();
+    release(undefined);
+    const receipt = await barrier.mock.calls[0]![3];
+    if (scenario === "winner") {
+      expect(publish).toHaveBeenCalledOnce();
+      expect(receipt).toEqual({sourceEventId: opened.replies()[0]!.replyId, voiceStreamIds: [opened.id]});
+      expect(voiceFrames(opened.frames)).toHaveLength(1);
+      expect(opened.replies().map(frame => frame.kind)).toEqual(["begin", "yield"]);
+      expect(executor).toHaveBeenCalledOnce();
+    } else {
+      expect(receipt).toBeUndefined();
+      expect(executor).not.toHaveBeenCalled();
+      expect(opened.replies()).toMatchObject([{kind: "begin"}, {kind: "yield"}, {kind: "cancel", reason: "publication_suppressed"}]);
+      const otherRecipient = native(service);
+      resolve(correlations[1]!)(publish);
+      await vi.waitFor(() => expect(voiceFrames(otherRecipient.frames)).toHaveLength(1));
+      expect(voiceFrames(opened.frames)).toEqual([]);
+      expect(opened.replies()).toHaveLength(3);
+      expect(complete).toHaveBeenCalledOnce();
+      expect(barrier).toHaveBeenCalledOnce();
+    }
+  });
+
   it("retires a yielded scanner on expiry and still confirms terminal suppression for its reservation only", async () => {
     const {service} = fixture();
     enableEarly(service);

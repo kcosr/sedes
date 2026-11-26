@@ -661,6 +661,7 @@ export async function startProductionApplication(
       },
     );
     const terminalVoice = new TurnVoiceCompletion(notifications, clientControls);
+    resources.defer("turn voice completion", () => terminalVoice.close());
     const turnBookmarkRepository = new ConversationTurnBookmarkRepository(
       database,
       inventoryRepository,

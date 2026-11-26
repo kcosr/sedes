@@ -31,6 +31,7 @@ import { DomainError } from "./errors.js";
 import type { ResponseVoiceFreshness } from "../conversations/response-voice-freshness.js";
 import { MAX_REPLY_STREAM_IDS } from "../../shared/protocol/client-controls.js";
 
+export const MAX_DEFERRED_VOICE_PUBLICATIONS = 128;
 const MAX_CONCURRENT = 4;
 const MAX_PENDING = 64;
 type Pending = {
@@ -378,7 +379,7 @@ export class NotificationService {
       };
       if (!settlement) return publish(context.recognitionTarget);
       // Bound transient waiting independently from script capacity.
-      if (this.#deferred.size >= 128) return publish(undefined);
+      if (this.#deferred.size >= MAX_DEFERRED_VOICE_PUBLICATIONS) return publish(undefined);
       const key = {};
       this.#deferred.set(key, scope);
       let target: VoiceRecognitionTarget | undefined;

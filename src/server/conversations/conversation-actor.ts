@@ -444,7 +444,7 @@ export class ConversationActor {
     return this.#handle.automaticEviction;
   }
 
-  /** A provider control can retire independently of its final projection event. */
+  /** Actor and provider-control lifetimes can end before the terminal projection event. */
   retireEarlyReplyAuthority(): void {
     this.#earlyReply?.finish("authority_lost");
   }

@@ -150,7 +150,7 @@ export class LiveFinalReplyTracker {
 
 /** Freeze the recipient at capture time and coalesce text behind preceding durable submission observers. */
 export function afterSubmissionAdmission(
-  sink: EarlyReplyObservation, admission: Promise<void>, lifetime: AbortSignal, isCurrent: () => boolean,
+  sink: EarlyReplyObservation, admission: Promise<void>, isCurrent: () => boolean,
 ): EarlyReplyObservation {
   let finished: Parameters<EarlyReplyObservation["finish"]>[0] | undefined;
   let admitted = false;
@@ -166,16 +166,9 @@ export function afterSubmissionAdmission(
       if (finished && (finished !== "item_done" || reason === "item_done")) return;
       finished = reason;
       pending = undefined;
-      lifetime.removeEventListener("abort", retire);
       sink.finish(reason);
     },
   };
-  const retire = () => {
-    try { observation.finish("authority_lost"); }
-    catch { /* Voice observation is passive. */ }
-  };
-  lifetime.addEventListener("abort", retire, { once: true });
-  if (lifetime.aborted) retire();
   void admission.then(() => {
     if (finished) return;
     admitted = true;
@@ -184,6 +177,9 @@ export function afterSubmissionAdmission(
       pending = undefined;
       observation.observe(text, phases);
     }
-  }).catch(retire);
+  }).catch(() => {
+    try { observation.finish("authority_lost"); }
+    catch { /* Voice observation is passive. */ }
+  });
   return observation;
 }

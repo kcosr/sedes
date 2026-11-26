@@ -1,7 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { TurnVoiceCompletion } from "../../src/server/domain/turn-voice-completion.js";
 import type { ClientControlService } from "../../src/server/domain/client-control-service.js";
-import type { VoiceNotificationPublication } from "../../src/server/domain/notification-service.js";
+import { MAX_DEFERRED_VOICE_PUBLICATIONS, type VoiceNotificationPublication } from "../../src/server/domain/notification-service.js";
 
 const scope = {tenantId: "tenant", principalId: "owner"}, threadId = "thread", turnId = "turn";
 function input(backendCorrelation: string) {
@@ -12,8 +12,14 @@ function input(backendCorrelation: string) {
 function coordinator() {
   const finishEarlyReply = vi.fn(), observeNotification = vi.fn<ClientControlService["observeNotification"]>();
   const complete = vi.fn<ClientControlService["complete"]>().mockResolvedValue(undefined);
-  const service = new TurnVoiceCompletion({finishEarlyReply}, {observeNotification, complete});
-  return {observe: (id: string) => service.observe(scope, threadId, input(id)), finishEarlyReply, observeNotification, complete};
+  const pending = new Map<string, Promise<VoiceNotificationPublication | undefined>>();
+  observeNotification.mockImplementation((_scope, _threadId, turn, publication) => {
+    pending.set(turn, publication);
+    void publication.then(() => { if (pending.get(turn) === publication) pending.delete(turn); });
+  });
+  const hasPendingNotification = (_scope: typeof scope, _threadId: string, turn: string) => pending.has(turn);
+  const service = new TurnVoiceCompletion({finishEarlyReply}, {observeNotification, complete, hasPendingNotification});
+  return {observe: (id: string) => service.observe(scope, threadId, input(id)), service, finishEarlyReply, observeNotification, complete};
 }
 
 it("joins duplicate and unclaimed correlations behind the one pending terminal receipt", async () => {
@@ -66,4 +72,76 @@ it("keeps ordinary publication available for a later anchored observation after 
   await vi.waitFor(() => expect(c.finishEarlyReply).toHaveBeenLastCalledWith(scope, threadId, turnId, receipt));
   expect(publish).toHaveBeenCalledOnce();
   expect(c.complete).toHaveBeenCalledOnce();
+});
+
+it("expires incomplete groups without reporting a miss and lets a delayed admissible callback retain its barrier", async () => {
+  vi.useFakeTimers();
+  try {
+    const c = coordinator();
+    const late = c.observe("winner");
+    c.observe("missing")();
+    expect(vi.getTimerCount()).toBe(1);
+    vi.advanceTimersByTime(60_000);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(c.finishEarlyReply).not.toHaveBeenCalled();
+    const receipt = {sourceEventId: "reply", voiceStreamIds: ["recipient"]};
+    late(() => Promise.resolve(receipt));
+    // A different expected callback never returns.
+    expect(await c.observeNotification.mock.calls[0]![3]).toEqual(receipt);
+    expect(c.complete).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+    const duplicate = vi.fn();
+    c.observe("duplicate")(duplicate);
+    expect(duplicate).not.toHaveBeenCalled();
+  } finally { vi.useRealTimers(); }
+});
+
+it("bounds abandoned correlation sets and protects the winning receipt through repeated oldest-entry reclamation", async () => {
+  vi.useFakeTimers();
+  try {
+    const c = coordinator();
+    const late = c.observe("winner");
+    c.observe("missing")();
+    const extra = (n: number) => c.service.observe(scope, threadId, {...input("missing"), applicationTurnId: String(n), completionIdentity: String(n)});
+    for (let index = 0; index <= MAX_DEFERRED_VOICE_PUBLICATIONS; index++) extra(index)();
+    expect(vi.getTimerCount()).toBe(MAX_DEFERRED_VOICE_PUBLICATIONS);
+    expect(c.observeNotification).not.toHaveBeenCalled();
+
+    let finish!: (receipt: VoiceNotificationPublication) => void;
+    late(() => new Promise<VoiceNotificationPublication>(resolve => { finish = resolve; }));
+    // Even active ownership evicted from the recent-decision window is fenced
+    // by the actual unresolved publication held by the deferred controls.
+    for (let index = 0; index <= 4096; index++) {
+      c.service.observe(scope, threadId, {...input("one"), backendCorrelations: ["one"], applicationTurnId: "churn-" + index, completionIdentity: String(index)})(() => Promise.resolve(undefined));
+      await Promise.resolve();
+    }
+    vi.advanceTimersByTime(60_000);
+    const duplicate = vi.fn();
+    c.observe("winner")(duplicate);
+    expect(duplicate).not.toHaveBeenCalled();
+    const receipt = {sourceEventId: "reply", voiceStreamIds: ["recipient"]};
+    finish(receipt);
+    const calls = c.observeNotification.mock.calls.filter(call => call[2] === turnId);
+    expect(calls).toHaveLength(1);
+    expect(await calls[0]![3]).toEqual(receipt);
+    expect(c.finishEarlyReply.mock.calls.filter(call => call[2] === turnId)).toEqual([[scope, threadId, turnId, receipt]]);
+    c.observe("winner")(duplicate);
+    expect(duplicate).not.toHaveBeenCalled();
+  } finally { vi.useRealTimers(); }
+});
+
+it("discards incomplete observers on shutdown and fences their delayed callbacks", () => {
+  vi.useFakeTimers();
+  try {
+    const c = coordinator();
+    const queued = c.observe("winner");
+    c.observe("missing")();
+    expect(vi.getTimerCount()).toBe(1);
+    c.service.close();
+    expect(vi.getTimerCount()).toBe(0);
+    const publish = vi.fn();
+    queued(publish);
+    c.observe("winner")(publish);
+    expect(publish).not.toHaveBeenCalled();
+  } finally { vi.useRealTimers(); }
 });

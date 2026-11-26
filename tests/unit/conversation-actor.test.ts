@@ -5925,6 +5925,57 @@ describe("ConversationActorManager", () => {
     },
   );
 
+  it.each(["owner abort", "control abort", "control replacement", "terminal then owner abort"] as const)(
+    "retains authority over yielded speech until true settlement (%s)", async disposition => {
+      const observation = { observe: vi.fn(), finish: vi.fn() };
+      const { driver, handle, manager } = fixture(undefined, undefined, 10, undefined, 8,
+        undefined, undefined, undefined, undefined, () => observation);
+      const controlLifetime = new AbortController();
+      const control = { generation: "first-control", lifetime: controlLifetime.signal,
+        interrupt: handle.interrupt, reconcileInterrupt: handle.reconcileInterrupt };
+      let attached!: Parameters<ConversationBackendDriver["attach"]>[0];
+      vi.mocked(driver.attach).mockImplementation(async input => {
+        attached = input;
+        input.onControlReady?.(control);
+        return handle as unknown as ConversationHandle;
+      });
+      const initial = snapshot("running", "");
+      initial.turnsById["turn-1"]!.completionCorrelations = ["accepted"];
+      handle.establishmentSnapshots[0] = initial;
+      handle.backendCapabilities.mockResolvedValue({ ...await handle.backendCapabilities(), liveFinalAnswer: "supported" });
+      const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+      const borrowed = manager.acquireExistingControl(scope, binding.applicationThreadId)!;
+      try {
+        const item = { backendItemId: "final", backendTurnId: "turn-1", sourceOrder: 1, status: "streaming" as const,
+          semanticKind: "assistant_message" as const, responsePhase: "final" as const, markdown: { text: "One sentence. Another follows." } };
+        handle.emit(0, { type: "item_started", item, liveFinalStart: true }, 0);
+        handle.emit(0, { type: "item_completed", item: { ...item, status: "completed" } }, 1);
+        await acquired.actor.captureSnapshotState();
+        expect(observation.finish.mock.calls).toEqual([["item_done"]]);
+
+        if (disposition === "terminal then owner abort") {
+          handle.emit(0, { type: "turn_completed", turn: { ...initial.turnsById["turn-1"]!,
+            orderedBackendItemIds: ["item-1", "final"], status: "completed" } }, 2);
+          await acquired.actor.captureSnapshotState();
+        }
+        if (disposition === "control abort") controlLifetime.abort();
+        else if (disposition === "control replacement") {
+          attached.onControlReady?.({ ...control, generation: "replacement-control", lifetime: new AbortController().signal });
+        } else {
+          void manager.close();
+          // Shutdown still awaits the borrowed control. The source must be fenced now.
+          expect(handle.close).not.toHaveBeenCalled();
+        }
+        expect(observation.finish.mock.calls).toEqual(disposition === "terminal then owner abort"
+          ? [["item_done"]] : [["item_done"], ["authority_lost"]]);
+      } finally {
+        borrowed.release();
+        acquired.release();
+        await manager.close();
+      }
+    },
+  );
+
   it.each(["on", "off"] as const)("retains one deferred-control receipt for a steered turn with early playback %s", async mode => {
     const controls = new ClientControlService();
     const finishEarlyReply = vi.fn();
