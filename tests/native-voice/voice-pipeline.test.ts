@@ -613,7 +613,7 @@ describe("native voice production pipeline with loopback providers", () => {
     const title = "Early playback qualification";
     await adb(["shell", "pm", "clear", "dev.sedes.local"]);
     await speech.configure({ reset: true, ttsDurationSeconds: 1 });
-    const socketPath = path.join(app.directory, "android-codex.sock");
+    const socketPath = path.join(app.directory, `android-${earlyKind}.sock`);
     const codex = await OutboundCodexFixture.start(socketPath, { workspacePath: app.workspace });
     let device: ReturnType<typeof adb> | undefined;
     let output = "";

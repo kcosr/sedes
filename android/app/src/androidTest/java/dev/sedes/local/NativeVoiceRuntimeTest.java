@@ -2217,9 +2217,12 @@ public class NativeVoiceRuntimeTest {
             f.earlyTerminal(finalId, "Final.");
             assertEquals("accepted", f.settleClientSwitch(command, finalId).getString("status"));
             SpeechJob finalSpeech = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(finalSpeech);
-            assertTrue(f.openThreads.isEmpty()); f.runtime.drained(finalSpeech.id); f.flushEvents();
+            assertTrue(f.contexts.isEmpty()); assertTrue(f.openThreads.isEmpty());
+            f.runtime.drained(finalSpeech.id); f.flush();
+            String destination = command.getString("threadId");
+            f.takeClientTarget(destination).done(200, Fixture.inputContext(destination), null); f.flushEvents();
             JSONObject opened = f.openThreads.poll(10, TimeUnit.SECONDS); assertNotNull(opened);
-            assertEquals(command.getString("threadId"), opened.getString("threadId"));
+            assertEquals(destination, opened.getString("threadId"));
         }
     }
     @Test public void skippingCommentaryPreservesOtherItemsAndAnOrdinaryPartialReclassification() throws Exception {
