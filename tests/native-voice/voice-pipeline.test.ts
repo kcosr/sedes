@@ -24,7 +24,7 @@ import { OpenCodeProductionFixture } from "../support/opencode-production-fixtur
 const execFile = promisify(execCallback);
 const androidSerial = process.env.SEDES_VOICE_ANDROID_SERIAL;
 const adbPath = process.env.SEDES_ADB_EXECUTABLE ?? (process.env.ANDROID_HOME ? path.join(process.env.ANDROID_HOME, "platform-tools/adb") : "adb");
-async function adb(args: string[], timeout = 30_000) {
+function adb(args: string[], timeout = 30_000) {
   if (!androidSerial) throw new Error("An explicit isolated emulator serial is required.");
   return execFile(adbPath, ["-s", androidSerial, ...args], { timeout, maxBuffer: 8 * 1024 * 1024 });
 }
@@ -480,6 +480,66 @@ describe("native voice production pipeline with loopback providers", () => {
       await feed.close();
     }
   });
+
+  it.skipIf(!androidSerial)("plays a held live Codex reply in the packaged Android background service", async () => {
+    await adb(["shell", "pm", "clear", "dev.sedes.local"]);
+    await speech.configure({ reset: true, ttsDurationSeconds: 1 });
+    const socketPath = path.join(app.directory, "android-codex.sock");
+    const codex = await OutboundCodexFixture.start(socketPath, { workspacePath: app.workspace });
+    let device: ReturnType<typeof adb> | undefined;
+    let output = "";
+    try {
+      const threadId = await createVoiceCodexThread(app, socketPath, "android-early-codex");
+      const args = { serverOrigin: app.url, threadId, threadTitle: "Early playback qualification",
+        speechEndpoint: speech.endpoint, speechToken: speech.token, pairingCode: app.authentication.createPairing({ kind: "management" }).token,
+        scenario: "early-reply", mode: "speak", initialText: "Describe early and final speech." };
+      device = adb(["shell", "am", "instrument", "-w", "-r", "-e", "class", "dev.sedes.local.NativeVoiceE2eTest#nativeConversationCycle",
+        ...Object.entries(args).flatMap(([key, value]) => ["-e", key, shellArgument(value)]),
+        "dev.sedes.local.test/androidx.test.runner.AndroidJUnitRunner"], 300_000);
+      device.child.stdout!.on("data", (chunk: Buffer) => { output += chunk.toString(); });
+      let finished = false;
+      void device.then(() => { finished = true; }, () => { finished = true; });
+      const requireRunningDevice = () => {
+        if (finished) throw new Error("Android instrumentation finished before the opening drain. See android-early-reply.log.");
+      };
+      await waitForSpeech(async () => {
+        requireRunningDevice();
+        if (!codex.activeTurnConnected) return false;
+        const context = threadInputContextSchema.parse(await app.json(`/api/threads/${threadId}/input-context`));
+        return context.sourceTurnId && context.steer.availability === "available";
+      }, 180_000);
+
+      const opening = "This first sentence is playing while the reply is being written.";
+      const suffix = "The final sentence completes the same reply.";
+      const answer = codex.startAnswer("final_answer");
+      answer.append(opening + " The");
+      const observed = await waitForSpeech(() => {
+        requireRunningDevice();
+        return /^INSTRUMENTATION_STATUS: voiceOpening=(.+)\r?\n/mu.exec(output)?.[1];
+      }, 55_000);
+      const progress = JSON.parse(observed);
+      expect(progress).toMatchObject({ foreground: false, drain: { sampleRate: 24_000, writtenFrames: 24_000 } });
+      expect(progress.drain.playedFrames).toBeGreaterThanOrEqual(24_000);
+      expect((await app.thread(threadId)).runState).toBe("running");
+      expect((await speech.observations()).speech).toEqual([{ text: opening }]);
+      answer.append(suffix.slice(3));
+      answer.complete();
+      codex.completeTurn();
+
+      const { stdout } = await device;
+      expect(stdout).toMatch(/OK \(1 test\)/u);
+      const result = JSON.parse(/^INSTRUMENTATION_STATUS: voiceResult=(.+)$/mu.exec(stdout)![1]!);
+      expect(result.suffix.writtenFrames).toBe(24_000);
+      expect(result.suffix.playedFrames).toBeGreaterThanOrEqual(24_000);
+      expect(result.captureChunks).toBe(0);
+      expect((await speech.observations()).speech).toEqual([{ text: opening }, { text: suffix }]);
+    } finally {
+      await adb(["shell", "am", "force-stop", "dev.sedes.local"]);
+      await device?.catch(() => undefined);
+      await writeFile(path.join(artifactDirectory, "android-early-reply.log"), output);
+      await codex.close();
+    }
+  }, 330_000);
 
   it.skipIf(!androidSerial).each([
     "NativeVoiceStoreTest", "ClientCredentialStoreTest", "SpeechCredentialStoreTest", "NativeVoiceQueueDeviceTest",
