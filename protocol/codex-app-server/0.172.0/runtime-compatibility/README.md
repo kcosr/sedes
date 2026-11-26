@@ -57,6 +57,13 @@ The MCP history probe accepts an optional absolute path to a verified stock
 0.169.0 binary to seed both native history formats before opening them with
 0.172.0.
 
+## Linux x64 authorized checks
+
+[Authenticated check results](0.172.0-live-linux-x64.json) record the Luna-low
+UDS, managed TUI, persistent runtime and agent-tool suites. The Steer and Stop
+case passed on targeted rerun after aligning its assertion with the paginated
+receipt contract. The generated-image canary remains separately gated.
+
 ## Validation limits
 
 Offline checks use disposable state and loopback inference. Authenticated
