@@ -2167,6 +2167,41 @@ public class NativeVoiceRuntimeTest {
             assertNotNull(other); assertEquals("Other reply.", other.text); assertEquals(0, f.queued());
         }
     }
+    @Test public void nextStopAndRecordConsumeLateSlicesAndSuppressSuccessfulTerminalFollowup() throws Exception {
+        for (String command : new String[] {"skipCurrentPlayback", "stopPlayback", "recordDuringPlayback"}) {
+            try (Fixture f = new Fixture(false, false)) {
+                f.readyEarlyVoice();
+                f.settings(NativeVoiceJson.object("autoListen", true));
+                f.policy(true, false, "speakThenListen", new JSONArray().put("final"));
+                String id = "acbd".repeat(16);
+                f.earlySpan(id, 0, 0, "First.");
+                SpeechJob first = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(first);
+                f.earlySpan(id, 1, 6, " Buffered."); assertEquals(0, f.queued());
+                assertNull(command, f.command(command, NativeVoiceJson.object("interactionId", id)));
+                assertTrue("Retire the whole spoken reply", first.cancelled);
+                RecognitionJob capture = null; String captureInteraction = null;
+                if (command.equals("recordDuringPlayback")) {
+                    capture = f.completeClientTarget(f.target);
+                    JSONObject manual = f.runtime.snapshot().getJSONObject("active");
+                    captureInteraction = manual.getString("id"); assertNotEquals(id, captureInteraction);
+                    assertEquals("manual", manual.getString("eventKind"));
+                    assertEquals(f.target, manual.getString("recognitionThreadId"));
+                }
+                f.earlySpan(id, 2, 16, " Late.");
+                f.earlyTerminal(id, "First. Buffered. Late. Final.", true);
+                f.runtime.drained(first.id); f.flush();
+                assertTrue(command, f.speech.speechRequests.isEmpty()); assertTrue(command, f.contexts.isEmpty());
+                assertTrue("No automatic capture", f.speech.transcriptions.isEmpty());
+                assertEquals(0, f.queued());
+                if (capture == null) assertTrue(command, f.runtime.snapshot().isNull("active"));
+                else {
+                    assertFalse(capture.cancelled);
+                    assertEquals("The explicit capture keeps its interaction", captureInteraction,
+                        f.runtime.snapshot().getJSONObject("active").getString("id"));
+                }
+            }
+        }
+    }
     @Test public void offEdgeSerializesBeforeReenableAndAdmitsDefinitiveCancellationWhileOff() throws Exception {
         try (Fixture f = new Fixture(false, false)) {
             f.readyEarlyVoice(); String id = "aa44".repeat(16);
@@ -6879,13 +6914,17 @@ public class NativeVoiceRuntimeTest {
             NativeVoiceJson.put(frame, "text", text); NativeVoiceJson.put(frame, "paragraphEnd", false);
             wire(NativeVoiceSse.EARLY_REPLY, frame);
         }
-        void earlyTerminal(String id, String text) throws Exception {
+        void earlyTerminal(String id, String text) throws Exception { earlyTerminal(id, text, false); }
+        void earlyTerminal(String id, String text, boolean followUp) throws Exception {
             JSONObject payload = NativeVoiceJson.object("schemaVersion", 5, "notificationId", id, "event", "turn.completed",
                 "occurredAt", "2026-11-26T14:00:00Z", "title", "Agent finished", "message", "Early",
                 "thread", NativeVoiceJson.object("id", target, "title", "Early"), "turn", NativeVoiceJson.object("id", "early-turn", "outcome", "completed"),
                 "assistantResult", NativeVoiceJson.object("final", NativeVoiceJson.object("text", text)));
-            wire("notification", NativeVoiceJson.object("sourceEventId", id, "generation", policyGeneration,
-                "voice", "speak", "userInputRevision", 0, "payload", payload));
+            JSONObject notice = NativeVoiceJson.object("sourceEventId", id, "generation", policyGeneration,
+                "voice", followUp ? "speakThenListen" : "speak", "userInputRevision", 0, "payload", payload);
+            if (followUp) NativeVoiceJson.put(notice, "recognitionTarget", NativeVoiceJson.object("threadId", target,
+                "sourceTurnId", "early-turn", "activityToken", "epoch"));
+            wire("notification", notice);
         }
         JSONObject clientSwitch(String selected, boolean listen) {
             return NativeVoiceJson.object("id", UUID.randomUUID().toString(), "action", "switch_thread", "sourceThreadId", target,
