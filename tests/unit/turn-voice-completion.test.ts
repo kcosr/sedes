@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { TurnVoiceCompletion } from "../../src/server/domain/turn-voice-completion.js";
-import type { ClientControlService } from "../../src/server/domain/client-control-service.js";
+import { ClientControlService } from "../../src/server/domain/client-control-service.js";
 import { MAX_DEFERRED_VOICE_PUBLICATIONS, type VoiceNotificationPublication } from "../../src/server/domain/notification-service.js";
 
 const scope = {tenantId: "tenant", principalId: "owner"}, threadId = "thread", turnId = "turn";
@@ -144,4 +144,52 @@ it("discards incomplete observers on shutdown and fences their delayed callbacks
     c.observe("winner")(publish);
     expect(publish).not.toHaveBeenCalled();
   } finally { vi.useRealTimers(); }
+});
+
+
+it.each([
+  {case: "no accepted correlation", anchored: false, recovered: false, superseded: false, action: "turn_cancelled"},
+  {case: "recovered history without an accepted correlation", anchored: false, recovered: true, superseded: false, action: "turn_cancelled"},
+  {case: "superseded accepted source", anchored: true, recovered: false, superseded: true, action: "turn_cancelled"},
+  {case: "confirmed live source with silent voice", anchored: true, recovered: false, superseded: false, action: "turn_settled"},
+  {case: "confirmed recovered source with a staged action", anchored: true, recovered: true, superseded: false, action: "turn_settled"},
+] as const)("settles an accepted switch/listen by source authority for $case", async ({anchored, recovered, superseded, action}) => {
+  const controls = new ClientControlService();
+  const coordinator = new TurnVoiceCompletion({finishEarlyReply: vi.fn()}, controls);
+  const state = {runtime: {foreground: true, voiceReady: true, interactionActive: false}, settings: null};
+  const client = controls.register(scope, undefined, {platform: "android",
+    capabilities: {navigate: true, voice: true, voiceSettings: true}, state});
+  const signal = new AbortController().signal;
+  try {
+    const request = controls.request(controls.target(scope, client.clientId), {action: "switch_thread",
+      sourceThreadId: threadId, sourceTurnId: turnId, threadId: "another-thread", listen: true}, signal);
+    const poll = () => controls.poll(scope, client.connectionToken, undefined, {state, acknowledgements: []}, signal);
+    const command = (await poll()).commands[0]!;
+    await controls.poll(scope, client.connectionToken, undefined, {state,
+      acknowledgements: [{id: command.id, result: {status: "accepted", state}}]}, AbortSignal.abort());
+    await request;
+    const result = poll();
+    for (const id of ["missing", "winner", "duplicate"]) {
+      const observation = {...input(id), provenance: recovered ? "recovered" as const : "live" as const,
+        ...(recovered ? {} : {responseVoice: {userInputRevision: 3, superseded}})};
+      // Even without a renderable payload, the accepted source record persists.
+      coordinator.observe(scope, threadId, observation)(anchored && id === "winner" ? () => undefined : undefined);
+    }
+    expect((await result).commands).toEqual([expect.objectContaining({id: command.id, action,
+      ...(action === "turn_settled" ? {replyEventId: null, replyStreamIds: []} : {})})]);
+  } finally {
+    coordinator.close();
+    controls.close();
+  }
+});
+
+it("keeps the receipt from an in-flight winner and fences early-stream writes after shutdown", async () => {
+  const c = coordinator();
+  let finish!: (receipt: VoiceNotificationPublication) => void;
+  c.observe("winner")(() => new Promise(resolve => { finish = resolve; }));
+  c.service.close();
+  const receipt = {sourceEventId: "reply", voiceStreamIds: ["recipient"]};
+  finish(receipt);
+  expect(await c.observeNotification.mock.calls[0]![3]).toEqual(receipt);
+  expect(c.finishEarlyReply).not.toHaveBeenCalled();
 });

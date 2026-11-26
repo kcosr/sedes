@@ -5,7 +5,7 @@ import { MAX_DEFERRED_VOICE_PUBLICATIONS, type NotificationService, type VoiceNo
 
 type Completion = Parameters<AuthoritativeCompletionObserver>[2];
 type Publication = Promise<VoiceNotificationPublication | undefined>;
-type PendingCorrelations = { pending: Set<string>; expiry: NodeJS.Timeout };
+type PendingCorrelations = { pending: Set<string>; anchored: boolean; expiry: NodeJS.Timeout };
 const CORRELATION_LIFETIME_MS = 60_000;
 
 /** Coordinate one terminal publication across the actor's per-input observers. */
@@ -41,6 +41,7 @@ export class TurnVoiceCompletion {
     }
     const group: PendingCorrelations = {
       pending: new Set(input.backendCorrelations),
+      anchored: false,
       expiry: setTimeout(() => this.#retire(key, group), CORRELATION_LIFETIME_MS).unref(),
     };
     this.#correlations.set(key, group);
@@ -67,6 +68,10 @@ export class TurnVoiceCompletion {
       const current = this.#correlations.get(key);
       if (original === current && !current.pending.delete(input.backendCorrelation)) return;
 
+      // Only a durably matched submission supplies publish. This authority
+      // also settles an explicitly staged action when ordinary voice is silent.
+      if (publish && current) current.anchored = true;
+      const anchored = publish !== undefined || current?.anchored === true;
       let publication: Publication | undefined;
       try { publication = publish?.(); } catch { /* Another correlation may still own publication. */ }
       if (!publication && (current !== original || current.pending.size)) return;
@@ -80,15 +85,16 @@ export class TurnVoiceCompletion {
       this.#remember(key, publication ? "published" : "unclaimed");
       if (controlsSettled && !publication) return;
       const finalized = (publication ?? Promise.resolve(undefined)).catch(() => undefined).then(receipt => {
+        if (this.#closed) return receipt;
         this.notifications.finishEarlyReply(scope, threadId, turnId, receipt);
         // Refresh an owner that outlived the recent-decision window before
         // releasing the actual control barrier guarded by hasPendingNotification.
-        if (publication && !this.#closed) this.#remember(key, "published");
+        if (publication) this.#remember(key, "published");
         return receipt;
       });
       if (!controlsSettled) {
         this.controls.observeNotification(scope, threadId, turnId, finalized);
-        void this.controls.complete(scope, threadId, turnId, input.outcome, input.responseVoice?.superseded === true);
+        void this.controls.complete(scope, threadId, turnId, input.outcome, !anchored || input.responseVoice?.superseded === true);
       }
     };
   }
