@@ -24,4 +24,3 @@ export const { SpeechTransport } = await import(new URL("../../packages/electron
     notify(event: string, value: unknown): void;
   }) => Transport;
 };
-
