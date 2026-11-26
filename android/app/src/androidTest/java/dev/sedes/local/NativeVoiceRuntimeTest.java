@@ -2181,7 +2181,11 @@ public class NativeVoiceRuntimeTest {
                 assertTrue("Retire the whole spoken reply", first.cancelled);
                 RecognitionJob capture = null; String captureInteraction = null;
                 if (command.equals("recordDuringPlayback")) {
-                    capture = f.completeClientTarget(f.target);
+                    // Explicit Record validates both at destination selection and immediately before opening capture.
+                    for (int check = 0; check < 2; check++) {
+                        f.takeClientTarget(f.target).done(200, Fixture.inputContext(f.target), null); f.flush();
+                    }
+                    capture = f.speech.transcriptions.poll(10, TimeUnit.SECONDS); assertNotNull(capture);
                     JSONObject manual = f.runtime.snapshot().getJSONObject("active");
                     captureInteraction = manual.getString("id"); assertNotEquals(id, captureInteraction);
                     assertEquals("manual", manual.getString("eventKind"));
