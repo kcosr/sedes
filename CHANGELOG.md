@@ -34,7 +34,7 @@ User-facing changes are collected here before release. See the
   same maintenance window. Remove the retired native Guardian configuration
   keys before startup. See
   [Codex upgrade requirements](docs/operator/backends/codex.md#version-compatibility).
-  ([#136](https://github.com/kcosr/sedes/pull/136))
+  ([#136](https://github.com/kcosr/sedes/pull/136)) ([#164](https://github.com/kcosr/sedes/pull/164))
 
 - Android now requires Android 10 (API 29) or newer for native Opus encoding.
   ([#128](https://github.com/kcosr/sedes/pull/128))
@@ -467,6 +467,7 @@ User-facing changes are collected here before release. See the
 - Codex can refresh saved threads with MCP tool results and display live tool
   activity and elicitation on 0.172.0. A late completion keeps a newer active
   turn available for controls and prevents premature idle cleanup.
+  ([#164](https://github.com/kcosr/sedes/pull/164))
 
 - After a server restart, threads whose recent turn kept running or finished
   while the server was down show their spinner or unread dot without being
