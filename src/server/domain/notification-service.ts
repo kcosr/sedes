@@ -3,7 +3,7 @@ import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import type { EarlyReplyFrame, EarlyReplyInterest } from "../../shared/protocol/early-reply.js";
 import { EarlyReplyDelivery } from "./early-reply-delivery.js";
 import { EarlyReplyPublication, type EarlyReplyAuthority } from "./early-reply-publication.js";
-import { notificationSourceId, scopedTurnKey, turnNotificationKey } from "./notification-identity.js";
+import { notificationSourceId, progressNotificationKey, scopedReplyKey, turnNotificationKey } from "./notification-identity.js";
 import type { EarlyReplyObservation, EarlyReplySource } from "../conversations/early-reply-observation.js";
 import {
   testNotificationRequestSchema,
@@ -70,7 +70,8 @@ export class NotificationService {
     subscriber?: Subscriber;
     early?: {token: string; revision: number; enabled: boolean; delivery: EarlyReplyDelivery};
   }>();
-  readonly #earlyTurns = new Map<string, EarlyReplyPublication>();
+  readonly #earlyReplies = new Map<string, EarlyReplyPublication>();
+  readonly #pendingProgress = new Set<string>();
   readonly #deferred = new Map<object, RequestScope>();
   #subscriberSequence = 0;
   #closed = false;
@@ -107,7 +108,7 @@ export class NotificationService {
       const stream = this.#voiceStreams.get(reservation);
       if (!stream) return;
       this.#voiceStreams.delete(reservation);
-      for (const group of this.#earlyTurns.values()) {
+      for (const group of this.#earlyReplies.values()) {
         if (sameScope(scope, group.scope)) group.remove(voiceStreamId);
       }
       if (stream.subscriber) this.#removeSubscriber(stream.subscriber, "unsubscribed");
@@ -153,7 +154,7 @@ export class NotificationService {
       if (input.revision <= stream.early.revision) throw new DomainError("conflict", "The voice stream interest revision is stale.");
       stream.early.revision = input.revision;
       stream.early.enabled = input.enabled;
-      if (!input.enabled) for (const group of this.#earlyTurns.values()) {
+      if (!input.enabled) for (const group of this.#earlyReplies.values()) {
         if (sameScope(scope, group.scope)) group.remove(voiceStreamId, false);
       }
       return;
@@ -165,7 +166,10 @@ export class NotificationService {
   captureEarlyReply(scope: RequestScope, threadId: string, source: EarlyReplySource,
     captureAuthority: () => EarlyReplyAuthority | undefined): EarlyReplyObservation | undefined {
     if (this.#closed) return;
-    const replyId = notificationSourceId(turnNotificationKey(threadId, source.applicationTurnId));
+    const eventKey = source.event === "turn.progress"
+      ? progressNotificationKey(threadId, source.applicationTurnId, source.applicationItemId)
+      : turnNotificationKey(threadId, source.applicationTurnId);
+    const replyId = notificationSourceId(eventKey);
     const recipients = [...this.#voiceStreams.entries()].flatMap(([reservation, stream]) => {
       if (!sameScope(scope, stream.scope) || !stream.subscriber || !stream.early?.enabled || !stream.early.delivery.mayOpen(replyId)) return [];
       const subscriber = stream.subscriber;
@@ -174,31 +178,69 @@ export class NotificationService {
         delivery.send(frame, outgoing => this.#deliver(subscriber, "voice_early_reply", outgoing))}];
     });
     if (!recipients.length) return;
-    const key = scopedTurnKey(scope, threadId, source.applicationTurnId);
-    if (this.#earlyTurns.has(key) || [...this.#earlyTurns.values()].filter(group => sameScope(scope, group.scope)).length >= 64) return;
+    const key = scopedReplyKey(scope, replyId);
+    if (this.#earlyReplies.has(key) || [...this.#earlyReplies.values()].filter(group => sameScope(scope, group.scope)).length >= 64) return;
     const {generation, settings} = this.input.repository.readDispatch(scope);
-    if (!settings.enabled || settings.silenced || settings.delivery["turn.completed"].voice === "none" ||
-        !settings.assistantResultPhases.includes("final")) return;
+    if (!settings.enabled || settings.silenced || settings.delivery[source.event].voice === "none" ||
+        (source.event === "turn.completed" && !settings.assistantResultPhases.includes("final"))) return;
     const authority = captureAuthority();
     if (!authority) return;
     const publication = new EarlyReplyPublication(scope, threadId, source.applicationTurnId, source.applicationItemId,
-      generation, replyId, settings.assistantResultPhases,
+      source.event, generation, replyId, settings.assistantResultPhases,
       recipients, authority, () => this.input.repository.readDispatch(scope).generation === generation,
-      () => { if (this.#earlyTurns.get(key) === publication) this.#earlyTurns.delete(key); });
-    this.#earlyTurns.set(key, publication);
+      () => { if (this.#earlyReplies.get(key) === publication) this.#earlyReplies.delete(key); });
+    this.#earlyReplies.set(key, publication);
     return publication;
   }
 
   checkEarlyReplyFreshness(scope: RequestScope, threadId: string): void {
-    for (const group of this.#earlyTurns.values()) {
+    for (const group of this.#earlyReplies.values()) {
       if (group.threadId === threadId && sameScope(scope, group.scope)) group.checkFreshness();
     }
   }
 
   finishEarlyReply(scope: RequestScope, threadId: string, turnId: string, publication: VoiceNotificationPublication | undefined): void {
-    this.#earlyTurns.get(scopedTurnKey(scope, threadId, turnId))?.dispose();
-    const replyId = notificationSourceId(turnNotificationKey(threadId, turnId));
-    const delivered = new Set(publication?.voiceStreamIds);
+    this.#finishPublication(scope, notificationSourceId(turnNotificationKey(threadId, turnId)), publication);
+    // A rewritten or abandoned commentary can still get its ordinary notice until
+    // turn settlement. Preserve a publication already claimed by its item observer.
+    for (const [key, group] of this.#earlyReplies) {
+      if (group.event === "turn.progress" && group.threadId === threadId && group.turnId === turnId &&
+          sameScope(scope, group.scope) && !this.#pendingProgress.has(key)) group.dispose();
+    }
+    for (const stream of this.#voiceStreams.values()) {
+      if (!stream.early || !stream.subscriber || !sameScope(scope, stream.scope)) continue;
+      const subscriber = stream.subscriber;
+      for (const replyId of stream.early.delivery.openProgressForTurn(threadId, turnId)) {
+        if (!this.#pendingProgress.has(scopedReplyKey(scope, replyId))) stream.early.delivery.terminal(
+          replyId, false, frame => this.#deliver(subscriber, "voice_early_reply", frame));
+      }
+    }
+  }
+
+  /** A completed commentary item owns its publication independently of the turn and other items. */
+  finishEarlyProgress(scope: RequestScope, threadId: string, turnId: string, itemId: string,
+    publication?: Promise<VoiceNotificationPublication | undefined>): void {
+    const replyId = notificationSourceId(progressNotificationKey(threadId, turnId, itemId));
+    const key = scopedReplyKey(scope, replyId);
+    if (this.#closed || this.#pendingProgress.has(key)) return;
+    // Expired scanners can still have recipients awaiting the ordinary item decision.
+    if (!this.#earlyReplies.has(key) && ![...this.#voiceStreams.values()].some(stream =>
+      sameScope(scope, stream.scope) && stream.early?.delivery.hasOpen(replyId))) return;
+    if (!publication) {
+      this.#finishPublication(scope, replyId, undefined);
+      return;
+    }
+    // The ordinary lane claims synchronously, then may await a settlement.
+    // Repeated completed/filtered observations cannot retire the claiming publication.
+    this.#pendingProgress.add(key);
+    void publication.catch(() => undefined).then(receipt => {
+      if (this.#pendingProgress.delete(key)) this.#finishPublication(scope, replyId, receipt);
+    });
+  }
+
+  #finishPublication(scope: RequestScope, replyId: string, publication: VoiceNotificationPublication | undefined): void {
+    this.#earlyReplies.get(scopedReplyKey(scope, replyId))?.dispose();
+    const delivered = new Set(publication?.sourceEventId === replyId ? publication.voiceStreamIds : []);
     for (const [reservation, stream] of this.#voiceStreams) {
       if (!stream.early || !stream.subscriber || !sameScope(scope, stream.scope)) continue;
       const subscriber = stream.subscriber;
@@ -324,12 +366,13 @@ export class NotificationService {
 
   async close(): Promise<void> {
     this.#closed = true;
-    for (const group of this.#earlyTurns.values()) {
+    for (const group of this.#earlyReplies.values()) {
       group.cancel("authority_lost");
       group.dispose();
     }
     this.#pending.length = 0;
     this.#deferred.clear();
+    this.#pendingProgress.clear();
     for (const subscriber of this.#subscribers) this.#removeSubscriber(subscriber, "service_closed");
     for (const reservation of this.#voiceStreams.keys()) reservation.release();
     for (const controller of this.#active.keys()) controller.abort();
@@ -367,7 +410,9 @@ export class NotificationService {
         const voiceStreamIds = new Set<string>();
         for (const recipient of recipients) {
           if (!this.#subscribers.has(recipient)) continue;
-          if (recipient.voiceStream && this.#voiceStreams.get(recipient.voiceStream)?.early?.delivery.mayDeliverTerminal(sourceEventId) === false) continue;
+          // Partial answers retain the ordinary delivery decision if an item's commentary classification changed.
+          if (payload.event !== "turn.partial" && recipient.voiceStream &&
+              this.#voiceStreams.get(recipient.voiceStream)?.early?.delivery.mayDeliverTerminal(sourceEventId) === false) continue;
           attemptedCount++;
           if (this.#deliver(recipient, "notification", value)) {
             deliveredCount++;
@@ -477,7 +522,7 @@ export class NotificationService {
   }
 
   #publishPolicy(scope: RequestScope): void {
-    for (const group of this.#earlyTurns.values()) {
+    for (const group of this.#earlyReplies.values()) {
       if (sameScope(scope, group.scope)) group.cancel("policy_changed");
     }
     const policy = this.input.repository.readDispatch(scope);

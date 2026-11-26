@@ -53,8 +53,8 @@ User-facing changes are collected here before release. See the
   ([#121](https://github.com/kcosr/sedes/pull/121))
 
 - Upgrade the server and browser/packaged clients together for client protocol
-  **182**. Rebuild Android and Electron clients for native voice snapshot **17**
-  and the early reply subscription. See
+  **183**. Rebuild Android and Electron clients for native voice snapshot **17**
+  and the early reply subscription for progress updates and final answers. See
   [early reply playback](docs/operator/clients/voice.md#early-reply-playback).
   ([#165](https://github.com/kcosr/sedes/pull/165))
   Thread inventory uses `parked` with `park` and `unpark` actions.
@@ -123,9 +123,10 @@ User-facing changes are collected here before release. See the
 
 ### Added
 
-- Android and Electron can start reading an explicitly identified final answer
+- Android and Electron can read Codex final answers and enabled progress updates
   while the agent writes. Choose Responsive, Balanced, or Natural phrasing in
-  Voice settings. Early playback defaults to Off and initially supports Codex.
+  Voice settings. Early playback defaults to Off. Skipping a progress update
+  leaves later updates and the final answer eligible to play.
   [Voice settings](docs/operator/clients/voice.md#early-reply-playback).
   ([#165](https://github.com/kcosr/sedes/pull/165))
 

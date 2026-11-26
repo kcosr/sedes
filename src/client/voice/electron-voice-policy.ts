@@ -184,6 +184,26 @@ export class ElectronVoiceQueue {
     this.seen.add(id);
     if (this.seen.size > 4096) this.seen.delete(this.seen.values().next().value!);
   }
+  #evictProgress(event: string, fits: () => boolean): ElectronVoiceQueueItem[] {
+    const evicted: ElectronVoiceQueueItem[] = [];
+    if (event !== "turn.progress") {
+      for (let index = 0; !fits() && index < this.items.length;) {
+        if (this.items[index]!.event === "turn.progress") {
+          evicted.push(...this.items.splice(index, 1)); this.drop("progress_evicted");
+        } else index++;
+      }
+    }
+    return evicted;
+  }
+  /** An ordinary notice has adopted its opening's position and may have more text than the opening. */
+  fitSealed(item: ElectronVoiceQueueItem, settings: NativeVoiceSettings): ElectronVoiceQueueItem[] {
+    const fits = () => this.bytes(settings) <= 256 * 1024;
+    const dropped = this.#evictProgress(item.event, fits);
+    if (!fits()) {
+      dropped.push(...this.items.splice(this.items.indexOf(item), 1)); this.drop("overflow");
+    }
+    return dropped;
+  }
   add(item: ElectronVoiceQueueItem, settings: NativeVoiceSettings): boolean {
     if (item.notification) {
       if (this.seen.has(item.id) || this.items.some(pending => pending.id === item.id)) return false;
@@ -203,12 +223,7 @@ export class ElectronVoiceQueue {
       if (remaining.length >= 64 || remainingBytes + bytes > 256 * 1024) throw new Error("Voice playback queue is full.");
     }
     const fits = () => this.items.length < 64 && this.bytes(settings) + bytes <= 256 * 1024;
-    if (item.event !== "turn.progress") {
-      for (let index = 0; !fits() && index < this.items.length;) {
-        if (this.items[index]!.event === "turn.progress") { this.items.splice(index, 1); this.drop("progress_evicted"); }
-        else index++;
-      }
-    }
+    this.#evictProgress(item.event, fits);
     if (!fits()) { if (item.replay) throw new Error("Voice playback queue is full."); this.drop("overflow"); return false; }
     this.items.push(item); return true;
   }

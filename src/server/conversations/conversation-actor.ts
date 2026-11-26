@@ -1,4 +1,4 @@
-import { LiveFinalReplyTracker, type CaptureEarlyReply } from "./early-reply-observation.js";
+import { LiveSpeechTracker, type CaptureEarlyReply, type EarlyReplySource } from "./early-reply-observation.js";
 import { ConversationNativeEffectFence } from "./conversation-native-effect-fence.js";
 import type { ClassifiedAssistantResult } from "../../shared/protocol/completion-result.js";
 import type { NonblockingQuestionsPayload } from "../../shared/protocol/questions.js";
@@ -61,7 +61,7 @@ import {
   projectClassifiedAssistantResult,
 } from "./completion-result-projection.js";
 import type { BoundedText } from "../../shared/protocol/payload.js";
-import { boundText } from "./payload-policy.js";
+import { boundText, MAX_LIVE_PROGRESS_BYTES } from "./payload-policy.js";
 import type { ApplicationPublicationAnchor } from "../../shared/protocol/application-publications.js";
 
 export const DEFAULT_PROJECTION_UPDATE_INTERVAL_MILLISECONDS = 50;
@@ -258,7 +258,7 @@ export type ActorBranchCheckpointSelection =
  * never race a submit, steer, interrupt, response, or registered action.
  */
 export class ConversationActor {
-  readonly #earlyReply?: LiveFinalReplyTracker;
+  readonly #earlyReply?: LiveSpeechTracker;
   #earlyReplyGapRevision = 0;
   #earlyReplyBaselineRevision = 0;
   readonly #handle: ConversationHandle;
@@ -321,6 +321,7 @@ export class ConversationActor {
     /** Installed before establishment so durable observers cannot miss startup events. */
     readonly initialObserver?: ConversationActorListener;
     readonly captureEarlyReply?: CaptureEarlyReply;
+    readonly onEarlyProgressSkipped?: (source: EarlyReplySource) => void;
     readonly onInputStateChanged?: () => void;
     /** Absent only for a passive history projection with no execution authority. */
     readonly environmentLease?: ExecutionEnvironmentLease;
@@ -344,7 +345,7 @@ export class ConversationActor {
     this.#nativeEffects = input.nativeEffects ?? new ConversationNativeEffectFence();
     if (input.initialObserver) this.#listeners.add(input.initialObserver);
     this.#environmentLease = input.environmentLease;
-    if (input.captureEarlyReply && input.environmentLease) this.#earlyReply = new LiveFinalReplyTracker(input.captureEarlyReply);
+    if (input.captureEarlyReply && input.environmentLease) this.#earlyReply = new LiveSpeechTracker(input.captureEarlyReply, input.onEarlyProgressSkipped);
     this.#attachmentDelivery = input.attachmentDelivery;
     this.#drainAuthoritativeObservers = input.drainAuthoritativeObservers;
     this.#onInputStateChanged = input.onInputStateChanged;
@@ -1606,9 +1607,8 @@ export class ConversationActor {
       nextEarlyReplySequence = event.handleSequence === nextEarlyReplySequence ? event.handleSequence + 1 : undefined;
       const earlyReplyGapRevision = this.#earlyReplyGapRevision;
       if (nextEarlyReplySequence !== undefined && epoch === this.#establishmentEpoch &&
-          earlyReplyGapRevision === this.#earlyReplyBaselineRevision && event.event.type === "turn_completed" &&
-          event.event.completionProvenance !== "recovered") {
-        this.#earlyReply?.noteOrderedSettlement(event.event.turn);
+          earlyReplyGapRevision === this.#earlyReplyBaselineRevision) {
+        this.#earlyReply?.noteOrderedSettlement(event.event);
       }
       if (epoch === this.#establishmentEpoch && event.event.type === "resnapshot_required") {
         this.noteEarlyReplyObservationGap();
@@ -1648,7 +1648,7 @@ export class ConversationActor {
           const priorCompletionStatus = nativeEvent.type === "turn_completed"
             ? this.#projector.backendTurns().find((turn) => turn.backendTurnId === nativeEvent.turn.backendTurnId)?.status
             : undefined;
-          const newFinalStart = nativeEvent.type === "item_started" && nativeEvent.liveFinalStart === true &&
+          const newSpeechStart = nativeEvent.type === "item_started" && !!nativeEvent.liveSpeechStart &&
             !this.#projector.itemForBackendId(nativeEvent.item.backendItemId);
           const application = this.#projector.apply(event);
           await this.#applyProjection(application);
@@ -1658,11 +1658,7 @@ export class ConversationActor {
             // actually survived recovery.
             return;
           }
-          this.#earlyReply?.accept(nativeEvent, this.#projector, this.#snapshotState?.timeline.activeTurnId,
-            !this.#closing &&
-            ((!this.#handleReplacementRequired && this.#earlyReplyBaselineRevision === this.#earlyReplyGapRevision) ||
-             (this.#earlyReply.reconcilingOrderedSettlement && earlyReplyGapRevision === this.#earlyReplyBaselineRevision)) &&
-            this.#snapshotState?.backendCapabilities.liveFinalAnswer === "supported", newFinalStart);
+          let progress: Extract<ConversationActorEvent, { type: "live_progress" }> | undefined;
           if ((nativeEvent.type === "item_completed" || nativeEvent.type === "item_updated") && nativeEvent.liveProgress &&
               nativeEvent.item.semanticKind === "assistant_message" && nativeEvent.item.status === "completed" &&
               (nativeEvent.item.responsePhase === "provisional" || nativeEvent.item.responsePhase === "partial") && nativeEvent.item.markdown.text.trim()) {
@@ -1671,10 +1667,15 @@ export class ConversationActor {
             const backendTurn = this.#projector.backendTurns().find(turn => turn.backendTurnId === nativeEvent.item.backendTurnId);
             if (item && backendTurn?.status === "in_progress" && backendTurn.completionCorrelations?.length &&
                 timeline.activeTurnId === item.turnId && timeline.runState === "running") {
-              this.#publish({ type: "live_progress", applicationTurnId: item.turnId, applicationItemId: item.id,
-                backendCorrelations: backendTurn.completionCorrelations, phase: nativeEvent.item.responsePhase, text: boundText(nativeEvent.item.markdown.text, 8_192) });
+              progress = { type: "live_progress", applicationTurnId: item.turnId, applicationItemId: item.id,
+                backendCorrelations: backendTurn.completionCorrelations, phase: nativeEvent.item.responsePhase, text: boundText(nativeEvent.item.markdown.text, MAX_LIVE_PROGRESS_BYTES) };
             }
           }
+          this.#earlyReply?.accept(nativeEvent, this.#projector, this.#snapshotState?.timeline.activeTurnId,
+            this.#snapshotState?.backendCapabilities.liveSpeechStarts,
+            !this.#closing && !this.#handleReplacementRequired && this.#earlyReplyBaselineRevision === this.#earlyReplyGapRevision,
+            !this.#closing && earlyReplyGapRevision === this.#earlyReplyBaselineRevision, newSpeechStart, progress?.phase === "provisional");
+          if (progress) this.#publish(progress);
           if (
             event.event.type === "turn_started" ||
             event.event.type === "turn_updated" ||

@@ -15,6 +15,7 @@ public class NativeVoiceEarlyFramesTest {
 
     static JSONObject begin() {
         JSONObject begin = frame("begin", 0);
+        NativeVoiceJson.put(begin, "event", "turn.completed");
         NativeVoiceJson.put(begin, "threadTitle", "🦦");
         NativeVoiceJson.put(begin, "userInputRevision", 3);
         NativeVoiceJson.put(begin, "origin", NativeVoiceJson.object("clientId", STREAM));
@@ -34,6 +35,11 @@ public class NativeVoiceEarlyFramesTest {
     @Test public void validatesTypedRangesIdentitiesAndMetadata() {
         JSONObject begin = begin();
         NativeVoiceEarlyFrames.reply(begin);
+        NativeVoiceJson.put(begin, "event", "turn.progress");
+        NativeVoiceEarlyFrames.reply(begin);
+        rejects(begin, "event", "turn.partial");
+        JSONObject missingEvent = NativeVoiceJson.copy(begin); missingEvent.remove("event");
+        assertThrows(IllegalArgumentException.class, () -> NativeVoiceEarlyFrames.reply(missingEvent));
         rejects(begin, "replyId", "A".repeat(64));
         rejects(begin, "threadId", "thread-id");
         rejects(begin, "turnId", "");
@@ -61,6 +67,7 @@ public class NativeVoiceEarlyFramesTest {
         NativeVoiceJson.put(append, "text", "");
         NativeVoiceJson.put(append, "paragraphEnd", true);
         NativeVoiceEarlyFrames.reply(append);
+        rejects(append, "event", "turn.progress");
         rejects(append, "seq", 256);
         rejects(append, "paragraphEnd", false);
         rejects(append, "rawEnd", 8193);

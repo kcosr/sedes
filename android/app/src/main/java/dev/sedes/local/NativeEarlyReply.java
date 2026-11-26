@@ -9,12 +9,12 @@ import java.util.List;
 import java.util.Objects;
 import org.json.JSONObject;
 
-/** Live source, device phrasing and fully drained frontier for one application turn. Handler-owned. */
+/** Live source, device phrasing and fully drained frontier for one logical notification. Handler-owned. */
 final class NativeEarlyReply {
     static final int MAX_BYTES = NativeVoiceEarlyFrames.MAX_PREFIX_BYTES;
     static final long MAX_LIFETIME = 600_000, MAX_WAIT = 60_000, URGENT_WAIT = 2000;
     static final class Frame {
-        final String kind, id, thread, turn, item, title, origin, text, reason;
+        final String kind, id, event, thread, turn, item, title, origin, text, reason;
         final long generation, inputRevision;
         final int seq, start, end;
         final boolean paragraph;
@@ -24,7 +24,7 @@ final class NativeEarlyReply {
             kind = value.optString("kind"); id = value.optString("replyId"); thread = value.optString("threadId");
             turn = value.optString("turnId"); item = value.optString("itemId"); generation = value.optLong("generation");
             seq = value.optInt("seq"); inputRevision = value.optLong("userInputRevision", -1);
-            title = value.optString("threadTitle", null);
+            event = value.optString("event", null); title = value.optString("threadTitle", null);
             JSONObject source = value.optJSONObject("origin"); origin = source == null ? null : source.optString("clientId");
             start = value.optInt("rawStart", -1); end = value.optInt("rawEnd", -1);
             text = value.optString("text", null); paragraph = value.optBoolean("paragraphEnd"); reason = value.optString("reason", null);
@@ -51,7 +51,7 @@ final class NativeEarlyReply {
         }
     }
     private static IllegalArgumentException invalid() { return new IllegalArgumentException("invalid_early_reply"); }
-    final String id, thread, turn, item, title, origin;
+    final String id, event, thread, turn, item, title, origin;
     final long generation, inputRevision, opened;
     String reservation;
     long lastSpan, urgentSince = -1;
@@ -67,7 +67,7 @@ final class NativeEarlyReply {
 
     NativeEarlyReply(Frame first, long now) {
         if (!first.kind.equals("begin")) throw invalid();
-        id = first.id; thread = first.thread; turn = first.turn; item = first.item; title = first.title;
+        id = first.id; event = first.event; thread = first.thread; turn = first.turn; item = first.item; title = first.title;
         origin = first.origin; generation = first.generation; inputRevision = first.inputRevision; opened = now;
         accept(first, now);
     }
@@ -79,7 +79,7 @@ final class NativeEarlyReply {
         if (!owns(frame)) throw invalid();
         if (detached) return false;
         if (frame.seq < frames.size()) {
-            boolean sameBegin = frame.seq != 0 || Objects.equals(title, frame.title) &&
+            boolean sameBegin = frame.seq != 0 || event.equals(frame.event) && Objects.equals(title, frame.title) &&
                 Objects.equals(origin, frame.origin) && inputRevision == frame.inputRevision;
             if (sameBegin && frames.get(frame.seq).matches(frame, source)) return false;
             throw invalid();
@@ -155,10 +155,20 @@ final class NativeEarlyReply {
         }
         return mode.equals("natural") && !yielded ? raw : end;
     }
+    boolean matchesNotice(NativeVoiceQueue.Item notice) {
+        if (!event.equals(notice.event)) return false;
+        if (!notice.progress()) return true;
+        JSONObject progress = notice.envelope.optJSONObject("payload").optJSONObject("progress");
+        return item.equals(progress.optString("itemId"));
+    }
+    private JSONObject spokenSection(JSONObject payload) {
+        if (event.equals("turn.progress")) return payload.optJSONObject("progress");
+        JSONObject result = payload.optJSONObject("assistantResult");
+        return result == null ? null : result.optJSONObject("final");
+    }
     boolean agreesWith(Part part, NativeVoiceQueue.Item terminal) {
         if (part == null || part.rawEnd == 0) return true;
-        JSONObject result = terminal.envelope.optJSONObject("payload").optJSONObject("assistantResult");
-        JSONObject section = result == null ? null : result.optJSONObject("final");
+        JSONObject section = spokenSection(terminal.envelope.optJSONObject("payload"));
         if (section == null) return false;
         String raw = section.optString("text");
         return raw.startsWith(source.substring(0, part.rawEnd)) && prepare(raw, cleanup).startsWith(prepared(part.rawEnd).substring(0, part.preparedEnd));
@@ -186,9 +196,9 @@ final class NativeEarlyReply {
         detach();
         if (mode == null || !titleSubmitted && preparedEnd == 0 || notice.speech.isEmpty() ||
             !settings.mode().equals("speak") || settings.text("speechContent").equals("announcements")) return notice.speech;
-        JSONObject payload = notice.envelope.optJSONObject("payload"), result = payload.optJSONObject("assistantResult");
-        JSONObject finalSection = result == null ? null : result.optJSONObject("final");
-        String raw = finalSection == null ? "" : finalSection.optString("text", "");
+        JSONObject payload = notice.envelope.optJSONObject("payload");
+        JSONObject section = spokenSection(payload);
+        String raw = section == null ? "" : section.optString("text", "");
         String authoritative = prepare(raw, cleanup);
         if (preparedEnd > 0 && (raw.length() < rawEnd || authoritative.length() < preparedEnd ||
             !Arrays.equals(rawHash, hash(raw.substring(0, rawEnd))) ||
@@ -202,13 +212,14 @@ final class NativeEarlyReply {
             add(parts, prepare(payload.optString("title"), cleanup));
         }
         add(parts, authoritative.substring(preparedEnd).trim());
-        if (finalSection != null && finalSection.has("truncation")) add(parts, "The remaining response was truncated.");
+        if (section != null && section.has("truncation")) add(parts, "The remaining response was truncated.");
         if (context && !reintroduce) add(parts, prepare(payload.optString("title"), cleanup));
+        JSONObject result = notice.progress() ? null : payload.optJSONObject("assistantResult");
         if (result != null) for (String phase : NativeVoiceProtocol.RESULT_PHASES) {
-            JSONObject section = result.optJSONObject(phase);
-            if (phase.equals("final") || section == null) continue;
-            add(parts, prepare(section.optString("text"), cleanup));
-            if (section.has("truncation")) add(parts, "The remaining response was truncated.");
+            JSONObject other = result.optJSONObject(phase);
+            if (phase.equals("final") || other == null) continue;
+            add(parts, prepare(other.optString("text"), cleanup));
+            if (other.has("truncation")) add(parts, "The remaining response was truncated.");
         }
         return String.join(cleanup ? "\n\n" : "\n", parts);
     }

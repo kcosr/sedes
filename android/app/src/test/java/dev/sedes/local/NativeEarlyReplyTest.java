@@ -11,8 +11,12 @@ public class NativeEarlyReplyTest {
             "turnId", "turn", "seq", seq, "generation", 5);
     }
     private static NativeEarlyReply.Frame span(int seq, int start, String text, boolean paragraphEnd) {
+        return span("turn.completed", seq, start, text, paragraphEnd);
+    }
+    private static NativeEarlyReply.Frame span(String event, int seq, int start, String text, boolean paragraphEnd) {
         JSONObject value = common(seq == 0 ? "begin" : "append", seq);
         if (seq == 0) {
+            NativeVoiceJson.put(value, "event", event);
             NativeVoiceJson.put(value, "threadTitle", "Project"); NativeVoiceJson.put(value, "userInputRevision", 2);
         }
         NativeVoiceJson.put(value, "text", text); NativeVoiceJson.put(value, "rawStart", start);
@@ -86,6 +90,47 @@ public class NativeEarlyReplyTest {
         assertEquals("Project\n\nAgent finished\n\nTwo.\n\nStatus.", reply.terminal(terminal, both, "other"));
         assertEquals(terminal("Corrected.", "Status.", both).speech,
             reply.terminal(terminal("Corrected.", "Status.", both), both, ID));
+    }
+    private static NativeVoiceQueue.Item progress(String id, String itemId, String raw, NativeVoiceSettings settings) {
+        JSONObject notice = NativeVoiceJson.copy(terminal(raw, null, settings).envelope);
+        NativeVoiceJson.put(notice, "sourceEventId", id);
+        JSONObject payload = notice.optJSONObject("payload"); payload.remove("assistantResult");
+        NativeVoiceJson.put(payload, "event", "turn.progress");
+        NativeVoiceJson.put(payload, "title", "Agent progress");
+        NativeVoiceJson.put(payload, "turn", NativeVoiceJson.object("id", "turn"));
+        NativeVoiceJson.put(payload, "progress", NativeVoiceJson.object("itemId", itemId, "phase", "provisional", "text", raw));
+        return new NativeVoiceQueue.Item(notice, settings);
+    }
+    @Test public void progressSealsOnlyItsOwnItemAndKeepsDrainedAttributionAndPrefix() {
+        NativeVoiceSettings both = settings("both");
+        NativeEarlyReply reply = new NativeEarlyReply(span("turn.progress", 0, 0, "First.", true), 0);
+        reply.freeze("responsive", both, 4096);
+        assertTrue(new NativeVoiceQueue.Item(reply).progress());
+        assertThrows(IllegalArgumentException.class, () -> reply.accept(span(0, 0, "First.", true), 1));
+        NativeEarlyReply.Part title = reply.next(null);
+        assertEquals("Project", title.text); reply.submitted(title); reply.drained(title);
+        NativeEarlyReply.Part first = reply.next(null);
+        NativeVoiceQueue.Item notice = progress(ID, "message", "First. **Tail.**", both);
+        assertTrue(reply.matchesNotice(notice));
+        assertFalse(reply.matchesNotice(progress(ID, "other", "First.", both)));
+        assertFalse(reply.matchesNotice(terminal("First.", null, both)));
+        assertTrue(reply.agreesWith(first, notice));
+        assertFalse(reply.agreesWith(first, progress(ID, "message", "Corrected.", both)));
+        reply.drained(first);
+        assertEquals("Tail.\n\nAgent progress", reply.terminal(notice, both, ID));
+        assertEquals("Project\n\nAgent progress\n\nTail.", reply.terminal(notice, both, "other"));
+    }
+    @Test public void sealingProgressUnderPressureDropsIncomingItemAndPreservesOlderProgress() {
+        NativeVoiceSettings settings = settings("messages");
+        NativeVoiceQueue queue = new NativeVoiceQueue();
+        NativeEarlyReply reply = new NativeEarlyReply(span("turn.progress", 0, 0, "First.", true), 0);
+        assertTrue(queue.addOpening(new NativeVoiceQueue.Item(reply)));
+        for (int n = 0; n < 5; n++)
+            assertTrue(queue.add(progress("other-" + n, "other-" + n, "P".repeat(50_000), settings)));
+        NativeVoiceQueue.Item notice = progress(ID, "message", "X".repeat(20_000), settings);
+        notice.early = reply;
+        assertTrue(queue.sealPending(notice)); assertFalse(queue.contains(ID)); assertFalse(queue.add(notice));
+        assertEquals(5, queue.size()); assertEquals(250_000, queue.bytes());
     }
     @Test public void onlyAttributionAndNoOutputChooseDifferentTerminalOrdering() {
         NativeVoiceSettings both = settings("both"); NativeVoiceQueue.Item terminal = terminal("One. End.", "Late", both);

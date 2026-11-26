@@ -35,6 +35,7 @@ import type {
   LiveProgressObserver,
   ModelFeedbackObserver,
 } from "../../src/server/conversations/conversation-actor-manager.js";
+import type { EarlyReplySource } from "../../src/server/conversations/early-reply-observation.js";
 import type { ConversationActor, ConversationActorEvent } from "../../src/server/conversations/conversation-actor.js";
 import { applicationTurnIdForBackendTurn, ConversationProjector } from "../../src/server/conversations/conversation-projector.js";
 import { InteractionBroker } from "../../src/server/conversations/interaction-broker.js";
@@ -156,7 +157,7 @@ function selectedBranchingCapabilities(
       creationRecovery: "idempotent",
     },
     interactionKinds: [],
-    usageAccounting: "supported" as const, turnThroughput: "unsupported" as const, liveFinalAnswer: "unsupported" as const, usageSections: [],
+    usageAccounting: "supported" as const, turnThroughput: "unsupported" as const, liveSpeechStarts: { final: false, provisional: false }, usageSections: [],
     effectiveSettings: { toolAccess: "read_only" },
   };
 }
@@ -219,7 +220,7 @@ class FakeHandle {
         reason: { text: "Branching is unavailable in this fixture." },
       },
       interactionKinds: [],
-      usageAccounting: "supported" as const, turnThroughput: "unsupported" as const, liveFinalAnswer: "unsupported" as const, usageSections: [],
+      usageAccounting: "supported" as const, turnThroughput: "unsupported" as const, liveSpeechStarts: { final: false, provisional: false }, usageSections: [],
       effectiveSettings: {},
     }),
   );
@@ -329,6 +330,7 @@ function fixture(
   applicationPublications?: (requestedScope: typeof scope, threadId: string, turnIds: readonly string[]) => readonly PagePublication[],
   onModelFeedback?: ModelFeedbackObserver,
   captureEarlyReply?: ConstructorParameters<typeof ConversationActorManager>[0]["captureEarlyReply"],
+  onLiveProgressSkipped?: ConstructorParameters<typeof ConversationActorManager>[0]["onLiveProgressSkipped"],
 ) {
   const closeOrder: string[] = [];
   const handle = new FakeHandle(closeOrder);
@@ -393,6 +395,7 @@ function fixture(
     ...(onAuthoritativeCompletion ? { onAuthoritativeCompletion } : {}),
     ...(onAuthoritativeSubmission ? { onAuthoritativeSubmission } : {}),
     ...(onLiveProgress ? { onLiveProgress } : {}),
+    ...(onLiveProgressSkipped ? { onLiveProgressSkipped } : {}),
     ...(captureEarlyReply ? { captureEarlyReply } : {}),
     ...(onModelFeedback ? { onModelFeedback } : {}),
     ...(captureResponseVoiceContext ? { captureResponseVoiceContext } : {}),
@@ -3421,7 +3424,7 @@ describe("ConversationActorManager", () => {
         creationRecovery: "idempotent",
       },
       interactionKinds: [],
-      usageAccounting: "supported" as const, turnThroughput: "unsupported" as const, liveFinalAnswer: "unsupported" as const, usageSections: [],
+      usageAccounting: "supported" as const, turnThroughput: "unsupported" as const, liveSpeechStarts: { final: false, provisional: false }, usageSections: [],
       effectiveSettings: {
         model: { provider: "test", id: "model" },
         thinkingLevel: "low",
@@ -4053,7 +4056,7 @@ describe("ConversationActorManager", () => {
         creationRecovery: "idempotent",
       },
       interactionKinds: [],
-      usageAccounting: "supported" as const, turnThroughput: "unsupported" as const, liveFinalAnswer: "unsupported" as const, usageSections: [],
+      usageAccounting: "supported" as const, turnThroughput: "unsupported" as const, liveSpeechStarts: { final: false, provisional: false }, usageSections: [],
       effectiveSettings: { toolAccess: "read_only" },
     });
     const acquired = await manager.acquire({
@@ -4189,7 +4192,7 @@ describe("ConversationActorManager", () => {
           creationRecovery: "idempotent",
         },
         interactionKinds: [],
-        usageAccounting: "supported" as const, turnThroughput: "unsupported" as const, liveFinalAnswer: "unsupported" as const, usageSections: [],
+        usageAccounting: "supported" as const, turnThroughput: "unsupported" as const, liveSpeechStarts: { final: false, provisional: false }, usageSections: [],
         effectiveSettings: { toolAccess: "read_only" },
       });
       handle.establishmentHistories[0] = {
@@ -5878,12 +5881,12 @@ describe("ConversationActorManager", () => {
       handle.establishmentSnapshots[0] = baseline;
       handle.establishmentSnapshots.push(baseline);
       const capabilities = await handle.backendCapabilities();
-      handle.backendCapabilities.mockResolvedValue({ ...capabilities, liveFinalAnswer: "supported" });
+      handle.backendCapabilities.mockResolvedValue({ ...capabilities, liveSpeechStarts: { final: true, provisional: false } });
       const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
       const item = { backendTurnId: "turn-1", backendItemId: "early-answer", status: "streaming" as const,
         semanticKind: "assistant_message" as const, responsePhase: "final" as const, sourceOrder: 1, markdown: { text: "" } };
       try {
-        handle.emit(0, { type: "item_started", item, liveFinalStart: true }, 0);
+        handle.emit(0, { type: "item_started", item, liveSpeechStart: "final" }, 0);
         handle.emit(0, { type: "item_updated", item: { ...item, markdown: { text: "One" } } }, 1);
         handle.emit(0, { type: "item_updated", item: { ...item, markdown: { text: "One. Two." } } }, 2);
         await acquired.actor.captureSnapshotState();
@@ -5905,7 +5908,7 @@ describe("ConversationActorManager", () => {
           handle.emit(0, { type: "item_updated", item: { ...item, markdown: { text: "Changed." } } }, 3);
           await acquired.actor.captureSnapshotState();
           expect(observation.finish).toHaveBeenCalledWith("source_changed");
-          handle.emit(0, { type: "item_started", item: { ...item, sourceOrder: 2, backendItemId: "later-answer" }, liveFinalStart: true }, 4);
+          handle.emit(0, { type: "item_started", item: { ...item, sourceOrder: 2, backendItemId: "later-answer" }, liveSpeechStart: "final" }, 4);
           await acquired.actor.captureSnapshotState();
           expect(capture).toHaveBeenCalledOnce();
         } else {
@@ -5942,13 +5945,13 @@ describe("ConversationActorManager", () => {
       const initial = snapshot("running", "");
       initial.turnsById["turn-1"]!.completionCorrelations = ["accepted"];
       handle.establishmentSnapshots[0] = initial;
-      handle.backendCapabilities.mockResolvedValue({ ...await handle.backendCapabilities(), liveFinalAnswer: "supported" });
+      handle.backendCapabilities.mockResolvedValue({ ...await handle.backendCapabilities(), liveSpeechStarts: { final: true, provisional: false } });
       const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
       const borrowed = manager.acquireExistingControl(scope, binding.applicationThreadId)!;
       try {
         const item = { backendItemId: "final", backendTurnId: "turn-1", sourceOrder: 1, status: "streaming" as const,
           semanticKind: "assistant_message" as const, responsePhase: "final" as const, markdown: { text: "One sentence. Another follows." } };
-        handle.emit(0, { type: "item_started", item, liveFinalStart: true }, 0);
+        handle.emit(0, { type: "item_started", item, liveSpeechStart: "final" }, 0);
         handle.emit(0, { type: "item_completed", item: { ...item, status: "completed" } }, 1);
         await acquired.actor.captureSnapshotState();
         expect(observation.finish.mock.calls).toEqual([["item_done"]]);
@@ -6003,12 +6006,12 @@ describe("ConversationActorManager", () => {
     const item = { backendItemId: "final", backendTurnId: turn.backendTurnId, sourceOrder: 0, status: "streaming" as const,
       semanticKind: "assistant_message" as const, responsePhase: "final" as const, markdown: { text: "Original sentence." } };
     handle.establishmentSnapshots[0] = initial;
-    handle.backendCapabilities.mockResolvedValue({ ...await handle.backendCapabilities(), liveFinalAnswer: "supported" });
+    handle.backendCapabilities.mockResolvedValue({ ...await handle.backendCapabilities(), liveSpeechStarts: { final: true, provisional: false } });
     const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
     try {
       let sequence = 0;
       const emit = (event: BackendConversationEvent) => handle.emit(0, event, sequence++);
-      emit({ type: "item_started", item, liveFinalStart: true });
+      emit({ type: "item_started", item, liveSpeechStart: "final" });
       const open = scenario === "corrected terminal text" || scenario === "queued text before terminal" || scenario === "closed handle after terminal";
       if (!open) emit({ type: "item_completed", item: { ...item, status: "completed" } });
       await acquired.actor.captureSnapshotState();
@@ -6070,7 +6073,7 @@ describe("ConversationActorManager", () => {
     const initial = snapshot("running", "");
     initial.turnsById["turn-1"]!.completionCorrelations = ["submitted"];
     handle.establishmentSnapshots[0] = initial;
-    handle.backendCapabilities.mockResolvedValue({ ...await handle.backendCapabilities(), liveFinalAnswer: "supported" });
+    handle.backendCapabilities.mockResolvedValue({ ...await handle.backendCapabilities(), liveSpeechStarts: { final: true, provisional: false } });
     const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
     const threadId = binding.applicationThreadId;
     const state = { runtime: { foreground: true, voiceReady: true, interactionActive: false }, settings: null };
@@ -6089,7 +6092,7 @@ describe("ConversationActorManager", () => {
       handle.emit(0, { type: "turn_updated", turn: steered }, 0);
       const item = { backendItemId: "final", backendTurnId: "turn-1", sourceOrder: 1, status: "streaming" as const,
         semanticKind: "assistant_message" as const, responsePhase: "final" as const, markdown: { text: "A sentence. More follows." } };
-      handle.emit(0, { type: "item_started", item, liveFinalStart: true }, 1);
+      handle.emit(0, { type: "item_started", item, liveSpeechStart: "final" }, 1);
       await acquired.actor.captureSnapshotState();
       expect(capture).toHaveBeenCalledWith(scope, threadId, expect.objectContaining({ backendCorrelations: ["submitted", "steered"] }));
       expect(early.observe).toHaveBeenCalledTimes(mode === "on" ? 1 : 0);
@@ -6129,7 +6132,7 @@ describe("ConversationActorManager", () => {
       responsePhase: "final" as const, status: "streaming" as const, sourceOrder: 0, markdown: { text: "Written during cold start. " } };
     initial.itemsById["item-1"] = item;
     handle.establishmentSnapshots[0] = initial;
-    handle.backendCapabilities.mockResolvedValue({ ...await handle.backendCapabilities(), liveFinalAnswer: "supported" });
+    handle.backendCapabilities.mockResolvedValue({ ...await handle.backendCapabilities(), liveSpeechStarts: { final: true, provisional: false } });
     const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
     try {
       const markdown = { text: item.markdown.text + "A later sentence arrives." };
@@ -6155,13 +6158,13 @@ describe("ConversationActorManager", () => {
       if (caseName !== "external") baseline.turnsById["turn-1"]!.completionCorrelations = ["accepted"];
       handle.establishmentSnapshots[0] = baseline;
       const capabilities = await handle.backendCapabilities();
-      if (caseName !== "no capability") handle.backendCapabilities.mockResolvedValue({ ...capabilities, liveFinalAnswer: "supported" });
+      if (caseName !== "no capability") handle.backendCapabilities.mockResolvedValue({ ...capabilities, liveSpeechStarts: { final: true, provisional: false } });
       const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
       const item = { backendTurnId: "turn-1", backendItemId: caseName === "already projected" ? "item-1" : "early",
         sourceOrder: caseName === "already projected" ? 0 : 1, status: "streaming" as const, semanticKind: "assistant_message" as const,
         responsePhase: "final" as const, markdown: { text: "" } };
       try {
-        handle.emit(0, { type: "item_started", item, ...(caseName === "late label" ? {} : { liveFinalStart: true }) }, 0);
+        handle.emit(0, { type: "item_started", item, ...(caseName === "late label" ? {} : { liveSpeechStart: "final" }) }, 0);
         handle.emit(0, { type: "item_updated", item: { ...item, markdown: { text: "A full sentence. " } } }, 1);
         await acquired.actor.captureSnapshotState();
         expect(capture).not.toHaveBeenCalled();
@@ -6171,6 +6174,139 @@ describe("ConversationActorManager", () => {
       }
     },
   );
+
+  describe("early commentary speech", () => {
+    const assistant = (id: string, order: number, phase: "final" | "provisional" | "partial" = "provisional") => ({
+      backendItemId: id, backendTurnId: "turn-1", sourceOrder: order, semanticKind: "assistant_message" as const,
+      responsePhase: phase, status: "streaming" as const, markdown: { text: id + " opening. " },
+    });
+    async function setup(submission?: AuthoritativeSubmissionObserver, provisional = true) {
+      const captures: Array<{source: EarlyReplySource, observe: ReturnType<typeof vi.fn>, finish: ReturnType<typeof vi.fn>}> = [];
+      const progress = vi.fn<LiveProgressObserver>();
+      const skipped = vi.fn();
+      const completed = vi.fn<AuthoritativeCompletionObserver>();
+      const { handle, manager, driver } = fixture(completed, submission, 10, undefined, 8, progress, undefined, undefined, undefined,
+        (_scope, _thread, source) => {
+          const sink = { source, observe: vi.fn(), finish: vi.fn() };
+          captures.push(sink);
+          return sink;
+        }, skipped);
+      const baseline = snapshot("running", "");
+      baseline.turnsById["turn-1"]!.completionCorrelations = ["submitted"];
+      handle.establishmentSnapshots[0] = baseline;
+      handle.backendCapabilities.mockResolvedValue({ ...await handle.backendCapabilities(), liveSpeechStarts: { final: true, provisional } });
+      const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "fixture", driver });
+      let sequence = 0;
+      const emit = (event: BackendConversationEvent) => handle.emit(0, event, sequence++);
+      const completeTurn = (...ids: string[]) => emit({ type: "turn_completed", turn: { ...baseline.turnsById["turn-1"]!,
+        orderedBackendItemIds: ["item-1", ...ids], status: "completed" } });
+      return { captures, progress, skipped, completed, emit, completeTurn,
+        drain: () => acquired.actor.captureSnapshotState(), close: async () => { acquired.release(); await manager.close(); } };
+    }
+
+    it("keeps independent item anchors through interleaved commentary and the first final answer", async () => {
+      const run = await setup();
+      const first = assistant("one", 1), second = assistant("two", 2), final = assistant("result", 3, "final");
+      try {
+        for (const item of [first, second, final]) run.emit({ type: "item_started", item, liveSpeechStart: item.responsePhase === "final" ? "final" : "provisional" });
+        const again = { ...first, markdown: { text: first.markdown.text + "Later sentence." } };
+        run.emit({ type: "item_updated", item: again });
+        // A streaming retransmission with a native label cannot open the same projected item twice.
+        run.emit({ type: "item_started", item: again, liveSpeechStart: "provisional" });
+        await run.drain();
+        expect(run.captures.map(sink => sink.source.event)).toEqual(["turn.progress", "turn.progress", "turn.completed"]);
+        const [a, b, answer] = run.captures;
+        for (const sink of run.captures) {
+          expect(sink.source).toMatchObject({ applicationTurnId: projectedTurnId, backendCorrelations: ["submitted"] });
+        }
+        expect(new Set(run.captures.map(sink => sink.source.applicationItemId)).size).toBe(3);
+        expect(a!.observe).toHaveBeenLastCalledWith(again.markdown.text, []);
+        expect(b!.observe).toHaveBeenLastCalledWith(second.markdown.text, []);
+        expect(answer!.observe).toHaveBeenLastCalledWith(final.markdown.text, ["provisional"]);
+
+        for (const item of [second, again]) run.emit({ type: "item_completed", item: { ...item, status: "completed" }, liveProgress: true });
+        await vi.waitFor(() => expect(run.progress).toHaveBeenCalledTimes(2));
+        expect(run.progress.mock.calls.map(call => call[2].applicationItemId)).toEqual([b!.source.applicationItemId, a!.source.applicationItemId]);
+        expect(a!.finish.mock.calls).toEqual([["item_done"]]);
+        expect(b!.finish.mock.calls).toEqual([["item_done"]]);
+        expect(answer!.finish).not.toHaveBeenCalled();
+        run.emit({ type: "item_completed", item: { ...final, status: "completed" } });
+        run.completeTurn("one", "two", "result");
+        await vi.waitFor(() => expect(run.completed).toHaveBeenCalledOnce());
+        expect(answer!.finish.mock.calls).toEqual([["item_done"]]);
+        expect(run.skipped).not.toHaveBeenCalled();
+      } finally { await run.close(); }
+    });
+
+    it.each(["unqualified completion", "turn end", "gap", "rewritten progress", "phase changed to partial"] as const)(
+      "settles the exact item on %s", async disposition => {
+        const run = await setup();
+        const item = assistant("source", 1);
+        try {
+          run.emit({ type: "item_started", item, liveSpeechStart: "provisional" });
+          await run.drain();
+          const sink = run.captures[0]!;
+          if (disposition === "gap") run.emit({ type: "resnapshot_required", reason: "history_changed" });
+          else if (disposition === "turn end") run.completeTurn(item.backendItemId);
+          else if (disposition === "unqualified completion") run.emit({ type: "item_completed", item: { ...item, status: "completed" } });
+          else {
+            const revised = disposition === "rewritten progress" ? { ...item, markdown: { text: "Corrected commentary." } }
+              : { ...item, responsePhase: "partial" as const };
+            run.emit({ type: "item_updated", item: revised });
+            await run.drain();
+            expect(sink.finish).toHaveBeenCalledWith("source_changed");
+            expect(run.skipped).not.toHaveBeenCalled();
+            run.emit({ type: "item_completed", liveProgress: true, item: { ...revised, status: "completed" } });
+            await vi.waitFor(() => expect(run.progress).toHaveBeenCalledOnce());
+            expect(run.progress.mock.calls[0]![2]).toMatchObject({ applicationItemId: sink.source.applicationItemId, text: revised.markdown });
+            if (disposition === "phase changed to partial") {
+              expect(run.skipped).toHaveBeenCalledExactlyOnceWith(scope, binding.applicationThreadId, projectedTurnId, sink.source.applicationItemId);
+            } else expect(run.skipped).not.toHaveBeenCalled();
+            return;
+          }
+          await vi.waitFor(() => expect(run.skipped).toHaveBeenCalledExactlyOnceWith(scope, binding.applicationThreadId,
+            projectedTurnId, sink.source.applicationItemId));
+          expect(run.progress).not.toHaveBeenCalled();
+          expect(sink.finish).toHaveBeenCalledWith("authority_lost");
+        } finally { await run.close(); }
+      });
+
+    it("skips a completed commentary held behind submission when the live turn ends first", async () => {
+      let release!: () => void;
+      const waiting = new Promise<void>(resolve => { release = resolve; });
+      const run = await setup(() => waiting);
+      const item = assistant("waiting", 1);
+      try {
+        run.emit({ type: "item_started", item, liveSpeechStart: "provisional" });
+        run.emit({ type: "item_completed", item: { ...item, status: "completed" }, liveProgress: true });
+        run.completeTurn(item.backendItemId);
+        await run.drain();
+        const sink = run.captures[0]!;
+        expect(sink.observe).not.toHaveBeenCalled();
+        expect(sink.finish).toHaveBeenCalledWith("item_done");
+        expect(run.skipped).not.toHaveBeenCalled();
+        release();
+        await vi.waitFor(() => expect(run.completed).toHaveBeenCalledOnce());
+        expect(run.skipped).toHaveBeenCalledExactlyOnceWith(scope, binding.applicationThreadId, projectedTurnId, sink.source.applicationItemId);
+        expect(run.progress).not.toHaveBeenCalled();
+      } finally { release(); await run.close(); }
+    });
+
+    it.each(["unsupported provisional", "late phase", "partial answer", "established item"] as const)(
+      "requires native streaming evidence for a new commentary item (%s)", async reason => {
+        const run = await setup(undefined, reason !== "unsupported provisional");
+        const item = assistant(reason === "established item" ? "item-1" : "new", reason === "established item" ? 0 : 1,
+          reason === "partial answer" ? "partial" : "provisional");
+        try {
+          run.emit({ type: "item_started", item,
+            ...(reason === "late phase" || reason === "partial answer" ? {} : { liveSpeechStart: "provisional" as const }) });
+          run.emit({ type: "item_completed", item: { ...item, status: "completed" }, liveProgress: true });
+          await vi.waitFor(() => expect(run.progress).toHaveBeenCalledOnce());
+          expect(run.captures).toHaveLength(0);
+          expect(run.skipped).not.toHaveBeenCalled();
+        } finally { await run.close(); }
+      });
+  });
 
   it.each(["provisional", "partial"] as const)("publishes qualified live %s progress after projection, including late phase evidence, but not snapshots or terminal backfill", async (phase) => {
     const observed = vi.fn<LiveProgressObserver>();
@@ -6808,7 +6944,7 @@ describe("ConversationActorManager", () => {
     const early = { observe: vi.fn(), finish: vi.fn() };
     const { driver, handle, manager } = fixture(observed, undefined, 10, undefined, 8,
       undefined, undefined, undefined, undefined, () => early);
-    handle.backendCapabilities.mockResolvedValue({ ...await handle.backendCapabilities(), liveFinalAnswer: "supported" });
+    handle.backendCapabilities.mockResolvedValue({ ...await handle.backendCapabilities(), liveSpeechStarts: { final: true, provisional: false } });
     const controlLifetime = new AbortController();
     const first = { generation: "original", lifetime: controlLifetime.signal, interrupt: handle.interrupt, reconcileInterrupt: handle.reconcileInterrupt };
     const next = { ...first, generation: "reconnected", lifetime: new AbortController().signal };
@@ -6831,7 +6967,7 @@ describe("ConversationActorManager", () => {
     terminal.itemsById.final = { ...item, status: "completed" };
     handle.establishmentSnapshots.push(terminal);
     const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
-    handle.emit(0, { type: "item_started", item, liveFinalStart: true }, 0);
+    handle.emit(0, { type: "item_started", item, liveSpeechStart: "final" }, 0);
     await acquired.actor.captureSnapshotState();
     expect(early.observe).toHaveBeenCalledWith(item.markdown.text, ["unclassified"]);
     let release!: () => void;

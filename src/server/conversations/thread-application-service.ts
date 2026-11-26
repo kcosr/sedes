@@ -286,7 +286,7 @@ const emptyBackendCapabilities: BackendCapabilityDocument = {
   interactionKinds: [],
   usageAccounting: "unsupported",
   turnThroughput: "unsupported",
-  liveFinalAnswer: "unsupported",
+  liveSpeechStarts: { final: false, provisional: false },
       usageSections: [],
   effectiveSettings: {},
 };

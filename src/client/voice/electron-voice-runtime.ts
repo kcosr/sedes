@@ -798,8 +798,8 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
   #earlyEligible(reply: ElectronEarlyReply): boolean {
     const policy = this.#policy, settings = this.#state.settings, source = reply.identity;
     return this.#earlyEnabled() && this.#sessionReady() && !!policy && this.#notificationsConnected && policy.settings.enabled &&
-      !policy.settings.silenced && policy.settings.assistantResultPhases.includes("final") &&
-      policy.settings.delivery["turn.completed"].voice !== "none" && policy.generation === source.generation &&
+      !policy.settings.silenced && (source.event === "turn.progress" || policy.settings.assistantResultPhases.includes("final")) &&
+      policy.settings.delivery[source.event].voice !== "none" && policy.generation === source.generation &&
       !(settings.ignoreOtherDevices && source.origin && source.origin.clientId !== this.#state.originClientId) &&
       (!settings.onlyVoiceThread || settings.voiceThreadId === source.threadId);
   }
@@ -820,7 +820,7 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
       if (frame.kind !== "begin" || this.#early.size >= 4096 || this.#queue.seen.has(frame.replyId) || this.#drained.has(frame.replyId)) return;
       reply = new ElectronEarlyReply(frame, performance.now(), this.#connection!.voiceStreamId!);
       if (!this.#earlyEligible(reply)) return;
-      const item = { id: frame.replyId, early: reply, event: "turn.completed", threadId: frame.threadId, threadTitle: nativeThreadTitle(frame.threadTitle) };
+      const item = { id: frame.replyId, early: reply, event: frame.event, threadId: frame.threadId, threadTitle: nativeThreadTitle(frame.threadTitle) };
       if (!this.#enqueue(item)) return;
       this.#early.set(frame.replyId, reply); this.#trace("early_begin");
       reply.timer = setTimeout(() => this.#releaseEarly(reply!), 600_000);
@@ -877,13 +877,16 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
       let item: ElectronVoiceQueueItem = { id: notice.sourceEventId, notification: notice, event: notice.payload.event,
         threadId: notice.payload.thread?.id ?? null, threadTitle: notice.payload.thread ? nativeThreadTitle(notice.payload.thread.title) : null };
       this.#trace("received");
-      const reply = this.#early.get(item.id);
+      // Definitive suppression releases the receipt while previously submitted audio can still be draining.
+      const playing = this.#active?.item;
+      const reply = this.#early.get(item.id) ?? (playing?.id === item.id && !playing.notification ? playing.early : undefined);
       if (reply && item.threadId === reply.identity.threadId && notice.payload.turn?.id === reply.identity.turnId) {
         const existing = this.#queue.items.find(other => other.early === reply) ?? (this.#active?.item?.early === reply ? this.#active.item : undefined);
         if (existing?.notification || this.#queue.seen.has(item.id)) return;
-        if (notice.payload.event === "turn.completed") {
+        if (notice.payload.event === reply.identity.event &&
+            (notice.payload.event !== "turn.progress" || notice.payload.progress?.itemId === reply.identity.itemId)) {
           this.#trace("early_sealed");
-          if (reply.suppressed || !this.#eligible(item)) {
+          if (reply.suppressed || !this.#eligible(item) || !voiceItemText(item, this.#state.settings) && !notificationListens(notice, this.#state.settings)) {
             this.#queue.remember(item.id); this.#releaseEarly(reply); this.#early.delete(item.id); this.#rememberDrained(item.id); this.#scheduleDrain(); return;
           }
           // Seal in place, including when a physical request has already reached the speaker.
@@ -892,11 +895,9 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
             existing.notification = notice;
             this.#queue.remember(item.id);
             reply.cancelLookahead?.();
-            const index = this.#queue.items.indexOf(existing);
-            if (index >= 0) reply.detach();
-            if (index >= 0 && this.#queue.bytes(this.#state.settings) > 256 * 1024) {
-              this.#queue.items.splice(index, 1);
-              reply.detach(); this.#early.delete(item.id); this.#rememberDrained(item.id);
+            if (this.#queue.items.includes(existing)) {
+              reply.detach();
+              for (const dropped of this.#queue.fitSealed(existing, this.#state.settings)) this.#discardQueuedItem(dropped);
             } else {
               if (this.#active?.item === existing) {
                 this.#active.target = notice.recognitionTarget?.threadId ?? item.threadId;
@@ -980,7 +981,7 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
       this.#state.phase = "synthesizing"; this.#publish();
       const context = await this.#context(item.threadId, active.abort.signal); this.#assertCurrent(active);
       if (context.userInputRevision > revision) {
-        this.#discardSourceControls(item.threadId, item.notification?.payload.turn?.id ?? item.early?.identity.turnId);
+        if (item.event !== "turn.progress") this.#discardSourceControls(item.threadId, item.notification?.payload.turn?.id ?? item.early?.identity.turnId);
         this.#finish(active); return;
       }
     }
@@ -1005,7 +1006,8 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
       const context = await this.#context(item.threadId!, active.abort.signal);
       this.#assertCurrent(active);
       if (context.userInputRevision > item.notification.userInputRevision!) {
-        this.#discardSourceControls(item.threadId!, item.notification.payload.turn?.id); this.#finish(active); return;
+        if (item.event !== "turn.progress") this.#discardSourceControls(item.threadId!, item.notification.payload.turn?.id);
+        this.#finish(active); return;
       }
       const continuation = item.early.continuation(item.notification, settings, this.#lastAudibleOwner);
       const parts = continuation ?? [voiceItemText(item, settings)];
@@ -1078,7 +1080,7 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
     const cancelStaged = () => { staged?.close(true); staged = undefined; };
     const changed = () => {
       if (item.notification && current?.chunk.frontier &&
-          !reply.matches(item.notification.payload.assistantResult?.final?.text ?? "", settings.cleanSpeechText, current.chunk.frontier)) {
+          !reply.matches(reply.sealedSection(item.notification)?.text ?? "", settings.cleanSpeechText, current.chunk.frontier)) {
         current.close(true);
       }
       if (waitingDrain && !staged && current && !current.stopped()) {

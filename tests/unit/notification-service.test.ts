@@ -1,7 +1,8 @@
+import { boundText, MAX_LIVE_PROGRESS_BYTES } from "../../src/server/conversations/payload-policy.js";
 import { ClientControlService } from "../../src/server/domain/client-control-service.js";
 import { TurnVoiceCompletion } from "../../src/server/domain/turn-voice-completion.js";
 import { earlyReplyFrameSchema, earlyReplySessionSchema } from "../../src/shared/protocol/early-reply.js";
-import { notificationSourceId, turnNotificationKey } from "../../src/server/domain/notification-identity.js";
+import { notificationSourceId, progressNotificationKey, turnNotificationKey } from "../../src/server/domain/notification-identity.js";
 import { scriptDelivery } from "../support/notification-settings.js";
 import { notificationAssistantResultMigration } from "../../src/server/db/migrations/103-notification-assistant-result.js";
 import { notificationAssistantResultPhasesMigration } from "../../src/server/db/migrations/105-notification-assistant-result-phases.js";
@@ -1382,7 +1383,7 @@ describe("notification settings and passive hooks", () => {
 
 describe("early reply publication", () => {
   const threadId = randomUUID();
-  const source = {applicationTurnId: "turn", applicationItemId: "item", backendCorrelations: ["operation"]};
+  const source = {event: "turn.completed" as const, applicationTurnId: "turn", applicationItemId: "item", backendCorrelations: ["operation"]};
   const eventKey = turnNotificationKey(threadId, source.applicationTurnId);
   const authority = {threadTitle: "Example", userInputRevision: 2, fresh: () => true, admitted: () => true};
   const opening = "First sentence. Another word";
@@ -1420,7 +1421,7 @@ describe("early reply publication", () => {
     reply.observe(opening + " ends. Next sentence", []);
     reply.finish("item_done");
     expect(ready.replies()).toMatchObject([
-      {kind: "begin", seq: 0, rawStart: 0, rawEnd: 15, text: "First sentence.", userInputRevision: 2, origin},
+      {kind: "begin", event: "turn.completed", seq: 0, rawStart: 0, rawEnd: 15, text: "First sentence.", userInputRevision: 2, origin},
       {kind: "append", seq: 1, rawStart: 15, text: " Another word ends."}, {kind: "yield", seq: 2, reason: "item_done"},
     ]);
     expect(optsOut.replies()).toMatchObject([{kind: "begin", seq: 0}, {kind: "yield", seq: 1}]);
@@ -1434,6 +1435,152 @@ describe("early reply publication", () => {
     expect(ready.replies()).toHaveLength(3);
     expect(voiceFrames(browser)[0]?.sourceEventId).toBe(notificationSourceId(eventKey));
   });
+  it("uses the progress item policy independently of completion phases and scripts", async () => {
+    const {service, executor} = fixture();
+    const delivery = scriptDelivery(["turn.progress"]);
+    delivery["turn.completed"].voice = "none";
+    service.update(scope, {...config, assistantResultPhases: [], delivery});
+    const listener = native(service), offline = native(service, false);
+    const capture = vi.fn(() => authority);
+    expect(service.captureEarlyReply(scope, threadId, source, capture)).toBeUndefined();
+    expect(capture).not.toHaveBeenCalled();
+    const commentary = {...source, event: "turn.progress" as const};
+    const early = service.captureEarlyReply(scope, threadId, commentary, capture)!;
+    early.observe(opening, ["provisional", "unclassified"]);
+    early.finish("item_done");
+    const key = progressNotificationKey(threadId, source.applicationTurnId, source.applicationItemId);
+    const replyId = notificationSourceId(key);
+    expect(listener.replies()).toMatchObject([
+      {kind: "begin", event: "turn.progress", replyId, itemId: "item"}, {kind: "yield", replyId},
+    ]);
+    expect(offline.replies()).toEqual([]);
+    expect(executor).not.toHaveBeenCalled();
+    const event = {...progress({text: opening}), thread: {id: threadId, title: authority.threadTitle}};
+    const publication = emitFresh(service, scope, event, key, "live");
+    service.finishEarlyProgress(scope, threadId, source.applicationTurnId, source.applicationItemId, publication);
+    expect((await publication)?.voiceStreamIds).toEqual([listener.id, offline.id]);
+    await flush();
+    for (const device of [listener, offline]) expect(voiceFrames(device.frames)).toMatchObject([
+      {sourceEventId: replyId, voice: "speak", payload: {event: "turn.progress", progress: {text: opening}}},
+    ]);
+    expect(executor).toHaveBeenCalledOnce();
+    const nextDelivery = scriptDelivery([]);
+    nextDelivery["turn.progress"].voice = "none";
+    service.update(scope, {...config, assistantResultPhases: ["final"], delivery: nextDelivery, expectedRevision: 1});
+    expect(service.captureEarlyReply(scope, threadId, {...commentary, applicationItemId: "other"}, capture)).toBeUndefined();
+    expect(service.captureEarlyReply(scope, threadId, source, capture)).toBeDefined();
+  });
+
+  it("never speaks past the authoritative progress prefix when a later delta requires truncation", () => {
+    const {service} = fixture();
+    enableEarly(service);
+    const listener = native(service);
+    const group = service.captureEarlyReply(scope, threadId, {...source, event: "turn.progress"}, () => authority)!;
+    const start = "Opening. ";
+    const body = start + "a".repeat(MAX_LIVE_PROGRESS_BYTES - start.length - 3) + ".\n\n";
+    group.observe(body, []);
+    group.observe(body + "The rest.", []);
+    const frames = listener.replies();
+    const spoken = frames.flatMap(frame => frame.kind === "begin" || frame.kind === "append" ? [frame.text] : []).join("");
+    expect(spoken).toBe("Opening.");
+    expect(frames.at(-1)).toMatchObject({kind: "yield", reason: "limit"});
+    expect(boundText(body + "The rest.", MAX_LIVE_PROGRESS_BYTES).text.startsWith(spoken)).toBe(true);
+  });
+
+  it("settles overlapping commentary, abandoned items and the final reply independently", async () => {
+    const {service} = fixture();
+    enableEarly(service);
+    const device = native(service);
+    const key = (itemId: string) => progressNotificationKey(threadId, source.applicationTurnId, itemId);
+    const openProgress = (itemId: string) => {
+      const group = service.captureEarlyReply(scope, threadId, {...source, event: "turn.progress", applicationItemId: itemId}, () => authority)!;
+      group.observe(opening, []);
+      return group;
+    };
+    const first = openProgress("p1");
+    first.finish("item_done");
+    const next = openProgress("p2");
+    next.finish("item_done");
+    const abandoned = openProgress("revised");
+    abandoned.finish("source_changed");
+    const final = service.captureEarlyReply(scope, threadId, source, () => authority)!;
+    final.observe(opening, []);
+    const progressPayload = (id: string) => ({
+      ...progress(), thread: {id: threadId, title: "Example"},
+      progress: {itemId: id, phase: "provisional" as const, text: opening},
+    });
+    let release!: (value: undefined) => void;
+    const pending = new Promise<undefined>(resolve => { release = resolve; });
+    const firstDecision = emitFresh(service, scope, progressPayload("p1"), key("p1"), "live", undefined, () => ({settlement: pending}));
+    service.finishEarlyProgress(scope, threadId, "turn", "p1", firstDecision);
+    // A later callback without an eligible recipient cannot override the first claim.
+    service.finishEarlyProgress(scope, threadId, "turn", "p1");
+    service.finishEarlyProgress(scope, threadId, "turn", "p1", emitFresh(service, scope, progressPayload("p1"), key("p1"), "live"));
+    const nextDecision = emitFresh(service, scope, progressPayload("p2"), key("p2"), "live");
+    service.finishEarlyProgress(scope, threadId, "turn", "p2", nextDecision);
+    await nextDecision;
+    final.finish("item_done");
+    const finalDecision = await emitFresh(service, scope, {...event(), thread: {id: threadId, title: "Example"}}, eventKey, "live");
+    service.finishEarlyReply(scope, threadId, "turn", finalDecision);
+    expect(device.replies().filter(frame => frame.kind === "cancel")).toMatchObject([
+      {itemId: "revised", reason: "source_changed"}, {itemId: "revised", reason: "publication_suppressed"},
+    ]);
+    release(undefined);
+    await firstDecision;
+    await flush();
+    expect(voiceFrames(device.frames).map(notice => notice.sourceEventId)).toEqual(
+      [key("p2"), eventKey, key("p1")].map(notificationSourceId));
+    expect(device.replies().filter(frame => frame.kind === "begin").map(frame => frame.replyId)).toEqual(
+      [key("p1"), key("p2"), key("revised"), eventKey].map(notificationSourceId));
+    service.finishEarlyProgress(scope, threadId, "turn", "p1");
+    expect(device.replies().filter(frame => frame.kind === "cancel")).toHaveLength(2);
+  });
+
+  it("cancels stale commentary during playback and preserves the later ordinary decision per recipient", async () => {
+    const {service, executor} = fixture();
+    enableEarly(service);
+    const ready = native(service);
+    const fresh = vi.fn(() => true);
+    const group = service.captureEarlyReply(scope, threadId, {...source, event: "turn.progress"}, () => ({...authority, fresh}))!;
+    group.observe(opening, []);
+    fresh.mockReturnValue(false);
+    service.checkEarlyReplyFreshness(scope, threadId);
+    group.observe(opening + " ends. Next.", []);
+    const key = progressNotificationKey(threadId, "turn", "item");
+    const payload = {...progress(), thread: {id: threadId, title: "Example"}};
+    const publication = service.emit(scope, payload, key, "live", undefined, undefined, undefined,
+      {userInputRevision: authority.userInputRevision, superseded: true});
+    service.finishEarlyProgress(scope, threadId, "turn", "item", publication);
+    await publication;
+    await flush();
+    expect(ready.replies()).toMatchObject([
+      {kind: "begin"}, {kind: "cancel", reason: "superseded"}, {kind: "cancel", reason: "publication_suppressed"},
+    ]);
+    expect(voiceFrames(ready.frames)).toEqual([]);
+    expect(executor).not.toHaveBeenCalled();
+  });
+
+  it("closes a skipped commentary only for its opening recipient and still allows a reclassified partial answer", async () => {
+    const {service} = fixture();
+    const delivery = scriptDelivery([]);
+    delivery["turn.partial"].voice = "speak";
+    service.update(scope, {...config, delivery});
+    const listener = native(service);
+    const early = service.captureEarlyReply(scope, threadId, {...source, event: "turn.progress"}, () => authority)!;
+    early.observe(opening, []);
+    early.finish("source_changed");
+    service.finishEarlyProgress(scope, threadId, "turn", "item");
+    service.finishEarlyProgress(scope, threadId, "turn", "item");
+    const late = native(service);
+    const key = progressNotificationKey(threadId, "turn", "item");
+    const payload: NotificationEventPayload = {...progress(), event: "turn.partial", thread: {id: threadId, title: "Example"},
+      progress: {phase: "partial", itemId: "item", text: "Actual partial answer."}};
+    const receipt = await emitFresh(service, scope, payload, key, "live");
+    expect(receipt?.voiceStreamIds).toEqual([listener.id, late.id]);
+    expect(listener.replies().map(frame => frame.kind)).toEqual(["begin", "cancel", "cancel"]);
+    expect(voiceFrames(listener.frames)).toMatchObject([{payload: {event: "turn.partial"}}]);
+  });
+
   it.each(["winner", "unclaimed"] as const)("settles an actual opened steered reply and its control receipt once (%s)", async scenario => {
     const {service, executor} = fixture();
     enableEarly(service);

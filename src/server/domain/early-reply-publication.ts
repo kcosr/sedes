@@ -1,8 +1,9 @@
 import { recordVoiceDiagnostic } from "../diagnostics/voice-diagnostics.js";
-import { MAX_EARLY_REPLY_FRAMES, earlyReplyFrameSchema, type EarlyReplyFrame } from "../../shared/protocol/early-reply.js";
+import { MAX_EARLY_REPLY_BYTES, MAX_EARLY_REPLY_FRAMES, earlyReplyFrameSchema, type EarlyReplyFrame } from "../../shared/protocol/early-reply.js";
 import type { NotificationAssistantResultPhase } from "../../shared/protocol/notification.js";
-import type { EarlyReplyObservation } from "../conversations/early-reply-observation.js";
+import type { EarlyReplyObservation, EarlyReplySource } from "../conversations/early-reply-observation.js";
 import { EarlyReplyScanner } from "../conversations/early-reply-scanner.js";
+import { ELLIPSIS_BYTES, MAX_LIVE_PROGRESS_BYTES } from "../conversations/payload-policy.js";
 import type { RequestScope } from "../identity/identity-provider.js";
 
 const MAX_LIFETIME_MS = 600_000;
@@ -25,7 +26,7 @@ type Recipient = {readonly voiceStreamId: string; send(frame: EarlyReplyFrame): 
 
 export class EarlyReplyPublication implements EarlyReplyObservation {
   readonly #capturedAt = performance.now();
-  readonly #scanner = new EarlyReplyScanner();
+  readonly #scanner: EarlyReplyScanner;
   readonly #candidates: Set<Recipient>;
   readonly #opened = new Set<Recipient>();
   #seq = 0;
@@ -38,10 +39,14 @@ export class EarlyReplyPublication implements EarlyReplyObservation {
 
   constructor(
     readonly scope: RequestScope, readonly threadId: string, readonly turnId: string, readonly itemId: string,
-    readonly generation: number, readonly replyId: string, readonly phases: readonly NotificationAssistantResultPhase[],
+    readonly event: EarlyReplySource["event"], readonly generation: number, readonly replyId: string, readonly phases: readonly NotificationAssistantResultPhase[],
     recipients: readonly Recipient[], private readonly authority: EarlyReplyAuthority, private readonly policyCurrent: () => boolean,
     private readonly onRetired: () => void,
   ) {
+    // Every released range must fit the authoritative progress text even if that
+    // item later grows past the budget and the stored suffix becomes an ellipsis.
+    this.#scanner = new EarlyReplyScanner(event === "turn.progress"
+      ? Math.min(MAX_EARLY_REPLY_BYTES, MAX_LIVE_PROGRESS_BYTES - ELLIPSIS_BYTES) : MAX_EARLY_REPLY_BYTES);
     this.#candidates = new Set(recipients);
     recordVoiceDiagnostic("early_reply_captured", {
       sourceEventId: this.replyId, recipientCount: this.#candidates.size,
@@ -78,7 +83,7 @@ export class EarlyReplyPublication implements EarlyReplyObservation {
         this.#initialAuthorityChecked = true;
       }
       for (const segment of result.segments) {
-        if (this.#seq === 0 && precedingPhases.some(phase => this.phases.includes(phase))) {
+        if (this.event === "turn.completed" && this.#seq === 0 && precedingPhases.some(phase => this.phases.includes(phase))) {
           this.cancel("source_changed");
           return;
         }
@@ -86,7 +91,7 @@ export class EarlyReplyPublication implements EarlyReplyObservation {
         if (this.#seq >= MAX_EARLY_REPLY_FRAMES - 2) { this.yield("limit"); return; }
         const common = this.#common();
         const frame: EarlyReplyFrame = this.#seq === 0
-          ? {...common, kind: "begin", seq: 0, rawStart: 0, rawEnd: segment.rawEnd,
+          ? {...common, kind: "begin", event: this.event, seq: 0, rawStart: 0, rawEnd: segment.rawEnd,
             text: segment.text, paragraphEnd: segment.paragraphEnd, threadTitle: this.authority.threadTitle,
             userInputRevision: this.authority.userInputRevision, ...(this.authority.origin ? {origin: this.authority.origin} : {})}
           : {...common, kind: "append", ...segment};

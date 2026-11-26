@@ -10418,7 +10418,7 @@ describe("CodexConversationHandle", () => {
   });
 
   it.each(["final_answer", "commentary", "partial_answer", null] as const)(
-    "qualifies only an explicit initial final-answer phase for early observation (%s)", async phase => {
+    "qualifies only an explicit initial commentary or final-answer phase for early observation (%s)", async phase => {
       const harness = new RpcHarness();
       const handle = await attachIdle(harness);
       const established = await establish(harness, handle);
@@ -10433,10 +10433,11 @@ describe("CodexConversationHandle", () => {
       harness.notify("item/completed", { threadId: "thread-1", turnId: active.id,
         item: { ...message, phase: phase ?? "final_answer", text: "One sentence." }, completedAtMs: 1_700_000_004_000 });
       await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ type: "item_completed" })));
-      const marked = events.filter(event => event.type === "item_started" && event.liveFinalStart);
-      expect(marked).toHaveLength(phase === "final_answer" ? 1 : 0);
-      if (marked.length) expect(marked[0]).toMatchObject({ item: { responsePhase: "final", markdown: { text: "" } } });
-      expect((await handle.backendCapabilities()).liveFinalAnswer).toBe("supported");
+      const marked = events.filter(event => event.type === "item_started" && event.liveSpeechStart);
+      const expected = phase === "final_answer" ? "final" : phase === "commentary" ? "provisional" : undefined;
+      expect(marked).toHaveLength(expected ? 1 : 0);
+      if (expected) expect(marked[0]).toMatchObject({ liveSpeechStart: expected, item: { responsePhase: expected, markdown: { text: "" } } });
+      expect((await handle.backendCapabilities()).liveSpeechStarts).toEqual({ final: true, provisional: true });
       harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
       await handle.close();
     },

@@ -1347,7 +1347,7 @@ export class CodexConversationHandle implements ConversationHandle {
       ],
       usageAccounting: "supported",
       turnThroughput: "unsupported",
-      liveFinalAnswer: "supported",
+      liveSpeechStarts: { final: true, provisional: true },
       usageSections: ["context"],
       effectiveSettings,
     };
@@ -5521,10 +5521,12 @@ export class CodexConversationHandle implements ConversationHandle {
                 : "item_completed",
             item,
             ...(method === "item/started" && parsed.item.type === "agentMessage" &&
-              parsed.item.phase === "final_answer" && currentTurn.status === "inProgress" &&
-              item.semanticKind === "assistant_message" && item.status === "streaming" && item.responsePhase === "final" &&
+              currentTurn.status === "inProgress" &&
+              item.semanticKind === "assistant_message" && item.status === "streaming" &&
+              ((parsed.item.phase === "final_answer" && item.responsePhase === "final") ||
+               (parsed.item.phase === "commentary" && item.responsePhase === "provisional")) &&
               projection.projectedItemByNativeCoordinate.get(coordinate)?.orderedBackendItemIds.includes(item.backendItemId)
-              ? { liveFinalStart: true as const } : {}),
+              ? { liveSpeechStart: item.responsePhase } : {}),
             ...(method === "item/completed" && parsed.item.type === "agentMessage" &&
               (parsed.item.phase === "commentary" || parsed.item.phase === "partial_answer") && currentTurn.status === "inProgress" &&
               item.semanticKind === "assistant_message" && item.status === "completed" &&

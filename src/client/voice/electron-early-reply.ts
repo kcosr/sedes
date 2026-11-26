@@ -20,7 +20,7 @@ export interface EarlySpeechChunk { text: string; frontier?: Frontier; attributi
 /** Live source and physical request cursors are discarded when a reply gives up its queue position.
  * Only verified, fully drained chunks advance its compact receipt. */
 export class ElectronEarlyReply {
-  readonly identity: Pick<Begin, "replyId" | "threadId" | "threadTitle" | "turnId" | "itemId" | "generation" | "userInputRevision" | "origin">;
+  readonly identity: Pick<Begin, "replyId" | "event" | "threadId" | "threadTitle" | "turnId" | "itemId" | "generation" | "userInputRevision" | "origin">;
   readonly openedAt: number;
   lastSpanAt: number;
   raw = "";
@@ -42,8 +42,8 @@ export class ElectronEarlyReply {
   #prepared = "";
   #physical: EarlySpeechChunk[] = [];
   constructor(frame: Begin, now: number, readonly streamId: string) {
-    const { replyId, threadId, threadTitle, turnId, itemId, generation, userInputRevision, origin } = frame;
-    this.identity = { replyId, threadId, threadTitle, turnId, itemId, generation, userInputRevision, origin };
+    const { replyId, event, threadId, threadTitle, turnId, itemId, generation, userInputRevision, origin } = frame;
+    this.identity = { replyId, event, threadId, threadTitle, turnId, itemId, generation, userInputRevision, origin };
     this.openedAt = this.lastSpanAt = now;
     this.receive(frame, now);
   }
@@ -128,22 +128,26 @@ export class ElectronEarlyReply {
     return final.length >= frontier.rawEnd && prepared.length >= frontier.preparedEnd &&
       digest(final.slice(0, frontier.rawEnd)) === frontier.rawHash && digest(prepared.slice(0, frontier.preparedEnd)) === frontier.preparedHash;
   }
-  /** Null requests the ordinary context-first completion renderer. Each returned part is already formatted. */
+  sealedSection(notice: VoiceNotification) {
+    return this.identity.event === "turn.progress" ? notice.payload.progress : notice.payload.assistantResult?.final;
+  }
+  /** Null requests the ordinary context-first renderer. Each returned part is already formatted. */
   continuation(notice: VoiceNotification, settings: NativeVoiceSettings, lastAudibleOwner: string | undefined): string[] | null {
-    const result = notice.payload.assistantResult, raw = result?.final?.text ?? "";
+    const section = this.sealedSection(notice), raw = section?.text ?? "";
     if (settings.audioMode !== "speak" || settings.speechContent === "announcements" || !this.frontier && !this.attributed ||
         !this.matches(raw, settings.cleanSpeechText)) return null;
     const clean = (text: string) => electronSpeechText(text, settings.cleanSpeechText);
     const remaining = clean(raw).slice(this.frontier?.preparedEnd ?? 0).trimStart();
-    const final = [remaining, ...(result?.final?.truncation ? ["The remaining response was truncated."] : [])];
+    const tail = [remaining, ...(section?.truncation ? ["The remaining response was truncated."] : [])];
+    const result = this.identity.event === "turn.completed" ? notice.payload.assistantResult : undefined;
     const rest: string[] = [];
     for (const key of ["provisional", "partial", "unclassified"] as const) {
       if (result?.[key]?.text) rest.push(clean(result[key]!.text));
       if (result?.[key]?.truncation) rest.push("The remaining response was truncated.");
     }
-    if (settings.speechContent === "messages") return [...final, ...rest];
-    if (lastAudibleOwner !== this.identity.replyId) return [clean(notice.payload.message || this.identity.threadTitle), clean(notice.payload.title), ...final, ...rest];
-    return [...final, clean(notice.payload.title), ...(this.attributed ? [] : [clean(notice.payload.message)]), ...rest];
+    if (settings.speechContent === "messages") return [...tail, ...rest];
+    if (lastAudibleOwner !== this.identity.replyId) return [clean(notice.payload.message || this.identity.threadTitle), clean(notice.payload.title), ...tail, ...rest];
+    return [...tail, clean(notice.payload.title), ...(this.attributed ? [] : [clean(notice.payload.message)]), ...rest];
   }
   detach(): void {
     this.retired = true; clearTimeout(this.timer); this.timer = undefined;

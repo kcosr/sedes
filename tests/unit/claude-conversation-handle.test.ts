@@ -2295,7 +2295,7 @@ describe("ClaudeConversationHandle", () => {
 
     await expect(handle.backendCapabilities()).resolves.toMatchObject({
       turnThroughput: "unsupported",
-      liveFinalAnswer: "unsupported",
+      liveSpeechStarts: { final: false, provisional: false },
       deliveryModes: ["submit", "steer"],
       branching: { availability: "available" },
     });

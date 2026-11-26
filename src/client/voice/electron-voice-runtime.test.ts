@@ -774,20 +774,30 @@ describe("Electron app-session voice", () => {
 describe("early Electron reply playback", () => {
   const id = "a".repeat(64);
   const common = { replyId: id, threadId: THREAD, turnId: "turn-1", itemId: "source", generation: 1 };
-  const opening = { ...common, kind: "begin", seq: 0, userInputRevision: 1, threadTitle: "Thread A", rawStart: 0, rawEnd: 5, text: "One. ", paragraphEnd: false };
+  const opening = { ...common, kind: "begin", event: "turn.completed", seq: 0, userInputRevision: 1, threadTitle: "Thread A", rawStart: 0, rawEnd: 5, text: "One. ", paragraphEnd: false };
+  const commentary = { ...opening, event: "turn.progress" };
   const append = { ...common, kind: "append", seq: 1, rawStart: 5, rawEnd: 10, text: "Two. ", paragraphEnd: false };
   const setup = async (mode: "balanced" | "responsive" | "natural" = "responsive", patch = {}) => {
     const h = harness(); await h.enable({ audioMode: "speak", speechContent: "messages", autoListen: false, ...patch }); h.emitPolicy();
     await h.runtime.setEarlyReplyPlayback({ ...await h.command(), expectedEarlyReplyRevision: 0, earlyReplyPlayback: mode });
     const early = (frame: unknown) => h.current().callbacks.frame("voice_early_reply", frame, h.current().voiceStreamId!);
-    const complete = (final = "One. Two. Three.", identity = id) => {
-      const notice = notification(identity); notice.payload.assistantResult.final.text = final;
+    const complete = (final = "One. Two. Three.", identity = id, revision = 1) => {
+      const notice = notification(identity); notice.payload.assistantResult.final.text = final; notice.userInputRevision = revision;
       h.current().callbacks.frame("notification", notice, h.current().voiceStreamId!);
+    };
+    const progress = (text = "One. Two. Three.", identity = id, itemId = common.itemId, phase: "provisional" | "partial" = "provisional") => {
+      const partial = phase === "partial";
+      h.current().callbacks.frame("notification", {
+        sourceEventId: identity, voice: "speak", generation: 1, userInputRevision: 1,
+        payload: { schemaVersion: 5, notificationId: identity, event: partial ? "turn.partial" : "turn.progress", occurredAt: new Date().toISOString(),
+          title: partial ? "Partial answer" : "Agent progress", message: "Thread A", thread: { id: THREAD, title: "Thread A" },
+          turn: { id: common.turnId }, progress: { phase, itemId, text } },
+      }, h.current().voiceStreamId!);
     };
     const texts = () => h.speech.speak.mock.calls.map(([call]) => call.text);
     const waiting = () => vi.waitFor(async () => expect((await h.runtime.getState()).phase).toBe("waiting_for_reply_text"));
     const idle = () => vi.waitFor(async () => expect(await h.runtime.getState()).toMatchObject({ phase: "idle", active: null, queue: { count: 0 } }));
-    return { ...h, early, complete, texts, waiting, idle };
+    return { ...h, early, complete, progress, texts, waiting, idle };
   };
 
   it("keeps one queue position across starvation, appends and terminal reconciliation", async () => {
@@ -800,6 +810,111 @@ describe("early Electron reply playback", () => {
     expect(h.audio.startCapture).not.toHaveBeenCalled();
     h.complete(); h.complete(); await h.idle();
     expect(h.texts()).toEqual(["One.", "Two.", "Three.", "B reply."]);
+  });
+
+  it.each(["messages", "both"] as const)("speaks progress once in %s and keeps successive messages distinct", async speechContent => {
+    const h = await setup("responsive", { speechContent, autoListen: true });
+    const second = { ...commentary, replyId: "b".repeat(64), itemId: "next", text: "Next.", rawEnd: 5 };
+    h.early(commentary); await h.waiting();
+    expect((await h.runtime.getState()).active).toMatchObject({ id, eventKind: "turn.progress" });
+    h.early(second);
+    h.early(append); h.early(append);
+    expect((await h.runtime.getState()).queue.count).toBe(1);
+    await vi.waitFor(() => expect(h.texts().at(-1)).toBe("Two.")); await h.waiting();
+    h.progress(); h.progress();
+    await vi.waitFor(async () => expect((await h.runtime.getState()).active?.id).toBe(second.replyId));
+    await h.waiting();
+    h.progress("Next.", second.replyId, second.itemId); await h.idle();
+    expect(h.texts()).toEqual(speechContent === "both"
+      ? ["Thread A", "One.", "Two.", "Three.", "Agent progress", "Thread A", "Next.", "Agent progress"]
+      : ["One.", "Two.", "Three.", "Next."]);
+    expect(h.audio.startCapture).not.toHaveBeenCalled();
+    const final = { ...opening, replyId: "c".repeat(64), itemId: "answer", text: "Done.", rawEnd: 5 };
+    h.early(final); await h.waiting();
+    expect((await h.runtime.getState()).active?.eventKind).toBe("turn.completed");
+    h.complete("Done. Answer.", final.replyId);
+    await vi.waitFor(() => expect(h.audio.startCapture).toHaveBeenCalledOnce());
+    expect(h.texts()).toContain("Answer.");
+  });
+
+  it("applies progress delivery independently of completion voice and completion result phases", async () => {
+    const h = await setup();
+    const configuration = policy();
+    configuration.settings.assistantResultPhases = [];
+    configuration.settings.delivery["turn.completed"].voice = "none";
+    h.current().callbacks.frame("notification_policy", configuration, h.current().voiceStreamId!);
+    h.early(opening); await h.idle(); expect(h.texts()).toEqual([]);
+    h.early(commentary); await h.waiting(); expect(h.texts()).toEqual(["One."]);
+    h.progress("One."); await h.idle();
+    const disabled = policy(); disabled.settings.delivery["turn.progress"].voice = "none";
+    h.current().callbacks.frame("notification_policy", disabled, h.current().voiceStreamId!);
+    h.early({ ...commentary, replyId: "b".repeat(64) }); await h.idle(); expect(h.texts()).toEqual(["One."]);
+  });
+
+  it.each(["input", "announcements"] as const)("keeps early commentary out of %s", async destination => {
+    const h = await setup("responsive", destination === "input" ? { audioMode: "input", autoListen: true } : { speechContent: "announcements" });
+    h.early(commentary); await h.idle(); expect(h.texts()).toEqual([]);
+    h.progress(); await h.idle();
+    expect(h.texts()).toEqual(destination === "input" ? [] : ["Agent progress\n\nThread A"]);
+    expect(h.audio.startCapture).not.toHaveBeenCalled();
+  });
+
+  it.each(["turn.progress", "turn.partial"] as const)("skips only the dismissed commentary when its notice is %s", async event => {
+    const h = await setup();
+    const configuration = policy(); configuration.settings.delivery["turn.partial"].voice = "speak";
+    h.current().callbacks.frame("notification_policy", configuration, h.current().voiceStreamId!);
+    h.early(commentary); await h.waiting();
+    await h.runtime.skipCurrentPlayback({ ...await h.command(), interactionId: id });
+    h.early(append);
+    h.progress("One. Updated.", id, common.itemId, event === "turn.partial" ? "partial" : "provisional");
+    h.complete("Final answer.", "separate-final");
+    await h.idle();
+    expect(h.texts()).toEqual(event === "turn.partial" ? ["One.", "One. Updated.", "Final answer."] : ["One.", "Final answer."]);
+  });
+
+  it("plays a reclassified partial even when suppressed progress is finishing its submitted audio", async () => {
+    const h = await setup(), drain = deferred<void>();
+    const configuration = policy(); configuration.settings.delivery["turn.partial"].voice = "speak";
+    h.current().callbacks.frame("notification_policy", configuration, h.current().voiceStreamId!);
+    h.playback.finish.mockImplementationOnce(() => drain.promise);
+    h.early(commentary);
+    await vi.waitFor(() => expect(h.playback.finish).toHaveBeenCalledOnce());
+    h.early({ ...common, seq: 1, kind: "cancel", reason: "superseded" });
+    h.early({ ...common, seq: 2, kind: "cancel", reason: "publication_suppressed" });
+    expect((await h.runtime.getState()).active?.eventKind).toBe("turn.progress");
+    h.progress("This is the partial answer.", id, common.itemId, "partial");
+    h.progress("This is the partial answer.", id, common.itemId, "partial");
+    drain.resolve(); await h.idle();
+    expect(h.texts()).toEqual(["One.", "This is the partial answer."]);
+    expect(h.audio.startCapture).not.toHaveBeenCalled();
+  });
+
+  it.each(["turn.progress", "turn.completed"] as const)("honors queue byte limits and priority when sealing %s", async event => {
+    const h = await setup("responsive", { cleanSpeechText: false }); await h.begin();
+    for (let index = 0; index < 4; index++) h.complete("x".repeat(61_000), "pending-" + index);
+    h.progress("p".repeat(10_000), "prior-progress");
+    h.early({ ...opening, event }); expect((await h.runtime.getState()).queue.count).toBe(6);
+    if (event === "turn.progress") h.progress("s".repeat(16_000));
+    else h.complete("s".repeat(16_000));
+    expect((await h.runtime.getState()).queue).toMatchObject({
+      count: 5, bytes: event === "turn.progress" ? 254_000 : 260_000,
+      droppedReasons: event === "turn.progress" ? { overflow: 1 } : { progress_evicted: 1 },
+    });
+  });
+
+  it("preserves a deferred turn switch through stale progress until the actual final reply drains", async () => {
+    const h = await setup(); await h.foreground();
+    const opened = vi.fn(); await h.runtime.addListener("openThread", opened);
+    const command: ClientCommand = { id: crypto.randomUUID(), action: "switch_thread", sourceThreadId: THREAD, sourceTurnId: common.turnId,
+      threadId: OTHER, listen: false, expiresAt: Date.now() + 60_000 };
+    await h.current().callbacks.command(command);
+    await h.current().callbacks.command({ ...command, action: "turn_settled", replyEventId: "final-reply", replyStreamIds: [h.current().voiceStreamId!] });
+    h.early(commentary); await h.waiting();
+    h.request(async () => Response.json({ ...context(), userInputRevision: 2 }));
+    h.progress(); await h.idle();
+    expect(h.texts()).toEqual(["One."]); expect(opened).not.toHaveBeenCalled();
+    h.complete("Final answer.", "final-reply", 2); await h.idle();
+    expect(h.texts()).toEqual(["One.", "Final answer."]); expect(opened).toHaveBeenCalledOnce();
   });
 
   it("stages one physical request until the prior speaker drains, then drops staged audio on Skip", async () => {

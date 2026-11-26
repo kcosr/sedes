@@ -28,7 +28,8 @@ final class NativeVoiceEarlyFrames {
         NativeVoiceJson.integer(frame, "generation", 0, MAX_REVISION);
         if (kind.equals("begin")) {
             NativeVoiceJson.keys(frame, "kind", "replyId", "threadId", "turnId", "itemId", "generation", "seq",
-                "threadTitle", "userInputRevision", "origin", "rawStart", "rawEnd", "text", "paragraphEnd");
+                "event", "threadTitle", "userInputRevision", "origin", "rawStart", "rawEnd", "text", "paragraphEnd");
+            NativeVoiceProtocol.choice(frame, "event", "turn.completed", "turn.progress");
             NativeVoiceJson.integer(frame, "seq", 0, 0);
             unicode(frame, "threadTitle", 512);
             NativeVoiceJson.integer(frame, "userInputRevision", 0, MAX_REVISION);

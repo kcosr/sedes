@@ -72,7 +72,7 @@ describe("voice settings page", () => {
     const early = () => screen.queryByRole("combobox", { name: "Early reply playback" });
     const trigger = screen.getByRole("combobox", { name: "Early reply playback" });
     expect(trigger).toHaveTextContent("Off");
-    expect(trigger).toHaveAccessibleDescription(/Otherwise, read when the turn finishes/);
+    expect(trigger).toHaveAccessibleDescription(/final answers and enabled progress updates/);
     fireEvent.keyDown(trigger, { key: "ArrowDown" });
     const list = await screen.findByRole("listbox");
     expect(within(list).getAllByRole("option")).toHaveLength(4);

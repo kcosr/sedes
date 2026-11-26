@@ -18,14 +18,16 @@ describe("identified early reply voice lane", () => {
     expect(earlyReplyInterestSchema.safeParse({ token, enabled: true, revision: 1, voiceStreamId: id }).success).toBe(false);
   });
   it("checks exact control and text shapes, Unicode, byte bounds and offsets", () => {
-    const begin = { ...base, kind: "begin", seq: 0, threadTitle: "Title", userInputRevision: 0,
+    const begin = { ...base, kind: "begin", event: "turn.completed", seq: 0, threadTitle: "Title", userInputRevision: 0,
       rawStart: 0, rawEnd: 2, text: "Hi", paragraphEnd: false };
     const valid = (frame: object) => earlyReplyFrameSchema.safeParse(frame).success;
     expect(valid(begin)).toBe(true);
-    for (const overrides of [{ seq: 1 }, { rawStart: 1 }, { rawEnd: 1 }, { recognitionTarget: "x" }, { text: "\uD83D!", rawEnd: 2 },
+    expect(valid({ ...begin, event: "turn.progress" })).toBe(true);
+    for (const overrides of [{ event: undefined }, { event: "turn.partial" }, { seq: 1 }, { rawStart: 1 }, { rawEnd: 1 }, { recognitionTarget: "x" }, { text: "\uD83D!", rawEnd: 2 },
       { text: "漢".repeat(3000), rawEnd: 3000 }, { replyId: "x" }]) expect(valid({ ...begin, ...overrides })).toBe(false);
     const append = { ...base, kind: "append", seq: 1, rawStart: 4, rawEnd: 4, text: "", paragraphEnd: true };
     expect(valid(append)).toBe(true);
+    expect(valid({ ...append, event: "turn.progress" })).toBe(false);
     expect(valid({ ...append, paragraphEnd: false })).toBe(false);
     expect(valid({ ...append, seq: 256 })).toBe(false);
     expect(valid({ ...base, kind: "yield", seq: 256, reason: "limit" })).toBe(true);

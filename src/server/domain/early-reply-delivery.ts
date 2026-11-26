@@ -1,6 +1,9 @@
 import { MAX_EARLY_REPLY_FRAMES, type EarlyReplyFrame } from "../../shared/protocol/early-reply.js";
 
-type OpenReply = Pick<EarlyReplyFrame, "replyId" | "threadId" | "turnId" | "itemId" | "generation" | "seq">;
+type OpenReply = {
+  readonly event: Extract<EarlyReplyFrame, {kind: "begin"}>["event"];
+  readonly identity: Pick<EarlyReplyFrame, "replyId" | "threadId" | "turnId" | "itemId" | "generation" | "seq">;
+};
 const MAX_REPLIES_PER_RESERVATION = 4096;
 
 /**
@@ -11,6 +14,16 @@ const MAX_REPLIES_PER_RESERVATION = 4096;
 export class EarlyReplyDelivery {
   readonly #open = new Map<string, OpenReply>();
   readonly #suppressed = new Set<string>();
+
+  hasOpen(replyId: string): boolean {
+    return this.#open.has(replyId);
+  }
+
+  *openProgressForTurn(threadId: string, turnId: string): Iterable<string> {
+    for (const reply of this.#open.values()) {
+      if (reply.event === "turn.progress" && reply.identity.threadId === threadId && reply.identity.turnId === turnId) yield reply.identity.replyId;
+    }
+  }
 
   mayOpen(replyId: string): boolean {
     return !this.#open.has(replyId) && !this.#suppressed.has(replyId) &&
@@ -25,12 +38,15 @@ export class EarlyReplyDelivery {
     const {replyId, threadId, turnId, itemId, generation} = frame;
     const prior = this.#open.get(replyId);
     if (frame.kind === "begin" ? !this.mayOpen(replyId) : !prior) return false;
-    const seq = prior?.seq ?? 0;
+    const seq = prior?.identity.seq ?? 0;
     if (seq > MAX_EARLY_REPLY_FRAMES - 1) return false;
     if (frame.kind === "append" && seq !== frame.seq) return false;
     const outgoing = frame.kind === "yield" || frame.kind === "cancel" ? {...frame, seq} : frame;
     if (!deliver(outgoing)) return false;
-    this.#open.set(replyId, {replyId, threadId, turnId, itemId, generation, seq: seq + 1});
+    this.#open.set(replyId, {
+      event: frame.kind === "begin" ? frame.event : prior!.event,
+      identity: {replyId, threadId, turnId, itemId, generation, seq: seq + 1},
+    });
     return true;
   }
 
@@ -40,6 +56,6 @@ export class EarlyReplyDelivery {
     this.#open.delete(replyId);
     if (delivered) return;
     this.#suppressed.add(replyId);
-    send({...reply, kind: "cancel", reason: "publication_suppressed"});
+    send({...reply.identity, kind: "cancel", reason: "publication_suppressed"});
   }
 }

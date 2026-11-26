@@ -36,7 +36,7 @@ final class NativeVoiceQueue {
         NativeEarlyReply early;
         boolean opening() { return early != null && envelope == null; }
         Item(NativeEarlyReply early) {
-            this.early = early; id = early.id; event = "turn.completed"; speech = "";
+            this.early = early; id = early.id; event = early.event; speech = "";
             threadId = early.thread; threadTitle = early.title; origin = early.origin;
             policyGeneration = early.generation; userInputRevision = early.inputRevision;
             automatic = true; envelope = null; request = null; subject = null; target = null;
@@ -182,7 +182,7 @@ final class NativeVoiceQueue {
             if (!remember(terminal.id)) return true;
             ArrayList<Item> prior = new ArrayList<>(pending);
             pending.clear(); bytes -= item.bytes;
-            for (Iterator<Item> it = prior.iterator(); bytes + terminal.bytes > MAX_BYTES && it.hasNext();) {
+            for (Iterator<Item> it = prior.iterator(); !terminal.progress() && bytes + terminal.bytes > MAX_BYTES && it.hasNext();) {
                 Item candidate = it.next();
                 if (candidate.progress()) { bytes -= candidate.bytes; it.remove(); drop(candidate, "progress_evicted"); }
             }

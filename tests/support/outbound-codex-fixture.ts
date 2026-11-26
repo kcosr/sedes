@@ -136,7 +136,7 @@ export class OutboundCodexFixture {
   }
 
   /** The test controls when each provider delta and the authoritative item arrive. */
-  startAnswer(phase: "commentary" | "final_answer") {
+  startAnswer(phase: "commentary" | "final_answer" | null) {
     if (!this.#active) throw new Error("outbound_codex_fixture_turn_missing");
     const { thread, turn } = this.#active;
     const item: Extract<CodexThread["turns"][number]["items"][number], { type: "agentMessage" }> = {
@@ -151,7 +151,10 @@ export class OutboundCodexFixture {
         item.text += delta;
         this.#notify("item/agentMessage/delta", { ...scope, itemId: item.id, delta });
       },
-      complete: () => this.#notify("item/completed", { ...scope, item, completedAtMs: Date.now() }),
+      complete: (terminalPhase = phase) => {
+        item.phase = terminalPhase;
+        this.#notify("item/completed", { ...scope, item, completedAtMs: Date.now() });
+      },
     };
   }
 

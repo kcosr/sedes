@@ -183,30 +183,36 @@ an item already playing. Switching to Input stops automatic notification speech.
 
 In **Settings → Voice**, choose **Speak** and select **Messages** or **Both** to
 show **Early reply playback**. This preference belongs to the device and defaults
-to **Off**. Codex can identify its final answer while it is still writing.
-If the backend identifies the answer later, Sedes reads it at turn completion.
+to **Off**. Codex can identify a progress update or final answer as soon as it
+starts writing the message. To hear progress, set **Voice: Turn progress** to **Speak**
+in Notifications. If Codex supplies the label later, ordinary playback starts
+when the progress update or turn finishes. Partial answers use their existing
+notification when the message finishes.
 
 | Choice | What you hear |
 | --- | --- |
-| Off | The device waits for the turn to finish. |
+| Off | The device waits for the progress update or turn to finish. |
 | Responsive | Each complete sentence can start playing as soon as the speaker is ready. |
 | Balanced | The opening sentence plays first. Later requests group ready sentences in the same paragraph, aiming for 240 characters. |
 | Natural | The device waits for a paragraph break, or for complete sentences to reach 320 characters in a longer paragraph. |
 
 The phrasing targets count UTF-16 units, including spaces between sentences.
 An eligible plain-prose opening can play early. Markdown such as links, code,
-and lists moves the rest of the answer to completion playback. The voice bar
-shows one reply throughout. **Next** skips the whole reply. **Stop** also clears
-queued playback. **Record** replaces playback with a recording for the spoken
+and lists moves the remaining text to playback when the message finishes. The
+queue gives each progress update and the final answer a separate position. **Next** skips
+the whole current message, including any sentences still arriving. Skipping a
+progress update leaves later progress updates and the final answer eligible.
+**Stop** also clears queued playback. **Record** replaces playback with a recording for the spoken
 thread. Each action discards buffered audio and later text for that reply,
 including its completion and automatic listening. This decision survives a
 voice-stream reconnect within the same signed-in session and running app.
 Between sentences, the microphone stays closed. If a reply yields its
 queue position, the device can play another notification and return to the
-remaining text when the turn finishes.
+remaining text when the progress update or turn finishes.
 
-With **Both**, the opening identifies the thread. The turn outcome and any
-additional selected sections arrive at completion. An interrupted or revised
+With **Both**, the opening identifies the thread. A progress update adds its
+“Agent progress” announcement when the message finishes. For a final answer,
+the turn outcome and additional selected sections arrive at turn completion. An interrupted or revised
 turn can change words you already heard. Turning Early reply playback Off
 during a reply returns its remaining eligible text to completion playback.
 

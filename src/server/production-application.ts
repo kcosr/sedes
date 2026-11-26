@@ -1245,7 +1245,13 @@ export async function startProductionApplication(
       onModelFeedback: (eventScope, threadId, input) => automaticModelRetries?.onModelFeedback(eventScope, threadId, input.identity, input.automaticRetry),
       applicationPublications: (eventScope, threadId, turnIds) => [
         ...pageRepository.publications(eventScope, threadId, turnIds), ...imageShowRepository.publications(eventScope, threadId, turnIds)],
-      onLiveProgress: (eventScope, threadId, input) => notificationLifecycle.progress(eventScope, threadId, input),
+      onLiveProgress: (eventScope, threadId, input) => {
+        const publication = notificationLifecycle.progress(eventScope, threadId, input);
+        if (input.phase === "provisional") notifications.finishEarlyProgress(
+          eventScope, threadId, input.applicationTurnId, input.applicationItemId, publication);
+      },
+      onLiveProgressSkipped: (eventScope, threadId, turnId, itemId) =>
+        notifications.finishEarlyProgress(eventScope, threadId, turnId, itemId),
       captureEarlyReply: (eventScope, threadId, source) => captureTurnEarlyReply(
         notifications, inventoryRepository, completion, userInputs, mutations?.activity, eventScope, threadId, source),
       environments: execution,

@@ -1,4 +1,4 @@
-import { turnNotificationKey } from "./notification-identity.js";
+import { progressNotificationKey, turnNotificationKey } from "./notification-identity.js";
 import type { ClassifiedAssistantResult } from "../../shared/protocol/completion-result.js";
 import type { NotificationEventPayload } from "../../shared/protocol/notification.js";
 import type { BackendInteraction } from "../../shared/protocol/conversation.js";
@@ -29,17 +29,17 @@ export class NotificationLifecycleObserver<Publication = void> {
     ) => Publication,
   ) {}
 
-  progress(scope: RequestScope, threadId: string, input: Parameters<LiveProgressObserver>[2]): void {
+  progress(scope: RequestScope, threadId: string, input: Parameters<LiveProgressObserver>[2]): Publication | undefined {
     try {
       if (!input.text.text.trim() || !new SubmissionCompletionRepository(this.inventory.database)
         .hasActiveAcceptedCorrelation(scope, threadId, input.backendCorrelations)) return;
       const context = this.#context(scope, threadId);
-      this.emit(scope, {
+      return this.emit(scope, {
         event: input.phase === "partial" ? "turn.partial" : "turn.progress",
         occurredAt: new Date().toISOString(), title: input.phase === "partial" ? "Partial answer" : "Agent progress",
         message: context.thread.title, ...context, turn: { id: input.applicationTurnId },
         progress: { phase: input.phase, itemId: input.applicationItemId, ...input.text },
-      }, JSON.stringify(["progress", threadId, input.applicationTurnId, input.applicationItemId]), "live",
+      }, progressNotificationKey(threadId, input.applicationTurnId, input.applicationItemId), "live",
       undefined, undefined, undefined, input.responseVoice);
     } catch { /* Passive progress cannot affect provider work. */ }
   }

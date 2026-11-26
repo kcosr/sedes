@@ -130,7 +130,7 @@ export async function runDesktopTiming(endpoint: string, mode: "responsive" | "o
       for (const [seq, text] of sentences.entries()) {
         const segment = text + " ";
         callbacks.frame("voice_early_reply", { replyId, threadId, turnId: "turn", itemId: "final", generation: 1, seq,
-          ...(seq ? { kind: "append" } : { kind: "begin", threadTitle: "Timing", userInputRevision: 1 }),
+          ...(seq ? { kind: "append" } : { kind: "begin", event: "turn.completed", threadTitle: "Timing", userInputRevision: 1 }),
           rawStart: start, rawEnd: start + segment.length, text: segment, paragraphEnd: false }, stream);
         start += segment.length;
       }

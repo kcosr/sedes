@@ -32,7 +32,7 @@ export type EarlyReplySegment = z.infer<z.ZodObject<typeof segmentFields>>;
 const controlSequence = z.number().int().min(1).max(MAX_EARLY_REPLY_FRAMES);
 export const earlyReplyFrameSchema = z.discriminatedUnion("kind", [
   z.strictObject({ ...common, kind: z.literal("begin"), seq: z.literal(0),
-    threadTitle: unicode.max(512), userInputRevision: revision, origin: clientOriginSchema.optional(),
+    event: z.enum(["turn.completed", "turn.progress"]), threadTitle: unicode.max(512), userInputRevision: revision, origin: clientOriginSchema.optional(),
     ...segmentFields, rawStart: z.literal(0) }),
   z.strictObject({ ...common, kind: z.literal("append"), seq: z.number().int().min(1).max(MAX_EARLY_REPLY_FRAMES - 1),
     ...segmentFields }),

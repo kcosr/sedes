@@ -46,7 +46,7 @@ export function antigravityCapabilities(setup: AntigravitySetup | undefined, con
     composerAttachments: { fileStaging: !!setup, nativeImage: !!setup?.initialize.agentCapabilities?.promptCapabilities?.image },
     nonblockingQuestions: false, providerOutputArtifacts: { nativeImage: false }, supportsHistory: true,
     branching: { availability: "unavailable", reason: boundDisplayText("Antigravity does not offer a qualified exact conversation fork.") },
-    interactionKinds: setup ? ["decision", "choice"] : [], usageAccounting: "supported", turnThroughput: "unsupported", liveFinalAnswer: "unsupported", usageSections: setup ? ["context", "counters"] : ["counters"],
+    interactionKinds: setup ? ["decision", "choice"] : [], usageAccounting: "supported", turnThroughput: "unsupported", liveSpeechStarts: { final: false, provisional: false }, usageSections: setup ? ["context", "counters"] : ["counters"],
     effectiveSettings: { ...(model ? { model: { provider: connectionId, id: model } } : {}), ...(thinking ? { thinkingLevel: thinking } : {}),
     },
   };

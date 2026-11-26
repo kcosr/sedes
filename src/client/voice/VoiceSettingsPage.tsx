@@ -26,7 +26,7 @@ import { savedRecording, VoiceRecordingRecovery } from "./VoiceRecordingRecovery
 import { VoiceSpeechContent } from "./VoiceSpeechContent.js";
 
 const earlyReplyOptions = [
-  ["off", "Off", "Wait for the turn to finish."],
+  ["off", "Off", "Wait for the progress update or turn to finish."],
   ["responsive", "Responsive", "Read each complete sentence as soon as it is ready."],
   ["balanced", "Balanced", "Start with one sentence, then group ready sentences."],
   ["natural", "Natural", "Prefer paragraphs, with breaks in long paragraphs."],
@@ -115,7 +115,7 @@ export function VoiceSettingsPage({ store, applicationStore }: { store: NativeVo
       {settings.audioMode === "speak" ? <VoiceSpeechContent value={settings.speechContent} pending={state.pending}
         onChange={speechContent => update({ speechContent })} /> : null}
       {settings.audioMode === "speak" && settings.speechContent !== "announcements" ? <SettingsField label="Early reply playback"
-        description="When the agent identifies its final answer early, start reading while it writes. Otherwise, read when the turn finishes.">
+        description="Start reading while the agent writes. This applies to final answers and enabled progress updates that the agent identifies early.">
         <Select value={native.speech.earlyReplyPlayback} disabled={state.pending}
           onValueChange={value => { void store.setEarlyReplyPlayback(value as NativeEarlyReplyPlaybackMode).catch(() => undefined); }}>
           <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>

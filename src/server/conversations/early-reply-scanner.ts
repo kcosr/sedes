@@ -35,6 +35,8 @@ export class EarlyReplyScanner {
   #insideWord = false;
   #stop?: StopReason;
 
+  constructor(private readonly maximumBytes = MAX_EARLY_REPLY_BYTES) {}
+
   update(text: string): ScanResult {
     const segments: EarlyReplySegment[] = [];
     if (this.#stop) return { segments, stop: this.#stop };
@@ -44,18 +46,18 @@ export class EarlyReplyScanner {
     }
     // Even a single huge delta or combining sequence cannot allocate unbounded
     // parser state. Include lookahead for the last possible boundary.
-    const source = text.slice(0, MAX_EARLY_REPLY_BYTES + 2);
+    const source = text.slice(0, this.maximumBytes + 2);
     for (const { segment } of graphemes.segment(source.slice(this.#offset))) {
       const start = this.#offset;
       const end = start + segment.length;
       // A later delta may add a combining mark, a surrogate half, or a ZWJ.
       // LF is a complete control grapheme, including at the end of CRLF.
       if (end === source.length && !segment.endsWith("\n")) {
-        if (this.#bytes + Buffer.byteLength(segment) > MAX_EARLY_REPLY_BYTES) this.#stop = "limit";
+        if (this.#bytes + Buffer.byteLength(segment) > this.maximumBytes) this.#stop = "limit";
         break;
       }
       this.#bytes += Buffer.byteLength(segment);
-      if (this.#bytes > MAX_EARLY_REPLY_BYTES) { this.#stop = "limit"; break; }
+      if (this.#bytes > this.maximumBytes) { this.#stop = "limit"; break; }
       this.#offset = end;
       const word = () => source.slice(this.#wordStart, this.#wordEnd);
       const separator = segment === " " || segment === "\n" || segment === "\r" || segment === "\r\n";

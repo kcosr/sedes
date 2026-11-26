@@ -422,23 +422,28 @@ require `X-Sedes-Client`. The server admits at most 128 identified voice streams
 per principal and rejects excess subscriptions before sending response headers.
 Ordinary inventory streams omit the parameter and keep their existing behavior.
 
-With client protocol 182, the voice reservation declares its early playback
+With client protocol 183, the voice reservation declares its early playback
 interest using the paired `earlyReply=on|off` and `earlyRevision` query parameters.
 After policy, `voice_early_session` gives the device a reservation token.
 Authenticated `PUT /api/application/voice-streams/:voiceStreamId/early-reply`
 updates that reservation in place. An interest change takes effect against the
 current stream. Each new connection receives a fresh token.
 
-The first continuously observed final item captures eligible subscribers for
-its turn. The server scans plain prose into contiguous UTF-16 ranges and sends
-`voice_early_reply` frames (`begin`, `append`, `yield`, and `cancel`) only to
-those reservations. The application turn determines a common event ID for early
-playback and its authoritative outcome. Early delivery grants no script,
-microphone, or deferred-control authority. Devices track what reached output,
-then use the completed notification to play the remaining text. A revised
-prefix can require reading the authoritative final text again. Skipping retires
-the whole reply. Newer input, stream loss, policy changes, and deadlines retire
-live playback independently of ordinary terminal delivery.
+A continuously observed Codex commentary item captures subscribers eligible for
+`turn.progress`. A final item captures subscribers eligible for
+`turn.completed` with final response text selected. The server scans plain
+prose into contiguous UTF-16 ranges and sends `voice_early_reply` frames
+(`begin`, `append`, `yield`, and `cancel`) to those reservations. The required
+`event` on `begin` identifies the matching notification. Each commentary
+message uses the ordinary progress ID for its thread, turn, and item. The final
+answer uses the turn outcome ID. Devices match that notification to the
+existing queue item, then play any remaining text. A revised prefix can
+require reading the corrected text again.
+
+Skipping retires the whole message. Newer input, stream loss, policy changes,
+and deadlines retire live playback independently of ordinary notification
+delivery. Scripts, microphone activation, and deferred controls follow their
+existing notification rules. Progress is speak-only.
 
 The server records only the UUIDs of captured native streams that actually
 received a notification; it retains no client-control token or subscriber

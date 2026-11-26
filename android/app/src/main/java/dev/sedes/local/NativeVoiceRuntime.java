@@ -281,7 +281,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         if (!("ineligible".equals(reason) || "overflow".equals(reason) || "progress_evicted".equals(reason) ||
             "coalesced".equals(reason) || "settings_changed".equals(reason) || "notification_connection_lost".equals(reason) ||
             "notification_policy_changed".equals(reason) || "invalid_notification_policy".equals(reason)))
-            clientActions.discardTurn(item.threadId, clientTurn(item));
+            discardNoticeActions(item);
         clientActions.drained(item.id);
         // Queue mutation may still hold an iterator. Start work only after its operation has returned.
         handler.post(this::drain);
@@ -584,6 +584,10 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         if (item == null || item.envelope == null) return null;
         JSONObject turn = item.envelope.optJSONObject("payload").optJSONObject("turn");
         return turn == null ? null : turn.optString("id", null);
+    }
+    private void discardNoticeActions(NativeVoiceQueue.Item item) {
+        // A progress item can end or be skipped while its source turn and deferred controls are still live.
+        if (item != null && !item.progress()) clientActions.discardTurn(item.threadId, clientTurn(item));
     }
     private boolean clientSuppressesFollowup(NativeVoiceQueue.Item item) {
         return item != null && clientActions.suppresses(item.threadId, clientTurn(item), System.currentTimeMillis());
@@ -1053,7 +1057,8 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     }
     private boolean earlyEligible(NativeVoiceQueue.Item opening) {
         if (!earlyEnabled() || !speechReady() || !eligible(opening)) return false;
-        if ("none".equals(policy.optJSONObject("delivery").optJSONObject("turn.completed").optString("voice"))) return false;
+        if ("none".equals(policy.optJSONObject("delivery").optJSONObject(opening.event).optString("voice"))) return false;
+        if (opening.progress()) return true;
         JSONArray phases = policy.optJSONArray("assistantResultPhases");
         for (int i = 0; i < phases.length(); i++) if ("final".equals(phases.optString(i))) return true;
         return false;
@@ -1077,7 +1082,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             if (frame.kind.equals("cancel") && frame.reason.equals("publication_suppressed")) {
                 // A skipped or yielded reply may have ignored intervening frames. Its terminal will never arrive.
                 if (!existing.detached) existing.accept(frame, now);
-                trace(NativeVoiceDiagnostics.Event.EARLY_CANCEL, existing.id, "turn.completed", -1, frame.reason);
+                trace(NativeVoiceDiagnostics.Event.EARLY_CANCEL, existing.id, existing.event, -1, frame.reason);
                 boolean alreadyDraining = active != null && active.notification != null &&
                     active.notification.early == existing && active.releaseAfterDrain;
                 retireOpening(existing, alreadyDraining); earlyReplies.remove(existing.id); return;
@@ -1085,7 +1090,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             if (expired(existing, now)) { retireOpening(existing, false); return; }
             if (!existing.accept(frame, now)) return;
             trace(frame.kind.equals("yield") ? NativeVoiceDiagnostics.Event.EARLY_YIELD : frame.kind.equals("cancel") ?
-                NativeVoiceDiagnostics.Event.EARLY_CANCEL : NativeVoiceDiagnostics.Event.EARLY_APPEND, existing.id, "turn.completed", -1, frame.reason);
+                NativeVoiceDiagnostics.Event.EARLY_CANCEL : NativeVoiceDiagnostics.Event.EARLY_APPEND, existing.id, existing.event, -1, frame.reason);
             if (frame.kind.equals("cancel")) { retireOpening(existing, frame.reason.equals("superseded")); return; }
             if (!queue.accountOpening(existing)) return;
             if (active != null && active.notification != null && active.notification.early == existing && active.inputContextRequest == null) {
@@ -1138,9 +1143,9 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         scheduleEarlyDeadline();
     }
     private boolean sealEarly(NativeEarlyReply reply, NativeVoiceQueue.Item terminal) {
-        trace(NativeVoiceDiagnostics.Event.EARLY_SEALED, reply.id, terminal.event, -1, null);
         earlyReplies.remove(reply.id);
-        if (!terminal.event.equals("turn.completed")) { retireOpening(reply, false); return false; }
+        if (!reply.matchesNotice(terminal)) { retireOpening(reply, false); return false; }
+        trace(NativeVoiceDiagnostics.Event.EARLY_SEALED, reply.id, terminal.event, -1, null);
         if (clientSuppressesFollowup(terminal)) terminal.followUp = false;
         if (reply.skipped || !eligible(terminal) || terminal.speech.isEmpty() && !terminal.followUp) {
             retireOpening(reply, false); queue.remember(terminal.id); clientReplyDrained(terminal.id); publish(); return true;
@@ -1240,6 +1245,9 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             traceFrame(NativeVoiceDiagnostics.Event.RECEIVED, value, null);
             NativeVoiceQueue.Item item = new NativeVoiceQueue.Item(value, settings);
             NativeEarlyReply early = earlyReplies.get(item.id);
+            // A suppressed opening may still be draining submitted audio when a reclassified notice arrives.
+            if (early == null && active != null && active.id.equals(item.id) && active.notification != null && active.notification.opening())
+                early = active.notification.early;
             if (early != null && early.thread.equals(item.threadId) && early.turn.equals(clientTurn(item))) {
                 if (sealEarly(early, item)) return;
             }
@@ -1326,7 +1334,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     /** Retire the source action before drain bookkeeping can release a delayed switch or listen. */
     private void skipAutomaticItem(Active item, String reason) {
         queue.drop(reason); traceActive(NativeVoiceDiagnostics.Event.DROPPED, item, reason);
-        clientActions.discardTurn(item.notification.threadId, clientTurn(item.notification));
+        discardNoticeActions(item.notification);
         if (item.recordingId != null) abortBeforeAudio(item, reason, false, false);
         else finishItem(item);
     }
@@ -1766,7 +1774,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     private void abortBeforeAudio(Active item, String reason, boolean reportFailure, boolean discardActions, boolean advance) {
         if (active != item || item.stopped || captureOwner == item || item.admission != null) return;
         cancelInputContext(item);
-        if (discardActions && item.notification != null) clientActions.discardTurn(item.notification.threadId, clientTurn(item.notification));
+        if (discardActions) discardNoticeActions(item.notification);
         item.followUp = false; item.defaultHeld = false; item.keepListening = false; item.adopted = false;
         item.longDictationDeadline = 0; item.completedMaySubmit = false;
         if (item.preflight != null) item.preflight.cancel();
@@ -2151,7 +2159,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             if (captureOwner == old) captureOwner = null;
             if (old.notification != null) {
                 queue.completed(old.id);
-                if (discardSourceAction) clientActions.discardTurn(old.notification.threadId, clientTurn(old.notification));
+                if (discardSourceAction) discardNoticeActions(old.notification);
             }
             phase = sessionStarted ? "idle" : "off";
             if (publishState) publish();
@@ -2171,7 +2179,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         }
         if (old.notification != null && !old.notification.opening()) {
             queue.completed(old.id);
-            if (discardSourceAction) clientActions.discardTurn(old.notification.threadId, clientTurn(old.notification));
+            if (discardSourceAction) discardNoticeActions(old.notification);
         }
         old.stopped = true; active = null;
         if (!opening) audio.stop();
@@ -2250,7 +2258,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     /** Operational startup failures retain their audible feedback without turning an empty held slot into recovery. */
     private void failBeforeAudio(Active item, String reason) {
         cancelInputContext(item);
-        if (item.notification != null) clientActions.discardTurn(item.notification.threadId, clientTurn(item.notification));
+        discardNoticeActions(item.notification);
         item.followUp = false; item.defaultHeld = false; item.keepListening = false; item.adopted = false;
         item.longDictationDeadline = 0; item.completedMaySubmit = false;
         if (item.preflight != null) item.preflight.cancel();
@@ -2278,7 +2286,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         audio.stop(); closeRecordingTransport(item);
         if (item.notification != null) {
             queue.completed(item.id);
-            if (!completePlayback) clientActions.discardTurn(item.notification.threadId, clientTurn(item.notification));
+            if (!completePlayback) discardNoticeActions(item.notification);
         }
         final String owner = item.recordingBinding;
         final long generation = connectionGeneration, operation = beginDictationOperation();
@@ -2331,7 +2339,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         if (item.recording != null) item.recording.interrupt(reason);
         closeRecordingTransport(item);
         item.recording = null; item.captureId = null; item.stopped = true;
-        if (item.notification != null) { queue.completed(item.id); clientActions.discardTurn(item.notification.threadId, clientTurn(item.notification)); }
+        if (item.notification != null) { queue.completed(item.id); discardNoticeActions(item.notification); }
         active = null;
         if (item.record != null && item.record.adopted) acceptDictation(item.record);
         final long operation = beginDictationOperation();

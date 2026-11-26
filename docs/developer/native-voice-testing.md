@@ -210,15 +210,23 @@ env -u NODE_ENV SEDES_RUN_REAL_OPENCODE=1 \
 ```
 
 Use `-t 'plays a held live Codex reply in the packaged Android background service'`
-to select the early-reply device case. Instrumentation pairs through the Sedes
-HTTP API, saves both credentials through the native keystores, and enables
-Responsive playback through the packaged runtime. It backgrounds the Activity
-and waits for Sedes to accept the registered client's input. The fixture sends
-one sentence and withholds the rest until the device reports that its AudioTrack
-consumed all 24,000 PCM frames while the source turn is still running. Startup
-pre-roll is set to zero so frame counts match the fixture audio. After releasing
-the final delta, the host checks the second drain and the two speech requests.
-The device trace and frame counts are saved in `android-early-reply.log`.
+to select both device cases. Each pairs through the Sedes HTTP API, saves the
+credentials in the native keystores, enables Responsive playback, and backgrounds
+the Activity. The host waits for the registered client's input to be accepted
+before it streams an answer. Each synthesis request supplies 24,000 PCM frames
+at 24 kHz with zero startup pre-roll.
+
+- The final-answer case uses Messages. The host waits until Android reports
+  that the opening drained while the turn is still running. It then releases
+  the remaining text and completes the turn. The host checks both speech
+  requests and physical drains in `android-early-reply.log`.
+- The progress case uses Both. The thread title and opening sentence drain
+  before the commentary item closes. Closing that item releases its suffix and
+  the deferred “Agent progress” announcement while the turn is still running.
+  Android then selects Next on a second commentary item. The host sends that
+  item's remaining text and a distinct final answer. The test checks the exact
+  synthesis inputs, all six physical drains, and zero microphone captures in
+  `android-early-progress.log`.
 
 An explicit serial is required. The harness verifies that it is an emulator,
 clears `dev.sedes.local` application data between scenarios, installs the

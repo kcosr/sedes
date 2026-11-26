@@ -7,7 +7,7 @@ import type { EarlyReplyFrame } from "../../shared/protocol/early-reply.js";
 const common = { replyId: "a".repeat(64), threadId: crypto.randomUUID(), turnId: "turn", itemId: "source", generation: 1 };
 const settings = { ...electronVoiceDefaults(), speechContent: "messages" as const };
 function source(text: string, paragraphEnd = false) {
-  const frame: Extract<EarlyReplyFrame, { kind: "begin" }> = { ...common, kind: "begin", seq: 0, threadTitle: "Title", userInputRevision: 1,
+  const frame: Extract<EarlyReplyFrame, { kind: "begin" }> = { ...common, kind: "begin", event: "turn.completed", seq: 0, threadTitle: "Title", userInputRevision: 1,
     rawStart: 0, rawEnd: text.length, text, paragraphEnd };
   return new ElectronEarlyReply(frame, 0, crypto.randomUUID());
 }
