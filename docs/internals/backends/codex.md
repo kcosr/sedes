@@ -235,7 +235,15 @@ Transport loss, owned process replacement, external endpoint replacement, or
 an unrecoverable RPC condition retires the client generation. Stale responses,
 server requests, interactions, and channels from that generation are rejected.
 The replacement initializes independently, and attached actors establish a
-fresh normalized projection.
+fresh normalized projection. The persistent runtime validates the routed
+request before keeping it pending. Valid requests can wait for their owner
+and replay on reattach. Unsupported modes and invalid parameters settle at the
+native connection before they can occupy pending interaction capacity.
+
+During resume, the runtime tracks unscoped status hints independently of
+turn-scoped lifecycle evidence. A snapshot that identifies an active turn
+retains that identity through active or idle hints and unrelated completions.
+Its matching completion can settle the turn without granting new Stop authority.
 
 Only reads with an explicit safe-retry contract are replayed after connection
 loss. A sent mutation stays governed by its method-specific delivery

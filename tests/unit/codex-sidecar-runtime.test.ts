@@ -107,6 +107,72 @@ it("rejects unadvertised human approvals before sidecar retention while preservi
   }
 });
 
+it("rejects unsupported or invalid MCP elicitation before retention and replays valid pending requests", async () => {
+  const f = await threadFixture();
+  const proxy = new CodexRuntimeClient({
+    connection: f.connection, authority: f.authority, generationOffset: 41,
+    receipts: {
+      reserve: () => { throw new Error("unused"); },
+      recordOutcome: () => "untracked",
+      pending: () => [],
+      reconcileRecordedApplicationState: () => 0,
+      compactRetiredRuntime: () => 0,
+      releaseRejected: () => false,
+    },
+  });
+  const controller = new AbortController();
+  const method = "mcpServer/elicitation/request";
+  const handler = f.host.serverRequests.handlersForGeneration(1)[method]!;
+  const base = { threadId: "thread-b", turnId: "turn", serverName: "catalog", environmentId: "executor-1" };
+  const form = { mode: "form", message: "Allow catalog?", requestedSchema: { type: "object", properties: {} } };
+  const url = { mode: "url", message: "Open catalog?", url: "https://example.invalid/", elicitationId: "external" };
+  const rejected = [
+    { params: { ...form, mode: "openaiForm" }, code: "codex_mcp_openai_elicitation_unadvertised" },
+    { params: { ...form, mode: "openai/form" }, code: "codex_mcp_openai_elicitation_unadvertised" },
+    {
+      params: { mode: "openai/userVerification", title: "Verify", description: "Verification", challenge: "challenge" },
+      code: "codex_mcp_openai_elicitation_unadvertised",
+    },
+    { params: { ...form, environmentId: "x".repeat(513) }, code: "native_id_bound" },
+  ];
+  const invoke = (id: string, params: object) => {
+    const response = Promise.resolve(handler({
+      generation: 1, sequence: 1, id, method, signal: controller.signal,
+      params: decodeCodexServerRequestParams(method, { ...base, ...params }),
+    }));
+    void response.catch(() => {});
+    return response;
+  };
+  const valid: Promise<unknown>[] = [];
+  try {
+    await proxy.start();
+    valid.push(invoke("form", form), invoke("url", url));
+    expect(f.host.pendingInteractionCount()).toBe(2);
+    for (const connectionState of ["attached", "detached"]) {
+      if (connectionState === "detached") await proxy.close();
+      for (const [index, { params, code }] of rejected.entries()) {
+        const response = invoke(`${connectionState}-${index}`, params);
+        expect(f.host.pendingInteractionCount()).toBe(2);
+        await expect(response).rejects.toThrow(code);
+      }
+    }
+
+    const replay = await f.connection.attach(f.authority, () => {});
+    expect(replay.pendingRequests.map(({ id }) => id)).toEqual(["form", "url"]);
+    const result = { action: "decline", content: null, _meta: null };
+    for (const requestId of ["form", "url"]) {
+      await f.connection.respond(f.authority, { generation: 1, requestId, result });
+    }
+    await expect(Promise.all(valid)).resolves.toEqual([result, result]);
+    expect(f.host.pendingInteractionCount()).toBe(0);
+  } finally {
+    controller.abort();
+    await Promise.allSettled(valid);
+    await proxy.close();
+    await f.close();
+  }
+});
+
 it.each((["mcp", "command"] as const).flatMap(kind =>
   (["confirmed", "disconnected", "timed_out", "unanswered"] as const).map(ending => ({ kind, ending })),
 ))("handles $ending after remote $kind response settlement", async ({ kind, ending }) => {

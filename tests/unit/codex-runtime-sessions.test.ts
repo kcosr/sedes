@@ -166,6 +166,37 @@ describe("persistent Codex native session recovery", () => {
     },
   );
 
+  it.each([9, 11].flatMap(completionSequence =>
+    [false, true].map(bufferIdle => ({ completionSequence, bufferIdle })),
+  ))("keeps the exact resume turn after completion $completionSequence and buffered idle=$bufferIdle", ({
+    completionSequence, bufferIdle,
+  }) => {
+    const f = fixture(() => ({}));
+    const pending = f.sessions.trackResume("thread", 1);
+    const complete = (id: string, sequence: number) => f.sessions.observeNotification({
+      kind: "decoded_notification", generation: 1, sequence,
+      method: "turn/completed", params: { threadId: "thread", turn: { id } },
+    });
+    complete("older", completionSequence);
+    f.sessions.observeNotification({
+      kind: "decoded_notification", generation: 1, sequence: 12,
+      method: "thread/status/changed", params: { threadId: "thread", status: { type: "active", activeFlags: [] } },
+    });
+    if (bufferIdle) f.sessions.observeNotification({
+      kind: "decoded_notification", generation: 1, sequence: 13,
+      method: "thread/status/changed", params: { threadId: "thread", status: { type: "idle" } },
+    });
+    pending.apply({ result: resumedWithActiveHead("newer"), generation: 1, inboundSequence: 10 });
+    pending.close();
+    f.sessions.evict("thread", 1);
+    expect(f.sessions.canIdle()).toBe(false);
+
+    complete("unrelated", 14);
+    expect(f.sessions.canIdle()).toBe(false);
+    complete("newer", 15);
+    expect(f.sessions.canIdle()).toBe(true);
+  });
+
   it("preserves matching terminal proof when a buffered idle hint follows it", () => {
     const f = fixture(() => ({}));
     const pending = f.sessions.trackResume("thread", 1);

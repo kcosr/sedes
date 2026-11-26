@@ -16,10 +16,12 @@ type SettingsObservation = {
 type TurnActivity = { active: boolean; activeTurn: { id: string; source: "started" | "snapshot" } | null };
 type LoadedActivity = TurnActivity & { activeGoal: boolean };
 type TurnLifecycle = { method: "turn/started" | "turn/completed"; turnId: string };
-type PendingTurnActivity = TurnActivity & { sequence: number; known: boolean; completedTurnId?: string; unscopedStatusOnly?: boolean };
+type PendingTurnActivity = TurnActivity & { sequence: number; known: boolean; completedTurnId?: string };
+type ThreadStatus = OfficialCodexServerNotificationParams<"thread/status/changed">["status"]["type"];
 type PendingResume = {
   generation: number;
   activity?: PendingTurnActivity;
+  status?: { sequence: number; type: ThreadStatus };
   goal?: { sequence: number; active: boolean };
   settings?: SettingsObservation;
   closedSequence?: number;
@@ -37,7 +39,7 @@ function observeTurnActivity(event: TurnLifecycle, current: TurnActivity | undef
 }
 
 function observeThreadActivity(
-  status: OfficialCodexServerNotificationParams<"thread/status/changed">["status"]["type"],
+  status: ThreadStatus,
   current: TurnActivity | undefined,
 ): TurnActivity | undefined {
   // Idle can precede the exact turn's terminal event. Do not let an unscoped
@@ -79,22 +81,32 @@ export class CodexRuntimeSessions {
         if (pending.settings) this.#applySettings(session, pending.settings);
         const activity = pending.activity;
         const observed = activity ?? (priorSession?.generation === generation ? priorSession : undefined);
-        // The pending observer may not know the exact turn until the receipt
-        // exposes it. An unscoped active or idle hint cannot erase this ID.
-        const conflictsWithSnapshot = session.activeTurn !== null &&
-          (activity?.unscopedStatusOnly === true ||
-            (activity?.completedTurnId !== undefined && activity.completedTurnId !== session.activeTurn.id));
-        if (activity && activity.sequence > receipt.inboundSequence && !conflictsWithSnapshot) {
+        // The receipt can identify an active turn that the pending observer
+        // did not see start. Apply only a matching completion to that turn.
+        const unrelatedCompletion = session.activeTurn !== null && activity?.completedTurnId !== undefined &&
+          activity.completedTurnId !== session.activeTurn.id;
+        let appliedSequence = receipt.inboundSequence;
+        if (activity && activity.sequence > appliedSequence && !unrelatedCompletion) {
           session.active = activity.active;
           session.activeTurn = activity.activeTurn;
           session.known = activity.known;
+          appliedSequence = activity.sequence;
         } else if (session.active && observed?.known && observed.activeTurn &&
             (session.activeTurn === null || observed.activeTurn.id === session.activeTurn.id)) {
           session.activeTurn = observed.activeTurn;
         }
+        const status = pending.status;
+        if (status && status.sequence > appliedSequence) {
+          const hintedActivity = observeThreadActivity(status.type, session.known ? session : undefined);
+          if (hintedActivity) {
+            Object.assign(session, hintedActivity, { known: status.type === "active" || status.type === "idle" });
+            appliedSequence = status.sequence;
+          }
+        }
         const goal = pending.goal;
         if (goal && goal.sequence > receipt.inboundSequence) session.activeGoal = goal.active;
-        if (pending.closedSequence !== undefined && pending.closedSequence > Math.max(receipt.inboundSequence, activity?.sequence ?? -1, goal?.sequence ?? -1)) {
+        if (pending.closedSequence !== undefined &&
+            pending.closedSequence > Math.max(appliedSequence, activity?.sequence ?? -1, goal?.sequence ?? -1)) {
           this.#sessions.delete(threadId);
           this.#evicted.delete(threadId);
         }
@@ -165,15 +177,10 @@ export class CodexRuntimeSessions {
             ...(lifecycle.method === "turn/completed" ? { completedTurnId: lifecycle.turnId } : {}) };
         }
       } else if (status) {
-        const activity = observeThreadActivity(status, prior);
-        const previous = pending.activity;
-        // An idle hint that agrees with a terminal event supplies no newer
-        // turn identity. Preserve the terminal proof for the receipt merger.
-        if (activity && (previous?.sequence ?? -1) < notification.sequence &&
-            (status !== "idle" || previous?.completedTurnId === undefined)) {
-          const known = status === "active" || status === "idle";
-          pending.activity = { ...activity, sequence: notification.sequence, known,
-            unscopedStatusOnly: known && (previous === undefined || previous.unscopedStatusOnly === true) };
+        // Status has no turn ID. Keep it separate from exact lifecycle evidence
+        // so the resume receipt can resolve each against its own active turn.
+        if ((pending.status?.sequence ?? -1) < notification.sequence) {
+          pending.status = { sequence: notification.sequence, type: status };
         }
       } else if (notification.method === "thread/goal/updated" || notification.method === "thread/goal/cleared") {
         if ((pending.goal?.sequence ?? -1) < notification.sequence) pending.goal = { sequence: notification.sequence,

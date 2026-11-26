@@ -4,7 +4,7 @@ import { CodexRuntimeSessions } from "../../src/server/backends/codex/runtime/co
 import { CodexRuntimeClient } from "../../src/server/backends/codex/runtime/codex-runtime-client.js";
 import { CodexSharedClientFacade } from "../../src/server/backends/codex/codex-client-facade.js";
 import { codexRuntimeMethod, type CodexRuntimeAuthority, type CodexRuntimeEvent } from "../../src/server/backends/codex/runtime/codex-runtime-protocol.js";
-import type { CodexRpcRequestReceipt, CodexInboundServerRequest } from "../../src/server/backends/codex/rpc/codex-rpc-client.js";
+import type { CodexRpcRequestReceipt } from "../../src/server/backends/codex/rpc/codex-rpc-client.js";
 import { decodeCodexServerNotificationParams, decodeCodexServerRequestParams, type OfficialCodexClientRequestResult } from "../../src/server/provider-protocol/bindings/codex-app-server/codex-app-server-binding.js";
 import type { CodexRuntimeReceiptSink } from "../../src/server/backends/codex/runtime/codex-runtime-receipt-store.js";
 import { codexAccountUsageResult } from "../helpers/codex-account-usage.js";
@@ -298,7 +298,13 @@ describe("persistent Codex runtime ownership", () => {
     for (let index = 0; index < 5; index++) await f.host.submit(authority, { ...request, operationId: `stopped_${index}` });
     expect(f.dispatch).toHaveBeenCalledTimes(4);
     const handler = f.host.serverRequests.handlersForGeneration(1)["item/tool/requestUserInput"]!;
-    const response = Promise.resolve(handler({ generation: 1, sequence: 1, id: "request", method: "item/tool/requestUserInput", params: {}, signal: new AbortController().signal } as CodexInboundServerRequest<"item/tool/requestUserInput">));
+    const response = Promise.resolve(handler({
+      generation: 1, sequence: 1, id: "request", method: "item/tool/requestUserInput",
+      params: decodeCodexServerRequestParams("item/tool/requestUserInput", {
+        threadId: "thread", turnId: "turn", itemId: "item", questions: [], isBlocking: true,
+      }),
+      signal: new AbortController().signal,
+    }));
     const assertion = expect(response).rejects.toThrow("operator_stopped");
     f.host.abandonPendingWork();
     await assertion;
@@ -481,7 +487,13 @@ describe("persistent Codex runtime ownership", () => {
     const f = fixture(); await f.connect();
     const controller = new AbortController();
     const handler = f.host.serverRequests.handlersForGeneration(1)["item/tool/requestUserInput"]!;
-    const response = Promise.resolve(handler({ generation: 1, sequence: 1, id: "request", method: "item/tool/requestUserInput", params: {}, signal: controller.signal } as CodexInboundServerRequest<"item/tool/requestUserInput">));
+    const response = Promise.resolve(handler({
+      generation: 1, sequence: 1, id: "request", method: "item/tool/requestUserInput",
+      params: decodeCodexServerRequestParams("item/tool/requestUserInput", {
+        threadId: "thread", turnId: "turn", itemId: "item", questions: [], isBlocking: true,
+      }),
+      signal: controller.signal,
+    }));
     const assertion = expect(response).rejects.toThrow("request_expired");
     await f.host.detach(authority); controller.abort(); await assertion;
     const snapshot = await f.host.attach({ ...authority, controllerId: "2" }, () => {});

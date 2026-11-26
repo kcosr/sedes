@@ -465,8 +465,9 @@ User-facing changes are collected here before release. See the
 ### Fixed
 
 - Codex can refresh saved threads with MCP tool results and display live tool
-  activity and elicitation on 0.172.0. A late completion keeps a newer active
-  turn available for controls and prevents premature idle cleanup.
+  activity and elicitation on 0.172.0. The sidecar rejects unsupported
+  interactions before they can block cleanup. Late completions and resume
+  status hints preserve newer active work.
   ([#164](https://github.com/kcosr/sedes/pull/164))
 
 - After a server restart, threads whose recent turn kept running or finished
