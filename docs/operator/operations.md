@@ -647,7 +647,7 @@ directory, including `overlay.sqlite`, before upgrading.
 
 Migration 172 converts the stored inventory value from `settled` to `parked`.
 Upgrade the server, browser, Android, and Electron clients together to client
-protocol 181. The inventory actions are `park` and `unpark`, and the affected
+protocol 182. The inventory actions are `park` and `unpark`, and the affected
 thread and automation tools publish new schemas. See
 [agent tool contracts](../internals/agent-tools.md#catalog-and-effects).
 

@@ -53,7 +53,7 @@ User-facing changes are collected here before release. See the
   ([#121](https://github.com/kcosr/sedes/pull/121))
 
 - Upgrade the server and browser/packaged clients together for client protocol
-  **181**. Rebuild Android and Electron clients for native voice snapshot **17**
+  **182**. Rebuild Android and Electron clients for native voice snapshot **17**
   and the early reply subscription. See
   [early reply playback](docs/operator/clients/voice.md#early-reply-playback).
   ([#165](https://github.com/kcosr/sedes/pull/165))

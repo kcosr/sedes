@@ -422,7 +422,7 @@ require `X-Sedes-Client`. The server admits at most 128 identified voice streams
 per principal and rejects excess subscriptions before sending response headers.
 Ordinary inventory streams omit the parameter and keep their existing behavior.
 
-With client protocol 181, the voice reservation declares its early playback
+With client protocol 182, the voice reservation declares its early playback
 interest using the paired `earlyReply=on|off` and `earlyRevision` query parameters.
 After policy, `voice_early_session` gives the device a reservation token.
 Authenticated `PUT /api/application/voice-streams/:voiceStreamId/early-reply`
