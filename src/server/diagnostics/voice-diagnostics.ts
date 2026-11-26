@@ -2,6 +2,7 @@ import { deliveryDiagnosticsEnabled } from "./delivery-diagnostic-output.js";
 
 const events = [
   "completion_published", "voice_decision", "voice_published",
+  "early_reply_captured", "early_reply_first_segment", "early_reply_stopped",
   "voice_lane_subscribed", "voice_lane_unsubscribed", "application_stream_closed",
 ] as const;
 export type VoiceDiagnosticEvent = typeof events[number];
@@ -16,6 +17,10 @@ export type VoiceDiagnosticSuppressionReason = typeof suppressionReasons[number]
 const reasons = [
   "client_closed", "hub_closed", "drain_timeout", "overflow", "transient_overflow",
   "stream_error", "handshake_error", "unsubscribed", "listener_failed", "service_closed",
+] as const;
+const earlyReasons = [
+  "markup", "item_done", "limit", "stall", "source_changed", "authority_lost",
+  "superseded", "policy_changed", "publication_suppressed", "expired",
 ] as const;
 export type VoiceDiagnosticReason = typeof reasons[number];
 
@@ -38,6 +43,7 @@ export interface VoiceDiagnosticFields {
   readonly staleGeneration?: boolean;
   readonly suppressionReason?: VoiceDiagnosticSuppressionReason;
   readonly reason?: VoiceDiagnosticReason;
+  readonly earlyReason?: typeof earlyReasons[number];
   readonly live?: boolean;
   readonly pendingEventCount?: number;
   readonly pendingBytes?: number;
@@ -54,6 +60,7 @@ const enumFields = {
   action: ["none", "speak", "speakThenListen"],
   suppressionReason: suppressionReasons,
   reason: reasons,
+  earlyReason: earlyReasons,
 } as const;
 const counts = [
   "applicationStreamCount", "recipientCount", "attemptedCount", "deliveredCount",

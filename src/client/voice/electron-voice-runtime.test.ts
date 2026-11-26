@@ -83,6 +83,7 @@ function harness() {
       const connection = { callbacks, registration: null as RegisteredClient | null, voiceStreamId: null as string | null,
         async connect() { this.registration = REGISTRATION; callbacks.registered(REGISTRATION); },
         async request(path: string, init: RequestInit = {}) { requests.push({ path, init }); return requestImpl(path, init); },
+        earlyReplyInterest: vi.fn(),
         notifications(enabled: boolean) { this.voiceStreamId = enabled ? crypto.randomUUID() : null; if (!enabled) callbacks.notificationsChanged(false); },
         close() { this.registration = null; this.voiceStreamId = null; callbacks.registered(null); callbacks.notificationsChanged(false); },
       };
@@ -768,4 +769,174 @@ describe("Electron app-session voice", () => {
     expect(diagnostics.entries.length).toBeGreaterThan(0);
     expect(JSON.stringify(diagnostics)).not.toContain("The reply"); expect(JSON.stringify(diagnostics)).not.toContain(REGISTRATION.connectionToken);
   });
+});
+
+describe("early Electron reply playback", () => {
+  const id = "a".repeat(64);
+  const common = { replyId: id, threadId: THREAD, turnId: "turn-1", itemId: "source", generation: 1 };
+  const opening = { ...common, kind: "begin", seq: 0, userInputRevision: 1, threadTitle: "Thread A", rawStart: 0, rawEnd: 5, text: "One. ", paragraphEnd: false };
+  const append = { ...common, kind: "append", seq: 1, rawStart: 5, rawEnd: 10, text: "Two. ", paragraphEnd: false };
+  const setup = async (mode: "balanced" | "responsive" | "natural" = "responsive", patch = {}) => {
+    const h = harness(); await h.enable({ audioMode: "speak", speechContent: "messages", autoListen: false, ...patch }); h.emitPolicy();
+    await h.runtime.setEarlyReplyPlayback({ ...await h.command(), expectedEarlyReplyRevision: 0, earlyReplyPlayback: mode });
+    const early = (frame: unknown) => h.current().callbacks.frame("voice_early_reply", frame, h.current().voiceStreamId!);
+    const complete = (final = "One. Two. Three.", identity = id) => {
+      const notice = notification(identity); notice.payload.assistantResult.final.text = final;
+      h.current().callbacks.frame("notification", notice, h.current().voiceStreamId!);
+    };
+    const texts = () => h.speech.speak.mock.calls.map(([call]) => call.text);
+    const waiting = () => vi.waitFor(async () => expect((await h.runtime.getState()).phase).toBe("waiting_for_reply_text"));
+    const idle = () => vi.waitFor(async () => expect(await h.runtime.getState()).toMatchObject({ phase: "idle", active: null, queue: { count: 0 } }));
+    return { ...h, early, complete, texts, waiting, idle };
+  };
+
+  it("keeps one queue position across starvation, appends and terminal reconciliation", async () => {
+    const h = await setup();
+    h.early(opening); await h.waiting();
+    expect(h.texts()).toEqual(["One."]);
+    h.complete("B reply.", "other"); h.early(append); h.early(append);
+    await vi.waitFor(() => expect(h.texts()).toEqual(["One.", "Two."])); await h.waiting();
+    expect((await h.runtime.getState()).queue.count).toBe(1);
+    expect(h.audio.startCapture).not.toHaveBeenCalled();
+    h.complete(); h.complete(); await h.idle();
+    expect(h.texts()).toEqual(["One.", "Two.", "Three.", "B reply."]);
+  });
+
+  it("stages one physical request until the prior speaker drains, then drops staged audio on Skip", async () => {
+    const h = await setup(), drain = deferred<void>();
+    h.playback.finish.mockImplementationOnce(() => drain.promise);
+    h.early(opening);
+    await vi.waitFor(() => expect(h.playback.finish).toHaveBeenCalledTimes(1));
+    h.early(append);
+    await vi.waitFor(() => expect(h.texts()).toEqual(["One.", "Two."]));
+    expect(h.audio.createPlayback).toHaveBeenCalledTimes(1);
+    expect(h.playback.append).toHaveBeenCalledTimes(1);
+    await h.runtime.skipCurrentPlayback({ ...await h.command(), interactionId: id });
+    drain.resolve();
+    h.complete(); await h.idle(); expect(h.playback.append).toHaveBeenCalledTimes(1);
+    expect(h.audio.startCapture).not.toHaveBeenCalled();
+  });
+
+  it("renders the authoritative suffix after a gap and reads a corrected prefix in full", async () => {
+    const h = await setup(); h.early(opening); await h.waiting();
+    h.early({ ...append, seq: 3 }); await h.idle();
+    h.early(append); h.complete("Different. Tail."); await h.idle();
+    expect(h.texts()).toEqual(["One.", "Different. Tail."]);
+  });
+
+  it("retains the drained frontier across selector Off and same-binding reconnect", async () => {
+    const h = await setup();
+    h.early(opening); await h.waiting();
+    await h.runtime.setEarlyReplyPlayback({ ...await h.command(), expectedEarlyReplyRevision: 1, earlyReplyPlayback: "off" });
+    await h.runtime.setConnection({ ...BINDING, reconnect: true });
+    h.emitPolicy(); h.complete(); await h.idle();
+    expect(h.texts()).toEqual(["One.", "Two. Three."]);
+    expect((await h.runtime.getState()).speech.earlyReplyRevision).toBe(2);
+  });
+
+  it("reintroduces yielded speech in Both when another item reached the speaker first", async () => {
+    const h = await setup("responsive", { speechContent: "both" }); h.early(opening); await h.waiting();
+    h.early({ ...common, seq: 1, kind: "yield", reason: "item_done" });
+    h.complete("B reply.", "other");
+    await vi.waitFor(() => expect(h.texts().at(-1)).toContain("B reply."));
+    h.complete();
+    await h.idle();
+    expect(h.texts()).toEqual(["Thread A", "One.", "Done\n\nB reply.", "Thread A", "Done", "Two. Three."]);
+  });
+
+  it("waits for a closed Natural paragraph and starts its microphone only after the sealed tail drains", async () => {
+    const h = await setup("natural", { autoListen: true });
+    h.early(opening); await h.waiting(); expect(h.texts()).toEqual([]);
+    h.early(append); h.early({ ...append, seq: 2, rawStart: 10, rawEnd: 10, text: "", paragraphEnd: true });
+    await vi.waitFor(() => expect(h.texts()).toEqual(["One. Two."])); await h.waiting();
+    expect(h.audio.startCapture).not.toHaveBeenCalled();
+    h.complete(); await vi.waitFor(() => expect(h.audio.startCapture).toHaveBeenCalledTimes(1));
+    expect(h.texts()).toEqual(["One. Two.", "Three."]);
+  });
+
+  it("gives urgent blocking input two seconds of starvation, while ordinary replies wait", async () => {
+    vi.useFakeTimers();
+    const h = await setup("responsive", { speechContent: "both" }); h.early(opening); await h.waiting();
+    h.complete("Other reply.", "ordinary"); await vi.advanceTimersByTimeAsync(4_000);
+    expect((await h.runtime.getState()).active?.id).toBe(id);
+    h.current().callbacks.frame("notification", { sourceEventId: "blocked", generation: 1, voice: "speak",
+      payload: { schemaVersion: 5, notificationId: "blocked", event: "input.requested", title: "Input needed", message: "",
+        thread: { id: THREAD, title: "Thread" }, occurredAt: new Date().toISOString() } }, h.current().voiceStreamId!);
+    await vi.advanceTimersByTimeAsync(1999); expect((await h.runtime.getState()).active?.id).toBe(id);
+    await vi.advanceTimersByTimeAsync(1); await h.idle();
+    expect(h.texts().at(-1)).toBe("Input needed");
+    h.early(append); h.complete(); await h.idle(); expect(h.texts().at(-1)).toBe("Two. Three.");
+  });
+
+  it("expires a starved first paragraph and suppresses unheard queued openings explicitly cleared by Stop", async () => {
+    vi.useFakeTimers();
+    const h = await setup("natural");
+    h.early(opening); await h.waiting();
+    await vi.advanceTimersByTimeAsync(60_001); await h.idle();
+    expect(h.texts()).toEqual([]);
+    h.early({ ...opening, replyId: "c".repeat(64) }); await h.waiting();
+    h.early({ ...opening, replyId: "b".repeat(64) });
+    expect((await h.runtime.getState()).queue.count).toBe(1);
+    await h.runtime.stopPlayback({ ...await h.command(), interactionId: "c".repeat(64) });
+    h.complete("Stopped.", "b".repeat(64)); h.complete("Stopped.", "c".repeat(64));
+    h.complete(); await h.idle(); expect(h.texts()).toEqual(["One. Two. Three."]);
+  });
+
+  it("lets an independently configured failure speak after the user skipped the early reply", async () => {
+    const h = await setup("responsive", { speechContent: "both" }); h.early(opening); await h.waiting();
+    await h.runtime.skipCurrentPlayback({ ...await h.command(), interactionId: id });
+    const failure = { sourceEventId: id, generation: 1, voice: "speak", userInputRevision: 1,
+      payload: { schemaVersion: 5, notificationId: id, event: "turn.failed", title: "Agent turn failed", message: "Thread A",
+        thread: { id: THREAD, title: "Thread A" }, turn: { id: "turn-1", outcome: "failed" }, occurredAt: new Date().toISOString() } };
+    h.current().callbacks.frame("notification", failure, h.current().voiceStreamId!);
+    h.current().callbacks.frame("notification", failure, h.current().voiceStreamId!);
+    await h.idle(); expect(h.texts()).toEqual(["Thread A", "One.", "Agent turn failed\n\nThread A"]);
+  });
+
+  it("retries the authoritative completion once when an early request fails while its seal is in flight", async () => {
+    const h = await setup();
+    const failure = deferred<void>(); h.speech.speak.mockImplementationOnce(() => failure.promise);
+    h.early(opening); await vi.waitFor(() => expect(h.speech.speak).toHaveBeenCalledOnce());
+    h.complete(); failure.reject(new Error("Transient synthesis error.")); await h.idle();
+    expect(h.texts()).toEqual(["One.", "One. Two. Three."]);
+  });
+  it("retires a promoted request that has yet to reach audio when superseded", async () => {
+    const h = await setup();
+    const drain = deferred<void>(), openingSink = deferred<typeof h.playback>();
+    h.playback.finish.mockImplementationOnce(() => drain.promise);
+    h.audio.createPlayback.mockResolvedValueOnce(h.playback).mockImplementationOnce(() => openingSink.promise);
+    h.early(opening); h.early(append);
+    await vi.waitFor(() => expect(h.speech.speak).toHaveBeenCalledTimes(2));
+    drain.resolve(); await vi.waitFor(() => expect(h.audio.createPlayback).toHaveBeenCalledTimes(2));
+    h.early({ ...common, seq: 2, kind: "cancel", reason: "superseded" });
+    openingSink.resolve(h.playback); await h.idle();
+    expect(h.playback.append).toHaveBeenCalledOnce();
+  });
+
+  it("preserves Record as its own interaction while dropping the later seal of the replaced reply", async () => {
+    const h = await setup("responsive", { autoListen: true });
+    h.early(opening); await h.waiting();
+    await h.runtime.recordDuringPlayback({ ...await h.command(), interactionId: id });
+    await vi.waitFor(async () => expect((await h.runtime.getState()).phase).toBe("listening"));
+    h.early(append); h.complete();
+    expect((await h.runtime.getState()).queue.count).toBe(0);
+    expect(h.speech.startRecognition).toHaveBeenCalledOnce(); expect(h.texts()).toEqual(["One."]);
+  });
+
+  it("reclaims a definitive cancellation received while Off, preserving other unresolved receipts at capacity", async () => {
+    const h = await setup();
+    const key = (n: number) => n.toString(16).padStart(64, "0");
+    for (let i = 0; i < 4096; i++) {
+      h.early({ ...opening, replyId: key(i) });
+      h.early({ ...common, replyId: key(i), seq: 1, kind: "cancel", reason: "authority_lost" });
+    }
+    h.early({ ...opening, replyId: key(4096) });
+    expect((await h.runtime.getState()).queue.count).toBe(0);
+    await h.runtime.setEarlyReplyPlayback({ ...await h.command(), expectedEarlyReplyRevision: 1, earlyReplyPlayback: "off" });
+    h.early({ ...common, replyId: key(1), seq: 2, kind: "cancel", reason: "publication_suppressed" });
+    await h.runtime.setEarlyReplyPlayback({ ...await h.command(), expectedEarlyReplyRevision: 2, earlyReplyPlayback: "responsive" });
+    h.early({ ...opening, replyId: key(4096) }); await h.waiting();
+    expect((await h.runtime.getState()).active?.id).toBe(key(4096));
+  });
+
 });

@@ -1,3 +1,4 @@
+import { LiveFinalReplyTracker, type CaptureEarlyReply } from "./early-reply-observation.js";
 import { ConversationNativeEffectFence } from "./conversation-native-effect-fence.js";
 import type { ClassifiedAssistantResult } from "../../shared/protocol/completion-result.js";
 import type { NonblockingQuestionsPayload } from "../../shared/protocol/questions.js";
@@ -257,6 +258,9 @@ export type ActorBranchCheckpointSelection =
  * never race a submit, steer, interrupt, response, or registered action.
  */
 export class ConversationActor {
+  readonly #earlyReply?: LiveFinalReplyTracker;
+  #earlyReplyGapRevision = 0;
+  #earlyReplyBaselineRevision = 0;
   readonly #handle: ConversationHandle;
   readonly #environmentLease: ExecutionEnvironmentLease | undefined;
   readonly #attachmentDelivery: ComposerAttachmentDeliveryService;
@@ -316,6 +320,7 @@ export class ConversationActor {
     readonly handle: ConversationHandle;
     /** Installed before establishment so durable observers cannot miss startup events. */
     readonly initialObserver?: ConversationActorListener;
+    readonly captureEarlyReply?: CaptureEarlyReply;
     readonly onInputStateChanged?: () => void;
     /** Absent only for a passive history projection with no execution authority. */
     readonly environmentLease?: ExecutionEnvironmentLease;
@@ -339,6 +344,7 @@ export class ConversationActor {
     this.#nativeEffects = input.nativeEffects ?? new ConversationNativeEffectFence();
     if (input.initialObserver) this.#listeners.add(input.initialObserver);
     this.#environmentLease = input.environmentLease;
+    if (input.captureEarlyReply && input.environmentLease) this.#earlyReply = new LiveFinalReplyTracker(input.captureEarlyReply);
     this.#attachmentDelivery = input.attachmentDelivery;
     this.#drainAuthoritativeObservers = input.drainAuthoritativeObservers;
     this.#onInputStateChanged = input.onInputStateChanged;
@@ -378,6 +384,10 @@ export class ConversationActor {
     }
     this.#started = true;
     this.#unsubscribeHandleEvents = this.#handle.subscribe((event) => {
+      if (event.type === "resnapshot_required") {
+        this.#earlyReplyGapRevision += 1;
+        this.#earlyReply?.finish("authority_lost");
+      }
       if (event.type === "resnapshot_required" && interruptsCompletionObservation(event.reason)) {
         // Raw evidence remains observable while a replacement snapshot has
         // detached the sequenced subscription.
@@ -1313,6 +1323,7 @@ export class ConversationActor {
     }
     if (this.#closePromise) return this.#closePromise;
     this.#closing = true;
+    this.#earlyReply?.finish("authority_lost");
     this.#notifyInputStateChanged();
     this.#explicitStopPending = beforeCleanup !== undefined;
     this.#establishmentAbort?.abort();
@@ -1457,6 +1468,8 @@ export class ConversationActor {
     if (this.#handleReplacementRequired) {
       throw new Error("conversation_actor_handle_replacement_required");
     }
+    this.#earlyReply?.finish("authority_lost");
+    const earlyReplyGapRevision = this.#earlyReplyGapRevision;
     this.#establishmentEpoch += 1;
     const epoch = this.#establishmentEpoch;
     const completionGapRevision = this.#completionObservationGapRevision;
@@ -1541,6 +1554,7 @@ export class ConversationActor {
     }
     // A successful baseline covers only gaps known when capture began. A raw
     // gap arriving during any awaited establishment work remains fenced.
+    this.#earlyReplyBaselineRevision = earlyReplyGapRevision;
     this.#completionBaselineGapRevision = completionGapRevision;
     this.#snapshotState = state;
     this.#publish({ type: "projection_replaced", state });
@@ -1578,6 +1592,10 @@ export class ConversationActor {
   ): Unsubscribe {
     return established.subscribeFromNext((event) => {
       if (this.#closing || this.#closed) return;
+      if (epoch === this.#establishmentEpoch && event.event.type === "resnapshot_required") {
+        this.#earlyReplyGapRevision += 1;
+        this.#earlyReply?.finish("authority_lost");
+      }
       if (epoch === this.#establishmentEpoch && event.event.type === "resnapshot_required" &&
           interruptsCompletionObservation(event.event.reason)) {
         // Latch before enqueueing so an awaited establishment cannot miss a
@@ -1613,6 +1631,8 @@ export class ConversationActor {
           const priorCompletionStatus = nativeEvent.type === "turn_completed"
             ? this.#projector.backendTurns().find((turn) => turn.backendTurnId === nativeEvent.turn.backendTurnId)?.status
             : undefined;
+          const newFinalStart = nativeEvent.type === "item_started" && nativeEvent.liveFinalStart === true &&
+            !this.#projector.itemForBackendId(nativeEvent.item.backendItemId);
           const application = this.#projector.apply(event);
           await this.#applyProjection(application);
           if (application.kind === "resnapshot_required" || this.#projector.generation !== projectionGeneration) {
@@ -1621,6 +1641,9 @@ export class ConversationActor {
             // actually survived recovery.
             return;
           }
+          this.#earlyReply?.accept(nativeEvent, this.#projector, this.#snapshotState?.timeline.activeTurnId,
+            !this.#closing && !this.#handleReplacementRequired && this.#earlyReplyBaselineRevision === this.#earlyReplyGapRevision &&
+            this.#snapshotState?.backendCapabilities.liveFinalAnswer === "supported", newFinalStart);
           if ((nativeEvent.type === "item_completed" || nativeEvent.type === "item_updated") && nativeEvent.liveProgress &&
               nativeEvent.item.semanticKind === "assistant_message" && nativeEvent.item.status === "completed" &&
               (nativeEvent.item.responsePhase === "provisional" || nativeEvent.item.responsePhase === "partial") && nativeEvent.item.markdown.text.trim()) {
@@ -1663,7 +1686,7 @@ export class ConversationActor {
             const provenance = this.#completionProvenance(completionIdentity);
             if (!submittedCorrelations?.length && provenance === "live" &&
                 !this.#claimUnsubmittedCompletion(completionIdentity)) return;
-            const correlations = submittedCorrelations?.length ? submittedCorrelations : [event.event.turn.backendTurnId];
+            const correlations = Object.freeze(submittedCorrelations?.length ? [...submittedCorrelations] : [event.event.turn.backendTurnId]);
             for (const backendCorrelation of correlations) {
               this.#publish({
                 type: "authoritative_completion",
@@ -1742,8 +1765,8 @@ export class ConversationActor {
       // for autonomous work, without turning imported history into new work.
       if (!backendTurn.completionCorrelations?.length &&
           (provenance !== "live" || !this.#claimUnsubmittedCompletion(completionIdentity))) continue;
-      const correlations = backendTurn.completionCorrelations?.length
-        ? backendTurn.completionCorrelations : [backendTurn.backendTurnId];
+      const correlations = Object.freeze(backendTurn.completionCorrelations?.length
+        ? [...backendTurn.completionCorrelations] : [backendTurn.backendTurnId]);
       const completion = this.#completionResult(backendTurn.backendTurnId);
       for (const backendCorrelation of correlations) {
         const event: ConversationActorEvent = {
@@ -2145,6 +2168,7 @@ export class ConversationActor {
   }
 
   async #closeResources(failures: unknown[], evicted = false): Promise<void> {
+    this.#earlyReply?.finish("authority_lost");
     if (!this.#executionCloseBegun) {
       this.#executionCloseBegun = true;
     }

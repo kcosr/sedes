@@ -677,6 +677,10 @@ export class ConversationProjector {
         item?.semanticKind === "assistant_message");
   }
 
+  backendTurnById(id: string): BackendTurn | undefined {
+    return this.#backendTurns.get(id);
+  }
+
   backendTurns(): readonly BackendTurn[] {
     return [...this.#backendTurns.values()];
   }

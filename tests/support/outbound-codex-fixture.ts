@@ -29,6 +29,7 @@ export class OutboundCodexFixture {
   readonly #codexHome: string;
   readonly #workspacePath: string;
   #active: { socket: WebSocket; thread: CodexThread; turn: CodexThread["turns"][number] } | undefined;
+  #pendingSteer?: Extract<CodexThread["turns"][number]["items"][number], { type: "userMessage" }>;
   #closePromise: Promise<void> | undefined;
 
   private constructor(
@@ -120,17 +121,41 @@ export class OutboundCodexFixture {
 
   /** Drive the same native turn on either side of a Settings save. */
   appendOutput(text: string): void {
+    const message = this.startAnswer("commentary");
+    message.append(text);
+    message.complete();
+  }
+
+  /** The test controls when each provider delta and the authoritative item arrive. */
+  startAnswer(phase: "commentary" | "final_answer") {
     if (!this.#active) throw new Error("outbound_codex_fixture_turn_missing");
     const { thread, turn } = this.#active;
-    const item: CodexThread["turns"][number]["items"][number] = {
-      type: "agentMessage", id: `${turn.id}-item-${turn.items.length}`, text,
-      moderation: null, phase: "commentary", memoryCitation: null, delivery: null, questions: null,
+    const item: Extract<CodexThread["turns"][number]["items"][number], { type: "agentMessage" }> = {
+      type: "agentMessage", id: `${turn.id}-item-${turn.items.length}`, text: "",
+      moderation: null, phase, memoryCitation: null, delivery: null, questions: null,
     };
     turn.items.push(item);
     const scope = { threadId: thread.id, turnId: turn.id };
-    this.#notify("item/started", { ...scope, item: { ...item, text: "" }, startedAtMs: Date.now() });
-    this.#notify("item/agentMessage/delta", { ...scope, itemId: item.id, delta: text });
-    this.#notify("item/completed", { ...scope, item, completedAtMs: Date.now() });
+    this.#notify("item/started", { ...scope, item, startedAtMs: Date.now() });
+    return {
+      append: (delta: string) => {
+        item.text += delta;
+        this.#notify("item/agentMessage/delta", { ...scope, itemId: item.id, delta });
+      },
+      complete: () => this.#notify("item/completed", { ...scope, item, completedAtMs: Date.now() }),
+    };
+  }
+
+  /** The app-server's steer receipt precedes materialization of its authenticated input. */
+  materializeSteer(): void {
+    if (!this.#active || !this.#pendingSteer) throw new Error("outbound_codex_fixture_pending_steer_missing");
+    const { thread, turn } = this.#active;
+    const item = this.#pendingSteer;
+    this.#pendingSteer = undefined;
+    turn.items.push(item);
+    const scope = { threadId: thread.id, turnId: turn.id, item };
+    this.#notify("item/started", { ...scope, startedAtMs: Date.now() });
+    this.#notify("item/completed", { ...scope, completedAtMs: Date.now() });
   }
 
   completeTurn(): void {
@@ -217,6 +242,17 @@ export class OutboundCodexFixture {
         thread.turns.push(turn);
         this.#active = { thread, turn, socket };
         return { turn };
+      }
+      case "turn/steer": {
+        const current = this.#active;
+        if (!current || current.thread.id !== params.threadId || current.turn.id !== params.expectedTurnId || this.#pendingSteer) {
+          throw new Error("outbound_codex_fixture_invalid_steer_target");
+        }
+        const input = Array.isArray(params.input) ? params.input.find(entry => entry.type === "text") : undefined;
+        this.#pendingSteer = { type: "userMessage", id: `${current.turn.id}-steer-${current.turn.items.length}`,
+          clientId: typeof params.clientUserMessageId === "string" ? params.clientUserMessageId : null,
+          content: [{ type: "text", text: String(input?.text ?? ""), text_elements: [] }] };
+        return { turnId: current.turn.id };
       }
       case "thread/read": {
         const thread = this.#thread(params.threadId);

@@ -982,8 +982,15 @@ export const applicationEventStreamQuerySchema = z
     handshake: z.literal("authoritative_replacement").optional(),
     /** One native voice event-stream attempt, independent of control registration. */
     voiceStreamId: z.uuid().optional(),
+    earlyReply: z.enum(["on", "off"]).optional(),
+    earlyRevision: z.string().regex(/^(0|[1-9]\d{0,15})$/u).transform(Number)
+      .pipe(z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER)).optional(),
   })
   .superRefine((query, context) => {
+    if ((query.earlyReply !== undefined) !== (query.earlyRevision !== undefined) ||
+      (query.earlyReply !== undefined && query.voiceStreamId === undefined)) {
+      context.addIssue({ code: "custom", message: "Early reply interest and revision require an identified voice stream." });
+    }
     if (query.replayCursor && query.handshake) {
       context.addIssue({
         code: "custom",

@@ -179,6 +179,35 @@ are silent with Messages selected; use Announcements or Both to hear them.
 Changing Read aloud applies to queued and future speech; it does not interrupt
 an item already playing. Switching to Input stops automatic notification speech.
 
+### Early reply playback
+
+In **Settings → Voice**, choose **Speak** and select **Messages** or **Both** to
+show **Early reply playback**. This preference belongs to the device and defaults
+to **Off**. Codex can identify its final answer while it is still writing.
+If the backend identifies the answer later, Sedes reads it at turn completion.
+
+| Choice | What you hear |
+| --- | --- |
+| Off | The device waits for the turn to finish. |
+| Responsive | Each complete sentence can start playing as soon as the speaker is ready. |
+| Balanced | The opening sentence plays first. Later requests group ready sentences in the same paragraph, aiming for 240 characters. |
+| Natural | The device waits for a paragraph break, or for complete sentences to reach 320 characters in a longer paragraph. |
+
+The phrasing targets count UTF-16 units, including spaces between sentences.
+An eligible plain-prose opening can play early. Markdown such as links, code,
+and lists moves the rest of the answer to completion playback. The voice bar
+shows one reply throughout. **Next** skips that reply, including text still being
+written. Between sentences, the microphone stays closed. If a reply yields its
+queue position, the device can play another notification and return to the
+remaining text when the turn finishes.
+
+With **Both**, the opening identifies the thread. The turn outcome and any
+additional selected sections arrive at completion. An interrupted or revised
+turn can change words you already heard. Turning Early reply playback Off
+during a reply returns its remaining eligible text to completion playback.
+
+### Listening after a reply
+
 Automatic recognition requires **Speak then listen**, **Auto-listen**, and a
 still-current eligible target. In Input mode only completions listen
 afterward. Progress, partial answers, approvals, blocking input, and nonblocking questions are

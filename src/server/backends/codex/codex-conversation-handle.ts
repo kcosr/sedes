@@ -1345,6 +1345,7 @@ export class CodexConversationHandle implements ConversationHandle {
       ],
       usageAccounting: "supported",
       turnThroughput: "unsupported",
+      liveFinalAnswer: "supported",
       usageSections: ["context"],
       effectiveSettings,
     };
@@ -5442,6 +5443,11 @@ export class CodexConversationHandle implements ConversationHandle {
                   : "item_updated"
                 : "item_completed",
             item,
+            ...(method === "item/started" && parsed.item.type === "agentMessage" &&
+              parsed.item.phase === "final_answer" && currentTurn.status === "inProgress" &&
+              item.semanticKind === "assistant_message" && item.status === "streaming" && item.responsePhase === "final" &&
+              projection.projectedItemByNativeCoordinate.get(coordinate)?.orderedBackendItemIds.includes(item.backendItemId)
+              ? { liveFinalStart: true as const } : {}),
             ...(method === "item/completed" && parsed.item.type === "agentMessage" &&
               (parsed.item.phase === "commentary" || parsed.item.phase === "partial_answer") && currentTurn.status === "inProgress" &&
               item.semanticKind === "assistant_message" && item.status === "completed" &&

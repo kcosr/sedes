@@ -1,3 +1,7 @@
+import { randomUUID } from "node:crypto";
+import { ClientControlService } from "../../src/server/domain/client-control-service.js";
+import { TurnVoiceCompletion } from "../../src/server/domain/turn-voice-completion.js";
+import type { VoiceNotificationPublication } from "../../src/server/domain/notification-service.js";
 import { describe, expect, it, vi } from "vitest";
 import {
   type BackendCapabilityDocument,
@@ -152,7 +156,7 @@ function selectedBranchingCapabilities(
       creationRecovery: "idempotent",
     },
     interactionKinds: [],
-    usageAccounting: "supported" as const, turnThroughput: "unsupported" as const, usageSections: [],
+    usageAccounting: "supported" as const, turnThroughput: "unsupported" as const, liveFinalAnswer: "unsupported" as const, usageSections: [],
     effectiveSettings: { toolAccess: "read_only" },
   };
 }
@@ -215,7 +219,7 @@ class FakeHandle {
         reason: { text: "Branching is unavailable in this fixture." },
       },
       interactionKinds: [],
-      usageAccounting: "supported" as const, turnThroughput: "unsupported" as const, usageSections: [],
+      usageAccounting: "supported" as const, turnThroughput: "unsupported" as const, liveFinalAnswer: "unsupported" as const, usageSections: [],
       effectiveSettings: {},
     }),
   );
@@ -324,6 +328,7 @@ function fixture(
   captureResponseVoiceContext?: NonNullable<ConstructorParameters<typeof ConversationActorManager>[0]["captureResponseVoiceContext"]>,
   applicationPublications?: (requestedScope: typeof scope, threadId: string, turnIds: readonly string[]) => readonly PagePublication[],
   onModelFeedback?: ModelFeedbackObserver,
+  captureEarlyReply?: ConstructorParameters<typeof ConversationActorManager>[0]["captureEarlyReply"],
 ) {
   const closeOrder: string[] = [];
   const handle = new FakeHandle(closeOrder);
@@ -388,6 +393,7 @@ function fixture(
     ...(onAuthoritativeCompletion ? { onAuthoritativeCompletion } : {}),
     ...(onAuthoritativeSubmission ? { onAuthoritativeSubmission } : {}),
     ...(onLiveProgress ? { onLiveProgress } : {}),
+    ...(captureEarlyReply ? { captureEarlyReply } : {}),
     ...(onModelFeedback ? { onModelFeedback } : {}),
     ...(captureResponseVoiceContext ? { captureResponseVoiceContext } : {}),
     ...(applicationPublications ? { applicationPublications } : {}),
@@ -3415,7 +3421,7 @@ describe("ConversationActorManager", () => {
         creationRecovery: "idempotent",
       },
       interactionKinds: [],
-      usageAccounting: "supported" as const, turnThroughput: "unsupported" as const, usageSections: [],
+      usageAccounting: "supported" as const, turnThroughput: "unsupported" as const, liveFinalAnswer: "unsupported" as const, usageSections: [],
       effectiveSettings: {
         model: { provider: "test", id: "model" },
         thinkingLevel: "low",
@@ -4047,7 +4053,7 @@ describe("ConversationActorManager", () => {
         creationRecovery: "idempotent",
       },
       interactionKinds: [],
-      usageAccounting: "supported" as const, turnThroughput: "unsupported" as const, usageSections: [],
+      usageAccounting: "supported" as const, turnThroughput: "unsupported" as const, liveFinalAnswer: "unsupported" as const, usageSections: [],
       effectiveSettings: { toolAccess: "read_only" },
     });
     const acquired = await manager.acquire({
@@ -4183,7 +4189,7 @@ describe("ConversationActorManager", () => {
           creationRecovery: "idempotent",
         },
         interactionKinds: [],
-        usageAccounting: "supported" as const, turnThroughput: "unsupported" as const, usageSections: [],
+        usageAccounting: "supported" as const, turnThroughput: "unsupported" as const, liveFinalAnswer: "unsupported" as const, usageSections: [],
         effectiveSettings: { toolAccess: "read_only" },
       });
       handle.establishmentHistories[0] = {
@@ -5856,6 +5862,154 @@ describe("ConversationActorManager", () => {
       expect(order).toEqual(["feedback", "completion"]);
     } finally { release(); acquired.release(); await manager.close(); }
   });
+
+  it.each(["stream", "item_done", "authority_lost"] as const)(
+    "captures live final recipients before ordered submission and fences pending text at %s",
+    async (end) => {
+      let release!: () => void;
+      const admission = new Promise<void>(resolve => { release = resolve; });
+      const submission = vi.fn<AuthoritativeSubmissionObserver>(() => admission);
+      const observation = { observe: vi.fn(), finish: vi.fn() };
+      const capture = vi.fn(() => observation);
+      const { driver, handle, manager } = fixture(undefined, submission, 10, undefined, 8,
+        undefined, undefined, undefined, undefined, capture);
+      const baseline = snapshot("running", "Previous feedback");
+      baseline.turnsById["turn-1"]!.completionCorrelations = ["accepted"];
+      handle.establishmentSnapshots[0] = baseline;
+      handle.establishmentSnapshots.push(baseline);
+      const capabilities = await handle.backendCapabilities();
+      handle.backendCapabilities.mockResolvedValue({ ...capabilities, liveFinalAnswer: "supported" });
+      const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+      const item = { backendTurnId: "turn-1", backendItemId: "early-answer", status: "streaming" as const,
+        semanticKind: "assistant_message" as const, responsePhase: "final" as const, sourceOrder: 1, markdown: { text: "" } };
+      try {
+        handle.emit(0, { type: "item_started", item, liveFinalStart: true }, 0);
+        handle.emit(0, { type: "item_updated", item: { ...item, markdown: { text: "One" } } }, 1);
+        handle.emit(0, { type: "item_updated", item: { ...item, markdown: { text: "One. Two." } } }, 2);
+        await acquired.actor.captureSnapshotState();
+        expect(capture).toHaveBeenCalledOnce();
+        expect(capture).toHaveBeenCalledWith(scope, binding.applicationThreadId, expect.objectContaining({
+          backendCorrelations: ["accepted"], applicationTurnId: projectedTurnId,
+        }));
+        expect(observation.observe).not.toHaveBeenCalled();
+        if (end === "item_done") {
+          handle.emit(0, { type: "item_completed", item: { ...item, status: "completed", markdown: { text: "One. Two." } } }, 3);
+        } else if (end === "authority_lost") {
+          handle.emit(0, { type: "resnapshot_required", reason: "history_changed" }, 3);
+        }
+        await acquired.actor.captureSnapshotState();
+        release();
+        if (end === "stream") {
+          await vi.waitFor(() => expect(observation.observe).toHaveBeenCalledOnce());
+          expect(observation.observe).toHaveBeenCalledWith("One. Two.", ["unclassified"]);
+          handle.emit(0, { type: "item_updated", item: { ...item, markdown: { text: "Changed." } } }, 3);
+          await acquired.actor.captureSnapshotState();
+          expect(observation.finish).toHaveBeenCalledWith("source_changed");
+          handle.emit(0, { type: "item_started", item: { ...item, sourceOrder: 2, backendItemId: "later-answer" }, liveFinalStart: true }, 4);
+          await acquired.actor.captureSnapshotState();
+          expect(capture).toHaveBeenCalledOnce();
+        } else {
+          expect(observation.finish).toHaveBeenCalledWith(end);
+          expect(observation.observe).not.toHaveBeenCalled();
+        }
+      } finally {
+        release();
+        acquired.release();
+        await manager.close();
+      }
+    },
+  );
+
+  it.each(["on", "off"] as const)("retains one deferred-control receipt for a steered turn with early playback %s", async mode => {
+    const controls = new ClientControlService();
+    const finishEarlyReply = vi.fn();
+    const coordinator = new TurnVoiceCompletion({ finishEarlyReply }, controls);
+    let deliver!: (receipt: VoiceNotificationPublication) => void;
+    const publication = new Promise<VoiceNotificationPublication>(resolve => { deliver = resolve; });
+    const publish = vi.fn(() => publication);
+    const completed: string[] = [];
+    const completion: AuthoritativeCompletionObserver = (eventScope, threadId, observation) => {
+      expect(observation.backendCorrelations).toEqual(["submitted", "steered"]);
+      completed.push(observation.backendCorrelation);
+      coordinator.observe(eventScope, threadId, observation)(publish);
+    };
+    const early = { observe: vi.fn(), finish: vi.fn() };
+    const capture = vi.fn(() => mode === "on" ? early : undefined);
+    const { driver, handle, manager } = fixture(completion, undefined, 10, undefined, 8,
+      undefined, undefined, undefined, undefined, capture);
+    const initial = snapshot("running", "");
+    initial.turnsById["turn-1"]!.completionCorrelations = ["submitted"];
+    handle.establishmentSnapshots[0] = initial;
+    handle.backendCapabilities.mockResolvedValue({ ...await handle.backendCapabilities(), liveFinalAnswer: "supported" });
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    const threadId = binding.applicationThreadId;
+    const state = { runtime: { foreground: true, voiceReady: true, interactionActive: false }, settings: null };
+    const client = controls.register(scope, undefined, { platform: "android", capabilities: { navigate: true, voice: true, voiceSettings: true }, state });
+    const receipt = { sourceEventId: "actual-terminal", voiceStreamIds: [randomUUID()] };
+    try {
+      const requested = controls.request(controls.target(scope, client.clientId), { action: "switch_thread",
+        sourceThreadId: threadId, sourceTurnId: projectedTurnId, threadId: randomUUID(), listen: true }, new AbortController().signal);
+      const command = (await controls.poll(scope, client.connectionToken, undefined,
+        { state, acknowledgements: [] }, new AbortController().signal)).commands[0]!;
+      await controls.poll(scope, client.connectionToken, undefined, { state,
+        acknowledgements: [{ id: command.id, result: { status: "accepted", state } }] }, AbortSignal.abort());
+      await requested;
+
+      const steered = { ...initial.turnsById["turn-1"]!, completionCorrelations: ["submitted", "steered"] };
+      handle.emit(0, { type: "turn_updated", turn: steered }, 0);
+      const item = { backendItemId: "final", backendTurnId: "turn-1", sourceOrder: 1, status: "streaming" as const,
+        semanticKind: "assistant_message" as const, responsePhase: "final" as const, markdown: { text: "A sentence. More follows." } };
+      handle.emit(0, { type: "item_started", item, liveFinalStart: true }, 1);
+      await acquired.actor.captureSnapshotState();
+      expect(capture).toHaveBeenCalledWith(scope, threadId, expect.objectContaining({ backendCorrelations: ["submitted", "steered"] }));
+      expect(early.observe).toHaveBeenCalledTimes(mode === "on" ? 1 : 0);
+      handle.emit(0, { type: "item_completed", item: { ...item, status: "completed" } }, 2);
+      handle.emit(0, { type: "turn_completed", turn: { ...steered, orderedBackendItemIds: ["item-1", "final"], status: "completed" } }, 3);
+      await vi.waitFor(() => expect(completed).toEqual(["submitted", "steered"]));
+      // Re-observation while notification settlement is delayed must preserve the first publication.
+      await acquired.actor.replayAuthoritativeCompletions();
+      await vi.waitFor(() => expect(completed).toEqual(["submitted", "steered", "submitted", "steered"]));
+      expect(publish).toHaveBeenCalledOnce();
+      expect(finishEarlyReply).not.toHaveBeenCalled();
+      const settled = controls.poll(scope, client.connectionToken, undefined, { state, acknowledgements: [] }, new AbortController().signal);
+      deliver(receipt);
+      expect((await settled).commands).toEqual([expect.objectContaining({ id: command.id,
+        action: "turn_settled", replyEventId: receipt.sourceEventId, replyStreamIds: receipt.voiceStreamIds })]);
+      expect(finishEarlyReply).toHaveBeenCalledExactlyOnceWith(scope, threadId, projectedTurnId, receipt);
+    } finally {
+      deliver(receipt);
+      controls.close();
+      acquired.release();
+      await manager.close();
+    }
+  });
+
+  it.each(["no capability", "external", "late label", "already projected"] as const)(
+    "requires a new native final start on a supported running correlated turn (%s)",
+    async (caseName) => {
+      const capture = vi.fn(() => ({ observe: vi.fn(), finish: vi.fn() }));
+      const { driver, handle, manager } = fixture(undefined, undefined, 10, undefined, 8,
+        undefined, undefined, undefined, undefined, capture);
+      const baseline = snapshot("running");
+      if (caseName !== "external") baseline.turnsById["turn-1"]!.completionCorrelations = ["accepted"];
+      handle.establishmentSnapshots[0] = baseline;
+      const capabilities = await handle.backendCapabilities();
+      if (caseName !== "no capability") handle.backendCapabilities.mockResolvedValue({ ...capabilities, liveFinalAnswer: "supported" });
+      const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+      const item = { backendTurnId: "turn-1", backendItemId: caseName === "already projected" ? "item-1" : "early",
+        sourceOrder: caseName === "already projected" ? 0 : 1, status: "streaming" as const, semanticKind: "assistant_message" as const,
+        responsePhase: "final" as const, markdown: { text: "" } };
+      try {
+        handle.emit(0, { type: "item_started", item, ...(caseName === "late label" ? {} : { liveFinalStart: true }) }, 0);
+        handle.emit(0, { type: "item_updated", item: { ...item, markdown: { text: "A full sentence. " } } }, 1);
+        await acquired.actor.captureSnapshotState();
+        expect(capture).not.toHaveBeenCalled();
+      } finally {
+        acquired.release();
+        await manager.close();
+      }
+    },
+  );
 
   it.each(["provisional", "partial"] as const)("publishes qualified live %s progress after projection, including late phase evidence, but not snapshots or terminal backfill", async (phase) => {
     const observed = vi.fn<LiveProgressObserver>();

@@ -18,7 +18,12 @@ without an alias or migration. Client protocol 150 and client-control tool schem
 version 2 carry the audio-mode values. Notification payload version 5 carries
 Partial response sections, independent `turn.partial` delivery, and the required
 live `progress.phase` field.
-Native snapshot version 16 includes `speech.audioQuality`, its independent
+Native snapshot version 17 includes the device preference `speech.earlyReplyPlayback`
+and its independent `speech.earlyReplyRevision`. The setter checks the expected
+connection generation and preference revision. An open early reply that has
+caught up to its writer exposes `waiting_for_reply_text`. This phase retains
+the reply's playback controls and never starts automatic listening.
+The snapshot also includes `speech.audioQuality`, its independent
 `audioQualityRevision`, per-model picker `audioInputFormats`, and
 `active.recording` (ID, Keep listening and
 Reconnecting), native-authoritative `canSetKeepListening`/`canSend` actions, the
@@ -397,7 +402,7 @@ an origin or recognition target. A `turn.progress` or `turn.partial` payload ove
 payload limit keeps a shortened `progress.text` with byte-limit truncation
 metadata. It is dropped only if its metadata alone exceeds the limit.
 
-`GET /api/application/events` carries two additional named frames:
+`GET /api/application/events` carries the ordinary notification frames:
 
 - `notification_policy`: `{ generation, settings }`.
 - `notification`: `{ payload, sourceEventId, voice, generation, origin?,
@@ -411,6 +416,24 @@ authentication and is independent of client-control registration. It does not
 require `X-Sedes-Client`. The server admits at most 128 identified voice streams
 per principal and rejects excess subscriptions before sending response headers.
 Ordinary inventory streams omit the parameter and keep their existing behavior.
+
+With client protocol 181, the voice reservation declares its early playback
+interest using the paired `earlyReply=on|off` and `earlyRevision` query parameters.
+After policy, `voice_early_session` gives the device a reservation token.
+Authenticated `PUT /api/application/voice-streams/:voiceStreamId/early-reply`
+updates that reservation in place. An interest change takes effect against the
+current stream. Each new connection receives a fresh token.
+
+The first continuously observed final item captures eligible subscribers for
+its turn. The server scans plain prose into contiguous UTF-16 ranges and sends
+`voice_early_reply` frames (`begin`, `append`, `yield`, and `cancel`) only to
+those reservations. The application turn determines a common event ID for early
+playback and its authoritative outcome. Early delivery grants no script,
+microphone, or deferred-control authority. Devices track what reached output,
+then use the completed notification to play the remaining text. A revised
+prefix can require reading the authoritative final text again. Skipping retires
+the whole reply. Newer input, stream loss, policy changes, and deadlines retire
+live playback independently of ordinary terminal delivery.
 
 The server records only the UUIDs of captured native streams that actually
 received a notification; it retains no client-control token or subscriber

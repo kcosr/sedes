@@ -734,7 +734,7 @@ describe("voice controls card", () => {
     await waitFor(() => expect(voice.fake.plugin.stopPlayback).toHaveBeenCalledWith({ expectedConnectionGeneration: 1, interactionId: "item" }));
     expect(await within(card()).findByRole("button", { name: "Start voice recording" })).toBeInTheDocument();
   });
-  it.each(["synthesizing", "speaking"] as const)("updates Next during %s as queued playback and Auto-listen change", async phase => {
+  it.each(["synthesizing", "speaking", "waiting_for_reply_text"] as const)("updates Next during %s as queued playback and Auto-listen change", async phase => {
     const initial = speaking({ threadId: "named" }, {
       phase, settings: voiceSettings({ audioMode: "speak", autoListen: false }),
     });

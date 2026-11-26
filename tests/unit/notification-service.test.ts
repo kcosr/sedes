@@ -1,3 +1,5 @@
+import { earlyReplyFrameSchema, earlyReplySessionSchema } from "../../src/shared/protocol/early-reply.js";
+import { notificationSourceId, turnNotificationKey } from "../../src/server/domain/notification-identity.js";
 import { scriptDelivery } from "../support/notification-settings.js";
 import { notificationAssistantResultMigration } from "../../src/server/db/migrations/103-notification-assistant-result.js";
 import { notificationAssistantResultPhasesMigration } from "../../src/server/db/migrations/105-notification-assistant-result-phases.js";
@@ -1373,5 +1375,136 @@ describe("notification settings and passive hooks", () => {
         revision: 0,
       }).success,
     ).toBe(false);
+  });
+});
+
+describe("early reply publication", () => {
+  const threadId = randomUUID();
+  const source = {applicationTurnId: "turn", applicationItemId: "item", backendCorrelations: ["operation"]};
+  const eventKey = turnNotificationKey(threadId, source.applicationTurnId);
+  const authority = {threadTitle: "Example", userInputRevision: 2, fresh: () => true, admitted: () => true};
+  const opening = "First sentence. Another word";
+  const outgoing = (frames: string[], name: string) => frames.filter(frame => frame.startsWith(`event: ${name}\n`))
+    .map(frame => JSON.parse(frame.split("\n")[1]!.slice(6)));
+  function native(service: NotificationService, enabled = true, who = scope) {
+    const frames: string[] = [];
+    const reservation = service.reserveVoiceStream(who, randomUUID(), {enabled, revision: 1});
+    service.subscribe(who, frame => frames.push(frame), reservation);
+    expect(frames.map(frame => frame.split("\n")[0])).toEqual(["event: notification_policy", "event: voice_early_session"]);
+    const session = earlyReplySessionSchema.parse(outgoing(frames, "voice_early_session")[0]);
+    return {
+      id: reservation.voiceStreamId,
+      update: (enabled: boolean, revision: number) => service.updateEarlyInterest(who, session.voiceStreamId, {token: session.token, enabled, revision}),
+      replies: () => outgoing(frames, "voice_early_reply").map(frame => earlyReplyFrameSchema.parse(frame)),
+      frames,
+    };
+  }
+  function enableEarly(service: NotificationService) {
+    service.update(scope, {...config, assistantResultPhases: ["final", "unclassified"]});
+  }
+  it("freezes opted-in native recipients, preserves a contiguous per-recipient sequence, and shares the ordinary terminal ID", async () => {
+    const {service, executor} = fixture();
+    enableEarly(service);
+    const ready = native(service), optsOut = native(service), optsInLate = native(service, false), foreign = native(service, true, other);
+    const browser: string[] = [];
+    service.subscribe(scope, frame => browser.push(frame));
+    const origin = {clientId: randomUUID()};
+    const reply = service.captureEarlyReply(scope, threadId, source, () => ({...authority, origin}))!;
+    const late = native(service);
+    optsInLate.update(true, 2);
+    reply.observe(opening, []);
+    optsOut.update(false, 2);
+    optsOut.update(true, 3);
+    reply.observe(opening + " ends. Next sentence", []);
+    reply.finish("item_done");
+    expect(ready.replies()).toMatchObject([
+      {kind: "begin", seq: 0, rawStart: 0, rawEnd: 15, text: "First sentence.", userInputRevision: 2, origin},
+      {kind: "append", seq: 1, rawStart: 15, text: " Another word ends."}, {kind: "yield", seq: 2, reason: "item_done"},
+    ]);
+    expect(optsOut.replies()).toMatchObject([{kind: "begin", seq: 0}, {kind: "yield", seq: 1}]);
+    for (const listener of [optsInLate, late, foreign]) expect(listener.replies()).toEqual([]);
+    expect(browser).toHaveLength(1);
+    expect(executor).not.toHaveBeenCalled();
+    const receipt = await emitFresh(service, scope, {...event(), thread: {id: threadId, title: "Example"}}, eventKey, "live");
+    expect(receipt?.sourceEventId).toBe(ready.replies()[0]!.replyId);
+    expect(receipt?.voiceStreamIds).toEqual([ready.id, optsOut.id, optsInLate.id, late.id]);
+    service.finishEarlyReply(scope, threadId, source.applicationTurnId, receipt);
+    expect(ready.replies()).toHaveLength(3);
+    expect(voiceFrames(browser)[0]?.sourceEventId).toBe(notificationSourceId(eventKey));
+  });
+  it("retires a yielded scanner on expiry and still confirms terminal suppression for its reservation only", async () => {
+    const {service} = fixture();
+    enableEarly(service);
+    const listener = native(service);
+    vi.useFakeTimers();
+    try {
+      const reply = service.captureEarlyReply(scope, threadId, source, () => authority)!;
+      reply.observe(opening, []);
+      vi.advanceTimersByTime(60_000);
+      expect(listener.replies().at(-1)).toMatchObject({seq: 1, kind: "yield", reason: "stall"});
+      vi.advanceTimersByTime(540_000);
+      expect(listener.replies().at(-1)).toMatchObject({seq: 2, kind: "cancel", reason: "expired"});
+      service.finishEarlyReply(scope, threadId, source.applicationTurnId, undefined);
+      expect(listener.replies().at(-1)).toMatchObject({seq: 3, kind: "cancel", reason: "publication_suppressed"});
+      service.finishEarlyReply(scope, threadId, source.applicationTurnId, undefined);
+      expect(listener.replies()).toHaveLength(4);
+      const late = native(service);
+      const receipt = await emitFresh(service, scope, {...event(), thread: {id: threadId, title: "Example"}}, eventKey, "live");
+      expect(receipt?.voiceStreamIds).toEqual([late.id]);
+    } finally { vi.useRealTimers(); }
+  });
+  it("requires Final policy, initial phase order and continuing freshness and correlation", () => {
+    const {service} = fixture();
+    const listener = native(service);
+    const capture = vi.fn(() => authority);
+    expect(service.captureEarlyReply(scope, threadId, source, capture)).toBeUndefined();
+    expect(capture).not.toHaveBeenCalled();
+    enableEarly(service);
+    const blocked = service.captureEarlyReply(scope, threadId, source, capture)!;
+    blocked.observe(opening, ["unclassified"]);
+    expect(listener.replies()).toEqual([]);
+    const admitted = vi.fn().mockReturnValue(true);
+    const read = service.captureEarlyReply(scope, threadId, source, () => ({...authority, admitted}))!;
+    read.observe("", []);
+    admitted.mockReturnValue(false);
+    read.observe(opening, []);
+    expect(listener.replies()).toEqual([]);
+    const fresh = vi.fn().mockReturnValue(true);
+    const live = service.captureEarlyReply(scope, threadId, source, () => ({...authority, fresh}))!;
+    live.observe(opening, []);
+    fresh.mockReturnValue(false);
+    service.checkEarlyReplyFreshness(scope, threadId);
+    live.observe(opening + " ends. More words.", []);
+    expect(listener.replies()).toMatchObject([{kind: "begin"}, {kind: "cancel", reason: "superseded"}]);
+  });
+  it("bounds open turns, releases disconnected observers, and leaves room for definitive suppression at the frame limit", () => {
+    const {service} = fixture();
+    enableEarly(service);
+    const stale = service.reserveVoiceStream(scope, randomUUID(), {enabled: true, revision: 1});
+    service.subscribe(scope, () => {}, stale);
+    for (let index = 0; index < 64; index++) {
+      const captured = service.captureEarlyReply(scope, threadId, {...source, applicationTurnId: String(index)}, () => authority);
+      expect(captured).toBeDefined();
+    }
+    expect(service.captureEarlyReply(scope, threadId, source, () => authority)).toBeUndefined();
+    stale.release();
+    const listener = native(service);
+    const captured = service.captureEarlyReply(scope, threadId, source, () => authority)!;
+    captured.observe("Alpha. ".repeat(300) + "More text.", []);
+    expect(listener.replies().at(-1)).toMatchObject({kind: "yield", reason: "limit"});
+    service.setSilenced(scope, true);
+    service.finishEarlyReply(scope, threadId, source.applicationTurnId, undefined);
+    expect(listener.replies().slice(-2)).toMatchObject([
+      {kind: "cancel", seq: 255, reason: "policy_changed"}, {kind: "cancel", seq: 256, reason: "publication_suppressed"},
+    ]);
+  });
+  it("revokes buffered speech when policy changes after a markup yield", () => {
+    const {service} = fixture();
+    enableEarly(service);
+    const listener = native(service);
+    const reply = service.captureEarlyReply(scope, threadId, source, () => authority)!;
+    reply.observe(opening + " **bold**", []);
+    service.setSilenced(scope, true);
+    expect(listener.replies()).toMatchObject([{kind: "begin"}, {kind: "yield", reason: "markup"}, {kind: "cancel", reason: "policy_changed"}]);
   });
 });

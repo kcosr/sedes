@@ -1,3 +1,4 @@
+import { afterSubmissionAdmission, type EarlyReplySource, type EarlyReplyObservation } from "./early-reply-observation.js";
 import { ConversationNativeEffectFence } from "./conversation-native-effect-fence.js";
 import { randomUUID } from "node:crypto";
 import type { ClassifiedAssistantResult } from "../../shared/protocol/completion-result.js";
@@ -332,7 +333,10 @@ type NonblockingQuestionObserver = (
   payload: NonblockingQuestionsPayload,
 ) => void;
 
+type CaptureEarlyReplyObserver = (scope: ExecutionScope, threadId: string, source: EarlyReplySource) => EarlyReplyObservation | null | undefined;
+
 export class ConversationActorManager {
+  readonly #captureEarlyReply?: CaptureEarlyReplyObserver;
   readonly #onNonblockingQuestions?: NonblockingQuestionObserver;
   readonly #onHistoricalQuestion?: HistoricalQuestionObserver;
   readonly #environments: ExecutionEnvironmentProvider;
@@ -363,6 +367,7 @@ export class ConversationActorManager {
     readonly onAuthoritativeCompletion?: AuthoritativeCompletionObserver;
     readonly captureResponseVoiceContext?: (scope: ExecutionScope, threadId: string, backendCorrelations: readonly string[]) => CapturedResponseVoiceContext;
     readonly onAuthoritativeSubmission?: AuthoritativeSubmissionObserver;
+    readonly captureEarlyReply?: CaptureEarlyReplyObserver;
     readonly onLiveProgress?: LiveProgressObserver;
     readonly onModelFeedback?: ModelFeedbackObserver;
     readonly onNonblockingQuestions?: NonblockingQuestionObserver;
@@ -375,6 +380,7 @@ export class ConversationActorManager {
     this.#onAuthoritativeCompletion = input.onAuthoritativeCompletion;
     this.#captureResponseVoiceContext = input.captureResponseVoiceContext;
     this.#onAuthoritativeSubmission = input.onAuthoritativeSubmission;
+    this.#captureEarlyReply = input.captureEarlyReply;
     this.#onLiveProgress = input.onLiveProgress;
     this.#onModelFeedback = input.onModelFeedback;
     this.#onNonblockingQuestions = input.onNonblockingQuestions;
@@ -1519,6 +1525,22 @@ export class ConversationActorManager {
         handle,
         nativeEffects: entry.nativeEffects,
         environmentLease: lease,
+        ...(this.#captureEarlyReply ? { captureEarlyReply: (source: EarlyReplySource) => {
+          const generation = actor?.peekSnapshotState()?.timeline.generation;
+          const control = entry.control;
+          const lifetime = control ? AbortSignal.any([signal, control.lifetime]) : signal;
+          const isCurrent = () => {
+            const state = actor?.peekSnapshotState();
+            return !lifetime.aborted && entry.control === control && !entry.controlEnded && state?.timeline.generation === generation &&
+              state?.timeline.runState === "running" && state.timeline.activeTurnId === source.applicationTurnId &&
+              state.timeline.turnsById[source.applicationTurnId]?.status === "in_progress" &&
+              state.backendCapabilities.liveFinalAnswer === "supported";
+          };
+          if (!isCurrent()) return;
+          // Capture scope, policy, freshness and exact reservations before durable admission can wait.
+          const sink = this.#captureEarlyReply!(input.scope, input.binding.applicationThreadId, source);
+          return sink && afterSubmissionAdmission(sink, observationChain, lifetime, isCurrent);
+        } } : {}),
         onInputStateChanged: () => this.#publishInputActivity(entry),
         attachmentDelivery: this.#attachmentDelivery,
         ...(this.#deliveryInputSnapshots

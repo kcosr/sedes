@@ -391,6 +391,7 @@ function capabilities(
       interactionKinds: [],
       usageAccounting: "supported",
       turnThroughput: "supported",
+      liveFinalAnswer: "unsupported",
       usageSections: ["context", "counters"],
       effectiveSettings: {},
     };
@@ -426,6 +427,7 @@ function capabilities(
     interactionKinds: [],
     usageAccounting: "supported",
     turnThroughput: "supported",
+    liveFinalAnswer: "unsupported",
       usageSections: ["context", "counters"],
     effectiveSettings: {},
   };

@@ -599,7 +599,7 @@ function capabilities(settings: PiNativeSettings, state: Record<string, unknown>
     branching: { availability: "available", boundaries: ["latest_completed", "selected_completed_turn"], method: "provider_native", sourceMustBeIdle: false,
       settingsInheritance: "application_applied", fidelity: { instructions: false, messages: true, toolCalls: true, toolResults: true, compaction: true, attachments: true, settings: true,
         limitations: [{ text: "The child reloads the execution host's current instructions." }] }, childIdentity: "application_reserved", creationRecovery: "idempotent" },
-    interactionKinds: ["choice", "confirmation", "text_input", "editor", "decision"], usageAccounting: "supported", turnThroughput: "supported", usageSections: live ? ["context", "counters"] : ["counters"], effectiveSettings: effective };
+    interactionKinds: ["choice", "confirmation", "text_input", "editor", "decision"], usageAccounting: "supported", turnThroughput: "supported", liveFinalAnswer: "unsupported", usageSections: live ? ["context", "counters"] : ["counters"], effectiveSettings: effective };
 }
 
 export class PiNativeHistoryReader implements ConversationHistoryReader {
@@ -1303,7 +1303,7 @@ class PiNativeConversationHandle implements ConversationHandle {
   #capabilities(): BackendCapabilityDocument {
     const document = capabilities(this.#settings, this.#state, Boolean(this.driver.options.outputArtifacts), true);
     return this.#controlOnly ? { ...document, revision: fingerprint([document.revision, "control_only"]), actions: [], deliveryModes: [],
-      steerTarget: null, composerAttachments: { fileStaging: false, nativeImage: false }, interactionKinds: [], turnThroughput: "unsupported",
+      steerTarget: null, composerAttachments: { fileStaging: false, nativeImage: false }, interactionKinds: [], turnThroughput: "unsupported", liveFinalAnswer: "unsupported",
       branching: { availability: "unavailable", reason: { text: "Recover the conversation's live output before branching." } } } : document;
   }
   async backendCapabilities() { this.#assert(); return this.#capabilities(); }

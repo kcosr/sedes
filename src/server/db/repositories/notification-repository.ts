@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { notificationSourceId } from "../../domain/notification-identity.js";
 import type Database from "better-sqlite3";
 import {
   notificationSettingsSchema,
@@ -131,7 +131,7 @@ export class NotificationRepository {
         occurredAt <= row.dedupBefore
       )
         return null;
-      const hash = createHash("sha256").update(eventKey).digest("hex");
+      const hash = notificationSourceId(eventKey);
       const claimed = this.database
         .prepare(
           `INSERT OR IGNORE INTO notification_event_consumption

@@ -749,6 +749,7 @@ function capabilities(
     usageSections: ["context", "counters"],
     usageAccounting: "supported",
     turnThroughput: "supported",
+    liveFinalAnswer: "unsupported",
     effectiveSettings: {
       ...(session.model
         ? {
@@ -2379,6 +2380,7 @@ class PiConversationHistoryReader implements ConversationHistoryReader {
       usageSections: ["counters"],
       usageAccounting: "supported",
       turnThroughput: "supported",
+      liveFinalAnswer: "unsupported",
       effectiveSettings: settings,
     };
   }

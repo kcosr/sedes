@@ -1,3 +1,4 @@
+import { turnNotificationKey } from "./notification-identity.js";
 import type { ClassifiedAssistantResult } from "../../shared/protocol/completion-result.js";
 import type { NotificationEventPayload } from "../../shared/protocol/notification.js";
 import type { BackendInteraction } from "../../shared/protocol/conversation.js";
@@ -13,7 +14,7 @@ import type { RequestScope } from "../identity/identity-provider.js";
 import type { AutomationRunLifecycleObserver } from "./automation-service.js";
 
 /** Passive, post-commit consumers of Sedes-owned lifecycle state. */
-export class NotificationLifecycleObserver {
+export class NotificationLifecycleObserver<Publication = void> {
   constructor(
     readonly inventory: InventoryRepository,
     readonly emit: (
@@ -25,7 +26,7 @@ export class NotificationLifecycleObserver {
       recognitionThreadId?: string | null,
       subscriberWatermark?: number,
       responseVoice?: ResponseVoiceFreshness,
-    ) => void,
+    ) => Publication,
   ) {}
 
   progress(scope: RequestScope, threadId: string, input: Parameters<LiveProgressObserver>[2]): void {
@@ -104,7 +105,7 @@ export class NotificationLifecycleObserver {
     provenance: "live" | "recovered",
     subscriberWatermark?: number,
     responseVoice?: ResponseVoiceFreshness,
-  ): void {
+  ): Publication | undefined {
     if (
       observation.tenantId !== scope.tenantId ||
       observation.ownerPrincipalId !== scope.principalId ||
@@ -117,7 +118,7 @@ export class NotificationLifecycleObserver {
     try {
       const context = this.#context(scope, observation.applicationThreadId);
       const outcome = observation.completionOutcome;
-      this.emit(
+      return this.emit(
         scope,
         {
           event: `turn.${outcome}`,
@@ -132,11 +133,7 @@ export class NotificationLifecycleObserver {
           ...context,
           turn: { id: observation.applicationTurnId, outcome },
         },
-        JSON.stringify([
-          "turn",
-          observation.applicationThreadId,
-          observation.applicationTurnId,
-        ]),
+        turnNotificationKey(observation.applicationThreadId, observation.applicationTurnId),
         provenance,
         observation.classifiedResult ?? undefined,
         undefined,

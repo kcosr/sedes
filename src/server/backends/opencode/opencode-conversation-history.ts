@@ -48,7 +48,7 @@ export class OpenCodeConversationHistory implements ConversationHistoryReader {
       providerOutputArtifacts: { nativeImage: false }, supportsHistory: true,
       branching: { availability: "unavailable", reason: { text: "This acquisition provides conversation history only." } },
       interactionKinds: [], usageSections: ["context", "counters"], usageAccounting: "supported",
-      turnThroughput: "unsupported", effectiveSettings: {} };
+      turnThroughput: "unsupported", liveFinalAnswer: "unsupported", effectiveSettings: {} };
   }
 
   async close(): Promise<void> {

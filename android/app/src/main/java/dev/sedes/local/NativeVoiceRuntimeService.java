@@ -5,7 +5,10 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.content.BroadcastReceiver;
+import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.ServiceInfo;
 import android.media.session.MediaSession;
 import android.media.session.PlaybackState;
@@ -29,6 +32,9 @@ public final class NativeVoiceRuntimeService extends Service {
     private static final String CHANNEL = "sedes.voice";
     private static final int NOTIFICATION = 3107;
     private NativeVoiceRuntime runtime;
+    private final BroadcastReceiver screenOn = new BroadcastReceiver() {
+        @Override public void onReceive(Context context, Intent intent) { runtime.deviceAwake(); }
+    };
     private MediaSession mediaSession;
     private PowerManager.WakeLock wakeLock;
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -45,6 +51,7 @@ public final class NativeVoiceRuntimeService extends Service {
     };
     @Override public void onCreate() {
         super.onCreate(); runtime = NativeVoiceRuntime.get(this);
+        registerReceiver(screenOn, new IntentFilter(Intent.ACTION_SCREEN_ON));
         if (Build.VERSION.SDK_INT >= 26) {
             NotificationChannel channel = new NotificationChannel(CHANNEL, "Voice session", NotificationManager.IMPORTANCE_LOW);
             channel.setDescription("Controls for an enabled Sedes voice session"); channel.setSound(null, null);
@@ -131,7 +138,7 @@ public final class NativeVoiceRuntimeService extends Service {
     static boolean wakeLockNeeded(JSONObject state) {
         String phase = state.optString("phase");
         return state.optJSONObject("active") != null && !phase.equals("recordingRecovery") &&
-            !phase.equals("idle") && !phase.equals("off") && !phase.equals("error");
+            !phase.equals("waiting_for_reply_text") && !phase.equals("idle") && !phase.equals("off") && !phase.equals("error");
     }
     private void mediaAction(String action) {
         if (!foreground) return;
@@ -246,6 +253,7 @@ public final class NativeVoiceRuntimeService extends Service {
             case "idle": return "Ready";
             case "synthesizing": return "Preparing speech";
             case "speaking": return "Speaking";
+            case "waiting_for_reply_text": return "Waiting for reply text";
             case "validating": return "Checking the target thread";
             case "announcing": return "Announcing the recording thread";
             case "arming": return "Preparing microphone";
@@ -272,7 +280,7 @@ public final class NativeVoiceRuntimeService extends Service {
     }
     @Override public void onDestroy() {
         // A render already queued on the main thread must not re-post the notification or reacquire the wake lock.
-        foreground = false;
+        foreground = false; unregisterReceiver(screenOn);
         if (mediaSession != null) { mediaSession.setActive(false); mediaSession.release(); }
         releaseWakeLock();
         runtime.detached(this); super.onDestroy();

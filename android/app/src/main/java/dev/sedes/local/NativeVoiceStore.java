@@ -44,6 +44,7 @@ final class NativeVoiceStore {
     private static final Object LOCK = new Object();
     static final String DEVICE_BINDING = "device-preferences";
     static final String PREFERENCES_RECORD = "preferences";
+    static final String EARLY_PREFERENCES_RECORD = "early-reply-preferences";
     static final String UPLOAD_PREFERENCES_RECORD = "upload-preferences";
     private static final String KEY_ALIAS = "sedes.native-voice.v1";
     private final Context context;
@@ -142,7 +143,7 @@ final class NativeVoiceStore {
     /** Moves an unreadable record aside, keeping only the newest copy, so the caller can continue from defaults. */
     void quarantine(String binding, String name) throws Exception {
         synchronized (LOCK) {
-            if (name.equals(PREFERENCES_RECORD) || name.equals(UPLOAD_PREFERENCES_RECORD)) binding = DEVICE_BINDING;
+            if (name.equals(PREFERENCES_RECORD) || name.equals(UPLOAD_PREFERENCES_RECORD) || name.equals(EARLY_PREFERENCES_RECORD)) binding = DEVICE_BINDING;
             if (name.equals("journal")) journals.remove(binding);
             AtomicFile target = file(binding, name);
             File aside = new File(directory(binding), name + ".corrupt");
@@ -206,6 +207,17 @@ final class NativeVoiceStore {
     }
     void uploadPreferences(NativeVoiceUploadPreferences preferences) throws Exception {
         synchronized (LOCK) { write(DEVICE_BINDING, UPLOAD_PREFERENCES_RECORD, preferences.record()); }
+    }
+    NativeEarlyReplyPreferences earlyPreferences() throws Exception {
+        synchronized (LOCK) {
+            JSONObject value = read(DEVICE_BINDING, EARLY_PREFERENCES_RECORD);
+            if (value == null) return NativeEarlyReplyPreferences.defaults();
+            try { return NativeEarlyReplyPreferences.fromRecord(value); }
+            catch (RuntimeException error) { throw new CorruptRecord(EARLY_PREFERENCES_RECORD, error); }
+        }
+    }
+    void earlyPreferences(NativeEarlyReplyPreferences preferences) throws Exception {
+        synchronized (LOCK) { write(DEVICE_BINDING, EARLY_PREFERENCES_RECORD, preferences.record()); }
     }
     NativeSpeechCatalogCache speechCatalog(String binding, String scope) throws Exception {
         synchronized (LOCK) {

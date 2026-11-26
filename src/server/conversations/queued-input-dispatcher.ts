@@ -136,6 +136,7 @@ export class QueuedInputDispatcher {
   readonly #gateway: QueuedInputConversationGateway;
   readonly #publisher: QueueEventPublisher;
   readonly #onDurableInputChanged: QueueDurableInputObserver;
+  readonly #onDurableQueueChanged?: (scope: RequestScope, threadId: string) => void;
   readonly #onBackgroundError: (error: unknown) => void;
   readonly #retryPolicy: QueueRetryPolicy;
   readonly #clock: QueueDispatchClock;
@@ -156,6 +157,7 @@ export class QueuedInputDispatcher {
     readonly gateway: QueuedInputConversationGateway;
     readonly publisher: QueueEventPublisher;
     readonly onDurableInputChanged: QueueDurableInputObserver;
+    readonly onDurableQueueChanged?: (scope: RequestScope, threadId: string) => void;
     readonly onBackgroundError?: (error: unknown) => void;
     readonly retryPolicy: QueueRetryPolicy;
     readonly isDispatchBlocked: QueueDispatchBlockCheck;
@@ -172,6 +174,7 @@ export class QueuedInputDispatcher {
     this.#gateway = input.gateway;
     this.#publisher = input.publisher;
     this.#onDurableInputChanged = input.onDurableInputChanged;
+    this.#onDurableQueueChanged = input.onDurableQueueChanged;
     this.#onBackgroundError =
       input.onBackgroundError ??
       reportBackgroundError("Queued input observation or publication");
@@ -2053,6 +2056,8 @@ export class QueuedInputDispatcher {
   }
 
   #observeDurableState(scope: RequestScope, applicationThreadId: string): void {
+    try { this.#onDurableQueueChanged?.(scope, applicationThreadId); }
+    catch (error) { this.#onBackgroundError(error); }
     let records: readonly QueuedInputRecord[];
     try {
       records = this.#repository.list(scope, applicationThreadId);

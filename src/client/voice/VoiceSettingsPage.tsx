@@ -10,12 +10,13 @@ import { Callout } from "../components/ui/callout.js";
 import { useFieldControl } from "../components/ui/control.js";
 import { Input } from "../components/ui/input.js";
 import { NativeSelect } from "../components/ui/native-select.js";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select.js";
 import { SearchableSelect } from "../components/ui/searchable-select.js";
 import { useTouchDensity } from "../app/use-touch-density.js";
 import { isAndroidClient, isElectronClient } from "../app/client-platform.js";
 import { useVoiceState } from "./VoiceProvider.js";
 import { recentVoiceErrors, type NativeVoiceStore } from "./NativeVoiceStore.js";
-import { nativeThreadTitle, type NativeVoiceInputDevice, type NativeVoiceSettings, type NativeVoiceState } from "./native-voice-plugin.js";
+import { nativeThreadTitle, type NativeEarlyReplyPlaybackMode, type NativeVoiceInputDevice, type NativeVoiceSettings, type NativeVoiceState } from "./native-voice-plugin.js";
 import { inputPreference, selectedInputDevice } from "./native-voice-input.js";
 import { ThreadPicker } from "../components/ThreadPicker.js";
 import { defaultThreadChoices, useDefaultThread } from "../app/default-thread.js";
@@ -24,6 +25,12 @@ import { canEnableVoice, resumeVoice, voiceReadiness, voiceThreadFilterWarning }
 import { savedRecording, VoiceRecordingRecovery } from "./VoiceRecordingRecovery.js";
 import { VoiceSpeechContent } from "./VoiceSpeechContent.js";
 
+const earlyReplyOptions = [
+  ["off", "Off", "Wait for the turn to finish."],
+  ["responsive", "Responsive", "Read each complete sentence as soon as it is ready."],
+  ["balanced", "Balanced", "Start with one sentence, then group ready sentences."],
+  ["natural", "Natural", "Prefer paragraphs, with breaks in long paragraphs."],
+] as const;
 const toggles = [
   ["pinDefaultVoiceThread", "Pin default thread", "Use this as the initial recording target while viewing other threads."],
   ["autoListen", "Auto-listen", "Eligible notifications reopen the microphone."],
@@ -53,6 +60,7 @@ export function VoiceSettingsPage({ store, applicationStore }: { store: NativeVo
   const application = useApplicationStore(applicationStore);
   const defaultThread = useDefaultThread();
   const threads = defaultThreadChoices(application.snapshot?.threads ?? [], defaultThread?.thread);
+  const earlyReplyHelpId = useId();
   const [picker, setPicker] = useState(false);
   const [showBarWhenOff, setShowBarWhenOff] = useShowVoiceBarWhenOff();
   const [devices, setDevices] = useState<NativeVoiceInputDevice[]>([]);
@@ -106,6 +114,19 @@ export function VoiceSettingsPage({ store, applicationStore }: { store: NativeVo
       </SettingsField>
       {settings.audioMode === "speak" ? <VoiceSpeechContent value={settings.speechContent} pending={state.pending}
         onChange={speechContent => update({ speechContent })} /> : null}
+      {settings.audioMode === "speak" && settings.speechContent !== "announcements" ? <SettingsField label="Early reply playback"
+        description="When the agent identifies its final answer early, start reading while it writes. Otherwise, read when the turn finishes.">
+        <Select value={native.speech.earlyReplyPlayback} disabled={state.pending}
+          onValueChange={value => { void store.setEarlyReplyPlayback(value as NativeEarlyReplyPlaybackMode).catch(() => undefined); }}>
+          <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+          <SelectContent className="w-[var(--radix-select-trigger-width)] max-w-[calc(100vw-16px)]">
+            {earlyReplyOptions.map(([mode, label, help]) => <SelectItem key={mode} value={mode}
+              aria-describedby={`${earlyReplyHelpId}-${mode}`} description={<span id={`${earlyReplyHelpId}-${mode}`}>{help}</span>}>
+              {label}
+            </SelectItem>)}
+          </SelectContent>
+        </Select>
+      </SettingsField> : null}
       <SwitchField label="Show voice bar when off" description="Keep a dimmed bar under the composer."
         checked={showBarWhenOff} onCheckedChange={setShowBarWhenOff} />
       {settings.audioMode !== "off" && native.actions.canResume ? <Button disabled={state.pending} onClick={() => { void resumeVoice(store).catch(() => undefined); }}>Resume voice</Button> : null}

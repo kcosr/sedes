@@ -201,6 +201,8 @@ import { NotificationRepository } from "../../src/server/db/repositories/notific
 import { NotificationService } from "../../src/server/domain/notification-service.js";
 import { TurnReplySpeechService } from "../../src/server/domain/turn-reply-speech-service.js";
 import { ClientControlService } from "../../src/server/domain/client-control-service.js";
+import { captureTurnEarlyReply } from "../../src/server/domain/capture-turn-early-reply.js";
+import { TurnVoiceCompletion } from "../../src/server/domain/turn-voice-completion.js";
 import { NotificationLifecycleObserver } from "../../src/server/domain/notification-lifecycle-observer.js";
 import { InventoryService } from "../../src/server/domain/inventory-service.js";
 import { ConversationTurnBookmarkService } from "../../src/server/domain/conversation-turn-bookmark-service.js";
@@ -4410,18 +4412,16 @@ async function main(): Promise<void> {
     (eventScope, payload, eventKey, provenance, assistantResult, recognitionThreadId, subscriberWatermark, responseVoice) => {
       // Same wiring as production: voice context is captured only after dedup,
       // policy and recipient checks admit voice delivery.
-      const publication = notifications.emit(eventScope, payload, eventKey, provenance, assistantResult, () => {
+      return notifications.emit(eventScope, payload, eventKey, provenance, assistantResult, () => {
         const target = recognitionThreadId === undefined ? payload.thread?.id : recognitionThreadId;
         const context = target ? mutationsForSubmissions?.activity.notificationContext(eventScope, target, payload.turn?.id) : undefined;
         const subjectId = payload.interaction?.id ?? payload.question?.id ??
           (payload.event === "thread.woke" ? payload.occurredAt : undefined);
         return { ...context, ...(subjectId ? { subjectId } : {}) };
       }, subscriberWatermark, responseVoice);
-      if (payload.turn && payload.thread && ["turn.completed", "turn.failed", "turn.interrupted"].includes(payload.event)) {
-        clientControls.observeNotification(eventScope, payload.thread.id, payload.turn.id, publication);
-      }
     },
   );
+  const terminalVoice = new TurnVoiceCompletion(notifications, clientControls);
   const threadGroupRepository = new ThreadGroupRepository(database);
   const environmentRecord = inventoryRepository.getLocalEnvironment(scope);
   const terminalFixture = new TerminalE2eFixture(environmentRecord.id);
@@ -4658,6 +4658,8 @@ async function main(): Promise<void> {
       ...imageShowRepository.publications(publicationScope, threadId, turnIds),
     ],
     onLiveProgress: (eventScope, threadId, input) => notificationLifecycle.progress(eventScope, threadId, input),
+    captureEarlyReply: (eventScope, threadId, source) => captureTurnEarlyReply(
+      notifications, inventoryRepository, completion, userInputs, mutationsForSubmissions?.activity, eventScope, threadId, source),
     environments: execution,
     attachmentDelivery,
     deliveryInputSnapshots,
@@ -4852,6 +4854,7 @@ async function main(): Promise<void> {
   queue = new QueuedInputDispatcher({
     repository: queueRepository,
     gateway: queueGateway,
+    onDurableQueueChanged: (eventScope, threadId) => notifications.checkEarlyReplyFreshness(eventScope, threadId),
     onDurableInputChanged: (eventScope, applicationThreadId, item) => {
       observeAutomationQueue?.observe(eventScope, applicationThreadId, item);
       automaticModelRetries?.onInputChanged(eventScope, applicationThreadId, item);
@@ -5177,12 +5180,15 @@ async function main(): Promise<void> {
     applicationThreadId,
     input,
   ) => {
-    const observation = await queue.onAuthoritativeCompletion(
-      eventScope,
-      applicationThreadId,
-      input,
-    );
-    if (!observation) return;
+    const resolveVoice = terminalVoice.observe(eventScope, applicationThreadId, input);
+    let observation: Awaited<ReturnType<typeof queue.onAuthoritativeCompletion>>;
+    try {
+      observation = await queue.onAuthoritativeCompletion(eventScope, applicationThreadId, input);
+    } catch (error) {
+      resolveVoice();
+      throw error;
+    }
+    if (!observation) { resolveVoice(); return; }
     if (observation.changed) automaticModelRetries?.onCompletion(eventScope, applicationThreadId, input);
     const observed = observation.record;
     try {
@@ -5196,10 +5202,9 @@ async function main(): Promise<void> {
       // As in production, run history never breaks completion.
     }
     if (input.outcome !== "failed" || !automaticModelRetries?.isPending(eventScope, applicationThreadId)) {
-      notificationLifecycle.completion(eventScope, observed, input.provenance, input.voiceSubscriberWatermark, input.responseVoice);
-    }
-    if (observed.applicationTurnId) void clientControls.complete(eventScope, applicationThreadId, observed.applicationTurnId,
-      observed.completionOutcome ?? "interrupted", input.responseVoice?.superseded);
+      resolveVoice(() => notificationLifecycle.completion(eventScope, observed, input.provenance,
+        input.voiceSubscriberWatermark, input.responseVoice));
+    } else resolveVoice();
     authoritativeCompletionFollowUp.defer(() => performCompletionFollowUp({
       deliverCallbacks: () => completionCallbackDispatcher.deliverReady(eventScope),
       publishCompletion: () => snapshots.publishChanged(eventScope, applicationThreadId, observation.changed),

@@ -953,6 +953,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
       usageSections: ["context", "counters"],
       usageAccounting: "supported",
       turnThroughput: "unsupported",
+      liveFinalAnswer: "unsupported",
       effectiveSettings: {
         ...(this.#effectiveModel
           ? {

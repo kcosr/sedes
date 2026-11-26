@@ -5679,6 +5679,59 @@ describe("normalized HTTP application contract", () => {
     }
   });
 
+  it("updates early speech interest only for the authenticated, identified SSE reservation", async () => {
+    const current = await fixture();
+    const server = current.app.listen(0, "127.0.0.1");
+    const abort = new AbortController();
+    try {
+      await new Promise<void>((resolve, reject) => { server.once("listening", resolve); server.once("error", reject); });
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("test_server_address_invalid");
+      const id = randomUUID();
+      const streamRoute = `/api/application/events?voiceStreamId=${id}&earlyReply=off&earlyRevision=3`;
+      const response = await fetch(`http://127.0.0.1:${address.port}${streamRoute}`, {
+        headers: {Host: "127.0.0.1:4783"}, signal: AbortSignal.any([abort.signal, AbortSignal.timeout(10_000)]),
+      });
+      expect(response.status).toBe(200);
+      const reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+      let frames = "";
+      let handshake: RegExpExecArray | null;
+      while (!(handshake = /event: voice_early_session\ndata: (.+)\n\n/u.exec(frames))) {
+        const {done, value} = await reader.read();
+        if (done) throw new Error("early session handshake missing");
+        frames += decoder.decode(value, {stream: true});
+      }
+      const {token, voiceStreamId, revision} = JSON.parse(handshake[1]!);
+      expect(voiceStreamId).toBe(id);
+      expect(revision).toBe(3);
+      expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/u);
+      expect(frames.indexOf("event: notification_policy")).toBeLessThan(handshake.index);
+      await current.withHost(request(current.app).get(streamRoute)).expect(409);
+      await current.withHost(request(current.app).get("/api/application/events?earlyReply=on&earlyRevision=3")).expect(400);
+      await current.withHost(request(current.app).get(`/api/application/events?voiceStreamId=${id}&earlyReply=on`)).expect(400);
+      const putRoute = `/api/application/voice-streams/${id}/early-reply`;
+      const on = {enabled: true, revision: 4, token};
+      await current.withHost(request(current.app).put(putRoute)).send(on).expect(403);
+      await current.mutate(request(current.app).put(putRoute)).set("X-Test-Foreign-Principal", "yes").send(on).expect(404);
+      await current.mutate(request(current.app).put(putRoute)).send({...on, extra: 0}).expect(400);
+      await current.mutate(request(current.app).put(putRoute)).send({...on, token: "x".repeat(43)}).expect(404);
+      await current.mutate(request(current.app).put(putRoute)).send(on).expect(204);
+      await current.mutate(request(current.app).put(putRoute)).send(on).expect(204);
+      await current.mutate(request(current.app).put(putRoute)).send({...on, enabled: false}).expect(409);
+      await current.mutate(request(current.app).put(putRoute)).send({...on, revision: 2}).expect(409);
+      abort.abort();
+      await reader.cancel().catch(() => {});
+      await vi.waitFor(async () => {
+        await current.mutate(request(current.app).put(putRoute)).send(on).expect(404);
+      });
+    } finally {
+      abort.abort();
+      await closeHttpTestServer(server);
+      current.close();
+    }
+  });
+
   it("releases a native stream reservation when application stream setup fails", async () => {
     const current = await fixture();
     try {

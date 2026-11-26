@@ -74,4 +74,19 @@ public class NativeSpeechCatalogCacheTest {
         NativeVoiceJson.put(catalog, "realtime", new JSONObject());
         assertThrows(IllegalArgumentException.class, () -> new NativeSpeechCatalogCache("b".repeat(64), 100, catalog));
     }
+    @Test public void requestLimitComesFromTheSelectedModelAndStaysPrivateAcrossRestarts() {
+        JSONObject catalog = NativeSpeechCatalog.server(NativeVoiceJson.object("data", new JSONArray()
+            .put(NativeVoiceJson.object("id", "short", "task", "speech", "max_text_length", 160))
+            .put(NativeVoiceJson.object("id", "long", "task", "speech", "max_text_length", 8192))), "short");
+        JSONObject record = new NativeSpeechCatalogCache("b".repeat(64), 100, catalog).record();
+        JSONObject restored = NativeSpeechCatalogCache.fromRecord(record).catalog;
+        assertEquals(160, NativeSpeechCatalog.textLimit(restored, "short", 4096));
+        assertEquals(4096, NativeSpeechCatalog.textLimit(restored, "long", 4096));
+        assertEquals(4096, NativeSpeechCatalog.textLimit(restored, "unknown", 4096));
+        assertFalse(NativeSpeechCatalog.picker(restored).has("speechTextLimits"));
+        record.optJSONObject("catalog").remove("speechTextLimits");
+        assertEquals(4096, NativeSpeechCatalog.textLimit(NativeSpeechCatalogCache.fromRecord(record).catalog, "short", 4096));
+        NativeVoiceJson.put(catalog.optJSONObject("speechTextLimits"), "short", 0);
+        assertThrows(IllegalArgumentException.class, () -> new NativeSpeechCatalogCache("b".repeat(64), 100, catalog));
+    }
 }

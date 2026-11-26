@@ -50,7 +50,7 @@ describe("recordVoiceDiagnostic", () => {
     const extra = {
       threadId: "private-thread-title", turnId: "/private/provider/path", sourceEventId: "private-event-key",
       provenance: "private-provenance", outcome: "private-error", action: "private-action",
-      suppressionReason: "private-reason", reason: "private-message",
+      suppressionReason: "private-reason", reason: "private-message", earlyReason: "private-text",
       payload: { text: "private speech" }, error: new Error("private error"),
       get toJSON() { throw new Error("must not inspect"); },
     };

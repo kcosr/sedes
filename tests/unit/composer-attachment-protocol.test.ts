@@ -292,7 +292,7 @@ describe("composer attachment protocol", () => {
         reason: { text: "Unavailable." },
       },
       interactionKinds: [],
-      usageAccounting: "supported" as const, turnThroughput: "unsupported" as const, usageSections: [],
+      usageAccounting: "supported" as const, turnThroughput: "unsupported" as const, liveFinalAnswer: "unsupported" as const, usageSections: [],
       effectiveSettings: {},
     };
     expect(backendCapabilityDocumentSchema.parse(capabilities)).toEqual(

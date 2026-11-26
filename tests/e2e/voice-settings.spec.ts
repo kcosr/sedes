@@ -70,3 +70,31 @@ test("Android upload quality follows optional model capabilities and preserves a
   await quality.scrollIntoViewIfNeeded();
   await capture(page, testInfo, "voice-upload-quality-recording-360.png");
 });
+
+test("Early reply playback keeps one device preference when its voice settings are hidden", async ({ page }, testInfo) => {
+  await installVoiceFixture(page);
+  await page.setViewportSize({ width: 360, height: 800 });
+  await page.goto("/settings/voice");
+  const early = page.getByRole("combobox", { name: "Early reply playback", exact: true });
+  await expect(early).toHaveText("Off");
+  await expect(early).toHaveAccessibleDescription(/Otherwise, read when the turn finishes/);
+  await early.tap();
+  await expect(page.getByRole("listbox").getByRole("option")).toHaveCount(4);
+  await expectNoPageOverflow(page);
+  await capture(page, testInfo, "voice-early-reply-choices-360.png");
+  await page.getByRole("option", { name: /^Balanced/ }).tap();
+  await expect(early).toHaveText("Balanced");
+  expect(await page.evaluate(() => window.__voiceFixture.calls.filter(call => call.method === "setEarlyReplyPlayback"))).toEqual([
+    { method: "setEarlyReplyPlayback", args: { expectedConnectionGeneration: 1, expectedEarlyReplyRevision: 0, earlyReplyPlayback: "balanced" } },
+  ]);
+  const { settings } = voiceFixtureState();
+  for (const [audioMode, speechContent] of [["speak", "announcements"], ["input", "both"], ["off", "messages"]] as const) {
+    await publishVoiceState(page, { settings: { ...settings, audioMode, speechContent } });
+    await expect(early).toHaveCount(0);
+  }
+  await publishVoiceState(page, { settings: { ...settings, audioMode: "speak", speechContent: "messages" } });
+  await expect(early).toHaveText("Balanced");
+  await early.scrollIntoViewIfNeeded();
+  await expectNoPageOverflow(page);
+  await capture(page, testInfo, "voice-early-reply-settings-360.png");
+});

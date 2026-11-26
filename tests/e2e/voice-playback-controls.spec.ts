@@ -71,7 +71,7 @@ test("playback Record, Next and Stop stay separate on touch while replying to an
   const calls = () => page.evaluate(() => window.__voiceFixture.calls.filter(call =>
     ["recordDuringPlayback", "sendRecording", "skipCurrentPlayback", "stopCurrentInteraction", "stopPlayback", "startManualListen", "releaseRetainedVoiceTarget", "setNextRecordingTarget"].includes(call.method)));
   const expected: Awaited<ReturnType<typeof calls>> = [];
-  const playback = async (id: string, phase: "synthesizing" | "speaking", automatic: boolean) => {
+  const playback = async (id: string, phase: "synthesizing" | "speaking" | "waiting_for_reply_text", automatic: boolean) => {
     await publishVoiceState(page, { phase, settings, queue,
       nextRecordingTarget: { threadId: defaultId, threadTitle: "Pinned thread C" },
       active: { id, eventKind: automatic ? "turn.completed" : "replay", threadId: spokenId, threadTitle: "Spoken thread B",
@@ -102,9 +102,10 @@ test("playback Record, Next and Stop stay separate on touch while replying to an
     return boxes;
   };
 
-  for (const [phase, automatic] of [["synthesizing", true], ["speaking", false]] as const) {
+  for (const [phase, automatic] of [["synthesizing", true], ["speaking", false], ["waiting_for_reply_text", true]] as const) {
     const id = `playback-${phase}`;
     await playback(id, phase, automatic);
+    if (phase === "waiting_for_reply_text") await expect(toolbar.locator(".voice-card-sub")).toContainText("Waiting for reply text…");
     const playbackBoxes = await assertPlaybackTargets();
     await capture(page, testInfo, `voice-record-before-${phase}-320.png`);
     await toolbar.getByRole("button", { name: "Record reply", exact: true }).tap();

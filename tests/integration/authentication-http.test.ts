@@ -105,6 +105,7 @@ describe("authentication HTTP admission", () => {
     await api.get("/api/input-receipts/mutation").set("Host", "127.0.0.1").expect(401);
     await api.get("/api/threads/thread/queued-inputs/input").set("Host", "127.0.0.1").expect(401);
     await api.get("/api/application/events").set("Host", "127.0.0.1").expect(401);
+    await api.put("/api/application/voice-streams/id/early-reply").set("Host", "127.0.0.1").expect(401);
     await api.get("/api/agent-tools").set("Host", "127.0.0.1").expect(418);
     await api.get("/api/agent-tools/other").set("Host", "127.0.0.1").expect(401);
     await api.get("/api/outbound/connector/sedes-sidecar.mjs").set("Host", "127.0.0.1").expect(200);

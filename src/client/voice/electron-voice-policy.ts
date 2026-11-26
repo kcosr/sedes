@@ -1,3 +1,4 @@
+import type { ElectronEarlyReply } from "./electron-early-reply.js";
 import { unified } from "unified";
 import remarkParse from "remark-parse";
 import remarkGfm from "remark-gfm";
@@ -85,7 +86,8 @@ export interface ElectronVoiceQueueItem {
   readonly threadId: string | null;
   readonly threadTitle: string | null;
   readonly event: string;
-  readonly notification?: VoiceNotification;
+  readonly early?: ElectronEarlyReply;
+  notification?: VoiceNotification;
   readonly replay?: NativeReplySpeech;
 }
 function renderVoiceItem(item: ElectronVoiceQueueItem, settings: NativeVoiceSettings): string {
@@ -109,6 +111,7 @@ const encoder = new TextEncoder();
 function preparedVoiceItem(item: ElectronVoiceQueueItem, settings: NativeVoiceSettings): PreparedVoiceItem {
   const presentation = item.replay ? `replay:${settings.cleanSpeechText}`
     : `${settings.audioMode}:${settings.speechContent}:${settings.cleanSpeechText}`;
+  if (item.early && !item.notification) return { presentation, text: item.early.raw, bytes: item.early.rawBytes + encoder.encode(item.threadTitle ?? "").length };
   const cached = preparedItems.get(item);
   if (cached?.presentation === presentation) return cached;
   const text = renderVoiceItem(item, settings);
@@ -120,8 +123,8 @@ export function voiceItemText(item: ElectronVoiceQueueItem, settings: NativeVoic
   return preparedVoiceItem(item, settings).text;
 }
 
-export function voiceChunks(text: string, limit: number): string[] {
-  const chunks: string[] = [];
+export function voiceChunkRanges(text: string, limit: number): Array<{ text: string; end: number }> {
+  const chunks: Array<{ text: string; end: number }> = [];
   let start = 0;
   while (start < text.length) {
     let end = Math.min(text.length, start + limit);
@@ -136,10 +139,13 @@ export function voiceChunks(text: string, limit: number): string[] {
     }
     if (end <= start) throw new Error("Invalid speech text limit.");
     const chunk = text.slice(start, end);
-    if (chunk.trim()) chunks.push(chunk);
+    if (chunk.trim()) chunks.push({ text: chunk, end });
     start = end;
   }
   return chunks;
+}
+export function voiceChunks(text: string, limit: number): string[] {
+  return voiceChunkRanges(text, limit).map(chunk => chunk.text);
 }
 export function notificationEligible(notice: VoiceNotification, policy: NotificationPolicy | null,
   settings: NativeVoiceSettings, clientId: string | null): boolean {
@@ -173,11 +179,14 @@ export class ElectronVoiceQueue {
   // accounting accurate without reparsing Markdown or re-encoding speech on audio callbacks.
   bytes(settings: NativeVoiceSettings): number { return this.items.reduce((sum, item) => sum + preparedVoiceItem(item, settings).bytes, 0); }
   drop(reason: string): void { this.dropped[reason] = (this.dropped[reason] ?? 0) + 1; }
+  remember(id: string): void {
+    this.seen.add(id);
+    if (this.seen.size > 4096) this.seen.delete(this.seen.values().next().value!);
+  }
   add(item: ElectronVoiceQueueItem, settings: NativeVoiceSettings): boolean {
     if (item.notification) {
       if (this.seen.has(item.id) || this.items.some(pending => pending.id === item.id)) return false;
-      this.seen.add(item.id);
-      if (this.seen.size > 4096) this.seen.delete(this.seen.values().next().value!);
+      this.remember(item.id);
       const notice = item.notification;
       if (notice.subjectId && (item.event === "thread.woke" || item.event.endsWith(".requested"))) {
         for (let index = this.items.length - 1; index >= 0; index--) {
@@ -204,7 +213,7 @@ export class ElectronVoiceQueue {
   }
   clearAutomatic(reason: string): void {
     for (let index = this.items.length - 1; index >= 0; index--) {
-      if (this.items[index]!.notification) { this.items.splice(index, 1); this.drop(reason); }
+      if (this.items[index]!.notification || this.items[index]!.early) { this.items.splice(index, 1); this.drop(reason); }
     }
   }
   /** Settings change presentation only. Rebuild queued text from original sources and reapply the same byte/item bounds. */

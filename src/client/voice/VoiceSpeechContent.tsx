@@ -18,7 +18,7 @@ export function VoiceSpeechContent({ value, pending, onChange }: {
     <SelectContent className="w-[var(--radix-select-trigger-width)] max-w-[calc(100vw-16px)]">
       <SelectItem value="announcements" description="Event and thread, without message text">Announcements</SelectItem>
       <SelectItem value="messages" description="Message text, without a preamble">Messages</SelectItem>
-      <SelectItem value="both" description="Announcement followed by message text">Both</SelectItem>
+      <SelectItem value="both" description="Announcement and message text">Both</SelectItem>
     </SelectContent>
   </Select>;
 }

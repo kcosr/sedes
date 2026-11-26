@@ -64,6 +64,32 @@ describe("voice settings page", () => {
     }
     store.dispose();
   });
+  it.each(["Android", "Electron"])("saves Early reply playback on %s and retains the choice while hidden", async client => {
+    platform.electron = client === "Electron";
+    const native = voiceSnapshot({ settings: voiceSettings({ audioMode: "speak", speechContent: "messages" }), speech: { earlyReplyRevision: 7 } });
+    const changed = voiceSnapshot({ ...native, stateRevision: 2, speech: { ...native.speech, earlyReplyRevision: 8, earlyReplyPlayback: "balanced" } });
+    const { fake, store } = await renderPage(native, fake => fake.plugin.setEarlyReplyPlayback.mockResolvedValue(changed));
+    const early = () => screen.queryByRole("combobox", { name: "Early reply playback" });
+    const trigger = screen.getByRole("combobox", { name: "Early reply playback" });
+    expect(trigger).toHaveTextContent("Off");
+    expect(trigger).toHaveAccessibleDescription(/Otherwise, read when the turn finishes/);
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    const list = await screen.findByRole("listbox");
+    expect(within(list).getAllByRole("option")).toHaveLength(4);
+    expect(within(list).getByRole("option", { name: "Balanced" })).toHaveAccessibleDescription("Start with one sentence, then group ready sentences.");
+    fireEvent.click(screen.getByRole("option", { name: /^Balanced/ }));
+    await waitFor(() => expect(fake.plugin.setEarlyReplyPlayback).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1,
+      expectedEarlyReplyRevision: 7, earlyReplyPlayback: "balanced" }));
+    await waitFor(() => expect(early()).toHaveTextContent("Balanced"));
+    let stateRevision = 2;
+    for (const [audioMode, speechContent] of [["speak", "announcements"], ["input", "messages"], ["off", "both"], ["speak", "both"]] as const) {
+      act(() => fake.emit("stateChanged", { ...changed, stateRevision: ++stateRevision, settings: { ...changed.settings, audioMode, speechContent } }));
+      if (audioMode === "speak" && speechContent === "both") expect(early()).toHaveTextContent("Balanced");
+      else expect(early()).toBeNull();
+    }
+    expect(fake.plugin.updateSettings).not.toHaveBeenCalled();
+    store.dispose();
+  });
   it("saves the long dictation limit in whole minutes and rejects values outside one minute through one day", async () => {
     const native = voiceSnapshot();
     const { fake, store } = await renderPage(native, fake => fake.plugin.updateSettings.mockResolvedValue({ ...native,

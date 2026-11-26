@@ -1,3 +1,4 @@
+import { earlyReplyInterestSchema } from "../shared/protocol/early-reply.js";
 import { ClientResponseCompression, sendJsonResponse } from "./http/response-compression.js";
 import { SseResponseWriter } from "./events/sse-response-writer.js";
 import {
@@ -1362,6 +1363,14 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
     },
   );
 
+  routes.put("/api/application/voice-streams/:voiceStreamId/early-reply", async (request, response) => {
+    const requestScope = await scope(request);
+    const voiceStreamId = z.uuid().parse(request.params.voiceStreamId);
+    dependencies.notifications.updateEarlyInterest(requestScope, voiceStreamId, earlyReplyInterestSchema.parse(request.body));
+    response.setHeader("Cache-Control", "no-store");
+    response.status(204).end();
+  });
+
   routes.get(
     "/api/application/events",
     longLived(async (request, response) => {
@@ -1371,7 +1380,8 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
       const writer = new SseResponseWriter(request, response, compression);
       tracked?.setGracefulEnd(() => writer.end());
       const requestScope = await scope(request);
-      const voiceStream = query.voiceStreamId === undefined ? undefined : dependencies.notifications.reserveVoiceStream(requestScope, query.voiceStreamId);
+      const voiceStream = query.voiceStreamId === undefined ? undefined : dependencies.notifications.reserveVoiceStream(requestScope, query.voiceStreamId,
+        query.earlyRevision === undefined ? undefined : {enabled: query.earlyReply === "on", revision: query.earlyRevision});
       if (voiceStream) {
         request.once("close", voiceStream.release);
         response.once("close", voiceStream.release);

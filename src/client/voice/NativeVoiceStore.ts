@@ -41,7 +41,7 @@ const RETRY_BASE_MS = 2_000;
 const RETRY_MAX_MS = 60_000;
 const UNCERTAIN_INPUT_CODE = "input_submission_uncertain";
 /** Entering one of these phases means a new interaction is under way, so an earlier failure no longer describes the bar. */
-const PROGRESS_PHASES = new Set<NativeVoiceState["phase"]>(["starting", "synthesizing", "speaking", "validating", "announcing", "arming", "listening", "recognizing", "submitting"]);
+const PROGRESS_PHASES = new Set<NativeVoiceState["phase"]>(["starting", "synthesizing", "speaking", "waiting_for_reply_text", "validating", "announcing", "arming", "listening", "recognizing", "submitting"]);
 
 /** Native snapshots are authoritative, including changes made while the WebView was suspended. */
 export class NativeVoiceStore {
@@ -486,6 +486,15 @@ export class NativeVoiceStore {
       if (!state) throw new Error("Voice settings are unavailable. Reconnect to this server.");
       const next = typeof patch === "function" ? patch(state) : patch;
       return next ? this.plugin.updateSettings({ ...this.commandContext(), expectedRevision: state.settingsRevision, patch: next }) : state;
+    });
+  }
+  async setEarlyReplyPlayback(earlyReplyPlayback: NativeVoiceState["speech"]["earlyReplyPlayback"]): Promise<void> {
+    await this.run(async () => {
+      await this.refresh();
+      const state = this.#state.native;
+      if (!state) throw new Error("Voice settings are unavailable. Reconnect to this server.");
+      return this.plugin.setEarlyReplyPlayback({ ...this.commandContext(),
+        expectedEarlyReplyRevision: state.speech.earlyReplyRevision, earlyReplyPlayback });
     });
   }
   async setSpeechAudioQuality(audioQuality: NativeVoiceState["speech"]["audioQuality"]): Promise<void> {

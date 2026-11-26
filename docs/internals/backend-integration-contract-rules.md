@@ -2945,6 +2945,17 @@ Claude retain their existing provisional/final/unclassified dispositions; Grok
 and OpenCode do not manufacture partial evidence. A partial message is neither
 a user question nor terminal turn evidence.
 
+Early final-answer playback requires a handle to declare `liveFinalAnswer: "supported"`
+and attach `liveFinalStart: true` to an explicitly final assistant item's native streaming
+start. Codex qualifies `item/started` for the exact `agentMessage` with
+`phase: "final_answer"`. The actor captures its application turn, item, and accepted
+input correlations after projection. The manager freezes voice recipients before
+waiting for preceding submission observers. Only the first final item can continue
+within a single live projection generation. Completed items, baseline items,
+replayed starts, late final labels and passive history handles take the ordinary
+completion path. A new backend enables this capability on its live handle when
+it can provide the same item identity, explicit live start and cumulative source text.
+
 Live progress is a separate, passive observation of an already projected,
 completed provisional or partial assistant item on an active Sedes-accepted turn. Providers
 must attach `liveProgress: true` to the qualifying live `item_completed` or

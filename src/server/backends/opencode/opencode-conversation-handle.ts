@@ -228,7 +228,7 @@ export class OpenCodeConversationHandle implements ConversationHandle {
         observed.catalog.catalog.models.some(model => model.id === qualifiedOpenCodeModelId(observed.observed.resolvedSelection!) && model.inputModalities.includes("image")) }, nonblockingQuestions: false,
       providerOutputArtifacts: { nativeImage: false }, supportsHistory: true,
       branching: { availability: "unavailable", reason: boundDisplayText("Native branching is not qualified.") },
-      interactionKinds: ["decision", "form", "questionnaire"], usageAccounting: "supported", turnThroughput: "unsupported", usageSections: ["context", "counters"],
+      interactionKinds: ["decision", "form", "questionnaire"], usageAccounting: "supported", turnThroughput: "unsupported", liveFinalAnswer: "unsupported", usageSections: ["context", "counters"],
       effectiveSettings: observed?.observed.classification === "recognized" && observed.observed.resolvedSelection
         ? toEffective(observed.observed.resolvedSelection, this.context.connection.id, observed.catalog.catalog) : {} };
   }

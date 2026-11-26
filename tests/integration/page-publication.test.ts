@@ -95,7 +95,7 @@ async function fixture() {
   const capabilities: BackendCapabilityDocument = { revision: "test", actions: [], deliveryModes: ["submit"], steerTarget: null,
     composerAttachments: { fileStaging: false, nativeImage: false }, nonblockingQuestions: false, providerOutputArtifacts: { nativeImage: false },
     supportsHistory: true, branching: { availability: "unavailable", reason: { text: "No fork in fixture" } }, interactionKinds: [],
-    usageAccounting: "unsupported", turnThroughput: "unsupported", usageSections: [], effectiveSettings: {} };
+    usageAccounting: "unsupported", turnThroughput: "unsupported", liveFinalAnswer: "unsupported", usageSections: [], effectiveSettings: {} };
   const binding: ConversationBinding = { tenantId: scope.tenantId, ownerPrincipalId: scope.principalId,
     applicationThreadId: source.thread.id, backendInstanceId: sourceThread.backendInstanceId!, connectionProfileId: sourceThread.connectionProfileId!,
     executionEnvironmentId: environment.id, backendConversationId: "native-page-session", createdAt: "2026-10-11T00:00:00.000Z" };

@@ -12,6 +12,7 @@ import org.json.JSONObject;
 final class NativeVoiceDiagnostics {
     static final int MAX_ENTRIES = 512;
     enum Event { RECEIVED, QUEUED, DROPPED, DEQUEUED, SYNTHESIS_STARTED, PLAYBACK_STARTED, PLAYBACK_DRAINED,
+        EARLY_BEGIN, EARLY_APPEND, EARLY_YIELD, EARLY_CANCEL, EARLY_SEALED, EARLY_WAITING, EARLY_PREFETCHED, EARLY_PROMOTED,
         PLAYBACK_STOPPED, INTERACTION_FINISHED, STREAM_CONNECTING, STREAM_LIVE, STREAM_LOST, POLICY_RECEIVED, DISCONNECTED }
     enum ComposerEvent { FOREGROUND_CONTEXT, RECORDING_ROUTE_SELECTED, HANDOFF_OFFERED, HANDOFF_CLAIMED,
         HANDOFF_ACCEPTED, HANDOFF_DECLINED, NATIVE_SUBMISSION_STARTED }
@@ -19,7 +20,8 @@ final class NativeVoiceDiagnostics {
         "turn.interrupted", "thread.woke", "automation.started", "automation.failed", "approval.requested",
         "input.requested", "question.requested", "replay", "manual"));
     private static final Set<String> REASONS = new HashSet<>(Arrays.asList("duplicate", "ineligible", "empty_speech",
-        "coalesced", "progress_evicted", "overflow", "settings_changed", "stopped", "skipped", "disconnected",
+        "source_changed", "authority_lost", "superseded", "policy_changed", "publication_suppressed", "expired",
+        "markup", "item_done", "limit", "stall", "early_reply_released", "coalesced", "progress_evicted", "overflow", "settings_changed", "stopped", "skipped", "disconnected",
         "service_stopped", "notification_connection_lost", "notification_policy_changed", "invalid_notification_policy",
         "invalid_notification_frame", "record_during_playback", "audio_mode_changed", "audio_off", "speech_settings_changed",
         "speech_configuration_required", "speech_timeout", "playback_failed", "playback_drain_timeout", "empty_pcm_stream",
