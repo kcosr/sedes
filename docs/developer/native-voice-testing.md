@@ -209,6 +209,12 @@ env -u NODE_ENV SEDES_RUN_REAL_OPENCODE=1 \
   SEDES_VOICE_ANDROID_SERIAL=emulator-5580 npm run test:voice
 ```
 
+Use `-t 'plays a held live Codex reply in the packaged Android background service'`
+to select the early-reply device case. Its first instrumentation checkpoint
+requires the opening audio to drain while the WebView is backgrounded and the
+source turn is still running. The host then releases the final delta and checks
+the remaining audio and request count.
+
 An explicit serial is required. The harness verifies that it is an emulator,
 clears `dev.sedes.local` application data between scenarios, installs the
 current APKs, pairs through the bundled UI, and reverses only its owned Sedes
