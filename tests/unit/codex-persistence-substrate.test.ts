@@ -41,7 +41,7 @@ const backend: AgentBackendInstance = Object.freeze({
   label: "Codex",
   enabled: true,
   configurationRevision: 7,
-  protocolRelease: "0.169.0",
+  protocolRelease: "0.172.0",
 });
 
 const connection: AgentConnectionProfile = Object.freeze({

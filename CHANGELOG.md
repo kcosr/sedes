@@ -29,9 +29,10 @@ User-facing changes are collected here before release. See the
   See [native Pi setup](docs/operator/backends/pi-native.md).
   ([#143](https://github.com/kcosr/sedes/pull/143))
 
-- Codex app-servers and managed TUI commands now require **0.169.0 or newer**.
-  Upgrade every execution host and rebuild execution sidecars with the server.
-  Remove the retired native Guardian configuration keys before startup. See
+- Codex app-servers, managed TUI, and Codex CLI research now require **0.172.0 or
+  newer**. Upgrade the Codex commands, the server, and execution sidecars in the
+  same maintenance window. Remove the retired native Guardian configuration
+  keys before startup. See
   [Codex upgrade requirements](docs/operator/backends/codex.md#version-compatibility).
   ([#136](https://github.com/kcosr/sedes/pull/136))
 
@@ -462,6 +463,10 @@ User-facing changes are collected here before release. See the
   ([#81](https://github.com/kcosr/sedes/pull/81))
 
 ### Fixed
+
+- Codex can refresh saved threads with MCP tool results and display live tool
+  activity and elicitation on 0.172.0. A late completion keeps a newer active
+  turn available for controls and prevents premature idle cleanup.
 
 - After a server restart, threads whose recent turn kept running or finished
   while the server was down show their spinner or unread dot without being

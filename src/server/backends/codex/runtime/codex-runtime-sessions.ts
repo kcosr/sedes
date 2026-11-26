@@ -13,17 +13,39 @@ type SettingsObservation = {
   sequence: number;
   settings: OfficialCodexServerNotificationParams<"thread/settings/updated">["threadSettings"] | null;
 };
+type TurnActivity = { active: boolean; activeTurn: { id: string; source: "started" | "snapshot" } | null };
+type LoadedActivity = TurnActivity & { activeGoal: boolean };
+type TurnLifecycle = { method: "turn/started" | "turn/completed"; turnId: string };
 type PendingResume = {
   generation: number;
-  activity?: { sequence: number; active: boolean; turnId: string | null; known: boolean };
+  activity?: TurnActivity & { sequence: number; known: boolean; completedTurnId?: string };
   goal?: { sequence: number; active: boolean };
   settings?: SettingsObservation;
   closedSequence?: number;
 };
-type Session = { generation: number; metadata: Metadata; settingsSequence: number; settingsKnown: boolean; active: boolean; activeTurnId: string | null; activeGoal: boolean; known: boolean };
+type Session = LoadedActivity & { generation: number; metadata: Metadata; settingsSequence: number; settingsKnown: boolean; known: boolean };
 const readMethod = defineCodexAppServerMethod({ method: "thread/read", refineParams: value => value, refineResult: value => value });
 const turnsMethod = defineCodexAppServerMethod({ method: "thread/turns/list", refineParams: value => value, refineResult: value => value });
 const itemsMethod = defineCodexAppServerMethod({ method: "thread/items/list", refineParams: value => value, refineResult: value => value });
+
+function observeTurnActivity(event: TurnLifecycle, current: TurnActivity | undefined): TurnActivity | undefined {
+  if (event.method === "turn/started") return { active: true, activeTurn: { id: event.turnId, source: "started" } };
+  // A terminal event can race the next turn's start on the same thread.
+  if (current?.activeTurn && current.activeTurn.id !== event.turnId) return undefined;
+  return { active: false, activeTurn: null };
+}
+
+function observeThreadActivity(
+  status: OfficialCodexServerNotificationParams<"thread/status/changed">["status"]["type"],
+  current: TurnActivity | undefined,
+): TurnActivity | undefined {
+  // Idle can precede the exact turn's terminal event. Do not let an unscoped
+  // hint retire known work before its completion arrives.
+  if (status === "idle" && current?.activeTurn) return undefined;
+  return status === "active"
+    ? { active: true, activeTurn: current?.activeTurn ?? null }
+    : { active: false, activeTurn: null };
+}
 
 /** Retains live session configuration, never a transcript. Reattachment reads
  * provider history and uses the original subscribed session's metadata rather
@@ -31,9 +53,10 @@ const itemsMethod = defineCodexAppServerMethod({ method: "thread/items/list", re
 export class CodexRuntimeSessions {
   readonly #sessions = new Map<string, Session>();
   readonly #pendingResumes = new Map<string, PendingResume>();
-  #inventory: ReadonlyMap<string, { active: boolean; activeGoal: boolean }> = new Map();
+  #inventory: ReadonlyMap<string, LoadedActivity> = new Map();
   readonly #evicted = new Set<string>();
   #inventoryKnown = false;
+  #inventoryActivityRevision = 0;
   #trackingFailed = false;
   constructor(readonly client: CodexSharedClientFacade) {}
 
@@ -47,16 +70,23 @@ export class CodexRuntimeSessions {
       apply: receipt => {
         if (this.#pendingResumes.get(threadId) !== pending || receipt.generation !== generation || this.client.lifecycleSnapshot().generation !== generation) return;
         if ((receipt.result as Resume).thread.id !== threadId) throw new Error("codex_runtime_session_identity_mismatch");
+        const priorSession = this.#sessions.get(threadId);
         this.observeResult("thread/resume", receipt.result, generation);
         const session = this.#sessions.get(threadId);
         if (!session || session.generation !== generation) throw new Error("codex_runtime_session_identity_mismatch");
         session.settingsSequence = receipt.inboundSequence;
         if (pending.settings) this.#applySettings(session, pending.settings);
         const activity = pending.activity;
-        if (activity && activity.sequence > receipt.inboundSequence) {
+        const observed = activity ?? (priorSession?.generation === generation ? priorSession : undefined);
+        if (activity && activity.sequence > receipt.inboundSequence &&
+            (activity.completedTurnId === undefined || session.activeTurn === null ||
+              activity.completedTurnId === session.activeTurn.id)) {
           session.active = activity.active;
-          session.activeTurnId = activity.turnId;
+          session.activeTurn = activity.activeTurn;
           session.known = activity.known;
+        } else if (session.active && observed?.known && observed.activeTurn &&
+            (session.activeTurn === null || observed.activeTurn.id === session.activeTurn.id)) {
+          session.activeTurn = observed.activeTurn;
         }
         const goal = pending.goal;
         if (goal && goal.sequence > receipt.inboundSequence) session.activeGoal = goal.active;
@@ -72,14 +102,21 @@ export class CodexRuntimeSessions {
   observeResult(method: string, result: unknown, generation: number): void {
     if (method !== "thread/start" && method !== "thread/resume" && method !== "thread/fork") return;
     const value = result as Resume;
-    const { thread, initialTurnsPage: _initial, turnsBackwardsCursor: _turns, itemsBackwardsCursor: _items, ...metadata } = value;
+    const { thread, initialTurnsPage, turnsBackwardsCursor: _turns, itemsBackwardsCursor: _items, ...metadata } = value;
     if (!this.#sessions.has(thread.id) && this.#sessions.size >= 4096) throw new Error("codex_runtime_session_capacity_exceeded");
     this.#evicted.delete(thread.id);
-    this.#sessions.set(thread.id, { generation, metadata, settingsSequence: 0, settingsKnown: true, active: thread.status.type === "active", activeTurnId: null, activeGoal: false, known: true });
+    const active = thread.status.type === "active";
+    const head = thread.historyMode === "paginated" ? initialTurnsPage?.data[0] : thread.turns.at(-1);
+    // A snapshot identifies a turn for residency without granting live Stop authority.
+    this.#sessions.set(thread.id, { generation, metadata, settingsSequence: 0, settingsKnown: true,
+      active, activeTurn: active && head?.status === "inProgress" ? { id: head.id, source: "snapshot" } : null,
+      activeGoal: false, known: true });
   }
   observeNotification(notification: CodexRpcNotification): void {
+    if (notification.generation !== this.client.lifecycleSnapshot().generation) return;
     if (notification.kind !== "decoded_notification") {
       this.#inventoryKnown = false;
+      this.#inventoryActivityRevision++;
       if (notification.method === "thread/settings/updated") {
         const observation = { sequence: notification.sequence, settings: null };
         for (const [threadId, pending] of this.#pendingResumes) {
@@ -93,26 +130,41 @@ export class CodexRuntimeSessions {
         }
       }
       for (const pending of this.#pendingResumes.values()) if (pending.generation === notification.generation) {
-        pending.activity = { sequence: notification.sequence, active: true, turnId: null, known: false };
+        pending.activity = { sequence: notification.sequence, active: true, activeTurn: null, known: false };
       }
       for (const session of this.#sessions.values()) session.known = false;
       return;
     }
     const params = notification.params as { threadId?: string };
+    const method = notification.method;
+    const lifecycle: TurnLifecycle | undefined = method === "turn/started" || method === "turn/completed"
+      ? { method, turnId: (notification.params as { turn: { id: string } }).turn.id }
+      : undefined;
+    const status = method === "thread/status/changed"
+      ? (notification.params as OfficialCodexServerNotificationParams<"thread/status/changed">).status.type
+      : undefined;
+    if (lifecycle || status || method === "thread/goal/updated" || method === "thread/goal/cleared" ||
+        method === "thread/started" || method === "thread/closed" || method === "thread/deleted" ||
+        method === "thread/archived" || method === "thread/unarchived") this.#inventoryActivityRevision++;
     if (notification.method === "thread/started") this.#inventoryKnown = false;
     if (!params.threadId) return;
+    const inventoried = this.#inventory.get(params.threadId);
+    const retained = this.#sessions.get(params.threadId);
+    const session = retained?.generation === notification.generation ? retained : undefined;
     const pending = this.#pendingResumes.get(params.threadId);
     if (pending?.generation === notification.generation) {
-      if (notification.method === "turn/started" || notification.method === "turn/completed") {
-        if ((pending.activity?.sequence ?? -1) < notification.sequence) pending.activity = {
-          sequence: notification.sequence, active: notification.method === "turn/started",
-          turnId: notification.method === "turn/started" ? (notification.params as { turn: { id: string } }).turn.id : null, known: true,
-        };
-      } else if (notification.method === "thread/status/changed") {
-        const status = (notification.params as OfficialCodexServerNotificationParams<"thread/status/changed">).status.type;
-        if ((pending.activity?.sequence ?? -1) < notification.sequence) pending.activity = {
-          sequence: notification.sequence, active: status === "active", turnId: null, known: status === "active" || status === "idle",
-        };
+      const prior = pending.activity ?? session;
+      if (lifecycle) {
+        const activity = observeTurnActivity(lifecycle, prior);
+        if (activity && (pending.activity?.sequence ?? -1) < notification.sequence) {
+          pending.activity = { ...activity, sequence: notification.sequence, known: true,
+            ...(lifecycle.method === "turn/completed" ? { completedTurnId: lifecycle.turnId } : {}) };
+        }
+      } else if (status) {
+        const activity = observeThreadActivity(status, prior);
+        if (activity && (pending.activity?.sequence ?? -1) < notification.sequence) {
+          pending.activity = { ...activity, sequence: notification.sequence, known: status === "active" || status === "idle" };
+        }
       } else if (notification.method === "thread/goal/updated" || notification.method === "thread/goal/cleared") {
         if ((pending.goal?.sequence ?? -1) < notification.sequence) pending.goal = { sequence: notification.sequence,
           active: notification.method === "thread/goal/updated" && (notification.params as { goal: { status: string } }).goal.status === "active" };
@@ -126,37 +178,36 @@ export class CodexRuntimeSessions {
         pending.closedSequence = Math.max(pending.closedSequence ?? -1, notification.sequence);
       }
     }
-    const inventoried = this.#inventory.get(params.threadId);
     if (notification.method === "thread/archived" || notification.method === "thread/unarchived") {
       this.#inventoryKnown = false;
       this.#evicted.delete(params.threadId);
     }
     if (inventoried) {
-      if (notification.method === "turn/started") inventoried.active = true;
-      if (notification.method === "turn/completed") inventoried.active = false;
+      if (lifecycle) Object.assign(inventoried, observeTurnActivity(lifecycle, inventoried));
       if (notification.method === "thread/goal/updated") inventoried.activeGoal = (notification.params as { goal: { status: string } }).goal.status === "active";
       if (notification.method === "thread/goal/cleared") inventoried.activeGoal = false;
-      if (notification.method === "thread/status/changed") inventoried.active = (notification.params as OfficialCodexServerNotificationParams<"thread/status/changed">).status.type === "active";
-      if (notification.method === "thread/status/changed" && !["idle", "active"].includes((notification.params as OfficialCodexServerNotificationParams<"thread/status/changed">).status.type)) this.#inventoryKnown = false;
+      if (status) {
+        Object.assign(inventoried, observeThreadActivity(status, inventoried));
+        if (status !== "idle" && status !== "active") this.#inventoryKnown = false;
+      }
     }
-    const session = this.#sessions.get(params.threadId);
-    if (!session || session.generation !== notification.generation) return;
+    if (!session) return;
+    if (lifecycle) {
+      Object.assign(session, observeTurnActivity(lifecycle, session));
+      return;
+    }
+    if (status) {
+      Object.assign(session, observeThreadActivity(status, session.known ? session : undefined), { known: true });
+      return;
+    }
     switch (notification.method) {
       case "thread/settings/updated": {
         const { threadSettings: settings } = notification.params as OfficialCodexServerNotificationParams<"thread/settings/updated">;
         this.#applySettings(session, { sequence: notification.sequence, settings });
         return;
       }
-      case "turn/started": session.active = true; session.activeTurnId = (notification.params as { turn: { id: string } }).turn.id; return;
-      case "turn/completed": session.active = false; session.activeTurnId = null; return;
       case "thread/goal/updated": session.activeGoal = (notification.params as { goal: { status: string } }).goal.status === "active"; return;
       case "thread/goal/cleared": session.activeGoal = false; return;
-      case "thread/status/changed": {
-        const value = notification.params as OfficialCodexServerNotificationParams<"thread/status/changed">;
-        session.active = value.status.type === "active";
-        session.known = true;
-        return;
-      }
       case "thread/closed":
       case "thread/deleted":
       case "thread/archived":
@@ -173,7 +224,7 @@ export class CodexRuntimeSessions {
     session.metadata = { ...session.metadata, cwd: settings.cwd, approvalPolicy: settings.approvalPolicy, approvalsReviewer: settings.approvalsReviewer, sandbox: settings.sandboxPolicy, activePermissionProfile: settings.activePermissionProfile, model: settings.model, modelProvider: settings.modelProvider, serviceTier: settings.serviceTier, reasoningEffort: settings.effort, multiAgentMode: settings.multiAgentMode };
   }
 
-  revision(): string { return createHash("sha256").update(JSON.stringify([this.#inventoryKnown, this.#trackingFailed, [...this.#inventory].sort(), [...this.#sessions.entries()].map(([id, value]) => [id, value.generation, value.known, value.active, value.activeTurnId, value.activeGoal]).sort((left, right) => String(left[0]).localeCompare(String(right[0])))] )).digest("hex"); }
+  revision(): string { return createHash("sha256").update(JSON.stringify([this.#inventoryKnown, this.#trackingFailed, [...this.#inventory].sort(), [...this.#sessions.entries()].map(([id, value]) => [id, value.generation, value.known, value.active, value.activeTurn, value.activeGoal]).sort((left, right) => String(left[0]).localeCompare(String(right[0])))] )).digest("hex"); }
   evict(threadId: string, generation: number): void {
     const session = this.#sessions.get(threadId);
     if (session?.generation === generation) this.#evicted.add(threadId);
@@ -199,7 +250,7 @@ export class CodexRuntimeSessions {
     return !this.#trackingFailed && [...this.#sessions].every(([id, session]) =>
       this.#evicted.has(id) && session.known && !session.active && !session.activeGoal);
   }
-  invalidate(): void { this.#pendingResumes.clear(); this.#evicted.clear(); this.#sessions.clear(); this.#trackingFailed = false; this.#inventoryKnown = false; this.#inventory = new Map(); }
+  invalidate(): void { this.#pendingResumes.clear(); this.#evicted.clear(); this.#sessions.clear(); this.#trackingFailed = false; this.#inventoryKnown = false; this.#inventory = new Map(); this.#inventoryActivityRevision++; }
   markUnknown(): void { this.#trackingFailed = true; }
   activity(): "active" | "idle" | "unknown" {
     if (this.#trackingFailed || !this.#inventoryKnown) return "unknown";
@@ -212,8 +263,8 @@ export class CodexRuntimeSessions {
   async interruptKnownActiveTurns(): Promise<void> {
     const lifecycle = this.client.lifecycleSnapshot();
     if (lifecycle.state !== "ready" || this.#trackingFailed) return;
-    const turns = [...this.#sessions].flatMap(([threadId, session]) => session.generation === lifecycle.generation && session.known && session.active && session.activeTurnId !== null
-      ? [{ threadId, session, turnId: session.activeTurnId }] : []);
+    const turns = [...this.#sessions].flatMap(([threadId, session]) => session.generation === lifecycle.generation && session.known && session.active && session.activeTurn?.source === "started"
+      ? [{ threadId, session, turnId: session.activeTurn.id }] : []);
     if (turns.length === 0) return;
     const controller = new AbortController();
     const deadline = Date.now() + 1_000;
@@ -224,7 +275,8 @@ export class CodexRuntimeSessions {
           for (const { threadId, session, turnId } of turns) {
             const current = this.client.lifecycleSnapshot();
             if (controller.signal.aborted || current.state !== "ready" || current.generation !== lifecycle.generation) return;
-            if (!session.known || !session.active || session.activeTurnId !== turnId || this.#sessions.get(threadId) !== session) continue;
+            if (!session.known || !session.active || session.activeTurn?.id !== turnId ||
+                session.activeTurn.source !== "started" || this.#sessions.get(threadId) !== session) continue;
             try {
               await this.client.requestWithReceipt(codexRuntimeMethod("turn/interrupt"), { threadId, turnId },
                 { timeoutMilliseconds: Math.max(1, deadline - Date.now()), signal: controller.signal });
@@ -302,6 +354,7 @@ export class CodexRuntimeSessions {
   async refreshActivity(): Promise<void> {
     this.#inventoryKnown = false;
     const generation = this.client.lifecycleSnapshot().generation;
+    const activityRevision = this.#inventoryActivityRevision;
     const deadline = Date.now() + 10_000;
     const options = () => {
       const remaining = deadline - Date.now();
@@ -328,7 +381,7 @@ export class CodexRuntimeSessions {
       throw new Error("codex_runtime_inventory_incomplete");
     };
     const ids = await list();
-    const inventory = new Map<string, { active: boolean; activeGoal: boolean }>();
+    const inventory = new Map<string, LoadedActivity>();
     for (const threadId of ids) {
       const receipt = await this.client.requestWithReceipt(readMethod, { threadId, includeTurns: false }, options());
       this.#assertCurrent({ generation }, receipt.generation);
@@ -338,18 +391,24 @@ export class CodexRuntimeSessions {
       this.#assertCurrent({ generation }, goal.generation);
       const nativeGoal = (goal.result as OfficialCodexClientRequestResult<"thread/goal/get">).goal;
       if (nativeGoal && nativeGoal.threadId !== threadId) throw new Error("codex_runtime_inventory_identity_mismatch");
+      const session = this.#sessions.get(threadId);
+      const prior = session?.generation === generation && session.known ? session : this.#inventory.get(threadId);
+      const active = receipt.result.thread.status.type === "active";
       inventory.set(threadId, {
-        active: receipt.result.thread.status.type === "active",
+        active,
+        activeTurn: active ? prior?.activeTurn ?? null : null,
         activeGoal: nativeGoal?.status === "active",
       });
     }
     // External clients can change the loaded set during inspection. Refuse an
     // incomplete snapshot instead of treating omitted sessions as idle.
     const finalIds = await list();
-    if (finalIds.size !== ids.size || [...finalIds].some(id => !ids.has(id))) throw new Error("codex_runtime_inventory_changed");
+    if (activityRevision !== this.#inventoryActivityRevision ||
+        finalIds.size !== ids.size || [...finalIds].some(id => !ids.has(id))) throw new Error("codex_runtime_inventory_changed");
     for (const [threadId, session] of this.#sessions) {
       const current = inventory.get(threadId);
-      if (current) Object.assign(session, current, { known: true });
+      if (current) Object.assign(session, { active: current.active, activeGoal: current.activeGoal,
+        activeTurn: current.active && session.known ? session.activeTurn : null, known: true });
       else this.#sessions.delete(threadId);
     }
     this.#inventory = inventory;

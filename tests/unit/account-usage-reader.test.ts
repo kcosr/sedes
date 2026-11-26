@@ -23,7 +23,7 @@ function source() {
 function runtime(id: string, accountUsage: BackendAccountUsageSource): Pick<BackendModuleRuntime, "scope" | "instance" | "accountUsage"> {
   return {
     scope, accountUsage,
-    instance: { id, tenantId: scope.tenantId, kind: "codex_app_server", label: id, enabled: true, configurationRevision: 1, protocolRelease: "0.169.0" },
+    instance: { id, tenantId: scope.tenantId, kind: "codex_app_server", label: id, enabled: true, configurationRevision: 1, protocolRelease: "0.172.0" },
   };
 }
 

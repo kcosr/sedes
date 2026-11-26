@@ -651,6 +651,10 @@ const serverRequestMethods = Object.freeze([
   "mcpServer/elicitation/request",
 ] as const satisfies readonly CodexServerRequestMethod[]);
 
+const mcpElicitationKeys = [
+  "threadId", "turnId", "serverName", "environmentId", "mode", "_meta", "message",
+] as const;
+
 const serverRequestKeys = Object.freeze({
   "account/chatgptAuthTokens/refresh": ["reason", "previousAccountId"],
   applyPatchApproval: ["conversationId", "callId", "fileChanges", "reason", "grantRoot"],
@@ -661,7 +665,7 @@ const serverRequestKeys = Object.freeze({
   "item/permissions/requestApproval": ["threadId", "turnId", "itemId", "environmentId", "startedAtMs", "cwd", "reason", "permissions"],
   "item/tool/call": ["threadId", "turnId", "callId", "namespace", "tool", "arguments"],
   "item/tool/requestUserInput": ["threadId", "turnId", "itemId", "questions", "isBlocking", "autoResolutionMs"],
-  "mcpServer/elicitation/request": ["threadId", "turnId", "serverName", "mode", "_meta", "message", "requestedSchema", "url", "elicitationId"],
+  "mcpServer/elicitation/request": [...mcpElicitationKeys, "requestedSchema", "url", "elicitationId"],
 } as const satisfies Record<CodexServerRequestMethod, readonly string[]>);
 
 const serverRequestIdKeys = Object.freeze({
@@ -674,7 +678,7 @@ const serverRequestIdKeys = Object.freeze({
   "item/permissions/requestApproval": ["threadId", "turnId", "itemId"],
   "item/tool/call": ["threadId", "turnId", "callId"],
   "item/tool/requestUserInput": ["threadId", "turnId", "itemId"],
-  "mcpServer/elicitation/request": ["threadId", "turnId", "elicitationId"],
+  "mcpServer/elicitation/request": ["threadId", "turnId", "environmentId", "elicitationId"],
 } as const satisfies Record<CodexServerRequestMethod, readonly string[]>);
 
 function refineCommandDecision(value: unknown): void {
@@ -763,13 +767,9 @@ export function refineCodexC2ServerRequest<Method extends CodexServerRequestMeth
           throw new Error("codex_mcp_openai_elicitation_unadvertised");
         }
         if (elicitation.mode === "url") {
-          return exactKeys(elicitation, [
-            "threadId", "turnId", "serverName", "mode", "_meta", "message", "url", "elicitationId",
-          ]);
+          return exactKeys(elicitation, [...mcpElicitationKeys, "url", "elicitationId"]);
         }
-        return exactKeys(elicitation, [
-          "threadId", "turnId", "serverName", "mode", "_meta", "message", "requestedSchema",
-        ]);
+        return exactKeys(elicitation, [...mcpElicitationKeys, "requestedSchema"]);
       })()
     : exactKeys(attested, serverRequestKeys[method]);
   assertBounds(attested);

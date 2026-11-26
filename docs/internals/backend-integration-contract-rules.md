@@ -144,9 +144,13 @@ Pi SDK, native Pi, Codex, Claude, OpenCode, and Antigravity share this applicati
 path without provider-specific changes. Grok intentionally does not advertise
 Steer; the lookup grants no new delivery capability.
 
-The Codex 0.169.0 compatibility update is provider-private. Its single generated
-profile validates native moderation, completion-token, executor-environment and
-audio-reference metadata without granting browser or additional-executor authority.
+The Codex 0.172.0 compatibility update is provider-private. Its single generated
+profile validates version 1 moderation, MCP registration scope, completion-token,
+executor-environment, and audio-reference metadata. Codex keeps the newer active
+turn's residency and control authority when an older turn completes, and records
+the older terminal turn in the transcript. This change adds no browser capability.
+Pi SDK, native Pi, Claude, Grok, OpenCode, and Antigravity preserve their own
+integration and turn lifecycle contracts.
 Runtime admission requires the native provider-specific catalog selector; catalog
 validation retains each thread's saved native provider instead of substituting the
 daemon default. Thread presentation supplies the server-derived binding to catalog

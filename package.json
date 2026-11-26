@@ -60,6 +60,7 @@
     "probe:grok-live-readonly": "tsx scripts/grok-probes/run-grok-live-readonly-gate.ts",
     "verify:codex-interactions": "tsx scripts/codex-probes/verify-runtime-interactions.ts",
     "verify:codex-runtime": "tsx scripts/codex-probes/verify-runtime-compatibility.ts",
+    "verify:codex-mcp-history": "tsx scripts/codex-probes/verify-runtime-mcp-history.ts",
     "probe:codex-release": "node scripts/codex-probes/probe-release.mjs",
     "probe:codex-d1": "node scripts/codex-probes/probe-d1-empty-thread.mjs",
     "probe:codex-tool-refresh": "node scripts/codex-probes/probe-tool-refresh.mjs",
@@ -194,7 +195,7 @@
   "devDependencies": {
     "@capacitor/android": "8.4.3",
     "@capacitor/cli": "8.4.3",
-    "@openai/codex": "0.169.0",
+    "@openai/codex": "0.172.0",
     "@playwright/test": "1.62.0",
     "@tailwindcss/vite": "4.3.3",
     "@testing-library/jest-dom": "7.0.0",

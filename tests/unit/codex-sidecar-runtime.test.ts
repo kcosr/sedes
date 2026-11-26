@@ -1,13 +1,14 @@
 import { launchAdmission } from "../../src/server/backends/provider-policy-admission.js";
 import {attachFixturePolicy} from "../helpers/execution-policy-fixture.js";
 import { describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import { SIDECAR_WIRE_VERSION } from "../../src/internal/sidecar-protocol/envelopes.js";
 import { SidecarFrameWriteError, SidecarOperationRegistry, SidecarProtocolPeer, controlHelloOperation, registerControlV3Operations, type SidecarFrame, type SidecarFrameSendOptions, type SidecarFrameTransport, type SidecarTransportClosure } from "../../src/internal/sidecar-protocol/index.js";
 import { SidecarRuntimeChannel } from "../../src/server/sidecar/runtime-channel.js";
 import { PersistentSidecarServiceRegistry } from "../../src/server/sidecar/persistent-sidecar-service-registry.js";
 import { CodexRuntimeHost } from "../../src/server/backends/codex/runtime/codex-runtime-host.js";
 import type { CodexRuntimeHostRegistry } from "../../src/server/backends/codex/runtime/codex-runtime-host-registry.js";
-import { CodexSidecarRuntimeConnection, codexRuntimeEnsureOperation, registerCodexRuntimeHost } from "../../src/server/backends/codex/runtime/codex-sidecar-runtime.js";
+import { CodexSidecarRuntimeConnection, codexRuntimeEnsureOperation, codexRuntimeLookupOperation, registerCodexRuntimeHost } from "../../src/server/backends/codex/runtime/codex-sidecar-runtime.js";
 import { recoverCodexRuntimeAdministration } from "../../src/server/backends/codex/runtime/codex-runtime-administration.js";
 import { BackendRuntimeControlRejectedError } from "../../src/server/backends/runtime-control.js";
 import { CodexRuntimeClient } from "../../src/server/backends/codex/runtime/codex-runtime-client.js";
@@ -40,6 +41,27 @@ it.each([1, 2])("reports protocol %s mismatch through the actual sidecar wire pa
     expect(proxy.client.lifecycleSnapshot().state).not.toBe("ready");
   } finally { await proxy.close(); await f.close(); }
 });
+
+it.each([codexRuntimeEnsureOperation, codexRuntimeLookupOperation])(
+  "rejects the previous Codex profile on the wire for $operation",
+  async (operation) => {
+    const fixture = await diagnosticAttachment();
+    try {
+      // An older controller can encode its own profile at this operation version.
+      const previousControllerOperation = { ...operation, requestSchema: z.unknown() };
+      await expect(fixture.channel.call(previousControllerOperation, {
+        configuration: {
+          ...runtimeConfiguration,
+          instance: { ...runtimeConfiguration.instance, protocolRelease: "0.169.0" },
+        },
+      })).rejects.toMatchObject({ code: "sidecar_request_payload_invalid", retryable: false });
+      await expect(fixture.connection.lookup(runtimeConfiguration)).resolves.toBe(fixture.host.runtimeId);
+    } finally {
+      await fixture.close();
+      fixture.host.dispose();
+    }
+  },
+);
 
 it("rejects unadvertised human approvals before sidecar retention while preserving unowned commands", async () => {
   const f = await threadFixture();
@@ -407,7 +429,7 @@ it("keeps another runtime and acknowledgements responsive while preserving same-
 
 function metadata(threadId: string): OfficialCodexClientRequestResult<"thread/read"> {
   return { readState: null, thread: {
-    environments: null, originator: null, daybreakEnabled: null,
+    environments: null, originator: null, daybreakEnabled: null, daybreakProgramPropagationEnrolled: null,
     id: threadId, extra: {}, sessionId: "session", forkedFromId: null, attachedToThreadId: null, parentThreadId: null,
     preview: "A thread", ephemeral: false, section: null, sectionEnteredAt: null,
     projectId: null, historyMode: "paginated", modelProvider: "openai", model: null,
@@ -705,7 +727,7 @@ async function diagnosticAttachment() {
 }
 
 const runtimeConfiguration = {
-    instance: { id: scope.backendInstanceId, tenantId: scope.tenantId, kind: "codex_app_server" as const, label: "Codex", enabled: false, configurationRevision: 0, protocolRelease: "0.169.0" as const },
+    instance: { id: scope.backendInstanceId, tenantId: scope.tenantId, kind: "codex_app_server" as const, label: "Codex", enabled: false, configurationRevision: 0, protocolRelease: "0.172.0" as const },
     connections: [{ id: "connection", tenantId: scope.tenantId, ownerPrincipalId: scope.principalId, templateId: "template", kind: "codex_app_server" as const, backendInstanceId: scope.backendInstanceId, executionEnvironmentId: scope.executionEnvironmentId, label: "Codex", enabled: false, configurationRevision: 0 }],
     connection: { ownership: "external" as const, channel: { type: "unix_websocket" as const, socketPath: "/provider/codex.sock" } },
   };

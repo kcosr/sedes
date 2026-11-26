@@ -103,6 +103,42 @@ describe("persistent Codex native session recovery", () => {
     expect(f.sessions.canIdle()).toBe(method === "turn/completed");
   });
 
+  it.each(["retained", "pending-resume", "resume-head"] as const)("preserves the exact newer turn in %s across late completion and idle hints", async source => {
+    const f = fixture(method => { expect(method).toBe("turn/interrupt"); return {}; });
+    if (source === "retained") f.sessions.observeResult("thread/resume", resumed(), 1);
+    const pending = source === "retained" ? undefined : f.sessions.trackResume("thread", 1);
+    const notifyTurn = (method: "turn/started" | "turn/completed", id: string, sequence: number) =>
+      f.sessions.observeNotification({ kind: "decoded_notification", generation: 1, sequence,
+        method, params: { threadId: "thread", turn: { id } } });
+    if (source !== "resume-head") {
+      notifyTurn("turn/started", "older", 11);
+      notifyTurn("turn/started", "newer", 12);
+    }
+    for (const [sequence, status] of [[13, { type: "active", activeFlags: [] }], [14, { type: "idle" }]] as const) {
+      f.sessions.observeNotification({ kind: "decoded_notification", generation: 1, sequence,
+        method: "thread/status/changed", params: { threadId: "thread", status } });
+    }
+    notifyTurn("turn/completed", "older", 15);
+    const activeHead = {
+      id: "newer", rootTurnId: "newer", items: [], itemsView: "full", status: "inProgress",
+      startedAt: null, completedAt: null, durationMs: null, error: null,
+    };
+    const result = source === "resume-head"
+      ? { ...resumed(), thread: { ...thread("thread", true), turns: [activeHead] } }
+      : resumed();
+    pending?.apply({ result, generation: 1, inboundSequence: 10 });
+    pending?.close();
+    f.sessions.evict("thread", 1);
+    expect(f.sessions.canIdle()).toBe(false);
+
+    await f.sessions.interruptKnownActiveTurns();
+    if (source === "resume-head") expect(f.request).not.toHaveBeenCalled();
+    else expect(f.request).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ method: "turn/interrupt" }),
+      { threadId: "thread", turnId: "newer" }, expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    notifyTurn("turn/completed", "newer", 16);
+    expect(f.sessions.canIdle()).toBe(true);
+  });
+
   it("does not override a resume response with older activity or a stale generation", () => {
     const f = fixture(() => ({}));
     const pending = f.sessions.trackResume("thread", 1);
@@ -387,6 +423,41 @@ describe("persistent Codex native session recovery", () => {
     await f.sessions.refreshActivity();
     expect(f.sessions.activity()).toBe("active");
     expect(f.request.mock.calls.filter(([method]) => method.method === "thread/loaded/list")).toHaveLength(4);
+  });
+
+  it("does not treat a newer inventoried turn as idle after an older completion", async () => {
+    const f = fixture(method => method === "thread/loaded/list" ? { data: ["thread"], nextCursor: null }
+      : method === "thread/read" ? { thread: thread() } : { goal: null });
+    await f.sessions.refreshActivity();
+    expect(f.sessions.activity()).toBe("idle");
+    const notifyTurn = (method: "turn/started" | "turn/completed", id: string, sequence: number) =>
+      f.sessions.observeNotification({ kind: "decoded_notification", generation: 1, sequence,
+        method, params: { threadId: "thread", turn: { id } } });
+    notifyTurn("turn/started", "older", 10);
+    notifyTurn("turn/started", "newer", 11);
+    f.sessions.observeNotification({ kind: "decoded_notification", generation: 1, sequence: 12,
+      method: "thread/status/changed", params: { threadId: "thread", status: { type: "idle" } } });
+    notifyTurn("turn/completed", "older", 13);
+    expect(f.sessions.activity()).toBe("active");
+    notifyTurn("turn/completed", "newer", 14);
+    expect(f.sessions.activity()).toBe("idle");
+  });
+
+  it("refuses an inventory read that races newer turn activity", async () => {
+    let lists = 0;
+    const f = fixture(method => {
+      if (method === "thread/loaded/list") {
+        if (++lists === 2) f.sessions.observeNotification({ kind: "decoded_notification", generation: 1,
+          sequence: 4, method: "turn/started", params: { threadId: "thread", turn: { id: "newer" } } });
+        return { data: ["thread"], nextCursor: null };
+      }
+      return method === "thread/read" ? { thread: thread() } : { goal: null };
+    });
+    f.sessions.observeResult("thread/resume", resumed(), 1);
+    f.sessions.evict("thread", 1);
+    await expect(f.sessions.refreshActivity()).rejects.toThrow("inventory_changed");
+    expect(f.sessions.activity()).toBe("unknown");
+    expect(f.sessions.canIdle()).toBe(false);
   });
 
   it("proves an empty external inventory idle and refuses repeated cursors instead of truncating", async () => {

@@ -31,7 +31,7 @@ and execution environment can prove all launch requirements:
   persistent sidecar, whose runtime channel must have negotiated the
   `codex_managed_tui@3` `tui.control` and `tui.execute` operations; the sidecar
   advertises that capability only when its optional native PTY binding loaded;
-- the command reports a stable release at or above the supported `0.169.0`
+- the command reports a stable release at or above the supported `0.172.0`
   floor; and
 - the desired seven-axis execution tuple is complete, currently allowed, and
   exactly representable by the provider policy contract.

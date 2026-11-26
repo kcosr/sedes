@@ -1,0 +1,34 @@
+{
+  "release": "0.172.0",
+  "nativeExecutableSha256": "ad83b94c093f0cdd8176a6bc8005a461bdf23a759863e157d40f562b8a9d664d",
+  "platform": "linux/x64",
+  "native": [
+    {
+      "historyMode": "legacy",
+      "mcpItems": 14,
+      "compactionVerified": true
+    },
+    {
+      "historyMode": "paginated",
+      "mcpItems": 14,
+      "compactionVerified": true
+    }
+  ],
+  "previousStore": {
+    "release": "0.169.0",
+    "nativeExecutableSha256": "b452ca20f838a8855a88a41050ee4a694033fff4ea3ecdad5633e6e0e8d13f2b",
+    "histories": [
+      {
+        "historyMode": "legacy",
+        "mcpItems": 14,
+        "compactionVerified": false
+      },
+      {
+        "historyMode": "paginated",
+        "mcpItems": 14,
+        "compactionVerified": false
+      }
+    ]
+  },
+  "liveProviderVerified": false
+}

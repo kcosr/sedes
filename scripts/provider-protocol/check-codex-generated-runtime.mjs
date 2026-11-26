@@ -6,7 +6,7 @@ const modulePath = path.resolve(
 );
 const binding = await import(pathToFileURL(modulePath).href);
 
-if (binding.CODEX_APP_SERVER_RELEASE !== "0.169.0") {
+if (binding.CODEX_APP_SERVER_RELEASE !== "0.172.0") {
   throw new Error("Built Codex binding selected the wrong release.");
 }
 if (binding.CODEX_CLIENT_REQUEST_METHODS.length !== 28) {
@@ -18,7 +18,7 @@ if (binding.CODEX_SERVER_REQUEST_METHODS.length !== 10) {
 if (binding.CODEX_ADOPTED_SERVER_NOTIFICATION_METHODS.length !== 40) {
   throw new Error("Built Codex adopted notification registry is incomplete.");
 }
-if (binding.CODEX_SERVER_NOTIFICATION_METHODS.length !== 88) {
+if (binding.CODEX_SERVER_NOTIFICATION_METHODS.length !== 89) {
   throw new Error(
     "Built Codex notification admission registry is incomplete.",
   );
@@ -142,5 +142,5 @@ if (!rejected) {
 }
 
 console.log(
-  "Built Codex 0.169.0 production binding executes stable and experimental profiles as ESM.",
+  "Built Codex 0.172.0 production binding executes stable and experimental profiles as ESM.",
 );

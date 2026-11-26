@@ -43,6 +43,7 @@ function forkResponse() {
               type: "mcpToolCall" as const,
               id: "tool-call",
               server: "fixture",
+              environmentId: "registration-environment",
               tool: "read",
               status: "completed" as const,
               arguments: { path: "README.md" },
@@ -97,6 +98,7 @@ function projectedForkResponse() {
       environments: null,
       originator: null,
       daybreakEnabled: null,
+      daybreakProgramPropagationEnrolled: null,
     },
   };
 }

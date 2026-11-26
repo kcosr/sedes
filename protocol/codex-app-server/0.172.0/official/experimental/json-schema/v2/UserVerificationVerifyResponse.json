@@ -1,0 +1,50 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "UserVerificationBiometricType": {
+      "enum": [
+        "fingerprint"
+      ],
+      "type": "string"
+    },
+    "UserVerificationProof": {
+      "additionalProperties": false,
+      "description": "A signature over the exact decoded challenge. The verifier validates and consumes it.",
+      "properties": {
+        "credentialId": {
+          "type": "string"
+        },
+        "signature": {
+          "description": "Unpadded base64url DER ECDSA signature using P-256 and SHA-256.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "credentialId",
+        "signature"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "biometricType": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/UserVerificationBiometricType"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Native-reported authentication method for this signature. Older servers omit it. This is approval context, not part of the signed proof."
+    },
+    "proof": {
+      "$ref": "#/definitions/UserVerificationProof"
+    }
+  },
+  "required": [
+    "proof"
+  ],
+  "title": "UserVerificationVerifyResponse",
+  "type": "object"
+}

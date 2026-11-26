@@ -105,13 +105,15 @@ can apply. The detailed authority rules are in
 
 ## Version compatibility
 
-Sedes supplies the exact generated `0.169.0` app-server protocol profile from
+Sedes supplies the exact generated `0.172.0` app-server protocol profile from
 its compiled Codex backend. Operators do not select that profile in Settings.
-Sedes independently probes and admits stable Codex app-server executables at or
-above **0.169.0**. Upgrade each execution host's app-server and managed TUI
-command before upgrading Sedes. Build metadata does not affect version precedence;
-prereleases, malformed versions, versions below the floor, and explicitly
-excluded known-bad releases are rejected.
+Sedes independently probes and admits stable Codex executables at or above
+**0.172.0** for app-server, managed TUI, and Codex CLI research. Settle active
+Codex work before upgrading. Update each execution host's Codex command, the
+Sedes server, and its execution sidecars in the same maintenance window. Older
+Sedes parsers can reject MCP history emitted by Codex 0.171.0 and newer. Build
+metadata does not affect version precedence. Prereleases, malformed versions,
+versions below the floor, and explicitly excluded releases are rejected.
 
 The minimum provides native provider-specific model discovery. Restored threads
 and forks keep the source thread's saved native provider when the native default
@@ -121,7 +123,7 @@ provider rather than forking existing work. Older app-servers can ignore the
 provider selector and return the wrong catalog, so they are rejected rather than
 admitted with ambiguous settings.
 
-Releases newer than the 0.169.0 tested-through threshold are admitted with an
+Releases newer than the 0.172.0 tested-through threshold are admitted with an
 installation advisory. They do not gain capabilities merely because of their
 version. Managed TUI uses `moduleConfiguration.tuiExecutablePath` when present;
 otherwise it resolves the first `codex` on the execution environment account's
@@ -135,9 +137,10 @@ routes. Reviewed experimental directions remain provider-private and do not
 change the normalized browser contract or any other backend.
 
 Native item timestamps remain available in the existing transcript timing fields.
-Completion token counts, moderation/display hints, section changes, read-state
-metadata, and executor-environment metadata are validated without adding browser
-controls or granting additional execution authority. Native sections do not move
+Completion token counts, version 1 moderation display metadata, MCP registration
+scope, section changes, read-state metadata, and executor environments remain
+provider-private. MCP registration scope keeps warnings for identically named
+servers independent. Native sections do not move
 Sedes threads between groups; read-state does not replace Sedes completion
 attention. Audio URL/file references, including function-output audio, remain
 metadata only: playback and audio attachment submission are unsupported. Required
@@ -145,12 +148,15 @@ human command approval and additional native executor environments remain
 unsupported. Inline generated PNG images remain available; file-backed generated
 images remain unavailable without native byte-retrieval authority.
 
-Codex 0.169.0 removes `auto_review.extra_policy` and
+Codex 0.169.0 removed `auto_review.extra_policy` and
 `auto_review.experimental_policy_template`. Sedes launches owned app-servers and
 managed TUI commands with `--strict-config`, so retaining either key prevents
 startup. Remove the template override; move enforced additional review rules to
 `guardian_extra_policy` in managed `requirements.toml`. Sedes does not rewrite
-operator-owned native configuration or authentication.
+operator-owned native configuration or authentication. The stock 0.172.0
+app-server also requires a host time provider for the experimental
+`features.current_time_reminder.clock_source = "external"` setting. Use the
+native clock on execution hosts where that experimental override was set.
 
 Provider executables remain separately installed. Updating Sedes or an execution
 sidecar does not update the operator-owned Codex executable. Upgrade Codex

@@ -11,28 +11,28 @@ import { codexThreadForkMethod } from "../../src/server/backends/codex/codex-c4-
 import { codexThreadReadMethod, type CodexThread } from "../../src/server/backends/codex/codex-c1-protocol.js";
 import { codexThreadStartMethod, codexTurnStartMethod } from "../../src/server/backends/codex/codex-c2-protocol.js";
 
-// An explicitly selected, digest-verified stock 0.169.0 binary, disposable
+// An explicitly selected, digest-verified stock 0.172.0 binary, disposable
 // native stores, and loopback inference only. No credentials or shell tools.
 const candidate = process.env.SEDES_SPEED_NATIVE_EXECUTABLE;
 const native = candidate ? it : it.skip;
 if (candidate) beforeAll(async () => {
   expect(path.isAbsolute(candidate)).toBe(true);
-  const versionHome = await mkdtemp(path.join(tmpdir(), "codex169-version-"));
+  const versionHome = await mkdtemp(path.join(tmpdir(), "codex-runtime-version-"));
   try {
     expect(execFileSync(candidate, ["--version"], {
       env: probeEnvironment(versionHome), encoding: "utf8", timeout: 10_000,
-    }).trim()).toBe("codex-cli 0.169.0");
+    }).trim()).toBe("codex-cli 0.172.0");
   } finally { await rm(versionHome, { recursive: true, force: true }); }
   const metadata = JSON.parse(await readFile(path.resolve(
-    "protocol/codex-app-server/0.169.0/runtime-compatibility/0.169.0.json"), "utf8")) as {
+    "protocol/codex-app-server/0.172.0/runtime-compatibility/0.172.0.json"), "utf8")) as {
       platforms: { nodePlatform: string; nodeArch: string; executableSha256: string }[];
     };
   const platform = metadata.platforms.find(value => value.nodePlatform === process.platform && value.nodeArch === process.arch);
   expect(platform).toBeDefined();
   const sha256 = createHash("sha256").update(await readFile(candidate)).digest("hex");
   expect(sha256).toBe(platform!.executableSha256);
-  process.stdout.write(`Offline Codex169 lifecycle qualification: ${JSON.stringify({
-    version: "0.169.0", sha256, platform: process.platform, arch: process.arch, authenticatedProvider: false,
+  process.stdout.write(`Offline Codex lifecycle qualification: ${JSON.stringify({
+    version: "0.172.0", sha256, platform: process.platform, arch: process.arch, authenticatedProvider: false,
   })}\n`);
 });
 
@@ -46,7 +46,7 @@ function completedResponse(id: string): MockResponseEvent[] {
 }
 
 async function fixture() {
-  const root = await mkdtemp(path.join(tmpdir(), "sedes-codex169-runtime-"));
+  const root = await mkdtemp(path.join(tmpdir(), "sedes-codex-runtime-fixture-"));
   const home = path.join(root, "home"), workspace = path.join(root, "workspace");
   const provider = await startMockResponsesServer();
   await Promise.all([mkdir(home), mkdir(workspace)]);

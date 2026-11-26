@@ -1,0 +1,113 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ThreadRealtimeOrder": {
+      "oneOf": [
+        {
+          "description": "Sort by canonical observation time, then committed position.",
+          "enum": [
+            "observedAt"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Sort by committed position, including events sealed after older snapshots.",
+          "enum": [
+            "position"
+          ],
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "properties": {
+    "afterPosition": {
+      "format": "uint64",
+      "minimum": 0.0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "cursor": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "eventId": {
+      "description": "A required exact event ID, such as a completed item's acknowledgement. Returns pending until projected. Explicit filters can exclude a known event.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "fromObservedAtMs": {
+      "description": "Inclusive canonical observation time lower bound.",
+      "format": "int64",
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "limit": {
+      "format": "uint32",
+      "minimum": 0.0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "order": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ThreadRealtimeOrder"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Defaults to canonical observation time."
+    },
+    "requiredThroughPosition": {
+      "description": "Return pending until the projection includes this committed position.",
+      "format": "uint64",
+      "minimum": 0.0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "sessionId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "snapshotEnd": {
+      "description": "Exclusive committed position delimiting an immutable snapshot.",
+      "format": "uint64",
+      "minimum": 0.0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "threadId": {
+      "type": "string"
+    },
+    "toObservedAtMs": {
+      "description": "Exclusive canonical observation time upper bound.",
+      "format": "int64",
+      "type": [
+        "integer",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "threadId"
+  ],
+  "title": "ThreadRealtimeListParams",
+  "type": "object"
+}

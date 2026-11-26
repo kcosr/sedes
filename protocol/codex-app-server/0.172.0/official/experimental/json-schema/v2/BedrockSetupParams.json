@@ -1,0 +1,81 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "BedrockProviderId": {
+      "enum": [
+        "amazon-bedrock",
+        "amazon-bedrock-runtime"
+      ],
+      "type": "string"
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "profile": {
+          "type": "string"
+        },
+        "providerId": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/BedrockProviderId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Defaults to Amazon Bedrock Mantle when omitted."
+        },
+        "region": {
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "profile"
+          ],
+          "title": "Profilev2::BedrockSetupParamsType",
+          "type": "string"
+        }
+      },
+      "required": [
+        "profile",
+        "region",
+        "type"
+      ],
+      "title": "Profilev2::BedrockSetupParams",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "providerId": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/BedrockProviderId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Defaults to Amazon Bedrock Mantle when omitted."
+        },
+        "region": {
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "environment"
+          ],
+          "title": "Environmentv2::BedrockSetupParamsType",
+          "type": "string"
+        }
+      },
+      "required": [
+        "region",
+        "type"
+      ],
+      "title": "Environmentv2::BedrockSetupParams",
+      "type": "object"
+    }
+  ],
+  "title": "BedrockSetupParams"
+}

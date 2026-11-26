@@ -2578,6 +2578,7 @@ class CodexE2eRpcFixture {
                   type: "mcpToolCall",
                   id: `mcp-${ordinal}`,
                   server: "fixture",
+                  environmentId: null,
                   tool: "inspect_history",
                   status: "completed",
                   arguments: {
@@ -3069,6 +3070,7 @@ class CodexE2eRpcFixture {
         environments: null,
         originator: "sedes_web",
         daybreakEnabled: null,
+        daybreakProgramPropagationEnrolled: null,
         extra: {},
         sessionId: `e2e-codex-created-session-${threadSource}`,
         forkedFromId: null, attachedToThreadId: null,

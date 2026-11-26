@@ -28,7 +28,7 @@ describe("maximum page preview media boundaries", () => {
     // invocation budget, and must still fit the separate provider frame limits.
     expect(Buffer.byteLength(JSON.stringify(mcp))).toBeGreaterThan(4 * 1024 * 1024);
     const params = { threadId: "thread-a", turnId: "turn-a", completedAtMs: 1, item: {
-      type: "mcpToolCall", id: "preview", server: "sedes", tool: "sedes_page_preview", status: "completed",
+      type: "mcpToolCall", id: "preview", server: "sedes", environmentId: null, tool: "sedes_page_preview", status: "completed",
       arguments: { html: "<p>preview</p>" }, appContext: null, mcpAppResourceUri: null, mcpAppUi: null, pluginId: null,
       readOnlyHint: true, result: { content: mcp.content, structuredContent: mcp.structuredContent, _meta: null }, error: null, durationMs: 1,
     } };
