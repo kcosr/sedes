@@ -90,6 +90,18 @@ replacement and retained reconnect. An exact pending permission also supplies
 active foreground authority on a cold attachment, allowing application
 composition to show the approval state without requiring a fresh text chunk.
 It does not make an already completed foreground turn active.
+A bound session can replay a permission before ACP `session/load` returns.
+Sedes exposes that decision for the exact session during loading and keeps
+ordinary submissions and settings changes fenced until load completes. The
+finished load supplies its authoritative settings. If the load fails, reconnect
+can drain the closed generation's events. After confirming peer cleanup, a
+subsequent attach reloads the same native session and retains the outcomes of
+prior requests, including an uncertain Stop. The host keeps its prior activity
+inventory until the new generation reads history.
+
+Attachments and observation pages carry the IDs of pending native prompts. A pending prompt holds
+Send across non-daemon background work even after the foreground turn settles.
+A late failure notice can enrich the timeline without completing the turn again.
 Acknowledged mutation outcomes remain readable while the host is retained,
 without keeping it busy solely for an already-applied receipt.
 
@@ -103,7 +115,7 @@ work. Stop, request cancellation, and owned shutdown still cancel pending waits.
 ## Native history
 
 `native-projection.json` is the reviewed field projection of protobuf
-descriptors embedded in official `agy` 1.5.14. Its descriptor provenance is
+descriptors embedded in official `agy` 1.5.18. Its descriptor provenance is
 recorded separately from runtime version admission; runtime compatibility is not
 an executable digest allowlist. The decoder bounds bytes, nesting, fields and
 integers and rejects changed wire types for known fields.
@@ -194,9 +206,9 @@ receipt exists. The final execution governs a multi-execution turn; trailing
 native inputs proven unstarted do not advance the executed head. The same proof
 settles background continuations and retires retained ACP tools only when no
 newer activity invalidates it. A failed or cancelled tool step alone is
-insufficient. Remote history carries this required evidence through `antigravity_runtime` capability
-4; older peers fail capability negotiation because their derived child states
-can mistake recoverable tool errors for whole-execution failure.
+insufficient. Capability 5 of `antigravity_runtime` carries the diagnostic
+classification and the child state derived on the execution host. Remote
+peers must negotiate this capability before opening a runtime.
 
 Executor termination reasons have explicit dispositions. The same exact
 identity, frontier, terminal-step and no-auto-continue checks apply to every
@@ -215,8 +227,12 @@ supported receipt:
 Unsupported receipts leave incomplete turns reconciling and children unknown
 unless a separate supported terminal response proves the outcome. Error text
 never fills that evidence gap. A failed executor uses its standalone/planner
-error diagnostic when present at the executed head, otherwise a generic failure;
-it does not attribute the execution failure to an ordinary tool diagnostic.
+error diagnostic when present at the executed head. A completed, execution-ID-free
+system error-message step without a tool call is a display notice. Both foreground
+and child history skip these notices when locating the executed head. If an exact
+`ERROR` receipt has no displayable error at its executed head, the first trailing
+notice with error text supplies the failure message. If neither source supplies
+text, Sedes displays a generic failure.
 
 Exact child-session reads apply the same executor proof before classifying a
 cancelled tool tail as a cancelled child or a failed tail as terminal. Missing,
@@ -261,7 +277,7 @@ Ordinary failures and historical diagnostic-only queue rows do not prove
 abandonment. An absent provider operation can be cleared locally only after
 explicit application abandonment; loss of carrier authority preserves uncertainty.
 
-Stock `agy` 1.5.14 can cancel the original execution after a permission rejection
+Stock `agy` 1.5.14 and 1.5.18 can cancel the original execution after a permission rejection
 without replying to a queued concurrent prompt. Live qualification observed an
 exact `USER_CANCELED` executor receipt and no queued input row while that prompt
 remained pending. Sedes retains the unresolved operation: native quiescence does
@@ -270,6 +286,11 @@ not fabricate that proof. Live qualification recovered this case with an explici
 Stop, verifying the queued callback's cancellation receipt and subsequent prompt
 admission. The application does not issue a hidden Stop to turn permission
 rejection into cancellation of all work.
+
+During stock 1.5.18 qualification, a second concurrent Steer sometimes reached
+the provider after Stop had begun. The CLI rejected that prompt with JSON-RPC
+`-32603`. Sedes kept the rejection on that operation and retained the native
+cancellation receipts for the prompts the provider had accepted.
 
 Accepted ACP events advance and acknowledge their cursor before passive history
 acquisition, so a history-worker failure does not replay them. Reconnect applies

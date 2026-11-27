@@ -172,9 +172,9 @@ User-facing changes are collected here before release. See the
   Bound threads support Sedes-local titles that survive native rediscovery;
   Antigravity displays its official brand mark and reasoning effort labels such
   as **Extra High**. Codex Saved Agents use the same reasoning labels as threads.
-  Upgrade Antigravity execution sidecars with the server for runtime capability **4**.
+  Upgrade Antigravity execution sidecars with the server for runtime capability **5**.
   See [Antigravity setup](docs/operator/backends/antigravity.md).
-  ([#144](https://github.com/kcosr/sedes/pull/144))
+  ([#144](https://github.com/kcosr/sedes/pull/144), [#168](https://github.com/kcosr/sedes/pull/168))
 
 - Enable **Highlight questions in agent replies** under **Settings > Appearance
   > Chat formatting** to show completed questions in red with an underline.
@@ -531,10 +531,12 @@ User-facing changes are collected here before release. See the
   editor for that selection.
   ([#146](https://github.com/kcosr/sedes/pull/146))
 
-- Antigravity tool errors no longer prematurely complete agent work or send
-  empty failure callbacks while the agent is still working. Genuine failed and
-  canceled executions still settle from native terminal evidence.
-  ([#144](https://github.com/kcosr/sedes/pull/144))
+- Antigravity quota failures settle the turn even when the CLI appends a
+  separate error notice. Recoverable tool errors let the agent keep working.
+  Reattaching preserves pending approvals, and Send reflects a prompt still
+  waiting for background work. The reference CLI is 1.5.18 and the minimum
+  remains 1.5.14.
+  ([#144](https://github.com/kcosr/sedes/pull/144), [#168](https://github.com/kcosr/sedes/pull/168))
 
 - Accepted Steers remain visible until their matching message arrives. Force
   Reset and queue withdrawal clear stale Steer cards across clients and release

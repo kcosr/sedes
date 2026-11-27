@@ -1,7 +1,9 @@
 import type { InitializeResponse } from "@agentclientprotocol/sdk";
 import { AntigravityError } from "./port.js";
 
-export const ANTIGRAVITY_PROTOCOL_RELEASE = "1.5.14";
+// The qualified profile labels Sedes configuration. The ACP version gate below
+// independently admits compatible stock runtimes starting with 1.5.14.
+export const ANTIGRAVITY_PROTOCOL_RELEASE = "1.5.18";
 export function admitAntigravityInitialize(value: InitializeResponse): string {
   const version = value.agentInfo?.version;
   const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version ?? "");

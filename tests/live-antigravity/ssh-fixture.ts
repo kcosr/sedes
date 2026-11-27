@@ -2,10 +2,12 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { executionPolicyDigest } from "../../src/internal/sidecar-protocol/execution-policy.js";
 import { SidecarOperationRegistry } from "../../src/internal/sidecar-protocol/operation-registry.js";
 import { SidecarClientSession } from "../../src/server/sidecar/sidecar-client-session.js";
 import { SshSidecarArtifactInstaller } from "../../src/server/sidecar/ssh-sidecar-artifact-installer.js";
 import type { SidecarRuntimeLease } from "../../src/server/sidecar/runtime-channel.js";
+import { runtimeLaunchDigest } from "../../src/server/backends/provider-launch-digest.js";
 import { AntigravityRemotePort } from "../../src/server/backends/antigravity/sidecar/remote-port.js";
 import { antigravityRuntimeCapability } from "../../src/server/backends/antigravity/sidecar/wire.js";
 import type { AntigravityIdentity, AntigravityRuntimeConfiguration } from "../../src/server/backends/antigravity/port.js";
@@ -26,6 +28,13 @@ export async function sshFixture() {
   let generation = 0, identity: AntigravityIdentity | undefined;
   const configuration: AntigravityRuntimeConfiguration = { tenantId: randomUUID(), principalId: randomUUID(), backendInstanceId: randomUUID(), executionEnvironmentId: randomUUID(),
     executablePath: selected.executablePath, geminiDirectory: selected.geminiDirectory, initializationTimeoutMs: 30_000 };
+  const revision = { environmentRevision: 1, operationsRevision: 1 };
+  const snapshot = { roots: [], capabilities: [], backends: [{
+    id: configuration.backendInstanceId, kind: "antigravity", generation: 1,
+    launchDigest: runtimeLaunchDigest.antigravity(configuration),
+    targets: [{ id: randomUUID(), generation: 1 }],
+  }] };
+  const policy = { snapshot, digest: executionPolicyDigest(snapshot), revision: 1, configuration: revision };
   const ports: AntigravityRemotePort[] = [];
   let installer: SshSidecarArtifactInstaller | undefined;
   let serviceStarted = false;
@@ -55,7 +64,7 @@ export async function sshFixture() {
     installer = new SshSidecarArtifactInstaller({ host: "sedes-production-fixture", artifact, sshExecutable: path.join(bin, "ssh"),
       agentToolEndpointKey: randomBytes(12).toString("hex"), testOnlyAccountHome: home,
       serviceScope: { installationId: randomUUID(), tenantId: configuration.tenantId, principalId: configuration.principalId, executionEnvironmentId: configuration.executionEnvironmentId },
-      configuration: { environmentRevision: 1, operationsRevision: 1 } });
+      configuration: revision });
     await installer.install(AbortSignal.timeout(30_000));
     const connect = async (existing: boolean) => {
       const sessionNonce = randomBytes(32).toString("base64url"), signal = AbortSignal.timeout(30_000);
@@ -66,7 +75,9 @@ export async function sshFixture() {
       recovery = existing;
       session = await SidecarClientSession.start({ connectionCompression: true, transportKind: "ssh_stdio", stream, sessionNonce, carrierGeneration: generation,
         artifact, installation: stream.installation, authorizedCapabilities: [], authorizedRuntimeCapabilities: [antigravityRuntimeCapability],
+        policyAttachment: existing ? "recovery" : "normal", readDesiredPolicy: () => policy,
         sedesOperations: new SidecarOperationRegistry(), signal });
+      if (!existing) await session.applyPolicy(policy, signal);
       lease = { channel: session.runtimeChannel, closed: session.closed, controllerEpoch: stream.serviceStatus.controllerEpoch, serviceIncarnation: stream.serviceStatus.serviceIncarnation, release() {} };
     };
     await connect(false);

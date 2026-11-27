@@ -46,7 +46,7 @@ async function fixture() {
   const hosts = new AntigravityHostRegistry({ scope, executionEnvironmentId: "remote", channels, environment: process.env, services, createHost });
   return { cwd, configuration, services, hosts, launched, createHost, readHistory, failCleanup(value: boolean) { failCleanup = value; } };
 }
-async function attachment(f: Awaited<ReturnType<typeof fixture>>, mode: "normal" | "recovery" = "normal") {
+async function attachment(f: Awaited<ReturnType<typeof fixture>>, mode: "normal" | "recovery" = "normal", supportedAntigravityMajor: number = antigravityRuntimeCapability.majorVersion) {
   const left = new Transport(), right = new Transport(); left.peer = right; right.peer = left;
   const epoch = attachFixturePolicy(f.services, serviceConfiguration, mode, { roots: [], capabilities: [],
     backends: [{ id: f.configuration.backendInstanceId, kind: "antigravity", generation: 1, launchDigest: runtimeLaunchDigest.antigravity(f.configuration), targets: [{id:"target", generation:1}] }] });
@@ -58,7 +58,9 @@ async function attachment(f: Awaited<ReturnType<typeof fixture>>, mode: "normal"
   const capabilities = rightRegistry.capabilities().map(({ capabilityId, majorVersion }) => ({ capabilityId, majorVersion }));
   registerControlV3Operations(rightRegistry, { buildId: "test", artifactSha256: "a".repeat(64), enabledSidecarCapabilities: capabilities, enabledSedesCapabilities: leftRegistry.capabilities() });
   sedes.start(); sidecar.start();
-  await sedes.call(controlHelloOperation, { compression: "none", expectedBuildId: "test", expectedArtifactSha256: "a".repeat(64), supportedSidecarCapabilities: capabilities, offeredSedesCapabilities: leftRegistry.capabilities() });
+  const supported = capabilities.map(capability => capability.capabilityId === "antigravity_runtime"
+    ? { ...capability, majorVersion: supportedAntigravityMajor } : capability);
+  await sedes.call(controlHelloOperation, { compression: "none", expectedBuildId: "test", expectedArtifactSha256: "a".repeat(64), supportedSidecarCapabilities: supported, offeredSedesCapabilities: leftRegistry.capabilities() });
   const release = vi.fn();
   const lease: SidecarRuntimeLease = { channel, controllerEpoch: epoch, serviceIncarnation: f.services.serviceIncarnation, closed: left.closed, release };
   let disconnected = false;
@@ -81,6 +83,29 @@ describe("Antigravity persistent sidecar", () => {
     await expect(inspectRetainedAntigravityOwner(recovery.lease, f.configuration.backendInstanceId, signal)).resolves.toBe(true);
     expect(f.launched).toHaveBeenCalledOnce();
     expect(f.createHost).toHaveBeenCalledOnce();
+  });
+
+  it("delivers a cold-load approval and the resulting session settings through the sidecar", async () => {
+    const f = await fixture(), connected = await attachment(f), { port } = proxy(f, () => connected.lease);
+    const identity = { sessionId: "cold-load", cwd: f.cwd };
+    const opening = await port.attach({ ...identity,
+      executionEnvironment: { AGY_FIXTURE_LOAD_PERMISSION: { kind: "literal", value: "wait" } } });
+    expect(opening.loading).toBe(true);
+    expect(opening.pendingPermissions).toHaveLength(1);
+    const permission = opening.pendingPermissions[0]!;
+    expect(permission.request.sessionId).toBe(identity.sessionId);
+    await port.request({ handleId: opening.handleId, operationId: "answer", command: {
+      type: "permission", requestId: permission.requestId, response: { outcome: { outcome: "selected", optionId: "allow" } },
+    } });
+    await vi.waitFor(async () => {
+      const observed = await port.observe({ handleId: opening.handleId, afterSequence: opening.throughSequence });
+      expect(observed.events).toContainEqual(expect.objectContaining({ kind: "session_loaded" }));
+    });
+    const loaded = await port.attachExisting(identity);
+    expect(loaded?.handleId).toBe(opening.handleId);
+    expect(loaded?.loading).toBeUndefined();
+    expect(loaded?.pendingPermissions).toEqual([]);
+    expect(loaded?.setup.session.configOptions).toContainEqual(expect.objectContaining({ id: "model", currentValue: "fixture-model" }));
   });
 
   it.each([
@@ -176,9 +201,11 @@ describe("Antigravity persistent sidecar", () => {
     await expect(port.readHistory({ ...identity, knownRevision: "a".repeat(64) })).resolves.toBeNull();
     expect(f.readHistory).toHaveBeenCalledOnce();
     expect(encoded).toHaveBeenLastCalledWith({ status: "ok", runtimeVersion: null, value: null });
-    f.readHistory.mockResolvedValue({ ...identity, native: { steps: [], executions: [], revision: "b".repeat(64) } });
-    await expect(port.readHistory({ ...identity, knownRevision: "a".repeat(64) })).resolves.toMatchObject({ native: { revision: "b".repeat(64) } });
-    await expect(port.readHistory(identity)).resolves.toMatchObject({ native: { revision: "b".repeat(64) } });
+    const updated: AntigravityHistory = { ...identity, native: { executions: [], revision: "b".repeat(64),
+      steps: [{ index: 0, type: 17, status: 3, hasSubtrajectory: false, standaloneSystemDiagnostic: true, error: "Individual quota reached." }] } };
+    f.readHistory.mockResolvedValue(updated);
+    await expect(port.readHistory({ ...identity, knownRevision: "a".repeat(64) })).resolves.toEqual(updated);
+    await expect(port.readHistory(identity)).resolves.toEqual(updated);
     expect(f.launched).not.toHaveBeenCalled();
   });
   it("rejects an unchanged response without a caller revision", async () => {
@@ -190,7 +217,7 @@ describe("Antigravity persistent sidecar", () => {
       .rejects.toMatchObject({ code: "antigravity_history_revision_unproven" });
   });
   it("requires executor evidence inventory in its versioned private history contract", () => {
-    expect(antigravityRuntimeCapability.majorVersion).toBe(4);
+    expect(antigravityRuntimeCapability.majorVersion).toBe(5);
     const history = { sessionId: "session", cwd: "/workspace", native: { steps: [], revision: "a".repeat(64) } };
     expect(antigravityHistorySchema.safeParse(history).success).toBe(false);
     expect(antigravityHistorySchema.safeParse({ ...history, native: { ...history.native, executions: [] } }).success).toBe(true);
@@ -282,10 +309,9 @@ describe("Antigravity persistent sidecar", () => {
     await expect(f.hosts.lookup(changed, connected.epoch)).resolves.toBe(host);
     expect(f.createHost).toHaveBeenCalledOnce();
   });
-  it("denies wrong scope, unavailable runtime capability, and stale controllers before execution", async () => {
-    const f = await fixture(), connected = await attachment(f);
+  it("denies wrong scope and incompatible capability 4 before execution", async () => {
+    const f = await fixture(), connected = await attachment(f, "normal", 4);
     await expect(f.hosts.ensure({ ...f.configuration, principalId: "wrong" }, connected.epoch)).rejects.toMatchObject({ code: "antigravity_configuration_scope_denied" });
-    vi.spyOn(connected.channel, "supportsOperation").mockReturnValue(false);
     const { port } = proxy(f, () => connected.lease);
     await expect(port.create({ cwd: f.cwd, operationId: "create" })).rejects.toMatchObject({ code: "antigravity_remote_unsupported" });
     expect(f.createHost).not.toHaveBeenCalled();

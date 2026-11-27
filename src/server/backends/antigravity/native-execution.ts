@@ -1,5 +1,10 @@
 import type { AntigravityNativeHistory, AntigravityNativeStep } from "./native-schema.js";
 
+/** A standalone system notice is presentational, even when it follows the executor's final step. */
+export function isAntigravityStandaloneDiagnostic(step: AntigravityNativeStep): boolean {
+  return step.standaloneSystemDiagnostic === true;
+}
+
 /** Terminal planner evidence, never an ordinary tool's status or diagnostic. */
 export function antigravityNativeTerminalOutcome(step: AntigravityNativeStep | undefined): "completed" | "interrupted" | "failed" | undefined {
   if (!step) return undefined;
@@ -14,7 +19,8 @@ export function antigravityNativeTerminalOutcome(step: AntigravityNativeStep | u
   return undefined;
 }
 
-export function antigravityTerminatedExecutionHeads(native: Pick<AntigravityNativeHistory, "steps" | "executions">): ReadonlyMap<string, { index: number; outcome: "failed" | "interrupted" }> {
+type TerminatedExecution = { index: number; outcome: "failed" | "interrupted"; terminationReason: number };
+export function antigravityTerminatedExecutionHeads(native: Pick<AntigravityNativeHistory, "steps" | "executions">): ReadonlyMap<string, TerminatedExecution> {
   const heads = new Map<string, AntigravityNativeStep>(), unsettled = new Set<string>();
   const unconsumed = antigravityUnstartedInputs(native);
   const steps = new Map(native.steps.map(step => [step.index, step]));
@@ -24,7 +30,7 @@ export function antigravityTerminatedExecutionHeads(native: Pick<AntigravityNati
   }
   const receipts = new Map<string, AntigravityNativeHistory["executions"][number] | null>();
   for (const receipt of native.executions) receipts.set(receipt.executionId, receipts.has(receipt.executionId) ? null : receipt);
-  const terminated = new Map<string, { index: number; outcome: "failed" | "interrupted" }>();
+  const terminated = new Map<string, TerminatedExecution>();
   for (const [id, receipt] of receipts) {
     // Fatal errors, invocation/token limits and user cancellation can finish
     // an executor without another planner response. A tool diagnostic cannot.
@@ -36,7 +42,7 @@ export function antigravityTerminatedExecutionHeads(native: Pick<AntigravityNati
     // expose the last executed step to history and activity consumers.
     if (receipt && outcome && !receipt.proceededWithAutoContinue && head &&
         steps.get(receipt.lastStepIndex)?.executionId === id && head.index <= receipt.lastStepIndex &&
-        !unsettled.has(id)) terminated.set(id, { index: head.index, outcome });
+        !unsettled.has(id)) terminated.set(id, { index: head.index, outcome, terminationReason: receipt.terminationReason });
   }
   return terminated;
 }

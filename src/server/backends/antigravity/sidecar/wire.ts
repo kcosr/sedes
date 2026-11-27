@@ -72,7 +72,7 @@ export const antigravityHostCommandSchema = z.discriminatedUnion("action", [
 export type AntigravityHostCommand = z.infer<typeof antigravityHostCommandSchema>;
 export type AntigravityHostCommandInput = AntigravityHostCommand extends infer Command
   ? Command extends AntigravityHostCommand ? Omit<Command, "controllerEpoch" | "serviceIncarnation"> : never : never;
-const capability = { capabilityId: "antigravity_runtime", majorVersion: 4 } as const;
+const capability = { capabilityId: "antigravity_runtime", majorVersion: 5 } as const;
 export const antigravityExecuteOperation = { ...capability, operation: "runtime.execute", requestSchema: sidecarRuntimeBodySchema,
   responseSchema: sidecarRuntimeBodySchema, lane: "operation", maximumDeadlineMilliseconds: 120_000,
 } satisfies SidecarOperationDefinition<z.infer<typeof sidecarRuntimeBodySchema>, z.infer<typeof sidecarRuntimeBodySchema>>;
@@ -95,18 +95,20 @@ export const antigravityHostResponseSchema = z.discriminatedUnion("status", [
   z.strictObject({ status: z.literal("failed"), runtimeVersion: z.string().max(128).nullable(), failure: antigravityFailureSchema }),
 ]);
 export const antigravityAttachmentSchema = antigravityIdentitySchema.extend({ toolPeerStamp: z.string().regex(/^[0-9a-f]{64}$/u).optional(), handleId: id, generation: id, setup: antigravitySetupSchema,
+  loading: z.literal(true).optional(), closed: z.literal(true).optional(),
   createdByOperationId: id.optional(),
-  throughSequence: position, retainedAfterSequence: position, retainedOperationIds: z.array(id).max(640),
+  throughSequence: position, retainedAfterSequence: position, retainedOperationIds: z.array(id).max(640), activePromptIds: z.array(id).max(32),
   pendingPermissions: z.array(z.strictObject({ requestId: id, openedAt: z.iso.datetime(), request: acp<RequestPermissionRequest>(decodeRequestPermissionRequest) })).max(64) });
 const eventPosition = { sequence: position };
 export const antigravityEventSchema = z.discriminatedUnion("kind", [
+  z.strictObject({ ...eventPosition, kind: z.literal("session_loaded"), session: acp<LoadSessionResponse>(decodeLoadSessionResponse) }),
   z.strictObject({ ...eventPosition, kind: z.literal("update"), notification: acp<SessionNotification>(decodeSessionNotification) }),
   z.strictObject({ ...eventPosition, kind: z.literal("permission"), requestId: id, openedAt: z.iso.datetime(), request: acp<RequestPermissionRequest>(decodeRequestPermissionRequest) }),
   z.strictObject({ ...eventPosition, kind: z.literal("permission_resolved"), requestId: id }),
   z.strictObject({ ...eventPosition, kind: z.literal("operation"), operationId: id, outcome: antigravityOutcomeSchema }),
   z.strictObject({ ...eventPosition, kind: z.literal("failure"), failure: antigravityFailureSchema }),
 ]);
-export const antigravityObservationSchema = z.strictObject({ events: z.array(antigravityEventSchema).max(256), throughSequence: position, retainedAfterSequence: position, closed: z.boolean() });
+export const antigravityObservationSchema = z.strictObject({ activePromptIds: z.array(id).max(32), events: z.array(antigravityEventSchema).max(256), throughSequence: position, retainedAfterSequence: position, closed: z.boolean() });
 export const antigravityInspectionSchema = z.strictObject({ runtimeId: id, state: z.enum(["idle", "active", "unknown"]), revision: id,
   blockers: z.array(z.enum(["active_work", "pending_interaction", "unsettled_outcome", "cleanup_unproven", "unknown_state"])).max(5),
   retainedSessions: z.array(antigravityIdentitySchema.extend({ handleId: id, generation: id, closed: z.boolean() })).max(32) });

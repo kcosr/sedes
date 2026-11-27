@@ -42,6 +42,125 @@ async function drain(host: AntigravityHost, handleId: string): Promise<Antigravi
   await host.acknowledge({ handleId, throughSequence: observed.throughSequence }); return [...observed.events];
 }
 describe("Antigravity execution host", () => {
+  function replayInput(cwd: string, behavior: string) {
+    return { sessionId: "4c8ece79-6741-451f-8aa5-e01d576ed055", cwd,
+      executionEnvironment: { AGY_FIXTURE_LOAD_PERMISSION: { kind: "literal" as const, value: behavior } } };
+  }
+  it("attaches to the exact replayed approval while load waits for an answer, then publishes its settings", async () => {
+    const f = await fixture(), input = replayInput(f.cwd, "wait");
+    const [a, concurrent] = await Promise.all([f.host.attach(input), f.host.attach(input),
+      expect(f.host.attach({ sessionId: input.sessionId, cwd: input.cwd })).rejects.toMatchObject({ code: "antigravity_execution_environment_restart_required" })]);
+    expect(concurrent.handleId).toBe(a.handleId);
+    expect(a).toMatchObject({ loading: true, setup: { session: {} }, pendingPermissions: [{ request: { sessionId: input.sessionId } }] });
+    await expect(f.host.request({ handleId: a.handleId, operationId: "too-early", command: { type: "prompt", prompt: [] } }))
+      .rejects.toMatchObject({ code: "antigravity_session_loading", delivery: "not_sent" });
+    // The normal 1s load budget must not cap a human decision.
+    await new Promise(resolve => realSetTimeout(resolve, 1100));
+    const held = await f.host.attachExisting(input);
+    expect(held?.pendingPermissions).toEqual(a.pendingPermissions);
+    const command = { type: "permission" as const, requestId: a.pendingPermissions[0]!.requestId,
+      response: { outcome: { outcome: "selected" as const, optionId: "allow" } } };
+    expect(await f.host.request({ handleId: a.handleId, operationId: "answer", command })).toMatchObject({ status: "completed" });
+    await vi.waitFor(async () => {
+      const loaded = await f.host.attachExisting(input);
+      expect(loaded?.loading).toBeUndefined();
+      expect(loaded?.setup.session.configOptions).not.toHaveLength(0);
+      expect(loaded?.pendingPermissions).toEqual([]);
+    });
+    expect(await drain(f.host, a.handleId)).toContainEqual(expect.objectContaining({ kind: "session_loaded" }));
+  });
+  it.each(["stall", "fail"] as const)("closes a %s following a load decision and retains the answer until delivery", async behavior => {
+    const f = await fixture(), input = replayInput(f.cwd, behavior);
+    const a = await f.host.attach(input);
+    expect(a.loading).toBe(true);
+    const command = { type: "permission" as const, requestId: a.pendingPermissions[0]!.requestId, response: { outcome: { outcome: "cancelled" as const } } };
+    await f.host.request({ handleId: a.handleId, operationId: "answer", command });
+    await vi.waitFor(() => expect(f.host.snapshot().retainedSessions).toContainEqual(expect.objectContaining({ handleId: a.handleId, closed: true })),
+      { timeout: 5000 });
+    expect(await f.host.outcome({ handleId: a.handleId, operationId: "answer" })).toMatchObject({ status: "completed" });
+    expect(await drain(f.host, a.handleId)).toContainEqual(expect.objectContaining({ kind: "failure" }));
+    await f.host.acknowledgeOperation({ handleId: a.handleId, operationId: "answer" });
+    await f.host.release({ handleId: a.handleId });
+    expect(await f.host.attachExisting(input)).toBeNull();
+  });
+  it("reopens a failed bound load after delivering its receipts even while native history still shows active work", async () => {
+    const f = await fixture(), input = replayInput(f.cwd, "wait");
+    f.readHistory.mockResolvedValue({ ...input, native: { revision: "b".repeat(64), executions: [], steps: [
+      { index: 0, type: 132, status: 2, hasSubtrajectory: false, tool: { id: "read", name: "read_file", argumentsJson: "{}" } },
+    ] } });
+    const first = await f.host.attach(input);
+    await f.host.request({ handleId: first.handleId, operationId: "deny", command: { type: "permission",
+      requestId: first.pendingPermissions[0]!.requestId, response: { outcome: { outcome: "cancelled" } } } });
+    await vi.waitFor(() => expect(f.host.snapshot().retainedSessions[0]?.closed).toBe(true));
+    await f.host.release({ handleId: first.handleId });
+    expect(await f.host.retireSession(input)).toBe("busy");
+    // A reconnect can still consume the closed generation's permission result and failure.
+    expect(antigravityAttachmentSchema.parse(await f.host.attach(input))).toMatchObject({ handleId: first.handleId, closed: true });
+    expect(await f.host.outcome({ handleId: first.handleId, operationId: "deny" })).toMatchObject({ status: "completed" });
+    await f.host.acknowledgeOperation({ handleId: first.handleId, operationId: "deny" });
+    expect(await drain(f.host, first.handleId)).toContainEqual(expect.objectContaining({ kind: "failure" }));
+    f.readHistory.mockRejectedValueOnce(new Error("Replacement cannot read the native session"));
+    await expect(f.host.attach(input)).rejects.toMatchObject({ code: "antigravity_session_load_unavailable" });
+    expect((await f.host.attachExisting(input))?.handleId).toBe(first.handleId);
+    const [retry, joined] = await Promise.all([f.host.attach(input), f.host.attach(input)]);
+    expect(retry.handleId).not.toBe(first.handleId);
+    expect(joined.generation).toBe(retry.generation);
+    expect(retry.retainedOperationIds).toEqual([]);
+    expect(await f.host.outcome({ handleId: retry.handleId, operationId: "deny" })).toMatchObject({ status: "completed" });
+    await f.host.release({ handleId: first.handleId });
+    expect(f.host.snapshot().retainedSessions).toEqual([expect.objectContaining({ handleId: retry.handleId, closed: false })]);
+    await f.host.request({ handleId: retry.handleId, operationId: "allow", command: { type: "permission",
+      requestId: retry.pendingPermissions[0]!.requestId, response: { outcome: { outcome: "selected", optionId: "allow" } } } });
+    await vi.waitFor(async () => expect((await f.host.attachExisting(input))?.setup.session.configOptions?.length).toBeGreaterThan(0));
+    expect(await f.host.retireSession(input)).toBe("busy");
+  });
+  it("rejects another session's early approval and requires verified native history before exposing the bound one", async () => {
+    const f = await fixture();
+    const foreign = await f.host.attach(replayInput(f.cwd, "wrong_session"));
+    expect(foreign.pendingPermissions).toEqual([]);
+    expect(foreign.loading).toBeUndefined();
+    const input = { ...replayInput(f.cwd, "wait"), sessionId: "7f093f32-f035-4796-93d3-cb0f4cfc4928" };
+    f.readHistory.mockRejectedValueOnce(new Error("identity mismatch"));
+    await expect(f.host.attach(input)).rejects.toMatchObject({ code: "antigravity_session_load_unavailable" });
+    expect(await f.host.attachExisting(input)).toBeNull();
+  });
+  it("allows Stop to cancel a replayed approval but keeps its outcome uncertain while load has not finished replay", async () => {
+    const f = await fixture(25), input = replayInput(f.cwd, "stall");
+    const a = await f.host.attach(input);
+    expect(a.pendingPermissions).toHaveLength(1);
+    await f.host.request({ handleId: a.handleId, operationId: "stop", command: { type: "cancel" } });
+    expect(await settled(f.host, a.handleId, "stop")).toMatchObject({ status: "failed", failure: { code: "antigravity_cancel_unproven" } });
+    expect((await f.host.attachExisting(input))?.pendingPermissions).toEqual([]);
+  });
+  it("recovers an unacknowledged Stop across a failed load without dispatching it to the replacement", async () => {
+    const f = await fixture(25), input = replayInput(f.cwd, "fail");
+    const first = await f.host.attach(input);
+    const cancel = { operationId: "stop", command: { type: "cancel" as const } };
+    await f.host.request({ handleId: first.handleId, ...cancel });
+    const original = await settled(f.host, first.handleId, cancel.operationId);
+    expect(original).toMatchObject({ status: "failed", failure: { delivery: "sent_outcome_unknown" } });
+    await vi.waitFor(() => expect(f.host.snapshot().retainedSessions[0]?.closed).toBe(true));
+    expect(await drain(f.host, first.handleId)).toContainEqual(expect.objectContaining({ kind: "failure" }));
+    await f.host.release({ handleId: first.handleId });
+    const retry = await f.host.attach(input);
+    expect(retry.generation).not.toBe(first.generation);
+    expect(retry.retainedOperationIds).toContain(cancel.operationId);
+    expect(await f.host.request({ handleId: retry.handleId, ...cancel })).toEqual(original);
+    expect((await f.host.attachExisting(input))?.pendingPermissions).toHaveLength(1);
+    await f.host.acknowledgeOperation({ handleId: retry.handleId, operationId: cancel.operationId });
+    expect(await f.host.outcome({ handleId: retry.handleId, operationId: cancel.operationId })).toEqual(original);
+  });
+  it("retains an unanswered permission when load immediately supplies its settings", async () => {
+    const f = await fixture(), input = replayInput(f.cwd, "immediate");
+    const a = await f.host.attach(input);
+    await vi.waitFor(async () => {
+      const retained = await f.host.attachExisting(input);
+      expect(retained).toMatchObject({ handleId: a.handleId, pendingPermissions: [{ request: { sessionId: input.sessionId } }] });
+      expect(retained?.loading).toBeUndefined();
+    });
+    await f.host.close();
+    expect(f.host.snapshot().retainedSessions).toEqual([]);
+  });
   it("retires a proven-closed native session despite passive cache eviction failure", async () => {
     const f = await fixture(), identity = await f.host.create({ cwd: f.cwd, operationId: "create" });
     const { handleId } = await f.host.attach(identity);
@@ -145,6 +264,44 @@ describe("Antigravity execution host", () => {
     await f.host.close(); expect(f.history.close).toHaveBeenCalledOnce();
     expect(f.history.forget).toHaveBeenCalledWith(identity);
   });
+  it("retains the session on owned process cleanup failure and retries that channel on forced Stop", async () => {
+    const f = await fixture();
+    const opened = vi.spyOn(f.channels, "openOwnedProcess");
+    const identity = await f.host.create({ cwd: f.cwd, operationId: "create" });
+    await f.host.acknowledgeCreation({ ...identity, operationId: "create" });
+    const channel = await opened.mock.results[0]!.value;
+    const close = vi.spyOn(channel, "close").mockRejectedValue(new Error("process cleanup failed"));
+    await expect(f.host.retireSession(identity)).rejects.toMatchObject({ code: "antigravity_cleanup_unproven" });
+    await expect(f.host.close()).rejects.toMatchObject({ code: "antigravity_cleanup_unproven" });
+    expect(f.host.snapshot()).toMatchObject({ blockers: expect.arrayContaining(["cleanup_unproven"]),
+      retainedSessions: [expect.objectContaining({ ...identity, closed: true })] });
+    expect(f.history.forget).not.toHaveBeenCalled();
+    close.mockRestore();
+    await f.host.close();
+    expect(opened).toHaveBeenCalledTimes(1);
+    expect(f.host.snapshot().retainedSessions).toEqual([]);
+    expect(f.history.forget).toHaveBeenCalledWith(identity);
+  });
+  it("fences failed-load replacement with unsettled ACP continuations but can force-stop the proven-closed process", async () => {
+    const f = await fixture(), input = replayInput(f.cwd, "fail");
+    const open = AntigravityAcpConnection.open;
+    const launch = vi.spyOn(AntigravityAcpConnection, "open").mockImplementationOnce(async options => {
+      const peer = await open(options);
+      const report = peer.binding.closed.then(closure => ({ ...closure, continuations: "unsettled" as const }));
+      vi.spyOn(peer.binding, "closed", "get").mockReturnValue(report);
+      return peer;
+    });
+    const a = await f.host.attach(input);
+    await f.host.request({ handleId: a.handleId, operationId: "decision", command: { type: "permission",
+      requestId: a.pendingPermissions[0]!.requestId, response: { outcome: { outcome: "cancelled" } } } });
+    await vi.waitFor(() => expect(f.host.snapshot().blockers).toContain("cleanup_unproven"));
+    await f.host.acknowledgeOperation({ handleId: a.handleId, operationId: "decision" });
+    await drain(f.host, a.handleId);
+    await expect(f.host.attach(input)).rejects.toMatchObject({ code: "antigravity_cleanup_unproven" });
+    expect(launch).toHaveBeenCalledOnce();
+    await f.host.close();
+    expect(f.host.snapshot().retainedSessions).toEqual([]);
+  });
   it("settles admitted history reads through worker shutdown without accepting new reads", async () => {
     const f = await fixture(), identity = { sessionId: "native-session", cwd: f.cwd };
     let rejectRead!: (error: Error) => void;
@@ -220,9 +377,12 @@ describe("Antigravity execution host", () => {
   it("keeps Stop serviceable during a long running prompt and retains the exact terminal", async () => {
     const { host, cwd } = await fixture(); const identity = await host.create({ cwd, operationId: "creation" }); const { handleId } = await host.attach(identity);
     expect(await host.request({ handleId, operationId: "send", command: { type: "prompt", prompt: [{ type: "text", text: "wait" }] } })).toEqual({ status: "pending" });
+    expect((await host.attachExisting(identity))?.activePromptIds).toEqual(["send"]);
+    expect((await host.observe({ handleId, afterSequence: 0 })).activePromptIds).toEqual(["send"]);
     await expect(host.request({ handleId, operationId: "second", command: { type: "prompt", prompt: [{ type: "text", text: "hello" }] } })).rejects.toMatchObject({ code: "antigravity_session_busy" });
     await host.request({ handleId, operationId: "stop", command: { type: "cancel" } });
     expect(await settled(host, handleId, "send")).toMatchObject({ status: "completed", result: { stopReason: "cancelled" } });
+    expect((await host.observe({ handleId, afterSequence: 0 })).activePromptIds).toEqual([]);
   });
   it("preserves permissions on detach and denies allow decisions through retained-only authority", async () => {
     const { host, cwd } = await fixture(); const identity = await host.create({ cwd, operationId: "creation" }); const { handleId } = await host.attach(identity);

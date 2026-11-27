@@ -10,7 +10,7 @@ import { decodeAntigravityNativeMessage as decode, message, string, integer, rep
 import { AntigravityError, type AntigravityHistory, type AntigravityIdentity, type AntigravityRuntimeConfiguration } from "./port.js";
 import { assertAntigravityNativeSemantics } from "./native-guards.js";
 import { antigravityNativeActivity } from "./host/native-activity.js";
-import { antigravityTerminatedExecutionHeads, antigravityNativeTerminalOutcome, antigravityUnstartedInputs } from "./native-execution.js";
+import { antigravityTerminatedExecutionHeads, antigravityNativeTerminalOutcome, antigravityUnstartedInputs, isAntigravityStandaloneDiagnostic } from "./native-execution.js";
 export { createAntigravityNativeHistoryReader, type AntigravityNativeHistoryReader } from "./native-history-reader.js";
 
 const MAXIMUM_HISTORY_BYTES = 96 * 1024 * 1024;
@@ -357,8 +357,14 @@ function projectStep(index: number, hasSubtrajectory: boolean, value: Message, s
     throw new Error("antigravity_native_continuation_identity_invalid");
   const genericCommand = genericPayload(value, "RunCommand");
   const schedule = genericPayload(value, "Schedule");
+  // A completed, unowned system error_message has no execution frontier. Check
+  // the native payload before ordinary tool errors and system notices become text.
+  const standaloneSystemDiagnostic = value.type === 17 && value.status === 3 && value.error_message !== undefined &&
+    source === 5 && !string(metadata.execution_id) && metadata.tool_call === undefined && !hasSubtrajectory &&
+    Object.keys(value).every(key => ["type", "status", "metadata", "error_message"].includes(key));
   const projected: AntigravityNativeStep = {
     index, type: integer(value.type), status: integer(value.status), hasSubtrajectory,
+    ...(standaloneSystemDiagnostic ? { standaloneSystemDiagnostic: true } : {}),
     ...(started ? { createdAt: started } : {}), ...(completed ? { completedAt: completed } : {}),
     ...(executionStarted ? { startedAt: executionStarted } : {}),
     ...(string(metadata.execution_id) ? { executionId: string(metadata.execution_id) } : {}),
@@ -453,7 +459,7 @@ function childState(native: AntigravityNativeHistory): "active" | "terminal" | "
   if (steps.some(step => active.has(step.status) || step.subtrajectoryState === "active" || step.subagents?.some(child => child.state === "active"))) return "active";
   if (!steps.length || steps.some(step => !terminal.has(step.status) || (step.hasSubtrajectory && step.subtrajectoryState !== "terminal") || step.subagents?.some(child => child.state !== "terminal" && child.state !== "cancelled"))) return "unknown";
   const unstarted = antigravityUnstartedInputs(native);
-  const final = steps.findLast(step => !unstarted.has(step.index));
+  const final = steps.findLast(step => !isAntigravityStandaloneDiagnostic(step) && !unstarted.has(step.index));
   const outcome = antigravityNativeTerminalOutcome(final);
   if (outcome === "interrupted") return "cancelled";
   if (outcome === "completed" || outcome === "failed") return "terminal";

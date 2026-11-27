@@ -114,6 +114,81 @@ describe("Antigravity native projection and exact delivery evidence", () => {
     history.executions = [{ executionId: "cancelled-execution", lastStepIndex: 2, terminationReason: 2, proceededWithAutoContinue: false }];
     return history;
   }
+  const quota = "Individual quota reached. Resets in 8m18s.";
+  const diagnostic = { ...base, index: 3, type: 17, standaloneSystemDiagnostic: true as const, error: quota };
+  it("preserves turn and run states with standalone diagnostics at every position in the history fixtures", () => {
+    const histories = [0, 2, 10, 13, 16].map(reason => native("user", reason));
+    histories.push(cancelledCommandHistory());
+    for (const history of histories) {
+      // Reserve gaps so inserting a notice preserves native turn IDs and receipt indices.
+      for (const step of history.steps) step.index = step.index * 2 + 1;
+      for (const receipt of history.executions) receipt.lastStepIndex = receipt.lastStepIndex * 2 + 1;
+      const states = (steps: AntigravityNativeHistory["steps"]) => {
+        const { snapshot } = projectAntigravityHistory({ ...history, steps }, scope);
+        return { runState: snapshot.runState, active: snapshot.activeBackendTurnId,
+          turns: snapshot.orderedBackendTurnIds.map(id => [id, snapshot.turnsById[id]?.status]) };
+      };
+      const expected = states(history.steps);
+      for (let slot = 0; slot <= history.steps.length; slot++) {
+        const steps = history.steps.toSpliced(slot, 0, { ...diagnostic, index: slot * 2 });
+        expect(states(steps)).toEqual(expected);
+      }
+    }
+  });
+  it("keeps the exact failure when its system notice arrives and after a successful follow-up", () => {
+    const history = cancelledCommandHistory();
+    history.executions[0]!.terminationReason = 1;
+    const snapshot = () => projectAntigravityHistory(history, scope).snapshot;
+    expect(snapshot().turnsById["input:0"]?.status).toBe("failed");
+    history.steps.push(diagnostic);
+    const failed = snapshot();
+    expect(failed.turnsById["input:0"]).toMatchObject({ status: "failed", failure: { message: { text: quota } } });
+    expect(failed.itemsById["step:3:error"]).toMatchObject({ semanticKind: "notice", text: { text: quota } });
+    expect(failed.runState).toBe("idle");
+    history.steps.push({ ...base, index: 4, type: 14, executionId: "next", user: { text: "Continue" } },
+      { ...base, index: 5, executionId: "next", response: { text: "Done", thinking: "", stopReason: 2, toolCalls: [] } });
+    const after = snapshot();
+    expect(after.turnsById["input:0"]).toEqual(failed.turnsById["input:0"]);
+    expect(after.turnsById["input:4"]?.status).toBe("completed");
+    expect(after.runState).toBe("idle");
+  });
+  it.each([quota, "file does not exist"])("does not treat a system notice as execution proof: %s", error => {
+    const history = cancelledCommandHistory();
+    history.executions = [];
+    history.steps.push({ ...diagnostic, error });
+    const { snapshot } = projectAntigravityHistory(history, scope);
+    expect(snapshot.turnsById["input:0"]?.status).toBe("in_progress");
+    expect(snapshot.runState).toBe("reconciling");
+  });
+  it.each(["tool", "command status", "new execution", "continuation", "consumed Steer", "queued Steer"] as const)(
+    "preserves the turn and run state across a system notice followed by a %s", async kind => {
+      const history = cancelledCommandHistory();
+      history.executions[0]!.terminationReason = 1;
+      const next = { ...base, index: 4, executionId: "new" };
+      switch (kind) {
+        case "tool":
+          history.steps.push({ ...next, type: 132, tool: { id: "call", name: "read_file", argumentsJson: "{}" } }); break;
+        case "command status":
+          history.steps.push({ ...next, type: 37, commandStatus: { commandId: "command", status: 3, output: "done" } }); break;
+        case "new execution":
+          history.steps.push({ ...next, status: 2, response: { text: "", thinking: "", stopReason: 0, toolCalls: [] } }); break;
+        case "continuation":
+          history.steps.push({ ...next, type: 101, continuation: { id: "receipt", kind: "task_notification", recipient: binding.sessionId, sender: "task", content: "done" } }); break;
+        case "consumed Steer":
+        case "queued Steer":
+          history.steps.push({ ...next, type: 14, user: { text: await steerText("steer") },
+            ...(kind === "consumed Steer" ? { isInterruptingStep: true as const, startedAt: "2026-11-22T00:01:00Z", completedAt: "2026-11-22T00:01:01Z" } : {}) }); break;
+      }
+      const statuses = () => {
+        const { snapshot } = projectAntigravityHistory(history, scope);
+        return { runState: snapshot.runState, active: snapshot.activeBackendTurnId,
+          turns: Object.entries(snapshot.turnsById).map(([id, turn]) => [id, turn.status]) };
+      };
+      const before = statuses();
+      history.steps.splice(3, 0, diagnostic);
+      expect(statuses()).toEqual(before);
+      if (kind === "new execution") expect(before.runState).toBe("reconciling");
+    });
   it.each(["exact", "missing", "wrong_execution", "wrong_head", "auto_continue", "conflict", "active"] as const)("requires exact fatal executor proof with %s evidence", evidence => {
     const history = cancelledCommandHistory();
     const head = history.steps[2]!;
@@ -127,7 +202,9 @@ describe("Antigravity native projection and exact delivery evidence", () => {
     if (evidence === "conflict") history.executions.push({ ...history.executions[0]!, terminationReason: 2 });
     const { snapshot } = projectAntigravityHistory(history, scope);
     expect(snapshot.turnsById["input:0"]?.status).toBe(evidence === "exact" ? "failed" : "in_progress");
-    if (evidence === "exact") expect(snapshot.turnsById["input:0"]?.failure).toEqual({ message: { text: "Antigravity execution stopped before completing." } });
+    expect(snapshot.turnsById["input:0"]?.failure).toBeUndefined();
+    history.steps.push(diagnostic);
+    expect(projectAntigravityHistory(history, scope).snapshot.turnsById["input:0"]?.status).toBe(snapshot.turnsById["input:0"]?.status);
   });
   it.each([
     [0, "in_progress"], [1, "failed"], [2, "interrupted"], [3, "failed"], [4, "in_progress"],
@@ -139,6 +216,10 @@ describe("Antigravity native projection and exact delivery evidence", () => {
     history.steps[2]!.error = "file does not exist";
     history.executions[0]!.terminationReason = reason;
     expect(projectAntigravityHistory(history, scope).snapshot.turnsById["input:0"]?.status).toBe(status);
+    history.steps.push(diagnostic);
+    const withDiagnostic = projectAntigravityHistory(history, scope).snapshot.turnsById["input:0"];
+    expect(withDiagnostic?.status).toBe(status);
+    if (status === "failed") expect(withDiagnostic?.failure?.message.text).toBe(reason === 1 ? quota : "Antigravity execution stopped before completing.");
     // No supported termination reason may settle a turn that auto-continues.
     history.executions[0]!.proceededWithAutoContinue = true;
     expect(projectAntigravityHistory(history, scope).snapshot.turnsById["input:0"]?.status).toBe("in_progress");
@@ -154,6 +235,8 @@ describe("Antigravity native projection and exact delivery evidence", () => {
     expect(projectAntigravityHistory(history, scope).snapshot.turnsById["input:0"]).toMatchObject({
       status: "failed", failure: { message: { text: "Executor could not continue" } },
     });
+    history.steps.push(diagnostic);
+    expect(projectAntigravityHistory(history, scope).snapshot.turnsById["input:0"]?.failure?.message.text).toBe("Executor could not continue");
   });
   it("settles a cancelled command turn only from its exact durable executor cancellation receipt", () => {
     const { snapshot } = projectAntigravityHistory(cancelledCommandHistory(), scope);

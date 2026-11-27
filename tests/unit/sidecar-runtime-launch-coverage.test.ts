@@ -12,11 +12,11 @@ describe("sidecar runtime launch coverage", () => {
       await recordUncoveredRuntimeOperation(recorder, { ...operation, majorVersion: operation.majorVersion + 1 });
     }
     await recordUncoveredRuntimeOperation(recorder, {
-      capabilityId: "antigravity_runtime", majorVersion: 4, operation: "runtime.future",
+      capabilityId: "antigravity_runtime", majorVersion: 5, operation: "runtime.future",
     });
     expect(recorder.markUnsupported.mock.calls).toEqual([
-      ...antigravityRuntimeOperations.map(operation => [`antigravity_runtime:5:${operation.operation}`]),
-      ["antigravity_runtime:4:runtime.future"],
+      ...antigravityRuntimeOperations.map(operation => [`antigravity_runtime:6:${operation.operation}`]),
+      ["antigravity_runtime:5:runtime.future"],
     ]);
   });
 

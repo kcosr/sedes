@@ -1,4 +1,4 @@
-import type { InitializeResponse, NewSessionRequest, PromptRequest, RequestPermissionRequest, RequestPermissionResponse, SessionNotification } from "@agentclientprotocol/sdk";
+import type { InitializeResponse, LoadSessionResponse, NewSessionRequest, PromptRequest, RequestPermissionRequest, RequestPermissionResponse, SessionNotification } from "@agentclientprotocol/sdk";
 import { AcpBinding, ACP_AGENT_REQUESTS, ACP_AGENT_NOTIFICATIONS, ACP_CLIENT_NOTIFICATIONS, ACP_CLIENT_REQUESTS,
   defineAcpInlineReverseNotificationHandler, defineAcpReverseRequestHandler,
 } from "../../provider-protocol/bindings/acp-v1/index.js";
@@ -42,10 +42,11 @@ export class AntigravityAcpConnection {
     } catch (error) { await binding.close("antigravity_initialize_failed"); throw error; }
   }
   async create(cwd: string, mcpServers: NewSessionRequest["mcpServers"] = []) { return this.binding.request(ACP_AGENT_REQUESTS.newSession, { cwd, mcpServers }); }
-  async load(sessionId: string, cwd: string, mcpServers: NewSessionRequest["mcpServers"] = []) {
+  async load(sessionId: string, cwd: string, mcpServers: NewSessionRequest["mcpServers"], signal: AbortSignal, loaded: (response: LoadSessionResponse) => void) {
     const settlement = await this.binding.requestWithSettlement(ACP_AGENT_REQUESTS.loadSession, { sessionId, cwd, mcpServers },
-      { notificationCutover: { kind: "ordering_key", orderingKey: sessionId } });
-    return settlement.commitNotificationCutover(() => { if (settlement.kind === "remote_error") throw settlement.error; return settlement.response; });
+      { deadlineMilliseconds: null, cancellationSignal: signal, abandonOnCancellation: true,
+        notificationCutover: { kind: "ordering_key", orderingKey: sessionId } });
+    await settlement.commitNotificationCutover(() => { if (settlement.kind === "remote_error") throw settlement.error; loaded(settlement.response); });
   }
   async list(cwd: string, cursor?: string) { return this.binding.request(ACP_AGENT_REQUESTS.listSessions, { cwd, ...(cursor ? { cursor } : {}) }); }
   async prompt(sessionId: string, prompt: PromptRequest["prompt"], settle: (result: unknown) => void) {

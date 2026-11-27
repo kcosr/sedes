@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AntigravityBackendModule } from "../../src/server/backends/antigravity/module.js";
+import { ANTIGRAVITY_PROTOCOL_RELEASE } from "../../src/server/backends/antigravity/release-profile.js";
 import { AntigravityDriver } from "../../src/server/backends/antigravity/driver.js";
 import type { AntigravityPort } from "../../src/server/backends/antigravity/port.js";
 import type { BackendModuleConfigurationInput, BackendModuleRuntimeContext } from "../../src/server/backends/module.js";
@@ -12,7 +13,7 @@ import { planBackendNativeStores } from "../../src/server/runtime/backend-module
 const cleanup: (() => Promise<unknown>)[] = [];
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close(); vi.restoreAllMocks(); });
 function configuration(backendId = "backend", geminiDirectory?: string, environmentId = "environment"): BackendModuleConfigurationInput {
-  return { backend: { id: backendId, kind: "antigravity", protocolRelease: "1.5.14", enabled: true, modelPolicy: { type: "catalog" },
+  return { backend: { id: backendId, kind: "antigravity", protocolRelease: ANTIGRAVITY_PROTOCOL_RELEASE, enabled: true, modelPolicy: { type: "catalog" },
     moduleConfiguration: { initializationTimeoutMs: 30_000, ...(geminiDirectory === undefined ? {} : { geminiDirectory }) } },
     connections: [{ id: "target", kind: "antigravity_acp", backendInstanceId: backendId, executionEnvironmentId: environmentId, enabled: true, moduleConfiguration: { defaults: {} } }],
     executionEnvironments: [{ id: environmentId, kind: "ssh" }], environment: {} };
@@ -21,7 +22,7 @@ function fixture(geminiDirectory?: string) {
   const database = new Database(":memory:"); cleanup.push(async () => database.close());
   const scope = { tenantId: "tenant", principalId: "principal" };
   const instance: AgentBackendInstance = { id: "backend", tenantId: scope.tenantId, kind: "antigravity", label: "Antigravity", enabled: true,
-    configurationRevision: 0, protocolRelease: "1.5.14" };
+    configurationRevision: 0, protocolRelease: ANTIGRAVITY_PROTOCOL_RELEASE };
   const connection: AgentConnectionProfile = { id: "connection", tenantId: scope.tenantId, ownerPrincipalId: scope.principalId, backendInstanceId: instance.id,
     templateId: "target", executionEnvironmentId: "environment", kind: "antigravity_acp", label: "Target", enabled: true, configurationRevision: 0 };
   const release = vi.fn(), acquire = vi.fn(async () => ({ availability: "available" as const, endpoint: "unix:///tmp/sedes-module-test.sock", executableDirectory: "/host/bin",

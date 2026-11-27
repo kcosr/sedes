@@ -133,8 +133,9 @@ it("qualifies stock streaming, exact retained steering cancellation, and passive
     const result = await command(f.host, f.attachment.handleId, { type: "cancel" }) as { settledOperationIds: string[]; nativeRevision: string };
     expect(result.settledOperationIds).toEqual(expect.arrayContaining(steers)); expect(result.nativeRevision).toMatch(/^[a-f0-9]{64}$/u);
     for (const operationId of steers) {
-      const outcome = await waitOutcome(f.host, f.attachment.handleId, operationId); expect(outcome.status).toBe("completed");
-      if (outcome.status === "completed" && (outcome.result as { stopReason?: string }).stopReason === "cancelled") expect(outcome.cancelledAtNativeRevision).toBe(result.nativeRevision);
+      const outcome = await waitOutcome(f.host, f.attachment.handleId, operationId);
+      if (outcome.status !== "completed") throw new Error(`LIVE_ANTIGRAVITY_BLOCKER: Steer ${operationId} returned ${JSON.stringify(outcome)}`);
+      if ((outcome.result as { stopReason?: string }).stopReason === "cancelled") expect(outcome.cancelledAtNativeRevision).toBe(result.nativeRevision);
       await f.host.acknowledgeOperation({ handleId: f.attachment.handleId, operationId }); expect(await f.host.outcome({ handleId: f.attachment.handleId, operationId })).toEqual(outcome);
     }
     const first = await readPortHistory(f.host, f.identity), second = await readPortHistory(f.host, f.identity);
@@ -175,7 +176,8 @@ it.each(["command", "timer", "subagent"] as const)("qualifies native %s Stop evi
     await f.host.request({ handleId: f.attachment.handleId, operationId, command: { type: "prompt", prompt: [{ type: "text", text }] } });
     await untilNative(f.host, f.identity, observe, history => history.native.steps.some(step => kind === "subagent"
       ? step.subagents?.some(child => child.state === "active") : kind === "timer" ? step.schedule && step.status === 2 : step.command && step.status === 2));
-    if (kind === "subagent") await waitOutcome(f.host, f.attachment.handleId, operationId);
+    // Dispatch Stop at the proven active native step. Since 1.5.15 the ACP
+    // prompt can stay open until a non-daemon child finishes.
     const cancelId = randomUUID(); await f.host.request({ handleId: f.attachment.handleId, operationId: cancelId, command: { type: "cancel" } });
     await waitOutcome(f.host, f.attachment.handleId, cancelId);
     const history = await readPortHistory(f.host, f.identity);
