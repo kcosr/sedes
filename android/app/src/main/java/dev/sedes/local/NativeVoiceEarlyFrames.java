@@ -47,7 +47,7 @@ final class NativeVoiceEarlyFrames {
         } else {
             NativeVoiceJson.keys(frame, "kind", "replyId", "threadId", "turnId", "itemId", "generation", "seq", "reason");
             NativeVoiceJson.integer(frame, "seq", 1, 256);
-            if (kind.equals("yield")) NativeVoiceProtocol.choice(frame, "reason", "markup", "item_done", "limit", "stall");
+            if (kind.equals("yield")) NativeVoiceProtocol.choice(frame, "reason", "markup", "item_done", "observation_ended", "limit", "stall");
             else NativeVoiceProtocol.choice(frame, "reason", "source_changed", "authority_lost", "superseded",
                 "policy_changed", "publication_suppressed", "expired");
         }

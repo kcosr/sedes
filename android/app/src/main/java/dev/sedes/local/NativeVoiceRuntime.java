@@ -1153,8 +1153,10 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         terminal.early = reply;
         if (active != null && active.notification != null && active.notification.opening() && active.notification.early == reply) {
             Active item = active;
-            discardStaged(item); noteSubmitted(item);
-            if (item.ttsId != null && !reply.agreesWith(item.earlyPart, terminal)) {
+            noteSubmitted(item);
+            boolean keepCurrent = reply.agreesWith(item.earlyPart, terminal);
+            if (!keepCurrent || !reply.agreesWith(item.stagedPart, terminal)) discardStaged(item);
+            if (item.ttsId != null && !keepCurrent) {
                 if (item.speechRequest != null) item.speechRequest.cancel();
                 clearSpeechTimeout(item); audio.stop(); item.speechRequest = null; item.ttsId = null; item.earlyPart = null;
             }
@@ -1345,6 +1347,17 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         }
         NativeVoiceQueue.Item notice = item.notification;
         NativeEarlyReply reply = notice == null ? null : notice.early;
+        if (item.stagedId != null) {
+            // Only promote a live preview after the terminal freshness check and the preceding physical drain.
+            boolean sealedPreview = !notice.opening() && item.stagedPart != null;
+            if ((!sealedPreview || reply.startsWithStaged(item.stagedPart, notice, settings, lastOutputOwner)) && promoteStaged(item)) return;
+            discardStaged(item);
+            if (!sealedPreview) {
+                if (notice.opening()) retireOpening(reply, false); else failActive("playback_failed");
+                return;
+            }
+            // A changed presentation or failed early spool gets its ordinary terminal attempt below.
+        }
         String text;
         if (notice != null && notice.opening()) {
             if (item.releaseAfterDrain || expired(reply, earlyClock.getAsLong()) || !earlyEligible(notice)) {
@@ -1354,7 +1367,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             try { item.earlyPart = reply.next(null); }
             catch (IllegalArgumentException mismatch) { retireOpening(reply, false); return; }
             if (item.earlyPart == null) {
-                if (reply.yielded) { retireOpening(reply, false); return; }
+                if (reply.yielded()) { retireOpening(reply, false); return; }
                 if (!phase.equals("waiting_for_reply_text")) traceActive(NativeVoiceDiagnostics.Event.EARLY_WAITING, item, null);
                 phase = "waiting_for_reply_text"; scheduleEarlyDeadline(); publish(); return;
             }
@@ -1450,20 +1463,16 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         }
         if (notice != null && notice.opening() &&
             (item.releaseAfterDrain || expired(notice.early, earlyClock.getAsLong()))) { retireOpening(notice.early, false); return; }
-        if (item.stagedId != null) {
-            if (!audio.promote(item.stagedId)) {
-                // A spool failure can invalidate the slot before its callback reaches this handler.
-                discardStaged(item);
-                if (notice.opening()) retireOpening(notice.early, false); else failActive("playback_failed");
-                return;
-            }
-            traceActive(NativeVoiceDiagnostics.Event.EARLY_PROMOTED, item, null);
-            item.speechTimeout = item.stagedTimeout; item.stagedTimeout = null;
-            item.ttsId = item.stagedId; item.lastAudioId = item.ttsId;
-            item.speechRequest = item.stagedRequest; item.earlyPart = item.stagedPart;
-            item.stagedId = null; item.stagedRequest = null; item.stagedPart = null;
-            phase = "synthesizing"; publish(); prefetch(item);
-        } else speakChunk(item);
+        speakChunk(item);
+    }
+    private boolean promoteStaged(Active item) {
+        if (!audio.promote(item.stagedId)) return false;
+        traceActive(NativeVoiceDiagnostics.Event.EARLY_PROMOTED, item, null);
+        item.speechTimeout = item.stagedTimeout; item.stagedTimeout = null;
+        item.ttsId = item.stagedId; item.lastAudioId = item.ttsId;
+        item.speechRequest = item.stagedRequest; item.earlyPart = item.stagedPart;
+        item.stagedId = null; item.stagedRequest = null; item.stagedPart = null;
+        phase = "synthesizing"; publish(); prefetch(item); return true;
     }
     private void afterSpeech(Active item) {
         if (active != item || item.stopped) return;
@@ -2385,11 +2394,11 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     /** Transport and local audio failures share request ownership, including the private lookahead slot. */
     private void failSpeechRequest(Active item, String requestId, String code) {
         if (requestId.equals(item.stagedId)) {
+            boolean earlyRequest = item.stagedPart != null;
             discardStaged(item);
-            // Finish the preceding authorized request. An opening can reconcile at its terminal.
-            // A staged terminal request already used the ordinary attempt and follows provider-error policy.
+            // An early request can still take the ordinary terminal attempt after validation.
             if (item.notification.opening()) item.releaseAfterDrain = true;
-            else item.failureAfterDrain = code;
+            else if (!earlyRequest) item.failureAfterDrain = code;
         } else if (item.notification != null && item.notification.opening()) {
             retireOpening(item.notification.early, false);
         } else if (item.earlyPart != null) {

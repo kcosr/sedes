@@ -78,6 +78,29 @@ describe("incremental final-answer speech boundaries", () => {
       }
     }
   });
+  it("flushes a completed append as one contiguous frame, even across paragraphs", () => {
+    const scanner = new EarlyReplyScanner();
+    const opening = "Yes. This";
+    expect(scanner.update(opening).segments.map(span => span.text)).toEqual(["Yes."]);
+    const suffix = " This is a test.\n\nAnd this is the end";
+    const result = scanner.update("Yes." + suffix, true);
+    expect(result).toEqual({segments: [{rawStart: 4, rawEnd: 4 + suffix.length, text: suffix, paragraphEnd: true}]});
+    expect(scanner.update("Yes." + suffix, true)).toEqual({segments: []});
+  });
+  it.each(["[", "https:private", "www.example.org", "example.com", "最後。www.example.com", "\n1.", "x😀"])(
+    "checks the last grapheme and unterminated token for markup on completion: %s", tail => {
+      const scanner = new EarlyReplyScanner();
+      scanner.update("Yes. Here");
+      expect(scanner.update("Yes. Here is " + tail, true).stop).toBe("markup");
+    });
+  it("retains trailing whitespace, handles a standalone short reply, and respects byte limits on flush", () => {
+    const scanner = new EarlyReplyScanner();
+    expect(scanner.update("Yes.\n\n").segments[0]?.text).toBe("Yes.\n\n");
+    expect(scanner.update("Yes.\n\n ", true).segments).toEqual([{rawStart: 6, rawEnd: 7, text: " ", paragraphEnd: true}]);
+    expect(new EarlyReplyScanner(4).update("Yes.", true).segments[0]?.text).toBe("Yes.");
+    expect(new EarlyReplyScanner(3).update("Yes.", true)).toEqual({segments: [], stop: "limit"});
+    expect(new EarlyReplyScanner().update(" \n", true)).toEqual({segments: []});
+  });
   it("bounds a giant delta and leaves the rest for terminal reconciliation", () => {
     expect(new EarlyReplyScanner().update("a" + "\u0301".repeat(5000))).toEqual({segments: [], stop: "limit"});
     const result = new EarlyReplyScanner().update("Opening. Another " + "漢".repeat(100_000));

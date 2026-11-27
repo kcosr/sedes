@@ -542,7 +542,7 @@ public class NativeVoiceE2eTest {
     /** Exercise the packaged service while its Activity is backgrounded. Enrollment uses real HTTP and Android Keystore. */
     @Test(timeout = 210000) public void nativeBackgroundEarlyReply() throws Exception {
         Bundle args = InstrumentationRegistry.getArguments();
-        boolean progress = "progress".equals(args.getString("earlyKind"));
+        String earlyKind = required(args, "earlyKind");
         String server = args.getString("serverOrigin"), endpoint = args.getString("speechEndpoint"), pairing = args.getString("pairingCode");
         Assume.assumeTrue("Requires the isolated native voice host harness", server != null && endpoint != null && pairing != null);
         instrumentation = InstrumentationRegistry.getInstrumentation();
@@ -579,7 +579,7 @@ public class NativeVoiceE2eTest {
                     "sttModel", "parakeet-local", "ttsVoice", "af_heart", "speechContent", "both", "autoListen", false, "startupPreRollMs", 0)));
             command("updateSettings", NativeVoiceJson.object("expectedRevision", runtime.snapshot().getLong("settingsRevision"), "patch", NativeVoiceJson.object("audioMode", "speak")));
             await(() -> runtime.snapshot().optBoolean("ready") && idleVoice(runtime.snapshot()), 45000, "foreground service and native policy ready");
-            verifyBackgroundEarlyReply(activity, server, required(args, "threadId"), required(args, "initialText"), captures, progress);
+            verifyBackgroundEarlyReply(activity, server, required(args, "threadId"), required(args, "initialText"), captures, earlyKind);
         } finally {
             Bundle evidence = new Bundle();
             evidence.putString("voiceTrace", runtime.readDiagnostics().toString());
@@ -591,7 +591,8 @@ public class NativeVoiceE2eTest {
         }
     }
     /** Device stage reports let the host withhold item completion and send late commentary after Next. */
-    private void verifyBackgroundEarlyReply(MainActivity activity, String server, String thread, String input, AtomicInteger supplied, boolean progress) throws Exception {
+    private void verifyBackgroundEarlyReply(MainActivity activity, String server, String thread, String input, AtomicInteger supplied, String earlyKind) throws Exception {
+        boolean progress = "progress".equals(earlyKind);
         NativeVoiceAudio audio = runtimeAudio(runtime);
         List<NativeVoiceAudio.PlaybackDrain> baseline = audio.playbackDrainsForTest();
         AtomicBoolean moved = new AtomicBoolean();
@@ -607,6 +608,20 @@ public class NativeVoiceE2eTest {
         JSONObject preamble = assertPlaybackDrain(newPlaybackDrains(audio, baseline).get(0), 24_000, 24_000);
         String firstId = runtime.snapshot().getJSONObject("active").getString("id");
         reportVoiceStage("voicePreamble", NativeVoiceJson.object("drain", preamble, "interactionId", firstId));
+        if ("short-handoff".equals(earlyKind)) {
+            await(() -> idleVoice(runtime.snapshot()) && newPlaybackDrains(audio, baseline).size() == 2,
+                45000, "complete short body drained as a single request after the preamble");
+            assertFalse(runtime.snapshot().getJSONObject("foreground").getBoolean("visible"));
+            assertFalse(phases.contains("listening"));
+            assertEquals(0, supplied.get());
+            assertEquals(0, runtime.snapshot().getJSONArray("errors").length());
+            List<NativeVoiceAudio.PlaybackDrain> drains = newPlaybackDrains(audio, baseline);
+            JSONObject body = assertPlaybackDrain(drains.get(1), 24_000, 24_000);
+            assertNotEquals(preamble.getString("requestId"), body.getString("requestId"));
+            reportVoiceStage("voiceResult", NativeVoiceJson.object("suffix", body, "physicalDrains", drains.size(),
+                "captureChunks", supplied.get(), "phases", new JSONArray(phases)));
+            return;
+        }
         int openingDrains = 2; // The preamble and grouped opening drain before the item closes.
         await(() -> runtime.snapshot().optString("phase").equals("waiting_for_reply_text") && newPlaybackDrains(audio, baseline).size() == openingDrains,
             45000, "opening sentence physically drained before the source item completed");

@@ -894,7 +894,6 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
             clearTimeout(reply.timer);
             existing.notification = notice;
             this.#queue.remember(item.id);
-            reply.cancelLookahead?.();
             if (this.#queue.items.includes(existing)) {
               reply.detach();
               for (const dropped of this.#queue.fitSealed(existing, this.#state.settings)) this.#discardQueuedItem(dropped);
@@ -973,17 +972,27 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
     }
     this.#state.phase = "idle"; this.#publish();
   }
+  async #inputRevisionCurrent(active: ActiveInteraction, revision: number | undefined): Promise<boolean> {
+    const item = active.item!;
+    if (!item.threadId || revision === undefined) return true;
+    const context = await this.#context(item.threadId, active.abort.signal);
+    this.#assertCurrent(active);
+    if (context.userInputRevision <= revision) return true;
+    if (item.event !== "turn.progress") this.#discardSourceControls(item.threadId, item.notification?.payload.turn?.id ?? item.early?.identity.turnId);
+    return false;
+  }
+
+  #sealedSpeechParts(item: ElectronVoiceQueueItem, settings: NativeVoiceSettings): string[] {
+    return item.early!.continuation(item.notification!, settings, this.#lastAudibleOwner) ?? [voiceItemText(item, settings)];
+  }
+
   async #playItem(active: ActiveInteraction): Promise<void> {
     const item = active.item!;
     const settings = structuredClone(item.early?.presentationSettings(this.#state.settings) ?? this.#state.settings);
     const revision = item.notification?.userInputRevision ?? item.early?.identity.userInputRevision;
     if (revision !== undefined && item.threadId) {
       this.#state.phase = "synthesizing"; this.#publish();
-      const context = await this.#context(item.threadId, active.abort.signal); this.#assertCurrent(active);
-      if (context.userInputRevision > revision) {
-        if (item.event !== "turn.progress") this.#discardSourceControls(item.threadId, item.notification?.payload.turn?.id ?? item.early?.identity.turnId);
-        this.#finish(active); return;
-      }
+      if (!await this.#inputRevisionCurrent(active, revision)) { this.#finish(active); return; }
     }
     if (!this.#eligible(item)) { this.#finish(active); return; }
     const text = voiceItemText(item, settings);
@@ -992,8 +1001,11 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
     const limit = Math.min(settings.speechTextLimit, modelLimit);
     let chunks = item.early ? [] : voiceChunks(text, limit);
     if (item.early) {
+      // The seal authorizes both a matching lookahead and the remaining terminal speech.
+      let sealCheck: Promise<boolean> | undefined;
+      const validateSeal = () => sealCheck ??= this.#inputRevisionCurrent(active, item.notification!.userInputRevision ?? item.early!.identity.userInputRevision);
       if (!item.notification) {
-        try { await this.#playEarly(active, settings, modelLimit); }
+        try { await this.#playEarly(active, settings, modelLimit, validateSeal); }
         catch (error) {
           this.#assertCurrent(active);
           // If the ordinary seal arrived during a failed early request, it still
@@ -1003,17 +1015,15 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
       }
       this.#assertCurrent(active);
       if (!item.notification || !this.#eligible(item)) { this.#finish(active); return; }
-      const context = await this.#context(item.threadId!, active.abort.signal);
+      const fresh = await validateSeal();
       this.#assertCurrent(active);
-      if (context.userInputRevision > item.notification.userInputRevision!) {
-        if (item.event !== "turn.progress") this.#discardSourceControls(item.threadId!, item.notification.payload.turn?.id);
-        this.#finish(active); return;
-      }
-      const continuation = item.early.continuation(item.notification, settings, this.#lastAudibleOwner);
-      const parts = continuation ?? [voiceItemText(item, settings)];
+      if (!fresh || !this.#eligible(item)) { this.#finish(active); return; }
+      const { audioMode, speechContent, cleanSpeechText } = item.early.presentationSettings(this.#state.settings);
+      Object.assign(settings, { audioMode, speechContent, cleanSpeechText });
+      const parts = this.#sealedSpeechParts(item, settings);
       chunks = parts.flatMap(part => voiceChunks(part, Math.min(settings.speechTextLimit, modelLimit)));
       item.early.detach();
-      await this.#playEarly(active, settings, modelLimit, chunks);
+      await this.#playEarly(active, settings, modelLimit, validateSeal, chunks);
       chunks = [];
     }
     for (const chunk of chunks) {
@@ -1040,7 +1050,8 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
     if (listens && active.target && this.#sessionReady()) await this.#listen(active);
     else this.#finish(active);
   }
-  async #playEarly(active: ActiveInteraction, settings: NativeVoiceSettings, modelLimit: number, continuation?: string[]): Promise<void> {
+  async #playEarly(active: ActiveInteraction, settings: NativeVoiceSettings, modelLimit: number,
+    validateSeal: () => Promise<boolean>, continuation?: string[]): Promise<void> {
     const item = active.item!, reply = item.early!;
     let mode: NativeVoiceState["speech"]["earlyReplyPlayback"] | undefined;
     let blockingSince: number | undefined;
@@ -1067,13 +1078,15 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
       const receiving = this.#speech.speak({ requestId, provider: settings.speechProvider, endpoint: settings.speechEndpoint,
         model: settings.ttsModel, voice: settings.ttsVoice, speed: settings.ttsSpeed, text: chunk.text }).then(() => output.pending);
       const arrived = Promise.race([receiving, stopping]);
-      void arrived.catch(() => undefined); // A staged transport can fail while the preceding speaker is draining.
+      // A staged transport can fail while the preceding speaker drains. Never promote its buffered PCM.
+      let failed = false;
+      void arrived.catch(() => { failed = true; });
       const close = (cancel: boolean) => {
         if (stopped) return;
         stopped = true; this.#playbacks.delete(requestId); buffer.cancel(); onStop();
         if (cancel) void this.#speech.cancel({ requestId }).catch(() => undefined);
       };
-      return { chunk, buffer, arrived, close, stopping, stopped: () => stopped };
+      return { chunk, buffer, arrived, close, stopping, stopped: () => stopped, failed: () => failed };
     };
     let current: ReturnType<typeof start> | undefined, staged: typeof current;
     let waitingDrain = false, wake: (() => void) | undefined;
@@ -1081,8 +1094,10 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
     const changed = () => {
       if (item.notification && current?.chunk.frontier &&
           !reply.matches(reply.sealedSection(item.notification)?.text ?? "", settings.cleanSpeechText, current.chunk.frontier)) {
-        current.close(true);
+        current.close(true); cancelStaged();
       }
+      if (item.notification && staged?.chunk.frontier &&
+          !reply.matches(reply.sealedSection(item.notification)?.text ?? "", settings.cleanSpeechText, staged.chunk.frontier)) cancelStaged();
       if (waitingDrain && !staged && current && !current.stopped()) {
         const chunk = next();
         if (chunk) { staged = start(chunk); this.#trace("early_prefetched"); }
@@ -1116,7 +1131,22 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
         // Supersession may only drain a request that itself reached the speaker.
         this.#state.phase = "synthesizing"; this.#publish();
         const sink = await this.#audio.createPlayback({ gain: settings.ttsGain / 100, signal: active.abort.signal });
-        current.buffer.promote(sink);
+        try {
+          // A seal may arrive during the preceding drain or while this sink is opening.
+          // Reuse private PCM only when it is the next authorized speech after the drained frontier.
+          if (item.notification && !continuation && !current.stopped()) {
+            const fresh = await validateSeal();
+            this.#assertCurrent(active);
+            const presentation = reply.presentationSettings(this.#state.settings);
+            const nextPart = this.#sealedSpeechParts(item, presentation).find(part => part.trim());
+            if (!fresh || reply.retired || !this.#eligible(item) || presentation.audioMode !== "speak" ||
+                (current.chunk.frontier && !reply.canPromoteBody(item.notification, presentation, this.#lastAudibleOwner)) ||
+                !nextPart?.trimStart().startsWith(current.chunk.text.trim())) current.close(true);
+          }
+          if (current.failed()) await current.arrived;
+          this.#assertCurrent(active);
+          current.buffer.promote(sink);
+        } catch (error) { sink.cancel(); throw error; }
         await current.arrived; this.#assertCurrent(active);
         if (!current.stopped()) {
           waitingDrain = true; changed();

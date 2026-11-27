@@ -149,36 +149,104 @@ public class NativeEarlyReplyTest {
             assertEquals("Afterward.", stream.reply.terminal(terminal(first + next + " Afterward.", null, messages), messages, ID));
         }
     }
-    @Test public void responsiveStartsEveryGroupAtSixWordsAndReleasesTheTailOnYieldOrSeal() {
+    private static NativeVoiceQueue.Item notice(String event, String text, NativeVoiceSettings messages) {
+        return event.equals("turn.progress") ? progress(ID, "message", text, messages) : terminal(text, null, messages);
+    }
+    @Test public void completedSourceCombinesShortOpeningWithTheEntireRemainingMessageOnce() {
+        String first = "Yes.";
+        String original = " Sedes can show whether a thread is running, idle, or waiting for input, either for one thread or across a list of threads.\n"
+            + "The tools I have don’t show whether a thread has an unread or unacknowledged notification, or whether it has an attention badge. "
+            + "They do show when an automation needs attention because a run failed or its outcome is uncertain.";
         NativeVoiceSettings messages = settings("messages");
-        for (String event : new String[]{"turn.progress", "turn.completed"}) {
-            String first = "It passed.", next = " All four checks passed.", tail = " More soon.";
-            NativeEarlyReply reply = new NativeEarlyReply(span(event, 0, 0, first, true), 0);
-            reply.freeze("responsive", messages, 4096);
-            assertNull(reply.next(null));
-            reply.accept(span(event, 1, first.length(), next, false), 1);
-            NativeEarlyReply.Part group = reply.next(null);
-            assertEquals(first + next, group.text);
-            reply.accept(span(event, 2, first.length() + next.length(), tail, true), 2);
-            assertNull(reply.next(group)); reply.drained(group);
-            assertNull(reply.next(null));
-            NativeVoiceQueue.Item notice = event.equals("turn.progress") ? progress(ID, "message", first + next + tail, messages)
-                : terminal(first + next + tail, null, messages);
-            if (event.equals("turn.progress")) {
-                JSONObject yield = common("yield", 3);
-                NativeVoiceJson.put(yield, "reason", "markup"); reply.accept(new NativeEarlyReply.Frame(yield), 3);
-                NativeEarlyReply.Part remainder = reply.next(null); assertEquals(tail.trim(), remainder.text);
-                reply.drained(remainder); assertNull(reply.next(null));
-                assertEquals("", reply.terminal(notice, messages, ID));
-            } else {
-                assertEquals(tail.trim(), reply.terminal(notice, messages, ID));
+        for (String mode : new String[]{"responsive", "balanced", "natural"})
+            for (String event : new String[]{"turn.completed", "turn.progress"})
+                for (String rest : new String[]{"", " This is a test.", original}) {
+                    NativeEarlyReply reply = new NativeEarlyReply(span(event, 0, 0, first, false), 0);
+                    reply.freeze(mode, messages, 4096);
+                    assertNull(reply.next(null));
+                    if (!rest.isEmpty()) reply.accept(span(event, 1, first.length(), rest, false), 1);
+                    NativeEarlyReply.Part part = reply.next(null);
+                    finishLive(reply, rest.isEmpty() ? 1 : 2);
+                    if (part == null) part = reply.next(null);
+                    assertNotNull(part);
+                    NativeVoiceQueue.Item seal = notice(event, first + rest, messages);
+                    assertEquals(seal.speech, part.text);
+                    // Lookahead before physical drain and terminal reconciliation after it both stay silent.
+                    assertNull(reply.next(part));
+                    reply.drained(part); assertNull(reply.next(null));
+                    assertEquals("", reply.terminal(seal, messages, ID));
+                }
+    }
+    @Test public void interruptedSourceLeavesAnUnqualifiedFragmentForTheWholeTerminalText() {
+        NativeVoiceSettings messages = settings("messages");
+        String opening = sentence(16), fragment = " Yes.", rest = " This is a test.";
+        for (String reason : new String[]{"markup", "limit", "stall", "observation_ended"}) {
+            for (String mode : new String[]{"responsive", "balanced", "natural"}) {
+                Sentences stream = new Sentences(mode, 4096, opening, true);
+                assertEquals(opening, stream.take());
+                stream.append(fragment, false);
+                assertNull(stream.reply.next(null));
+                JSONObject marker = common("yield", stream.seq);
+                NativeVoiceJson.put(marker, "reason", reason);
+                stream.reply.accept(new NativeEarlyReply.Frame(marker), stream.seq);
+                assertNull(stream.reply.next(null));
+                stream.reply.detach();
+                assertEquals(fragment.trim() + rest, stream.reply.terminal(terminal(opening + fragment + rest, null, messages), messages, ID));
             }
-            NativeEarlyReply shortReply = new NativeEarlyReply(span(event, 0, 0, first, false), 0);
-            shortReply.freeze("responsive", messages, 4096);
-            assertNull(shortReply.next(null));
-            NativeVoiceQueue.Item shortNotice = event.equals("turn.progress") ? progress(ID, "message", first, messages) : terminal(first, null, messages);
-            assertEquals(first, shortReply.terminal(shortNotice, messages, ID));
         }
+    }
+    @Test public void interruptedNaturalSourceCanStillSpeakAnOpenParagraphThatMeetsItsWordMinimum() {
+        Sentences stream = new Sentences("natural", 4096, sentence(15), false);
+        assertNull(stream.reply.next(null));
+        JSONObject marker = common("yield", stream.seq); NativeVoiceJson.put(marker, "reason", "markup");
+        stream.reply.accept(new NativeEarlyReply.Frame(marker), stream.seq);
+        assertEquals(sentence(15), stream.take());
+    }
+    @Test public void trailingWhitespaceAtItemEndCreatesNoRequestAndAddsNothingToReconcile() {
+        NativeVoiceSettings messages = settings("messages");
+        String opening = sentence(6), trailing = " \n";
+        Sentences stream = new Sentences("responsive", 4096, opening, false);
+        assertEquals(opening, stream.take());
+        stream.append(trailing, false); finishLive(stream.reply, stream.seq);
+        assertNull(stream.reply.next(null));
+        assertEquals("", stream.reply.terminal(terminal(opening + trailing, null, messages), messages, ID));
+    }
+    @Test public void sealedBodyPreviewRequiresSourceAndPresentationAgreementAndOnlyDrainAdvancesIt() {
+        NativeVoiceSettings both = settings("both");
+        String body = "Yes. This is a test.";
+        for (String event : new String[]{"turn.completed", "turn.progress"}) {
+            NativeEarlyReply reply = new NativeEarlyReply(span(event, 0, 0, body, true), 0);
+            reply.freeze("responsive", both, 4096); finishLive(reply, 1);
+            NativeEarlyReply.Part header = reply.next(null), staged = reply.next(header);
+            NativeVoiceQueue.Item seal = notice(event, body + " More detail.", both);
+            assertTrue(reply.agreesWith(staged, seal));
+            assertFalse(reply.agreesWith(staged, notice(event, "Corrected answer.", both)));
+            assertFalse(reply.startsWithStaged(staged, seal, both, ID));
+            reply.drained(header);
+            assertTrue(reply.startsWithStaged(staged, seal, both, ID));
+            assertFalse(reply.startsWithStaged(staged, seal, both, "other-speaker"));
+            if (event.equals("turn.completed"))
+                assertFalse(reply.startsWithStaged(staged, terminal(body, body, both), both, ID));
+            assertFalse(reply.startsWithStaged(staged, seal, settings("announcements"), ID));
+            assertTrue(reply.startsWithStaged(staged, seal, both, ID)); // A preview is still unplayed.
+            reply.drained(staged);
+            assertEquals("More detail.", reply.terminal(seal, both, ID));
+        }
+    }
+    @Test public void identicalAnnouncementWordsCannotAuthorizeAStagedBodyInRestrictedModes() {
+        NativeVoiceSettings messages = settings("messages");
+        NativeEarlyReply reply = new NativeEarlyReply(span(0, 0, "It starts with these six words. ", false), 0);
+        reply.freeze("responsive", messages, 4096);
+        NativeEarlyReply.Part opening = reply.next(null);
+        reply.accept(span(1, opening.rawEnd, "Agent finished", false), 1); finishLive(reply, 2);
+        NativeEarlyReply.Part staged = reply.next(opening);
+        reply.drained(opening);
+        NativeVoiceSettings announcements = settings("announcements");
+        NativeVoiceQueue.Item seal = terminal(opening.text + " Agent finished", null, announcements);
+        assertTrue(seal.speech.startsWith(staged.text));
+        assertFalse(reply.startsWithStaged(staged, seal, announcements, ID));
+        NativeVoiceSettings input = messages.patch(messages.revision, NativeVoiceJson.object("audioMode", "input"));
+        assertFalse(reply.startsWithStaged(staged, seal, input, ID));
     }
     @Test public void paragraphMarkerAndAbsoluteSequenceRangeHaveNoDuplicateOutput() {
         NativeEarlyReply.Frame begin = span(0, 0, "One.", false);
@@ -280,6 +348,8 @@ public class NativeEarlyReplyTest {
             NativeEarlyReply.Part preview = reply.next(header);
             assertTrue(preview.preambleEnd > header.preambleEnd);
             reply.drained(header);
+            assertTrue(reply.startsWithStaged(preview, notice, both, ID));
+            assertFalse(reply.startsWithStaged(preview, notice, both, "other"));
             String label = payload.optString("title");
             assertEquals(label.substring(6) + "\n\nProject\n\nOne. End.", reply.terminal(notice, both, ID));
             assertEquals(label + "\n\nRenamed\n\nOne. End.", reply.terminal(notice, both, "other"));

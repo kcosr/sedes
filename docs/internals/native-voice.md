@@ -422,7 +422,7 @@ require `X-Sedes-Client`. The server admits at most 128 identified voice streams
 per principal and rejects excess subscriptions before sending response headers.
 Ordinary inventory streams omit the parameter and keep their existing behavior.
 
-With client protocol 183, the voice reservation declares its early playback
+With client protocol 184, the voice reservation declares its early playback
 interest using the paired `earlyReply=on|off` and `earlyRevision` query parameters.
 After policy, `voice_early_session` gives the device a reservation token.
 Authenticated `PUT /api/application/voice-streams/:voiceStreamId/early-reply`
@@ -449,9 +449,15 @@ six words and Balanced fifteen. Natural requires fifteen words plus a paragraph
 end or a sentence ending at or beyond word sixty of its paragraph. Every mode
 takes the furthest qualifying ending already available, up to the device and
 provider request limits. Larger qualified groups can span physical requests.
-An explicit server `yield` releases the remaining eligible prefix, including
-a short tail. A matching notification supplies the rest of the message after
-reconciliation with audio already played.
+On a confirmed item close, the server validates the completed text and sends
+the remaining plain prose before yielding with `item_done`. This yield means
+the recipient has the complete speakable source and can group all unscheduled
+words, even a one-word reply. A `markup`, `limit`, `stall`, or
+`observation_ended` yield ends early delivery with only a prefix available.
+The device holds a group below its word minimum until the matching notification
+supplies the remaining text. A device can play buffered audio that matches
+the completed notification after it rechecks input freshness. Only fully
+drained audio advances the spoken prefix.
 
 Skipping retires the whole message. Newer input, stream loss, policy changes,
 and deadlines retire live playback independently of ordinary notification

@@ -37,7 +37,7 @@ export const earlyReplyFrameSchema = z.discriminatedUnion("kind", [
   z.strictObject({ ...common, kind: z.literal("append"), seq: z.number().int().min(1).max(MAX_EARLY_REPLY_FRAMES - 1),
     ...segmentFields }),
   z.strictObject({ ...common, kind: z.literal("yield"), seq: controlSequence,
-    reason: z.enum(["markup", "item_done", "limit", "stall"]) }),
+    reason: z.enum(["markup", "item_done", "observation_ended", "limit", "stall"]) }),
   z.strictObject({ ...common, kind: z.literal("cancel"), seq: controlSequence,
     reason: z.enum(["source_changed", "authority_lost", "superseded", "policy_changed", "publication_suppressed", "expired"]) }),
 ]).superRefine((frame, context) => {

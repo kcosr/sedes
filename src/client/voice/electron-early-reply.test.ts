@@ -25,7 +25,7 @@ describe("Electron early phrasing and source reconciliation", () => {
     }
   });
   it.each([["responsive", 6], ["balanced", 15], ["natural", 15]] as const)(
-    "starts each %s group at %i words and releases a short tail on yield", (mode, minimum) => {
+    "starts each %s group at %i words and releases a short tail on item completion", (mode, minimum) => {
       const first = sentence(minimum - 1, "short");
       const reply = source(first, true);
       const next = () => reply.next(settings, mode, 1000)?.text;
@@ -49,6 +49,14 @@ describe("Electron early phrasing and source reconciliation", () => {
     expect(reply.next(settings, "natural", 4096)).toBeUndefined();
     append(reply, 3, "", true);
     expect(reply.next(settings, "natural", 4096)?.text).toBe(third.trimEnd());
+  });
+  it("can end an open Natural paragraph on a partial yield once the word minimum is met", () => {
+    const text = sentence(15, "word");
+    const reply = source(text);
+    expect(reply.next(settings, "natural", 4096)).toBeUndefined();
+    reply.receive({ ...common, seq: 1, kind: "yield", reason: "limit" }, 20);
+    expect(reply.next(settings, "natural", 4096)?.text).toBe(text.trimEnd());
+    expect(reply.next(settings, "natural", 4096)).toBeUndefined();
   });
   it("counts Natural's 60 words from the paragraph start across requests and resets at its actual end", () => {
     const pre = sentence(59, "a"), endpoint = "Ready. ", remainder = sentence(14, "b"), nextParagraph = sentence(15, "c");
@@ -121,7 +129,6 @@ describe("Electron early phrasing and source reconciliation", () => {
     expect(reply.next(both, mode, 1000)?.text).toBe("Agent finished\n\nTitle");
     expect(reply.next(both, mode, 1000)).toBeUndefined();
     reply.receive({ ...common, seq: 1, kind: "yield", reason: "markup" }, 20);
-    expect(reply.next(both, mode, 1000)?.text).toBe("Yes.");
     expect(reply.next(both, mode, 1000)).toBeUndefined();
   });
   it("recognizes a fully drained physical prefix even when later words in the same sentence were corrected", () => {

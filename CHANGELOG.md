@@ -53,10 +53,10 @@ User-facing changes are collected here before release. See the
   ([#121](https://github.com/kcosr/sedes/pull/121))
 
 - Upgrade the server and browser/packaged clients together for client protocol
-  **183**. Rebuild Android and Electron clients for native voice snapshot **17**
+  **184**. Rebuild Android and Electron clients for native voice snapshot **17**
   and the early reply subscription for progress updates and final answers. See
   [early reply playback](docs/operator/clients/voice.md#early-reply-playback).
-  ([#165](https://github.com/kcosr/sedes/pull/165))
+  ([#165](https://github.com/kcosr/sedes/pull/165), [#169](https://github.com/kcosr/sedes/pull/169))
   Thread inventory uses `parked` with `park` and `unpark` actions.
   Existing parked threads and saved sidebar visibility preferences carry over.
   Turn bookmarks may omit the user prompt for replies that continue
@@ -134,10 +134,12 @@ User-facing changes are collected here before release. See the
   while the agent writes. Responsive groups ready sentences starting at six
   words, Balanced at fifteen, and Natural prefers paragraph breaks. With
   **Both**, the device can announce the notification type and thread title
-  while it waits for the message text. Early playback defaults to Off.
+  while it waits for the message text. An opening such as “Yes.” stays with
+  the following sentence when early delivery hands off to completed playback.
+  Early playback defaults to Off.
   Skipping a progress update leaves later updates and the final answer eligible.
   [Voice settings](docs/operator/clients/voice.md#early-reply-playback).
-  ([#165](https://github.com/kcosr/sedes/pull/165))
+  ([#165](https://github.com/kcosr/sedes/pull/165), [#169](https://github.com/kcosr/sedes/pull/169))
 
 - Grant `thread.set_state` to let agents park, unpark, snooze, and wake threads
   within their tool scope. Thread status and list show the snooze deadline and

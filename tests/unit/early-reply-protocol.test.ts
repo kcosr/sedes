@@ -31,6 +31,9 @@ describe("identified early reply voice lane", () => {
     expect(valid({ ...append, paragraphEnd: false })).toBe(false);
     expect(valid({ ...append, seq: 256 })).toBe(false);
     expect(valid({ ...base, kind: "yield", seq: 256, reason: "limit" })).toBe(true);
-    expect(valid({ ...base, kind: "cancel", seq: 4, reason: "item_done" })).toBe(false);
+    for (const reason of ["item_done", "observation_ended"]) {
+      expect(valid({ ...base, kind: "yield", seq: 4, reason })).toBe(true);
+      expect(valid({ ...base, kind: "cancel", seq: 4, reason })).toBe(false);
+    }
   });
 });

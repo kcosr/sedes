@@ -212,20 +212,23 @@ env -u NODE_ENV SEDES_RUN_REAL_OPENCODE=1 \
 ```
 
 Use `-t 'plays a held live Codex reply in the packaged Android background service'`
-to select both device cases. Each pairs through the Sedes HTTP API, saves the
+to select the three device cases. Each pairs through the Sedes HTTP API, saves the
 credentials in the native keystores, enables early playback, and backgrounds
 the Activity. The host waits for the registered client's input to be accepted
 before it streams an answer. Each synthesis request supplies 24,000 PCM frames
 at 24 kHz with zero startup pre-roll.
 
-- Both cases select **Both**. The host supplies a short opening sentence and
+- All three cases select **Both**. The host supplies a short opening sentence and
   withholds further text until the notification type and thread title drain
   in the background. It checks that the preamble was the only synthesis request.
-  It then supplies enough words for the selected mode and checks that the
-  opening sentences reach the speech server together.
+  For the final-answer and progress cases it then supplies enough words for the
+  selected mode and checks that the opening sentences reach the speech server together.
 - The final-answer case uses Responsive. The grouped opening drains while the
   turn is still running. The host releases the remaining text, completes the turn,
   and checks all three requests and physical drains in `android-early-reply.log`.
+- The short-handoff case closes a Responsive final answer after streaming only
+  “Yes. This”. The host verifies that the speech server receives one body request
+  for “Yes. This is a test.” and that both preamble and body drain on AudioTrack.
 - The progress case uses Balanced. Closing the commentary item releases its
   short remainder while the turn is still running. Android selects Next on a
   second commentary item. The host sends its remaining text and a distinct final answer.

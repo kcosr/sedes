@@ -1419,12 +1419,13 @@ describe("early reply publication", () => {
     optsOut.update(false, 2);
     optsOut.update(true, 3);
     reply.observe(opening + " ends. Next sentence", []);
-    reply.finish("item_done");
+    reply.finish("item_done", opening + " ends. Next sentence", []);
     expect(ready.replies()).toMatchObject([
       {kind: "begin", event: "turn.completed", seq: 0, rawStart: 0, rawEnd: 15, text: "First sentence.", userInputRevision: 2, origin},
-      {kind: "append", seq: 1, rawStart: 15, text: " Another word ends."}, {kind: "yield", seq: 2, reason: "item_done"},
+      {kind: "append", seq: 1, rawStart: 15, text: " Another word ends."},
+      {kind: "append", seq: 2, text: " Next sentence"}, {kind: "yield", seq: 3, reason: "item_done"},
     ]);
-    expect(optsOut.replies()).toMatchObject([{kind: "begin", seq: 0}, {kind: "yield", seq: 1}]);
+    expect(optsOut.replies()).toMatchObject([{kind: "begin", seq: 0}, {kind: "yield", seq: 1, reason: "observation_ended"}]);
     for (const listener of [optsInLate, late, foreign]) expect(listener.replies()).toEqual([]);
     expect(browser).toHaveLength(1);
     expect(executor).not.toHaveBeenCalled();
@@ -1432,7 +1433,7 @@ describe("early reply publication", () => {
     expect(receipt?.sourceEventId).toBe(ready.replies()[0]!.replyId);
     expect(receipt?.voiceStreamIds).toEqual([ready.id, optsOut.id, optsInLate.id, late.id]);
     service.finishEarlyReply(scope, threadId, source.applicationTurnId, receipt);
-    expect(ready.replies()).toHaveLength(3);
+    expect(ready.replies()).toHaveLength(4);
     expect(voiceFrames(browser)[0]?.sourceEventId).toBe(notificationSourceId(eventKey));
   });
   it("uses the progress item policy independently of completion phases and scripts", async () => {
@@ -1447,11 +1448,11 @@ describe("early reply publication", () => {
     const commentary = {...source, event: "turn.progress" as const};
     const early = service.captureEarlyReply(scope, threadId, commentary, capture)!;
     early.observe(opening, ["provisional", "unclassified"]);
-    early.finish("item_done");
+    early.finish("item_done", opening, []);
     const key = progressNotificationKey(threadId, source.applicationTurnId, source.applicationItemId);
     const replyId = notificationSourceId(key);
     expect(listener.replies()).toMatchObject([
-      {kind: "begin", event: "turn.progress", replyId, itemId: "item"}, {kind: "yield", replyId},
+      {kind: "begin", event: "turn.progress", replyId, itemId: "item"}, {kind: "append", text: " Another word"}, {kind: "yield", replyId},
     ]);
     expect(offline.replies()).toEqual([]);
     expect(executor).not.toHaveBeenCalled();
@@ -1498,9 +1499,9 @@ describe("early reply publication", () => {
       return group;
     };
     const first = openProgress("p1");
-    first.finish("item_done");
+    first.finish("item_done", opening, []);
     const next = openProgress("p2");
-    next.finish("item_done");
+    next.finish("item_done", opening, []);
     const abandoned = openProgress("revised");
     abandoned.finish("source_changed");
     const final = service.captureEarlyReply(scope, threadId, source, () => authority)!;
@@ -1519,7 +1520,7 @@ describe("early reply publication", () => {
     const nextDecision = emitFresh(service, scope, progressPayload("p2"), key("p2"), "live");
     service.finishEarlyProgress(scope, threadId, "turn", "p2", nextDecision);
     await nextDecision;
-    final.finish("item_done");
+    final.finish("item_done", opening, []);
     const finalDecision = await emitFresh(service, scope, {...event(), thread: {id: threadId, title: "Example"}}, eventKey, "live");
     service.finishEarlyReply(scope, threadId, "turn", finalDecision);
     expect(device.replies().filter(frame => frame.kind === "cancel")).toMatchObject([
@@ -1593,7 +1594,7 @@ describe("early reply publication", () => {
     const correlations = ["unanchored", "anchored", "repeated"];
     const early = service.captureEarlyReply(scope, threadId, {...source, backendCorrelations: correlations}, () => authority)!;
     early.observe(opening, []);
-    early.finish("item_done");
+    early.finish("item_done", opening, []);
     const resolve = (backendCorrelation: string) => coordinator.observe(scope, threadId, {
       backendCorrelation, backendCorrelations: correlations, applicationTurnId: source.applicationTurnId,
       backendTurnId: "backend", completionIdentity: "backend:completed", outcome: "completed",
@@ -1614,7 +1615,7 @@ describe("early reply publication", () => {
       resolve(correlations[1]!)();
       resolve(correlations[2]!)();
     }
-    expect(opened.replies().map(frame => frame.kind)).toEqual(["begin", "yield"]);
+    expect(opened.replies().map(frame => frame.kind)).toEqual(["begin", "append", "yield"]);
     expect(voiceFrames(opened.frames)).toEqual([]);
     expect(loser).not.toHaveBeenCalled();
     expect(complete).toHaveBeenCalledOnce();
@@ -1625,17 +1626,17 @@ describe("early reply publication", () => {
       expect(publish).toHaveBeenCalledOnce();
       expect(receipt).toEqual({sourceEventId: opened.replies()[0]!.replyId, voiceStreamIds: [opened.id]});
       expect(voiceFrames(opened.frames)).toHaveLength(1);
-      expect(opened.replies().map(frame => frame.kind)).toEqual(["begin", "yield"]);
+      expect(opened.replies().map(frame => frame.kind)).toEqual(["begin", "append", "yield"]);
       expect(executor).toHaveBeenCalledOnce();
     } else {
       expect(receipt).toBeUndefined();
       expect(executor).not.toHaveBeenCalled();
-      expect(opened.replies()).toMatchObject([{kind: "begin"}, {kind: "yield"}, {kind: "cancel", reason: "publication_suppressed"}]);
+      expect(opened.replies()).toMatchObject([{kind: "begin"}, {kind: "append"}, {kind: "yield"}, {kind: "cancel", reason: "publication_suppressed"}]);
       const otherRecipient = native(service);
       resolve(correlations[1]!)(publish);
       await vi.waitFor(() => expect(voiceFrames(otherRecipient.frames)).toHaveLength(1));
       expect(voiceFrames(opened.frames)).toEqual([]);
-      expect(opened.replies()).toHaveLength(3);
+      expect(opened.replies()).toHaveLength(4);
       expect(complete).toHaveBeenCalledOnce();
       expect(barrier).toHaveBeenCalledOnce();
     }

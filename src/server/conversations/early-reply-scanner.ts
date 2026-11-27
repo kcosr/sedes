@@ -37,7 +37,7 @@ export class EarlyReplyScanner {
 
   constructor(private readonly maximumBytes = MAX_EARLY_REPLY_BYTES) {}
 
-  update(text: string): ScanResult {
+  update(text: string, completed = false): ScanResult {
     const segments: EarlyReplySegment[] = [];
     if (this.#stop) return { segments, stop: this.#stop };
     if (!text.startsWith(this.#source)) {
@@ -52,24 +52,19 @@ export class EarlyReplyScanner {
       const end = start + segment.length;
       // A later delta may add a combining mark, a surrogate half, or a ZWJ.
       // LF is a complete control grapheme, including at the end of CRLF.
-      if (end === source.length && !segment.endsWith("\n")) {
+      if (!completed && end === source.length && !segment.endsWith("\n")) {
         if (this.#bytes + Buffer.byteLength(segment) > this.maximumBytes) this.#stop = "limit";
         break;
       }
       this.#bytes += Buffer.byteLength(segment);
       if (this.#bytes > this.maximumBytes) { this.#stop = "limit"; break; }
       this.#offset = end;
-      const word = () => source.slice(this.#wordStart, this.#wordEnd);
       const separator = segment === " " || segment === "\n" || segment === "\r" || segment === "\r\n";
       const adjacentCjk = this.#insideWord && startsCjk.test(segment) &&
         cjkEnd.test(source.slice(Math.max(0, start - 8), start));
-      if (this.#insideWord && (separator || adjacentCjk)) {
-        const finishedWord = word();
-        if (looksLikeUrl.test(finishedWord) ||
-            (this.#wordStart === this.#lineStart && /^\d+[.)]$/u.test(finishedWord))) {
-          this.#stop = "markup";
-          break;
-        }
+      if ((separator || adjacentCjk) && this.#wordIsMarkup(source)) {
+        this.#stop = "markup";
+        break;
       }
       if (separator) {
         this.#insideWord = false;
@@ -86,7 +81,7 @@ export class EarlyReplyScanner {
       }
       this.#lineHasText = true;
       if (!this.#insideWord || adjacentCjk) {
-        if (this.#wordEnd > this.#released && startsWord.test(segment) && endsSentence(word())) {
+        if (this.#wordEnd > this.#released && startsWord.test(segment) && endsSentence(source.slice(this.#wordStart, this.#wordEnd))) {
           this.#release(source, this.#wordEnd, false, segments);
         }
         this.#wordStart = start;
@@ -95,8 +90,27 @@ export class EarlyReplyScanner {
       this.#wordEnd = end;
     }
     if (source.length < text.length && !this.#stop) this.#stop = "limit";
+    if (completed && !this.#stop) {
+      if (this.#wordIsMarkup(source)) this.#stop = "markup";
+      else {
+        // The device may start TTS synchronously on each frame. Deliver everything newly confirmed
+        // by this close together, including any sentence that had been waiting for lookahead.
+        const start = segments[0]?.rawStart ?? this.#released;
+        const remaining = source.slice(start);
+        if (remaining && (start > 0 || remaining.trim())) {
+          segments.splice(0, segments.length, {rawStart: start, rawEnd: source.length, text: remaining, paragraphEnd: true});
+          this.#released = source.length;
+        }
+      }
+    }
     this.#source = this.#stop ? "" : source;
     return this.#stop ? { segments, stop: this.#stop } : { segments };
+  }
+
+  #wordIsMarkup(source: string): boolean {
+    if (!this.#insideWord) return false;
+    const word = source.slice(this.#wordStart, this.#wordEnd);
+    return looksLikeUrl.test(word) || (this.#wordStart === this.#lineStart && /^\d+[.)]$/u.test(word));
   }
 
   #release(source: string, end: number, paragraphEnd: boolean, segments: EarlyReplySegment[]): void {
