@@ -7788,6 +7788,10 @@ tr.diff-hunk td {
   gap: 12px;
 }
 
+.account-usage-window-heading span {
+  overflow-wrap: anywhere;
+}
+
 .account-usage-window-heading strong {
   font-weight: var(--weight-semibold);
   font-variant-numeric: tabular-nums;

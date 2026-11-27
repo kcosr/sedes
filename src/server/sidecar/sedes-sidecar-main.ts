@@ -99,7 +99,7 @@ const compiledSidecarCapabilities = Object.freeze([
   Object.freeze({ capabilityId: "opencode_runtime", majorVersion: 5 }),
   Object.freeze({ capabilityId: "pi_native_runtime", majorVersion: 3 }),
   Object.freeze({ capabilityId: "antigravity_runtime", majorVersion: 6 }),
-  Object.freeze({ capabilityId: "claude_persistent_runtime", majorVersion: 6 }),
+  Object.freeze({ capabilityId: "claude_persistent_runtime", majorVersion: 7 }),
   Object.freeze({ capabilityId: "codex_managed_tui", majorVersion: 3 }),
 ]);
 const enabledSedesCapabilities = Object.freeze([

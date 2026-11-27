@@ -35,6 +35,12 @@ const scope = Object.freeze({
   executionEnvironmentId: "local",
 });
 
+const quotaObservation = {
+  observationId: randomUUID(), verifiedSessions: [],
+  usage: { capturedAt: 123, accountId: null, plan: "Max", includedUsageAllowed: null,
+    windows: [{ scope: { kind: "account" as const }, remainingPercent: 47, durationMinutes: 10_080, resetsAt: null }] },
+};
+
 describe("ClaudeManagedRuntimeOwner", () => {
   it("keeps one generation across paginated history after the last conversation was evicted", async () => {
     const f = paginatedHistoryHarness();
@@ -147,6 +153,14 @@ describe("ClaudeManagedRuntimeOwner", () => {
     await expect(f.owner.getSessionMessagesPage(f.sessionId, { cursor: first.nextCursor! }, {})).rejects.toThrow("claude_managed_runtime_closed");
     expect(f.open).toHaveBeenCalledOnce();
     expect(f.backgroundErrors).toEqual([]);
+  });
+
+  it("leaves a cold worker untouched for account quota", async () => {
+    const f = runtimeHarness();
+    const owner = f.owner();
+    expect(await owner.readAccountUsage(new AbortController().signal)).toBeNull();
+    expect(f.open).not.toHaveBeenCalled();
+    await owner.close();
   });
 
   it("releases the shared worker only after the last query lease closes and can restart it", async () => {
@@ -265,9 +279,13 @@ describe("ClaudeManagedRuntimeOwner", () => {
       expect(owner.emptyAfterCleanup()).toBe(false);
       current = false;
       await expect(listSessions(owner)).resolves.toEqual([]);
+      const signal = new AbortController().signal;
+      await expect(owner.readAccountUsage(signal)).resolves.toEqual(quotaObservation);
+      await expect(owner.readAccountUsage(signal, quotaObservation.observationId)).resolves.toEqual(quotaObservation);
       harness.generations[0]!.finish({ reason: "exit", exitCode: CLAUDE_RUNTIME_WORKER_CLEANUP_PROVEN_FAILURE_EXIT_CODE, signal: null });
       await waitUntil(() => harness.backgroundErrors.length === 1);
       expect(owner.emptyAfterCleanup()).toBe(true);
+      await expect(owner.readAccountUsage(signal)).resolves.toBeNull();
       await expect(listSessions(owner)).rejects.toThrow("backend_policy_denied");
       expect(harness.open).toHaveBeenCalledOnce();
     } finally { await owner.close(); }
@@ -573,6 +591,7 @@ function lifecycleHandlers(): ClaudeRuntimeV4WorkerHandlers {
     }),
     listSessions: () => ({ sessions: [] }),
     probe: unused,
+    accountUsage: ({ observationId }) => ({ observation: !observationId || observationId === quotaObservation.observationId ? quotaObservation : null }),
     getSessionInfo: unused,
     getSessionMessages: unused,
     hasSessionTranscript: unused,

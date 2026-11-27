@@ -171,6 +171,16 @@ export class ClaudeManagedRuntimeOwner implements ClaudeOwnedRuntimeClient {
     return this.#generation === 0 && !this.#starting ? "not_started" : "started";
   }
 
+  async readAccountUsage(signal: AbortSignal, observationId?: string) {
+    signal.throwIfAborted();
+    const current = this.#current;
+    if (!current || this.#closed || this.#retirementFailure !== undefined) return null;
+    // The resident generation keeps its acknowledged launch environment until restart.
+    // Reading it neither acquires a lease nor starts a replacement worker.
+    const usage = await current.client.readAccountUsage(AbortSignal.any([signal, this.#closeController.signal]), observationId);
+    return this.#current === current && !this.#closed ? usage : null;
+  }
+
   async probe(input: ClaudeRuntimeProbeInput): Promise<ClaudeRuntimeProbeResult> {
     this.#assertRuntimeIdentity(input);
     assertEmptyEnvironment(input.environment);

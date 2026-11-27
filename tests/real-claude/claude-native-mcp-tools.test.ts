@@ -1,3 +1,4 @@
+import { createLiveClaudeQuery, LIVE_CLAUDE_MODEL as REQUIRED_MODEL, assertLiveClaudeCatalog } from "../support/live-claude-model.js";
 import { randomBytes, randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -14,7 +15,6 @@ import { ClaudeSdkSession } from "../../src/server/backends/claude/claude-sdk-se
 import type { ConfigurationDocument } from "../../src/shared/protocol/configuration-admin.js";
 import { startLiveAgentToolListener } from "../helpers/live-agent-tool-listener.js";
 
-const REQUIRED_MODEL = "claude-sonnet-5-5";
 const MODEL_TURN_TIMEOUT_MS = 240_000;
 const environmentId = "019196f7-a0a8-7bc4-a89b-8cf013978405";
 const temporaryRoots: string[] = [];
@@ -87,7 +87,7 @@ class SedesOnlyClaudeSdkFacade extends OfficialClaudeSdkFacade {
       strictMcpConfig: true,
     } satisfies ClaudeQueryInput["options"];
     this.queryOptions.push(options);
-    return super.createQuery({ ...input, options });
+    return createLiveClaudeQuery({ ...input, options }, guarded => super.createQuery(guarded));
   }
 }
 
@@ -125,11 +125,10 @@ describe.sequential("real Claude Native Sedes MCP tools", () => {
       timeoutMs: 30_000,
       environment,
     });
+    assertLiveClaudeCatalog(preflight.models);
     expect(preflight.account.apiProvider).toBe("firstParty");
-    expect(sdk.authStatuses[0]).toMatchObject({
-      loggedIn: true,
-      authMethod: "claude.ai",
-    });
+    expect(sdk.authStatuses[0]?.loggedIn).toBe(true);
+    expect(sdk.authStatuses[0]?.authMethod).toBe("claude.ai");
 
     const listener = await startLiveAgentToolListener({
       root,

@@ -2,12 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 import { CompositeAccountUsageReader } from "../../src/server/application/account-usage-reader.js";
 import { NO_BACKEND_ACCOUNT_USAGE, type BackendAccountUsageSource } from "../../src/server/backends/backend-account-usage.js";
 import type { BackendModuleRuntime } from "../../src/server/backends/module.js";
-import type { BackendAccountUsage } from "../../src/shared/protocol/account-usage.js";
+import { backendAccountUsageReportSchema, backendAccountUsageSchema, type BackendAccountUsage } from "../../src/shared/protocol/account-usage.js";
 
 const scope = { tenantId: "tenant", principalId: "principal" };
 const usage: BackendAccountUsage = {
   capturedAt: 1_000, accountId: "account", plan: "Pro", includedUsageAllowed: true,
-  windows: [{ remainingPercent: 25, durationMinutes: 10_080, resetsAt: 10_000 }],
+  windows: [{ scope: { kind: "account" }, remainingPercent: 25, durationMinutes: 10_080, resetsAt: 10_000 }],
 };
 function source() {
   let current: BackendAccountUsage | null = usage;
@@ -28,6 +28,15 @@ function runtime(id: string, accountUsage: BackendAccountUsageSource): Pick<Back
 }
 
 describe("scoped account usage reader", () => {
+  it("accepts bounded, distinct thread membership only on the Sedes observation", () => {
+    const eligibleThreadIds = Array.from({ length: 32 }, (_, i) => `thread-${i}`);
+    const value = { ...usage, eligibleThreadIds };
+    expect(backendAccountUsageSchema.parse(value)).toEqual(value);
+    expect(backendAccountUsageReportSchema.safeParse(value).success).toBe(false);
+    for (const invalid of [[], ["same", "same"], [...eligibleThreadIds, "overflow"], [""]]) {
+      expect(backendAccountUsageSchema.safeParse({ ...usage, eligibleThreadIds: invalid }).success).toBe(false);
+    }
+  });
   it.each([0, 32, 64])("accepts 64 configured runtimes with %i supported quota sources", supportedCount => {
     const runtimes = new Map(Array.from({ length: 64 }, (_, index) => {
       const id = `backend-${index}`;
@@ -48,7 +57,7 @@ describe("scoped account usage reader", () => {
 
   it("keeps backend and environment ownership separate and omits unavailable or unsupported sources", () => {
     const first = source(), second = source();
-    second.replace({ ...usage, accountId: "another-account", windows: [{ remainingPercent: 0, durationMinutes: null, resetsAt: null }] });
+    second.replace({ ...usage, accountId: "another-account", windows: [{ scope: { kind: "account" }, remainingPercent: 0, durationMinutes: null, resetsAt: null }] });
     const reader = new CompositeAccountUsageReader({
       scope, runtimes: new Map([["one", runtime("one", first)], ["two", runtime("two", second)], ["unsupported", runtime("unsupported", NO_BACKEND_ACCOUNT_USAGE)]]),
       environmentId: id => `${id}-host`,

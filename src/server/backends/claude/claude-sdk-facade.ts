@@ -22,8 +22,11 @@ import {
   type ClaudeTranscriptReadOptions,
 } from "./claude-native-transcript.js";
 import { isRecord } from "../../../shared/json-guards.js";
+import { parseClaudeQuotaAccount, type ClaudeQuotaAccount } from "./claude-quota-account.js";
 
 export interface ClaudeCliAuthStatus {
+  /** Private execution-host evidence. Never projected into the runtime protocol. */
+  readonly quotaAccount?: ClaudeQuotaAccount;
   readonly loggedIn: boolean;
   readonly authMethod?: string;
   readonly apiProvider?: string;
@@ -31,11 +34,6 @@ export interface ClaudeCliAuthStatus {
   readonly apiKeySource?: string;
 }
 
-/**
- * Reads only the non-identifying fields from `claude auth status --json`.
- * The CLI also returns account identity fields; those deliberately never cross
- * this provider-private boundary.
- */
 export async function readClaudeCliAuthStatus(
   executablePath: string,
   timeoutMs: number,
@@ -65,6 +63,11 @@ export async function readClaudeCliAuthStatus(
       },
     );
   });
+  return parseClaudeCliAuthStatus(stdout);
+}
+
+/** The worker consumes identity locally and projects only non-identifying fields. */
+export function parseClaudeCliAuthStatus(stdout: string): ClaudeCliAuthStatus {
   let decoded: unknown;
   try {
     decoded = JSON.parse(stdout);
@@ -78,7 +81,9 @@ export async function readClaudeCliAuthStatus(
   const apiProvider = readOptionalString(decoded, "apiProvider");
   const subscriptionType = readOptionalString(decoded, "subscriptionType");
   const apiKeySource = readOptionalString(decoded, "apiKeySource");
+  const quotaAccount = parseClaudeQuotaAccount(decoded);
   return Object.freeze({
+    ...(quotaAccount ? { quotaAccount } : {}),
     loggedIn: decoded.loggedIn,
     ...(authMethod !== undefined ? { authMethod } : {}),
     ...(apiProvider !== undefined ? { apiProvider } : {}),

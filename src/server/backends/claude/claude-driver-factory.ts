@@ -11,6 +11,7 @@ import {
 import type { BackendDriverFactory } from "../registry.js";
 import type { AgentToolCliAvailability } from "../module.js";
 import { ClaudeConversationBackendDriver } from "./claude-conversation-driver.js";
+import { ClaudeAccountUsageSource } from "./claude-account-usage-source.js";
 import { captureClaudeChildEnvironment } from "./claude-child-environment.js";
 import type { ClaudeRuntimeClient } from "./claude-runtime-client.js";
 import type { ClaudeThreadRepository } from "./claude-thread-repository.js";
@@ -33,6 +34,7 @@ export class ClaudeBackendDriverFactory implements BackendDriverFactory {
   readonly connectionKinds = ["claude_agent_sdk"] as const;
   readonly supportsConversationCreation = true;
   readonly creationIdentity = APPLICATION_ASSIGNED_CREATION_IDENTITY;
+  readonly accountUsage: ClaudeAccountUsageSource;
   readonly #usage: UsageSink;
   readonly #nativeNamespace: string;
   readonly #resolveThreadEnvironment: ThreadEnvironmentResolver;
@@ -91,6 +93,7 @@ export class ClaudeBackendDriverFactory implements BackendDriverFactory {
     this.#resolveThreadEnvironment = input.resolveThreadEnvironment ?? (async () => Object.freeze({}));
     this.instance = input.instance;
     this.#runtimeClient = input.runtimeClient;
+    this.accountUsage = new ClaudeAccountUsageSource(input.runtimeClient);
     this.#executablePath = input.executablePath;
     this.#initializationTimeoutMs = input.initializationTimeoutMs;
     this.#probeDirectory = input.probeDirectory;
@@ -139,6 +142,7 @@ export class ClaudeBackendDriverFactory implements BackendDriverFactory {
     if (driver?.connection.configurationRevision !== connection.configurationRevision) {
       driver = new ClaudeConversationBackendDriver({
         usage: this.#usage,
+        accountUsage: this.accountUsage,
         nativeNamespace: this.#nativeNamespace,
         resolveThreadEnvironment: this.#resolveThreadEnvironment,
         instance: this.instance,
@@ -170,6 +174,7 @@ export class ClaudeBackendDriverFactory implements BackendDriverFactory {
   async close(): Promise<void> {
     if (this.#closed) return;
     this.#closed = true;
+    this.accountUsage.close();
     await Promise.allSettled(
       [...this.#drivers.values()].map((driver) => driver.close()),
     );

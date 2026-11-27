@@ -18,6 +18,7 @@ import { SidecarProtocolDeliveryError } from "../../../../internal/sidecar-proto
 import { claudeConfigDirectory, type ClaudeChildEnvironment } from "../claude-child-environment.js";
 import { snapshotBoundedJson } from "../../../provider-protocol/json/bounded-json-snapshot.js";
 import type { ClaudeSdkFacade } from "../claude-sdk-facade.js";
+import { ClaudeAccountUsageCache, readClaudeAccountUsage } from "../claude-account-usage-probe.js";
 import { probeClaudeSdkDirect } from "../claude-sdk-probe.js";
 import { ClaudeSdkSession } from "../claude-sdk-session.js";
 import { ClaudeRuntimeCompactError } from "../claude-compact-operation.js";
@@ -71,6 +72,7 @@ export interface ClaudeRuntimeWorkerHostOptions {
 type ActiveQuery = {
   readonly queryId: string;
   readonly sessionId: string;
+  readonly launch: "new" | "resume" | "fork";
   readonly session: ClaudeSdkSession;
   readonly processes: Pick<ClaudeQueryProcessScope, "settled">;
   retired?: Promise<void>;
@@ -103,6 +105,9 @@ export class ClaudeRuntimeWorkerHost {
   readonly #queryBySessionId = new Map<string, string>();
   readonly #retirements = new Map<string, Promise<void>>();
   readonly #queryProcessScope: () => ClaudeQueryProcessScope;
+  readonly #closeController = new AbortController();
+  readonly #accountUsageCache = new ClaudeAccountUsageCache();
+  #accountRead?: ReturnType<typeof readClaudeAccountUsage>;
   #configuration: RuntimeConfiguration | undefined;
   #initializing: Promise<RuntimeConfiguration> | undefined;
   #closed = false;
@@ -121,12 +126,13 @@ export class ClaudeRuntimeWorkerHost {
     this.#sdk = options.sdk;
     this.#queryProcessScope =
       options.queryProcessScope ??
-      (() => ({ sdk: options.sdk, settled: async () => undefined }));
+      (() => ({ sdk: options.sdk, settled: async () => undefined, terminate: async () => undefined }));
     this.#peer = options.peer;
     this.#maximumQueries = maximumQueries;
     const handlers: ClaudeRuntimeV4WorkerHandlers = {
       initialize: async (request, context) =>
         await this.#initialize(request, context.signal),
+      accountUsage: async ({ observationId }, context) => ({ observation: await this.#readAccountUsage(context.signal, observationId) }),
       probe: async ({ cwd }, context) => await this.#probe(cwd, context.signal),
       listSessions: async (request) => await this.#listSessions(request),
       getSessionInfo: async (request) => await this.#getSessionInfo(request),
@@ -198,14 +204,41 @@ export class ClaudeRuntimeWorkerHost {
   close(): Promise<void> {
     this.#closed = true;
     this.#history.close();
-    this.#closePromise ??= Promise.allSettled(
-      [...this.#queries.values()].map(({ session }) => session.close()),
-    ).then(() => {
+    this.#accountUsageCache.clear();
+    this.#closeController.abort();
+    this.#closePromise ??= Promise.allSettled([
+      ...[...this.#queries.values()].map(({ session }) => session.close()), this.#accountRead,
+    ]).then(() => {
       this.#queries.clear();
       this.#queryBySessionId.clear();
       this.#retirements.clear();
     });
     return this.#closePromise;
+  }
+
+  async #readAccountUsage(signal: AbortSignal, observationId?: string) {
+    this.#assertOpen();
+    signal.throwIfAborted();
+    if (![...this.#queries.values()].some(({ session, launch }) =>
+      launch !== "fork" && session.initialization && !session.closed)) return null;
+    if (observationId !== undefined) return await this.#accountUsageCache.observe(observationId, this.#queries.values());
+    if (this.#accountRead) return null;
+    this.#accountUsageCache.clear();
+    const configuration = this.#configured();
+    const processes = this.#queryProcessScope();
+    // The resident conversation permits a read; its own workspace, credentials,
+    // tools and stream never participate in the account query.
+    this.#accountRead = readClaudeAccountUsage({
+      sdk: processes.sdk, executablePath: configuration.executablePath, environment: configuration.environment,
+      signal: AbortSignal.any([signal, this.#closeController.signal]),
+    }).finally(() => processes.terminate());
+    try {
+      const sample = await this.#accountRead;
+      if (this.#closed || signal.aborted || !sample) return null;
+      const id = this.#accountUsageCache.store(sample);
+      return await this.#accountUsageCache.observe(id, this.#queries.values());
+    }
+    finally { this.#accountRead = undefined; }
   }
 
   async #probe(cwd: string, signal: AbortSignal) {
@@ -441,7 +474,7 @@ export class ClaudeRuntimeWorkerHost {
           );
       },
     });
-    query = { queryId, sessionId: request.sessionId, session, processes };
+    query = { queryId, sessionId: request.sessionId, launch: request.launch, session, processes };
     this.#queries.set(queryId, query);
     this.#queryBySessionId.set(request.sessionId, queryId);
     try {

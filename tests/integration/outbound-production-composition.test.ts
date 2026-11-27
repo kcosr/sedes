@@ -10,10 +10,11 @@ import { randomUUID } from "node:crypto";
 import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { connect } from "node:net";
 import { homedir } from "node:os";
-import { buildToolDisabledWorker, LIVE_CLAUDE_MODEL } from "../support/live-claude-worker.js";
+import { LIVE_CLAUDE_MODEL } from "../support/live-claude-model.js";
+import { buildToolDisabledWorker } from "../support/live-claude-worker.js";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { OutboundClaudeFixtureEvent } from "../support/outbound-claude-sdk-fixture.js";
+import { OUTBOUND_CLAUDE_AUTH_STATUS, type OutboundClaudeFixtureEvent } from "../support/outbound-claude-sdk-fixture.js";
 import { normalizedThreadSnapshotSchema, threadEventEnvelopeSchema } from "../../src/shared/protocol/conversation.js";
 import { OutboundCodexFixture } from "../support/outbound-codex-fixture.js";
 import { decodeCodexModelSetting } from "../../src/server/backends/codex/codex-setting-values.js";
@@ -140,7 +141,7 @@ describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")("
         executionEnvironmentId: fixture.environmentId,
         accountId: "account-1",
         plan: "Pro Max",
-        windows: [{ remainingPercent: 28, durationMinutes: 10_080, resetsAt: 1_800_000_000_000 }],
+        windows: [{ scope: { kind: "account" }, remainingPercent: 28, durationMinutes: 10_080, resetsAt: 1_800_000_000_000 }],
       }),
     ]);
     const created = await fixture.json("/api/threads", "POST", { workspaceId: workspace.id, title: "Outbound terminal fixture", executionWorkspace: { kind: "direct" }, configuration: { kind: "custom", targetId } }) as { threadId: string };
@@ -303,7 +304,21 @@ describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")("
       const newTarget = await fixture.addClaudeBackend();
       const claudeThread = await fixture.submit(workspace.id, newTarget, "Confirm that the new backend is ready.");
       await fixture.waitFor(async () => JSON.stringify((await fixture.thread(claudeThread)).itemsById).includes("Offline outbound Claude response."));
+      const backendId = (await fixture.snapshot()).executionTargets.find(target => target.id === newTarget)!.backendInstanceId;
+      const readQuota = async () => (await fixture.snapshot()).accountUsages.find(usage => usage.backendInstanceId === backendId);
+      await fixture.waitFor(async () => (await readQuota()) !== undefined);
+      const quota = (await readQuota())!;
+      expect(quota).toMatchObject({
+        executionEnvironmentId: fixture.environmentId, eligibleThreadIds: [claudeThread], windows: [
+          { scope: { kind: "account" }, remainingPercent: 47 },
+          { scope: { kind: "model", label: "Fable" }, remainingPercent: 35 },
+        ],
+      });
       expect((await fixture.claudeEvents()).filter(event => event.event === "send")).toHaveLength(1);
+      const nextClaudeThread = await fixture.submit(workspace.id, newTarget, "Verify quota on the next Claude thread.");
+      await fixture.waitFor(async () => (await readQuota())?.eligibleThreadIds?.includes(nextClaudeThread) === true);
+      expect(await readQuota()).toEqual({ ...quota, eligibleThreadIds: expect.arrayContaining([claudeThread, nextClaudeThread]) });
+      expect((await fixture.claudeEvents()).filter(event => event.event === "account_usage")).toHaveLength(1);
       const secondTarget = await fixture.addCodexBackend("second-codex");
       const second = await fixture.json("/api/threads", "POST", { workspaceId: workspace.id, title: "Second Codex", executionWorkspace: { kind: "direct" },
         configuration: { kind: "custom", targetId: secondTarget } }) as { threadId: string };
@@ -382,7 +397,7 @@ describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")("
         return thread.runState === "running" && Object.values(thread.itemsById).some(item => item.kind === "assistant_message" && item.markdown.text.includes(marker));
       }, 50, 120_000);
       const claudeTarget = await fixture.addClaudeBackend({ executablePath: await realpath(executablePath), configDirectory: await realpath(configDirectory) });
-      const claudeThread = await fixture.submit(workspace.id, claudeTarget, `Reply with exactly ${marker}_CLAUDE. Use no tools.`, "sonnet");
+      const claudeThread = await fixture.submit(workspace.id, claudeTarget, `Reply with exactly ${marker}_CLAUDE. Use no tools.`, "haiku");
       await fixture.waitFor(async () => {
         const thread = await fixture.thread(claudeThread);
         return thread.runState === "idle" && Object.values(thread.itemsById).some(item => item.kind === "assistant_message" && item.markdown.text.includes(`${marker}_CLAUDE`));
@@ -630,7 +645,7 @@ class OutboundFixture {
     await this.waitFor(async () => (await this.snapshot()).environments.some(environment => environment.id === this.environmentId && environment.available));
   }
 
-  async submit(workspaceId: string, targetId: string, text: string, live?: "luna" | "sonnet") {
+  async submit(workspaceId: string, targetId: string, text: string, live?: "luna" | "haiku") {
     const created = await this.json("/api/threads", "POST", { workspaceId, title: text, executionWorkspace: { kind: "direct" },
       configuration: { kind: "custom", targetId } }) as { threadId: string };
     const route = `/api/threads/${created.threadId}`;
@@ -638,7 +653,7 @@ class OutboundFixture {
     for (const settingId of ["model", "thinking_level"] as const) {
       const options = snapshot.capabilities.settings.find(setting => setting.id === settingId)?.options.filter(option => option.available) ?? [];
       const option = options.find(option => !live || (settingId === "model"
-        ? (live === "sonnet" ? option.value === LIVE_CLAUDE_MODEL : decodeCodexModelSetting(option.value).modelId === "gpt-5.6-luna")
+        ? (live === "haiku" ? option.value === LIVE_CLAUDE_MODEL : decodeCodexModelSetting(option.value).modelId === "gpt-5.6-luna")
         : option.value === "low"));
       if (!option) {
         if (live) throw new Error(`live_settings_missing_${settingId}`);
@@ -690,7 +705,7 @@ class OutboundFixture {
       // Only the documented version/auth commands are supplied by this executable.
       await writeFile(executablePath, `#!${process.execPath}
 if (process.argv.slice(2).join(" ") === "--version") console.log("2.1.287 (Claude Code)");
-else if (process.argv.slice(2).join(" ") === "auth status --json") console.log(JSON.stringify({ loggedIn: true, authMethod: "claude.ai", apiProvider: "firstParty", subscriptionType: "Claude Max" }));
+else if (process.argv.slice(2).join(" ") === "auth status --json") console.log(JSON.stringify(${JSON.stringify(OUTBOUND_CLAUDE_AUTH_STATUS)}));
 else process.exit(64);
 `, { mode: 0o700 });
     }

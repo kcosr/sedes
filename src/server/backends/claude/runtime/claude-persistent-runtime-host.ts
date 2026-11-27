@@ -11,7 +11,7 @@ import type { CanUseTool, PermissionResult, SDKMessage } from "@anthropic-ai/cla
 import type { ClaudeOwnedRuntimeClient, ClaudeOwnedRuntimeSession, ClaudeRuntimeClient, ClaudeRuntimeForkResult, ClaudeRuntimeSession } from "../claude-runtime-client.js";
 import { claudeForkLaunchFailure } from "../claude-fork-launch.js";
 import { SidecarOperationError } from "../../../../internal/sidecar-protocol/operation-registry.js";
-import { claudeRuntimeCompactResponseSchema, type ClaudeRuntimeAgentToolMcp } from "../worker/claude-runtime-v4.js";
+import { CLAUDE_ACCOUNT_USAGE_TIMEOUT_MS, claudeRuntimeCompactResponseSchema, type ClaudeRuntimeAgentToolMcp } from "../worker/claude-runtime-v4.js";
 import type { PersistentSidecarServiceRegistry } from "../../../sidecar/persistent-sidecar-service-registry.js";
 import { SidecarResourceHandoffPendingError } from "../../../sidecar/persistent-sidecar-service-registry.js";
 import type { SidecarUpgradeBlocker } from "../../../../internal/sidecar-protocol/service-management-v1.js";
@@ -297,7 +297,7 @@ export class ClaudePersistentRuntimeHost {
     this.#sessions.clear(); this.#revision++;
   }
 
-  async execute(command: ClaudePersistentCommand, listener: (event: ClaudePersistentEvent) => void, assertPolicy?: () => void): Promise<unknown> {
+  async execute(command: ClaudePersistentCommand, listener: (event: ClaudePersistentEvent) => void, assertPolicy?: () => void, signal?: AbortSignal): Promise<unknown> {
     if (command.action === "fork") return await this.#forkLaunch(command, assertPolicy);
     if (command.runtimeId !== this.runtimeId) throw new Error("claude_persistent_runtime_unknown");
     this.input.services.assertController(command.controllerEpoch);
@@ -334,7 +334,7 @@ export class ClaudePersistentRuntimeHost {
     if (mutation) { this.#inflight++; this.#revision++; }
     const started = performance.now();
     this.#commands++;
-    try { return await this.#execute(command, listener, assertPolicy); }
+    try { return await this.#execute(command, listener, assertPolicy, signal); }
     catch (error) {
       attachmentDiagnostic("claude_sidecar_command_failed", {
         role: "sidecar",
@@ -348,7 +348,7 @@ export class ClaudePersistentRuntimeHost {
     finally { this.#commands--; if (mutation) { this.#inflight--; this.#revision++; } }
   }
 
-  async #execute(command: ClaudePersistentCommand, listener: (event: ClaudePersistentEvent) => void, assertPolicy?: () => void): Promise<unknown> {
+  async #execute(command: ClaudePersistentCommand, listener: (event: ClaudePersistentEvent) => void, assertPolicy?: () => void, signal?: AbortSignal): Promise<unknown> {
     const config = this.input.configuration;
     if (this.#runtimeStopped) {
       if (command.action === "info" || command.action === "messages" || command.action === "transcript") {
@@ -398,6 +398,22 @@ export class ClaudePersistentRuntimeHost {
         if (resident) return { disposition: session && ended ? session.admissionJournalComplete ? "not_sent" : "session_ended" : "unknown" };
         if (retired) return { disposition: retired.admissionJournalComplete ? "not_sent" : "session_ended" };
         return { disposition: "unknown" };
+      }
+      case "account_usage": {
+        const attached = (session: Session | undefined) => session && session.epoch === command.controllerEpoch &&
+          session.listener && session.runtime.initialization && !session.runtime.closed && !session.failureCode;
+        if (![...this.#sessions.values()].some(attached)) return { observation: null };
+        const report = await this.input.client.readAccountUsage(signal ?? AbortSignal.timeout(CLAUDE_ACCOUNT_USAGE_TIMEOUT_MS), command.request.observationId);
+        if (!report || ![...this.#sessions.values()].some(attached) || (command.request.observationId !== undefined && report.observationId !== command.request.observationId)) {
+          return { observation: null };
+        }
+        // The controller's backend grant may have been revoked during a provider read.
+        assertPolicy?.();
+        const verifiedSessions = report.verifiedSessions.filter(({ sessionId, startupProbeUuid }) => {
+          const session = this.#sessions.get(sessionId);
+          return attached(session) && session?.runtime.startupProbeUuid === startupProbeUuid;
+        });
+        return { observation: { observationId: report.observationId, usage: report.usage, verifiedSessions } };
       }
       case "probe": return await this.input.client.probe({ executablePath: config.executablePath, timeoutMs: config.initializationTimeoutMs, environment: {}, cwd: command.request.cwd });
       case "list": return { sessions: await this.input.client.listSessions(command.request, {}) };

@@ -1,3 +1,4 @@
+import { backendAccountUsageReportSchema } from "../../../../shared/protocol/account-usage.js";
 import { environmentVariableOverridesSchema } from "../../../../shared/protocol/environment-variables.js";
 import { resolvedEnvironmentVariablesSchema } from "../../../../internal/sidecar-protocol/environment-variables-v1.js";
 import { normalizedAbsolutePath } from "../../../../shared/absolute-path.js";
@@ -24,6 +25,8 @@ export const CLAUDE_RUNTIME_MAJOR_VERSION = 4 as const;
 export const CLAUDE_RUNTIME_MAXIMUM_JSON_BYTES = 64 * 1024 * 1024;
 export const CLAUDE_RUNTIME_MAXIMUM_HISTORY_RESPONSE_BYTES = 32 * 1024 * 1024;
 export const CLAUDE_RUNTIME_MAXIMUM_QUERIES = 32;
+export const CLAUDE_ACCOUNT_USAGE_TIMEOUT_MS = 10_000;
+export const CLAUDE_ACCOUNT_USAGE_REFRESH_INTERVAL_MS = 5 * 60_000;
 
 const boundedJsonValueSchema = z
   .unknown()
@@ -532,6 +535,20 @@ function operation<Request, Response>(input: {
   });
 }
 
+export const claudeAccountUsageObservationSchema = z.strictObject({
+  observationId: uuidSchema,
+  usage: backendAccountUsageReportSchema,
+  verifiedSessions: z.array(z.strictObject({ sessionId: uuidSchema, startupProbeUuid: uuidSchema })).max(CLAUDE_RUNTIME_MAXIMUM_QUERIES),
+});
+export type ClaudeAccountUsageObservation = z.infer<typeof claudeAccountUsageObservationSchema>;
+
+export const claudeRuntimeAccountUsageOperation = operation({
+  operation: "runtime.account_usage",
+  requestSchema: z.strictObject({ observationId: uuidSchema.optional() }),
+  responseSchema: z.strictObject({ observation: claudeAccountUsageObservationSchema.nullable() }),
+  maximumDeadlineMilliseconds: CLAUDE_ACCOUNT_USAGE_TIMEOUT_MS,
+  lane: "operation",
+});
 export const claudeRuntimeProbeOperation = operation({
   operation: "runtime.probe",
   requestSchema: claudeRuntimeProbeRequestSchema,
@@ -679,6 +696,7 @@ export const claudeRuntimePermissionResponseAckOperation = operation({
 export const claudeRuntimeWorkerOperations = Object.freeze([
   claudeRuntimeInitializeOperation,
   claudeRuntimeProbeOperation,
+  claudeRuntimeAccountUsageOperation,
   claudeRuntimeSessionListOperation,
   claudeRuntimeSessionInfoOperation,
   claudeRuntimeSessionMessagesOperation,
@@ -711,6 +729,7 @@ type HandlerFor<Definition> = Definition extends {
 
 export interface ClaudeRuntimeV4WorkerHandlers {
   readonly initialize: HandlerFor<typeof claudeRuntimeInitializeOperation>;
+  readonly accountUsage: HandlerFor<typeof claudeRuntimeAccountUsageOperation>;
   readonly probe: HandlerFor<typeof claudeRuntimeProbeOperation>;
   readonly listSessions: HandlerFor<typeof claudeRuntimeSessionListOperation>;
   readonly getSessionInfo: HandlerFor<typeof claudeRuntimeSessionInfoOperation>;
@@ -753,6 +772,7 @@ export function registerClaudeRuntimeV4WorkerOperations(
 ): void {
   registry.register(claudeRuntimeInitializeOperation, handlers.initialize);
   registry.register(claudeRuntimeProbeOperation, handlers.probe);
+  registry.register(claudeRuntimeAccountUsageOperation, handlers.accountUsage);
   registry.register(claudeRuntimeSessionListOperation, handlers.listSessions);
   registry.register(claudeRuntimeSessionInfoOperation, handlers.getSessionInfo);
   registry.register(

@@ -147,7 +147,7 @@ describe("indexed application projection", () => {
     const usage = {
       backendInstanceId: "backend-1", executionEnvironmentId: "environment", capturedAt: 1_000,
       accountId: "account-😀", plan: "Pro", includedUsageAllowed: false,
-      windows: [{ remainingPercent: 0, durationMinutes: 10_080, resetsAt: 2_000 }],
+      windows: [{ scope: { kind: "account" as const }, remainingPercent: 0, durationMinutes: 10_080, resetsAt: 2_000 }],
     };
     let sequence = 2;
     for (const accountUsages of [[usage], [{ ...usage, accountId: null, plan: null }], []]) {
@@ -171,7 +171,7 @@ describe("indexed application projection", () => {
     const projection = new ApplicationProjection({ ...seed, environments: [...seed.environments, environment], accountUsages: [{
       backendInstanceId: "backend", executionEnvironmentId: environment.id, capturedAt: 1_000,
       accountId: null, plan: null, includedUsageAllowed: null,
-      windows: [{ remainingPercent: 50, durationMinutes: null, resetsAt: null }],
+      windows: [{ scope: { kind: "account" as const }, remainingPercent: 50, durationMinutes: null, resetsAt: null }],
     }] });
     projection.prepare({ type: "environment_upsert", generation, environment: { ...environment, available: false } })();
     expect(() => projection.prepare({ type: "environment_remove", generation, environmentId: environment.id })).toThrow("application_inventory_reference_invalid");

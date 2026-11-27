@@ -9,6 +9,7 @@ operator-visible capabilities, and troubleshooting, use the
 ## On this page
 
 - [Runtime and session ownership](#runtime-and-session-ownership)
+- [Account quota](#account-quota)
 - [Current context telemetry](#current-context-telemetry)
 - [Authoritative history and paging](#authoritative-history-and-paging)
 - [Semantic projection and terminal receipts](#semantic-projection-and-terminal-receipts)
@@ -40,7 +41,7 @@ enabled. One
 principal/backend runtime owns the SDK queries admitted by the shared Sedes
 conversation-runtime budget for that execution environment. A live Sedes thread
 has at most one warm query. The strict worker and persistent sidecar capabilities
-are `claude_runtime@4` and `claude_persistent_runtime@6`. Worker operations are
+are `claude_runtime@4` and `claude_persistent_runtime@7`. Worker operations are
 defined in `src/server/backends/claude/worker/claude-runtime-v4.ts`; older majors
 are not accepted.
 Closing a handle does not delete its Claude session, and attaching the same
@@ -249,6 +250,30 @@ timeout, or startup environment after the host proves cleanup and confirms
 there are no retained queries, provider operations, or paginated history reads.
 Changing the native configuration directory requires a different store identity.
 
+## Account quota
+
+One process-local account observation serves the principal's Claude backend
+instance and execution environment. Attaching a conversation schedules the first
+read. Concurrent attachments share the read and its five-minute refresh timer.
+The last release ends polling, and Stop closes the source before runtime teardown.
+The application stream publishes the observations independently of turn events.
+
+The usage control's reply carries no account identity. The worker reads it
+through a separate zero-input SDK query under the backend's configured login
+and neutral working directory. The execution host compares the subscription
+identity of each admitted primary query with that of the quota query. The
+account evidence stays on the host. For the lifetime of a reading, its opaque
+observation ID lets the worker verify newly attached queries against the same
+account without a provider call or timestamp change. The application snapshot
+pairs the reading with the Sedes thread IDs whose current queries matched.
+Releasing a query removes its eligibility. The worker uses `skipBehaviors: true` to skip the local
+transcript scan and projects only included quota. The private remote operation
+requires a resident runtime.
+
+The Claude adapter projects the next-turn model's ordered match keys. For
+Fable the composer prefers the matching version-specific weekly window, then
+the family window. See [account quota](../../operator/backends/claude.md#account-quota).
+
 ## Current context telemetry
 
 The handle owns a volatile context estimate for its admitted query generation.
@@ -267,7 +292,7 @@ late responses cannot restore them. Missing telemetry leaves context unknown
 without failing the conversation. Persistent reads bind the current service,
 controller and startup identity and never launch or reconnect a runtime for the
 meter. The worker requires `query.context_usage` in its exact operation inventory;
-the persistent closed command union requires `claude_persistent_runtime@6`.
+the persistent closed command union requires `claude_persistent_runtime@7`.
 
 Counters continue to come from the transcript projection. Every `usage_changed`
 event replaces the complete context-and-counters snapshot. Neither the context
@@ -1129,7 +1154,7 @@ The alias list is bounded to 128 names of at most 160 characters per skill.
 The catalog exposes at most 512 skills. Client protocol 132 carries the
 optional normalized field; Pi, Codex, Grok, and OpenCode omit it and retain
 their existing behavior. Native `builtin` classification stays private and
-is preserved by `claude_runtime@4` / `claude_persistent_runtime@6` catalogs.
+is preserved by `claude_runtime@4` / `claude_persistent_runtime@7` catalogs.
 Stale selections, terminal-only commands, unclassified builtins, malformed
 commands, and reset-producing forms fail before provider submission.
 
@@ -1331,7 +1356,7 @@ action only on exact native evidence. A lost reply or runtime authority keeps
 the operation uncertain; recovery consults its retained receipt and never
 resends a command whose outcome cannot be proven. Persistent sidecars carry
 the same command, result, and scoped receipt behavior. This operation requires
-the current `claude_runtime@4` / `claude_persistent_runtime@6` capability majors;
+the current `claude_runtime@4` / `claude_persistent_runtime@7` capability majors;
 the shared sidecar wire protocol is 18.
 
 Full accounting receipts are limited to 256 per native query and persistent

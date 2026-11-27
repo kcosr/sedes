@@ -672,7 +672,7 @@ describe("Codex production application integration", () => {
         expect(runtimeModules.runtimes.get(codexBackend.id)!.accountUsage.snapshot()).toMatchObject({
           accountId: "account-1",
           plan: "Pro Max",
-          windows: [{ remainingPercent: 28, durationMinutes: 10_080 }],
+          windows: [{ scope: { kind: "account" }, remainingPercent: 28, durationMinutes: 10_080 }],
         });
       });
       const piDriver = new InMemoryConformanceDriver({

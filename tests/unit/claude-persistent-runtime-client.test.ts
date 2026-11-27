@@ -30,7 +30,7 @@ function setup(input: { nativeDefault?: boolean; supportsRuntime?: boolean; runt
   const carriers: { lost: ReturnType<typeof deferred<void>>; release: ReturnType<typeof vi.fn> }[] = [];
   const acquire = vi.fn(async (_signal?: AbortSignal, _options?: { existingOnly?: boolean }) => {
     const lost = deferred<void>(); const release = vi.fn(); carriers.push({ lost, release });
-    return { channel: { assertReady: vi.fn(), supportsOperation: (operation: { majorVersion: number }) => input.supportsRuntime !== false && operation.majorVersion === (input.runtimeMajor ?? 6) } as unknown as SidecarRuntimeChannel, controllerEpoch: carriers.length, serviceIncarnation: "service", closed: lost.promise, release };
+    return { channel: { assertReady: vi.fn(), supportsOperation: (operation: { majorVersion: number }) => input.supportsRuntime !== false && operation.majorVersion === (input.runtimeMajor ?? 7) } as unknown as SidecarRuntimeChannel, controllerEpoch: carriers.length, serviceIncarnation: "service", closed: lost.promise, release };
   });
   const client = new ClaudePersistentRuntimeClient({ scope: { tenantId: "tenant", principalId: "principal", executionEnvironmentId: "remote", backendInstanceId: "claude" }, sidecarRuntime: { acquireExisting: async () => { throw new Error("unused_existing_carrier_admission"); }, acquire }, executablePath: "/bin/claude", ...(input.nativeDefault ? {} : { configDirectory: "/config" }), initializationTimeoutMs: 1000 });
   const options: ClaudeRuntimeSessionOptions = { executablePath: "/bin/claude", initializationTimeoutMs: 1000, sessionId: SESSION_ID, cwd: "/work", launch: "new", environment: {}, onMessage: vi.fn() };
@@ -698,7 +698,7 @@ it("leaves the omitted SSH native store unresolved despite main-server environme
   await client.close();
 });
 
-it.each([undefined, 2, 3, 4, 5])("fails closed when Claude runtime support is absent or uses an old major (%s)", async runtimeMajor => {
+it.each([undefined, 2, 3, 4, 5, 6])("fails closed when Claude runtime support is absent or uses an old major (%s)", async runtimeMajor => {
   const { client, carriers, options } = setup(runtimeMajor === undefined ? { supportsRuntime: false } : { runtimeMajor });
   await expect(client.createSession(options).start()).rejects.toThrow("claude_remote_runtime_unsupported");
   expect(connectionState.instances).toHaveLength(0);
@@ -833,6 +833,31 @@ it("reports native-owner replacement separately from replacement of its carrier"
   await client.close();
 });
 
+
+it("discards quota from a lost carrier and rejects extra reply fields", async () => {
+  vi.useFakeTimers();
+  const { client, acquire, carriers, options } = setup();
+  const session = client.createSession(options);
+  const signal = new AbortController().signal;
+  try {
+    await session.start();
+    const connection = connectionState.instances[0]!;
+    connection.execute.mockResolvedValueOnce({ observation: null, privateBreakdown: [] });
+    await expect(client.readAccountUsage(signal)).rejects.toThrow();
+    const pending = deferred<unknown>();
+    connection.execute.mockReturnValueOnce(pending.promise);
+    const result = client.readAccountUsage(signal);
+    expect(connection.execute).toHaveBeenLastCalledWith({ action: "account_usage", request: {}, runtimeId: "runtime", controllerEpoch: 1 },
+      { signal, deadlineMilliseconds: 10_000 });
+    carriers[0]!.lost.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    pending.resolve({ observation: { discarded: true } });
+    await expect(result).resolves.toBeNull();
+    await expect(client.readAccountUsage(signal)).resolves.toBeNull();
+    expect(acquire).toHaveBeenCalledOnce();
+    expect(session.closed).toBe(false);
+  } finally { await client.close(); }
+});
 
 it("reads context only from the current attachment and never reconnects to fill the meter", async () => {
   vi.useFakeTimers();

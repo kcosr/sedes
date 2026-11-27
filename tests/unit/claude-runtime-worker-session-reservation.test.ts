@@ -30,11 +30,13 @@ const FAKE_CLAUDE = `#!${process.execPath}
 const args = process.argv.slice(2);
 if (args[0] === "--version") { process.stdout.write("2.1.287 (Claude Code)\\n"); process.exit(0); }
 if (args[0] === "auth") {
-  process.stdout.write(JSON.stringify({ loggedIn: true, authMethod: "claude.ai", apiProvider: "firstParty", subscriptionType: "Claude Max" }));
+  process.stdout.write(JSON.stringify({ loggedIn: true, authMethod: "claude.ai", apiProvider: "firstParty", subscriptionType: "Claude Max", email: "owner@example.test", orgName: "Example", orgId: "7f1ca102-fab9-450f-a1e6-05ba2044ffd7" }));
   process.exit(0);
 }
+// A stuck telemetry process resists graceful shutdown and requires escalation.
+const quota = args[0] === "--quota";
 let exiting = false;
-const exitSoon = () => { if (!exiting) { exiting = true; setTimeout(() => process.exit(0), 1_000); } };
+const exitSoon = () => { if (!quota && !exiting) { exiting = true; setTimeout(() => process.exit(0), 1_000); } };
 process.on("SIGTERM", exitSoon);
 process.stdin.on("end", exitSoon);
 process.stdin.resume();
@@ -58,6 +60,18 @@ const describeWithProcessTable =
   process.platform === "linux" || process.platform === "darwin" ? describe : describe.skip;
 
 describeWithProcessTable("Claude runtime worker native session reservation", () => {
+  it("terminates a stuck quota process before worker host shutdown completes", async () => {
+    const fixture = await processFixture();
+    await fixture.open("33333333-3333-4333-8333-333333333333", "new");
+    const reading = expect(fixture.host.handlers.accountUsage({}, context())).rejects.toThrow();
+    await vi.waitFor(() => expect(fixture.launches).toHaveLength(2));
+    const pid = await fixture.launches[1]!.pid;
+    expect(processAlive(pid)).toBe(true);
+    await fixture.host.close();
+    await reading;
+    expect(processAlive(pid)).toBe(false);
+  }, 15_000);
+
   it("keeps a closed query's session reserved until its Claude process has exited", async () => {
     const fixture = await processFixture();
     await fixture.open("33333333-3333-4333-8333-333333333333", "new");
@@ -156,7 +170,7 @@ async function processFixture() {
     const livePredecessors = pids.filter(processAlive);
     const spawned = input.options.spawnClaudeCodeProcess!({
       command: input.options.pathToClaudeCodeExecutable!,
-      args: [],
+      args: input.options.persistSession === false ? ["--quota"] : [],
       env: {},
       signal: input.options.abortController!.signal,
     });
@@ -207,7 +221,7 @@ async function fakeFixture(scope: () => { settled: () => Promise<void> }) {
   const host = new ClaudeRuntimeWorkerHost({
     sdk,
     peer: inertPeer(),
-    queryProcessScope: () => ({ sdk, ...scope() }),
+    queryProcessScope: () => ({ sdk, ...scope(), terminate: async () => {} }),
   });
   cleanups.push(async () => {
     await host.close();
@@ -269,8 +283,9 @@ function queryDelegate(
       return Object.assign(stream, {
         initializationResult: async (): Promise<SDKControlInitializeResponse> => ({
           commands: [], agents: [], output_style: "default", available_output_styles: ["default"], models: [],
-          account: { apiProvider: "firstParty", subscriptionType: "Claude Max" },
+          account: { apiProvider: "firstParty", subscriptionType: "Claude Max", email: "owner@example.test", organization: "Example" },
         }),
+        usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: () => new Promise(() => {}),
         interrupt: async () => ({ still_queued: [] }),
         setModel: async () => undefined,
         setPermissionMode: async () => undefined,

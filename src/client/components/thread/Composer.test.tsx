@@ -790,7 +790,7 @@ describe("composer account usage", () => {
     }];
     const entry = {
       capturedAt: Date.now(), accountId: null, plan: null, includedUsageAllowed: false,
-      windows: [{ remainingPercent: 0, durationMinutes: 10_080, resetsAt: null }],
+      windows: [{ scope: { kind: "account" as const }, remainingPercent: 0, durationMinutes: 10_080, resetsAt: null }],
       backendInstanceId: "codex-one", executionEnvironmentId: "remote",
     };
     application.snapshot.accountUsages = [

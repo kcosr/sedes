@@ -297,7 +297,7 @@ describe("ClaudeThreadActionPersistence", () => {
       queryGeneration: 1,
       now: 3,
     });
-    const presentation = await new ClaudeThreadPresentationProvider(
+    const readPresentation = () => new ClaudeThreadPresentationProvider(
       settings,
       modelEfforts,
       permissionPolicy,
@@ -344,6 +344,8 @@ describe("ClaudeThreadActionPersistence", () => {
       },
     });
 
+    const presentation = await readPresentation();
+    expect(presentation.backend.accountUsageModelKeys).toBeUndefined();
     expect(presentation.skills).toEqual([{ id: "canonical-skill", name: { text: "canonical" }, reference: "/canonical", aliases: ["old-directory"] }]);
     expect(
       presentation.settings.values.find(({ id }) => id === "model"),
@@ -366,6 +368,15 @@ describe("ClaudeThreadActionPersistence", () => {
       presentation.settingDescriptors.find(({ id }) => id === "thinking_level")
         ?.options,
     ).toEqual([{ value: "low", label: { text: "Low" }, available: true }]);
+
+    settings.updateDesired(scope, applicationThreadId, {
+      expectedRevision: 2,
+      desired: { model: "claude-fable-5-2", effort: "low", permissionMode: "default" },
+      now: 4,
+    });
+    const changed = await readPresentation();
+    expect(changed.revision).not.toBe(presentation.revision);
+    expect(changed.backend.accountUsageModelKeys).toEqual(["claude:fable-5-2", "claude:fable"]);
   });
 
   it("mutates the allowlisted permission mode through the durable feature boundary", async () => {

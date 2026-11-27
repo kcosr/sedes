@@ -218,12 +218,18 @@ of a configured target.
 Every backend-facing change must give all seven an explicit implemented or
 intentionally unsupported disposition.
 
-Account-quota observation is a required explicit runtime contribution. Codex
-implements the native reader; Pi SDK, Pi, Claude, Grok, OpenCode, and Antigravity contribute
-the unsupported source. Observations belong to the authenticated principal's
+Account-quota observation is a required explicit runtime contribution. Codex and
+Claude implement native readers. Pi SDK, Pi, Grok, OpenCode, and Antigravity
+contribute the unsupported source. A model-scoped quota window can supply an
+opaque key. Each backend owns the mapping between its configured model and
+matching quota keys. The client selects the first available match in the
+backend's preferred order. Observations belong to the authenticated principal's
 backend instance and execution environment and enter the existing application
-snapshot/event projection. Reading that projection never initiates provider
-work, and quota metadata never authorizes or blocks a turn. Browser clients
+snapshot/event projection. When credentials can vary by thread, publish the
+reading together with the application thread IDs verified to use its account.
+Keep the identity comparison on the execution host. Reading that projection
+never initiates provider work, and quota metadata never authorizes or blocks a
+turn. Browser clients
 select the exact target's backend/environment pair rather than matching a
 provider label or account display name.
 Every source exposes idempotent `close()` cancellation. Explicit Stop closes
@@ -3502,7 +3508,7 @@ exact-target interrupt. An authoritative idle observation accepts a no-op.
 A stale native target is nonapplication; old-turn disappearance alone never
 proves command acceptance. Drivers record operation/generation evidence before
 effects. Persistent Claude owner evidence survives main-client replacement;
-`claude_runtime@4` and `claude_persistent_runtime@6` are required, without
+`claude_runtime@4` and `claude_persistent_runtime@7` are required, without
 older-contract parsers.
 
 The deadline includes pending-input withdrawal and carrier/SDK acknowledgement.

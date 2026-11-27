@@ -53,7 +53,8 @@ User-facing changes are collected here before release. See the
   ([#121](https://github.com/kcosr/sedes/pull/121))
 
 - Upgrade the server and browser/packaged clients together for client protocol
-  **186**. Rebuild Android and Electron clients for native voice snapshot **17**
+  **187**. Upgrade Claude sidecars with the server for
+  `claude_persistent_runtime@7`. Rebuild Android and Electron clients for native voice snapshot **17**
   and the early reply subscription for progress updates and final answers. See
   [early reply playback](docs/operator/clients/voice.md#early-reply-playback).
   ([#165](https://github.com/kcosr/sedes/pull/165), [#169](https://github.com/kcosr/sedes/pull/169))
@@ -124,6 +125,11 @@ User-facing changes are collected here before release. See the
   ([#81](https://github.com/kcosr/sedes/pull/81), [#83](https://github.com/kcosr/sedes/pull/83), [#87](https://github.com/kcosr/sedes/pull/87), [#88](https://github.com/kcosr/sedes/pull/88), [#92](https://github.com/kcosr/sedes/pull/92), [#95](https://github.com/kcosr/sedes/pull/95), [#111](https://github.com/kcosr/sedes/pull/111))
 
 ### Added
+
+- Claude threads show remaining subscription quota under the composer. Fable
+  threads show their matching weekly allowance. Open the bar for all reported
+  windows and reset times. See [Claude account quota](docs/operator/backends/claude.md#account-quota).
+  ([#174](https://github.com/kcosr/sedes/pull/174))
 
 - Four separately granted agent tools support pinning threads, listing Groups,
   moving a thread into or out of a Group, and creating a Group with its first

@@ -140,7 +140,7 @@ describe.skipIf(!openSshAvailable)(
             executionEnvironmentId: SSH_ENVIRONMENT_ID,
             accountId: "account-1",
             plan: "Pro Max",
-            windows: [{ remainingPercent: 28, durationMinutes: 10_080, resetsAt: 1_800_000_000_000 }],
+            windows: [{ scope: { kind: "account" }, remainingPercent: 28, durationMinutes: 10_080, resetsAt: 1_800_000_000_000 }],
           }),
         ]);
         expect(snapshot.environments).toEqual(

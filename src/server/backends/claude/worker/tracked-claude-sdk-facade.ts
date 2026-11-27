@@ -1,13 +1,13 @@
 import type { Options, SpawnedProcess } from "@anthropic-ai/claude-agent-sdk";
 import path from "node:path";
 import {
+  parseClaudeCliAuthStatus,
   type ClaudeCliAuthStatus,
   type ClaudeQueryInput,
   type ClaudeSdkFacade,
 } from "../claude-sdk-facade.js";
 import type { ClaudeChildEnvironment } from "../claude-child-environment.js";
 import type { ClaudeChildProcessSupervisor } from "./claude-child-process-supervisor.js";
-import { isRecord } from "../../../../shared/json-guards.js";
 
 /** Processes launched for one SDK query, with the facade that launches them. */
 export interface ClaudeQueryProcessScope {
@@ -17,6 +17,8 @@ export interface ClaudeQueryProcessScope {
    * process tree is proven gone; rejects when any cleanup is unproven.
    */
   settled(): Promise<void>;
+  /** Terminates a finished probe’s process tree even if its leader ignores SDK close. */
+  terminate(): Promise<void>;
 }
 
 /** Adds owned-process supervision to the official SDK facade used in a worker. */
@@ -67,22 +69,7 @@ export class TrackedClaudeSdkFacade implements ClaudeSdkFacade {
       ...(cwd ? { cwd } : {}),
       ...(signal ? { signal } : {}),
     });
-    let decoded: unknown;
-    try {
-      decoded = JSON.parse(stdout);
-    } catch {
-      throw new Error("claude_cli_auth_status_output_invalid");
-    }
-    if (!isRecord(decoded) || typeof decoded.loggedIn !== "boolean") {
-      throw new Error("claude_cli_auth_status_output_invalid");
-    }
-    return Object.freeze({
-      loggedIn: decoded.loggedIn,
-      ...optionalAuthField(decoded, "authMethod"),
-      ...optionalAuthField(decoded, "apiProvider"),
-      ...optionalAuthField(decoded, "subscriptionType"),
-      ...optionalAuthField(decoded, "apiKeySource"),
-    });
+    return parseClaudeCliAuthStatus(stdout);
   }
 
   createQuery(input: ClaudeQueryInput) {
@@ -103,14 +90,10 @@ export class TrackedClaudeSdkFacade implements ClaudeSdkFacade {
       hasSessionTranscript: (...input) => this.hasSessionTranscript(...input),
       renameSession: (...input) => this.renameSession(...input),
     };
-    return Object.freeze({
-      sdk,
-      settled: async () => {
-        await Promise.all(
-          processes.map((spawned) => this.#supervisor.processCleanup(spawned)),
-        );
-      },
-    });
+    const cleanup = async (mode: "after_exit" | "terminate") => {
+      await Promise.all(processes.map(spawned => this.#supervisor.processCleanup(spawned, mode)));
+    };
+    return Object.freeze({ sdk, settled: () => cleanup("after_exit"), terminate: () => cleanup("terminate") });
   }
 
   #createQuery(
@@ -164,21 +147,4 @@ export class TrackedClaudeSdkFacade implements ClaudeSdkFacade {
   renameSession(...input: Parameters<ClaudeSdkFacade["renameSession"]>) {
     return this.#delegate.renameSession(...input);
   }
-}
-
-function optionalAuthField(
-  value: Readonly<Record<string, unknown>>,
-  field: "authMethod" | "apiProvider" | "subscriptionType" | "apiKeySource",
-): Partial<ClaudeCliAuthStatus> {
-  const candidate = value[field];
-  if (candidate === undefined || candidate === null) return {};
-  if (
-    typeof candidate !== "string" ||
-    candidate.length === 0 ||
-    candidate.length > 256 ||
-    /[\u0000-\u001f\u007f]/u.test(candidate)
-  ) {
-    throw new Error("claude_cli_auth_status_output_invalid");
-  }
-  return { [field]: candidate };
 }

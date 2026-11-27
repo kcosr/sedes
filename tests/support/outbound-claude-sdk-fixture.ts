@@ -12,9 +12,10 @@ import { randomUUID } from "node:crypto";
 import { appendFileSync } from "node:fs";
 import path from "node:path";
 import { ClaudeInputQueue } from "../../src/server/backends/claude/claude-input-queue.js";
-import type {
-  ClaudeQueryInput,
-  ClaudeSdkFacade,
+import {
+  parseClaudeCliAuthStatus,
+  type ClaudeQueryInput,
+  type ClaudeSdkFacade,
 } from "../../src/server/backends/claude/claude-sdk-facade.js";
 
 // The esbuild override must match ONLY worker-main's facade import. Re-exporting
@@ -24,9 +25,13 @@ export { FakeOutboundClaudeSdkFacade as OfficialClaudeSdkFacade };
 
 export const OUTBOUND_CLAUDE_FIXTURE_LOG = ".outbound-claude-events.jsonl";
 export const OUTBOUND_CLAUDE_PERMISSION_PROMPT = "[outbound-permission]";
+export const OUTBOUND_CLAUDE_AUTH_STATUS = {
+  loggedIn: true, authMethod: "claude.ai", apiProvider: "firstParty", subscriptionType: "Claude Max",
+  email: "outbound-quota@example.test", orgName: "Outbound quota fixture", orgId: "5503a3bf-8edf-4741-9659-5aaed621e042",
+};
 
 export interface OutboundClaudeFixtureEvent {
-  readonly event: "query_open" | "startup_probe" | "send" | "permission_pending" |
+  readonly event: "query_open" | "startup_probe" | "account_usage" | "send" | "permission_pending" |
     "permission_resolved" | "result" | "interrupt" | "query_close" | "query_error";
   readonly pid: number;
   readonly queryId: string;
@@ -42,9 +47,7 @@ export class FakeOutboundClaudeSdkFacade implements ClaudeSdkFacade {
   #queryCount = 0;
 
   async readCliRelease(): Promise<string> { return "2.1.287"; }
-  async readCliAuthStatus() {
-    return { loggedIn: true, authMethod: "claude.ai", apiProvider: "firstParty", subscriptionType: "Claude Max" };
-  }
+  async readCliAuthStatus() { return parseClaudeCliAuthStatus(JSON.stringify(OUTBOUND_CLAUDE_AUTH_STATUS)); }
   async listSessions() { return [...this.#sessions.values()].map((value) => value.info); }
   async getSessionInfo(sessionId: string) { return this.#sessions.get(sessionId)?.info; }
   async getSessionMessages(sessionId: string) { return [...(this.#sessions.get(sessionId)?.messages ?? [])]; }
@@ -178,6 +181,20 @@ export class FakeOutboundClaudeSdkFacade implements ClaudeSdkFacade {
     return Object.assign(messages[Symbol.asyncIterator](), {
       [Symbol.asyncIterator]() { return this; },
       initializationResult: async () => initialization(),
+      usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async (options: { skipBehaviors?: boolean }) => {
+        if (options.skipBehaviors !== true || input.options.persistSession !== false || cwd !== "/" || sendCount !== 0) {
+          throw new Error("outbound_claude_fixture_account_query_invalid");
+        }
+        log("account_usage");
+        const reset = new Date(Date.now() + 7 * 86_400_000).toISOString();
+        return {
+          subscription_type: "max", behaviors: null, rate_limits_available: true,
+          rate_limits: {
+            seven_day: { utilization: 53, resets_at: reset },
+            model_scoped: [{ display_name: "Fable", utilization: 65, resets_at: reset }],
+          },
+        };
+      },
       interrupt: async () => {
         log("interrupt");
         currentTurn?.abort(new Error("outbound_claude_fixture_interrupted"));
@@ -197,7 +214,8 @@ function initialization(): SDKControlInitializeResponse {
     models: [{ value: "sonnet", resolvedModel: "claude-sonnet-5", displayName: "Claude Sonnet 5",
       description: "Offline deterministic fixture", supportsEffort: true,
       supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"] }],
-    account: { apiProvider: "firstParty", subscriptionType: "Claude Max", tokenSource: "oauth" },
+    account: { apiProvider: "firstParty", subscriptionType: "Claude Max", tokenSource: "oauth",
+      email: OUTBOUND_CLAUDE_AUTH_STATUS.email, organization: OUTBOUND_CLAUDE_AUTH_STATUS.orgName },
   };
 }
 

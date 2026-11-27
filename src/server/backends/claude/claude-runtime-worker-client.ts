@@ -54,6 +54,7 @@ import {
   claudeRuntimeQuerySetPermissionModeOperation,
   claudeRuntimeInitializeOperation,
   claudeRuntimeProbeOperation,
+  claudeRuntimeAccountUsageOperation,
   claudeRuntimeSessionInfoOperation,
   claudeRuntimeSessionListOperation,
   claudeRuntimeSessionMessagesOperation,
@@ -144,6 +145,13 @@ export class ClaudeRuntimeWorkerClient implements ClaudeOwnedRuntimeClient {
       () => this.close(new Error("claude_runtime_worker_closed")),
       (error) => this.close(error),
     );
+  }
+
+  async readAccountUsage(signal: AbortSignal, observationId?: string) {
+    signal.throwIfAborted();
+    this.#assertOpen();
+    const { observation } = await this.#peer.call(claudeRuntimeAccountUsageOperation, observationId === undefined ? {} : { observationId }, { signal });
+    return observation;
   }
 
   async probe(

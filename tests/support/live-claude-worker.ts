@@ -3,8 +3,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { build } from "esbuild";
 import { installClaudeWorkerBundle } from "../../src/server/backends/claude/worker/claude-sidecar-worker-artifact.js";
-
-export const LIVE_CLAUDE_MODEL = "claude-sonnet-5-5";
+import { LIVE_CLAUDE_MODEL } from "./live-claude-model.js";
 
 /** Decorate the real facade solely for the live suite's pre-existing safety
  * contract. All worker ownership, supervision, stdio, and artifact admission
@@ -38,6 +37,7 @@ TrackedClaudeSdkFacade.prototype.readCliAuthStatus = async function (...args) {
         contents: `${await readFile(args.path, "utf8")}
 import { appendFileSync as appendLiveAudit } from "node:fs";
 const liveAudit = entry => appendLiveAudit(${JSON.stringify(auditPath)}, JSON.stringify(entry) + "\\n", { mode: 0o600 });
+import { createLiveClaudeQuery } from ${JSON.stringify(path.resolve("tests/support/live-claude-model.ts"))};
 const originalLiveQuery = OfficialClaudeSdkFacade.prototype.createQuery;
 OfficialClaudeSdkFacade.prototype.createQuery = function (input) {
   const options = { ...input.options, tools: [], strictMcpConfig: true, mcpServers: {} };
@@ -47,10 +47,10 @@ OfficialClaudeSdkFacade.prototype.createQuery = function (input) {
     options.settings?.disableAllHooks === true && typeof options.canUseTool === "function" && !options.allowDangerouslySkipPermissions;
   if (options.persistSession !== false && (options.model !== ${JSON.stringify(LIVE_CLAUDE_MODEL)} || options.effort !== "low" ||
       options.permissionMode !== (fork ? "default" : "dontAsk") || (fork && !lockedDown))) {
-    throw new Error("REAL_CLAUDE_BLOCKER: Sonnet 5.5 low dontAsk (or a locked-down default fork launch) required");
+    throw new Error("REAL_CLAUDE_BLOCKER: Haiku 5.5 low dontAsk (or a locked-down default fork launch) required");
   }
   liveAudit({ persistent: options.persistSession !== false, pid: process.pid, model: options.model, effort: options.effort, permissionMode: options.permissionMode, toolsDisabled: true, ...(fork ? { fork, lockedDown } : {}) });
-  const nativeQuery = originalLiveQuery.call(this, { ...input, options });
+  const nativeQuery = createLiveClaudeQuery({ ...input, options }, guarded => originalLiveQuery.call(this, guarded));
   const nativeIterator = nativeQuery[Symbol.asyncIterator].bind(nativeQuery);
   nativeQuery[Symbol.asyncIterator] = async function* () {
     for await (const message of { [Symbol.asyncIterator]: nativeIterator }) {

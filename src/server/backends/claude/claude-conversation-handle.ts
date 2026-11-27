@@ -1,3 +1,4 @@
+import type { ClaudeAccountUsageSource } from "./claude-account-usage-source.js";
 import { ClaudeUsageAccounting } from "./claude-usage-accounting.js";
 import { assertClaudeCompactReceiptScope, ClaudeRuntimeCompactError, type ClaudeCompactUsageReceipt, type ClaudeRuntimeCompactDisposition,
   type ClaudeRuntimeCompactResult } from "./claude-compact-operation.js";
@@ -203,6 +204,7 @@ export interface ClaudeEffortEvidence {
 
 export interface ClaudeConversationHandleInput {
   readonly usage: UsageSink;
+  readonly accountUsage?: Pick<ClaudeAccountUsageSource, "retain">;
   readonly nativeNamespace: string;
   readonly binding: ConversationBinding;
   readonly canonicalWorkspacePath: string;
@@ -511,13 +513,22 @@ export class ClaudeConversationHandle implements ConversationHandle {
       parentEnvironment: input.childEnvironment,
     });
     const publishControl = () => {
-      if (this.#closed) return;
+      if (this.#closed || this.#projectionInvalidated) return;
       const generation = `claude:${this.binding.backendConversationId}:${this.#session.startupProbeUuid ?? this.#sessionGeneration}`;
       if (this.#controlOwnerIdentity === generation && !this.#controlLifetime.signal.aborted) return;
       this.#controlLifetime.abort();
       this.#controlLifetime = new AbortController();
       this.#controlOwnerIdentity = generation;
       const lifetime = this.#controlLifetime.signal;
+      const startupProbeUuid = this.#session.startupProbeUuid;
+      if (startupProbeUuid && input.accountUsage) {
+        const release = input.accountUsage.retain({
+          applicationThreadId: this.binding.applicationThreadId,
+          sessionId: this.binding.backendConversationId,
+          startupProbeUuid,
+        });
+        lifetime.addEventListener("abort", release, { once: true });
+      }
       input.onControlReady?.({ generation, lifetime,
         interrupt: async value => {
           if (lifetime.aborted) throw unavailable("Claude control authority has ended.", "claude_control_closed");

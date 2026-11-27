@@ -1,4 +1,3 @@
-import { NO_BACKEND_ACCOUNT_USAGE } from "../backend-account-usage.js";
 import type { EnvironmentVariableOverrides } from "../../../shared/protocol/environment-variables.js";
 import { backendStartupEnvironmentVariables } from "../../environment-variables/runtime-environment.js";
 import { createThreadEnvironmentResolver } from "../../environment-variables/runtime-environment.js";
@@ -148,7 +147,7 @@ class ClaudeBackendModuleRuntime implements BackendModuleRuntime {
   readonly actionPersistence;
   readonly discoveryPersistence;
   readonly discovery;
-  readonly accountUsage = NO_BACKEND_ACCOUNT_USAGE;
+  readonly accountUsage;
   readonly installationAdvisories;
   readonly savedAgents;
   readonly automationExecutionPolicy;
@@ -254,6 +253,7 @@ class ClaudeBackendModuleRuntime implements BackendModuleRuntime {
       beginVersionObservation: (source) =>
         this.installationAdvisories.beginObservation(source),
     });
+    this.accountUsage = this.driverFactory.accountUsage;
     this.discovery = {
       nativeNamespaceKey(connection) {
         if (
@@ -477,7 +477,7 @@ export class ClaudeBackendModule implements BackendModule {
   readonly creationProvenanceRepair = undefined;
   readonly startupPolicy = "composition_only" as const;
   readonly remoteRuntimeCapabilities = Object.freeze([Object.freeze({
-    capabilityId: "claude_persistent_runtime", majorVersion: 6,
+    capabilityId: "claude_persistent_runtime", majorVersion: 7,
     operations: Object.freeze(claudePersistentRuntimeOperations.map(operation => operation.operation)),
   })]);
   readonly backendKind = "claude_agent_sdk" as const;

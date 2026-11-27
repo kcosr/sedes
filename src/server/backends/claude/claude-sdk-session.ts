@@ -1,6 +1,7 @@
 import type { InterruptConversationInput } from "../contracts.js";
 import { assertClaudeInterruptTime, ClaudeInterruptOperations } from "./claude-interrupt-operation.js";
 import type {
+  ApiKeySource,
   CanUseTool,
   EffortLevel,
   ModelInfo,
@@ -13,6 +14,7 @@ import type {
   SlashCommand,
 } from "@anthropic-ai/claude-agent-sdk";
 import { randomUUID } from "node:crypto";
+import { claudeQuotaAccountKey, verifyClaudeQuotaSettings } from "./claude-quota-account.js";
 import { ClaudeInputQueue } from "./claude-input-queue.js";
 import type { ClaudeSdkFacade } from "./claude-sdk-facade.js";
 import { assertClaudeSubscriptionAuthStatus } from "./claude-sdk-probe.js";
@@ -181,6 +183,7 @@ export interface ClaudeSdkSessionInitialization {
 }
 
 interface ClaudeStreamInitialization {
+  readonly apiKeySource: ApiKeySource;
   readonly actualModel: string;
   readonly actualPermissionMode: PermissionMode;
   readonly cliRelease: string;
@@ -209,6 +212,7 @@ export class ClaudeSdkSession {
   #closed = false;
   #closing = false;
   #closePromise: Promise<void> | undefined;
+  #quotaAccountKey: Promise<string | null> | null = null;
   #initialization: ClaudeSdkSessionInitialization | undefined;
   #startupBarrier: Deferred<void> | undefined;
   #startupProbeUuid: SDKUserMessage["uuid"] | undefined;
@@ -237,6 +241,9 @@ export class ClaudeSdkSession {
   get closed(): boolean {
     return this.#closed || this.#closing;
   }
+
+  /** Private to this native query incarnation and its execution host. */
+  get quotaAccountKey(): Promise<string | null> | null { return this.#quotaAccountKey; }
 
   get initialization(): ClaudeSdkSessionInitialization | undefined {
     return this.#initialization;
@@ -424,6 +431,13 @@ export class ClaudeSdkSession {
         skillNames: initialization.skillNames,
         terminalCommandNames: initialization.terminalCommandNames,
       });
+      if (!forkLaunch && (streamInitialized.apiKeySource === "none" || streamInitialized.apiKeySource === "oauth")) {
+        const accountKey = claudeQuotaAccountKey(authStatus, initialized.account);
+        // Optional provenance work proceeds independently of conversation startup.
+        if (accountKey) this.#quotaAccountKey = verifyClaudeQuotaSettings(
+          accountKey, this.#options.cwd, this.#options.environment, [...CLAUDE_SETTING_SOURCES],
+        );
+      }
       this.#initialization = initialization;
       startupBarrier.resolve();
       this.#startupBarrier = undefined;
@@ -597,6 +611,7 @@ export class ClaudeSdkSession {
         ) {
           continue;
         }
+        if (message.type === "auth_status" && message.isAuthenticating) this.#quotaAccountKey = null;
         if (message.type === "system" && message.subtype === "init") {
           verifyClaudeRuntimeVersion(message.claude_code_version, {
             onNewerVersion,
@@ -611,8 +626,10 @@ export class ClaudeSdkSession {
           ) {
             throw new Error("claude_reset_producing_tools_enabled");
           }
+          if (message.apiKeySource !== "none" && message.apiKeySource !== "oauth") this.#quotaAccountKey = null;
           if (!streamInitialization.settled) {
             streamInitialization.resolve({
+              apiKeySource: message.apiKeySource,
               actualModel: message.model,
               actualPermissionMode: message.permissionMode,
               cliRelease: message.claude_code_version,

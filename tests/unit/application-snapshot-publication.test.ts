@@ -251,7 +251,7 @@ describe("ApplicationSnapshotPublicationBoundary", () => {
     const validUsage = {
       backendInstanceId: "backend-1", executionEnvironmentId: "environment-1", capturedAt: 1_000,
       accountId: "account", plan: "Pro", includedUsageAllowed: true,
-      windows: [{ remainingPercent: 25, durationMinutes: 10_080, resetsAt: 2_000 }],
+      windows: [{ scope: { kind: "account" as const }, remainingPercent: 25, durationMinutes: 10_080, resetsAt: 2_000 }],
     };
     const sourceUsages = [validUsage, { ...validUsage, backendInstanceId: "removed-backend", executionEnvironmentId: "removed-host" }];
     const service = capturedService(capture, { accountUsages: { read: () => sourceUsages } });
@@ -298,7 +298,7 @@ describe("ApplicationSnapshotPublicationBoundary", () => {
       accountUsages = [{
         backendInstanceId: "backend-1", executionEnvironmentId: "environment-1", capturedAt: 1_000,
         accountId: "account", plan: "Pro", includedUsageAllowed: true,
-        windows: [{ remainingPercent: 25, durationMinutes: 10_080, resetsAt: 2_000 }],
+        windows: [{ scope: { kind: "account" as const }, remainingPercent: 25, durationMinutes: 10_080, resetsAt: 2_000 }],
       }];
       await boundary.publishAccountUsagesChange(scope);
       await boundary.flush();

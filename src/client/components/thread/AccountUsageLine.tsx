@@ -16,36 +16,77 @@ const POPOVER_WIDTH = 272;
 export function accountUsageForTarget(
   application: NormalizedApplicationSnapshot | undefined,
   targetId: string,
+  threadId: string,
 ): BackendAccountUsage | undefined {
   const target = application?.executionTargets.find(({ id }) => id === targetId);
   if (!target?.available) return undefined;
   return application?.accountUsages.find((entry) =>
     entry.backendInstanceId === target.backendInstanceId &&
-    entry.executionEnvironmentId === target.environmentId,
+    entry.executionEnvironmentId === target.environmentId &&
+    (entry.eligibleThreadIds === undefined || entry.eligibleThreadIds.includes(threadId)),
   );
 }
 
-export function AccountUsageLine({ usage, backendLabel, visible = true }: {
+type UsageWindow = BackendAccountUsage["windows"][number];
+type LabeledWindow = { window: UsageWindow; label: string };
+
+function currentWindows(usage: BackendAccountUsage, modelKeys: readonly string[], now: number) {
+  const staleAt = usage.capturedAt + MAXIMUM_AGE_MS;
+  if (staleAt <= now) return undefined;
+  // Account-wide rows describe one observation. Once one resets, the lowest
+  // account-wide percentage is unknown until the provider reports again.
+  const accountExpired = usage.windows.some(({ scope, resetsAt }) =>
+    scope.kind === "account" && resetsAt !== null && resetsAt <= now);
+  const scoped = usage.eligibleThreadIds !== undefined;
+  const rows: LabeledWindow[] = [];
+  let lowestAccount: LabeledWindow | undefined;
+  let nextExpiry = staleAt;
+  for (const [index, window] of usage.windows.entries()) {
+    const { scope, resetsAt } = window;
+    if (resetsAt !== null && resetsAt <= now) continue;
+    if (resetsAt !== null) nextExpiry = Math.min(nextExpiry, resetsAt);
+    const period = windowLabel(window.durationMinutes, index, usage.windows.length);
+    const scopeLabel = scope.kind === "model" ? scope.label : "All models";
+    const label = scoped ? `${period} · ${scopeLabel}` : period;
+    const row = { window, label };
+    rows.push(row);
+    if (scope.kind === "account" && (!lowestAccount || window.remainingPercent < lowestAccount.window.remainingPercent)) {
+      lowestAccount = row;
+    }
+  }
+  let selected = accountExpired ? undefined : lowestAccount;
+  for (const key of modelKeys) {
+    const match = rows.find(({ window }) => window.scope.kind === "model" && window.scope.key === key);
+    if (match) {
+      selected = match;
+      break;
+    }
+  }
+  if (!selected) return undefined;
+  return { selected, rows: scoped ? [selected, ...rows.filter(row => row !== selected)] : rows, nextExpiry };
+}
+
+export function AccountUsageLine({ usage, backendLabel, modelKeys = [], visible = true }: {
   readonly usage?: BackendAccountUsage;
   readonly backendLabel: string;
+  readonly modelKeys?: readonly string[];
   readonly visible?: boolean;
 }): React.JSX.Element | null {
   const [expiryRevision, expire] = useState(0);
-  const expiresAt = usage ? Math.min(
-    usage.capturedAt + MAXIMUM_AGE_MS,
-    ...usage.windows.flatMap(({ resetsAt }) => resetsAt === null ? [] : [resetsAt]),
-  ) : 0;
+  const windows = visible && usage ? currentWindows(usage, modelKeys, Date.now()) : undefined;
+  const expiresAt = windows?.nextExpiry;
   useEffect(() => {
-    if (!visible || !expiresAt || expiresAt <= Date.now()) return;
-    const timer = window.setTimeout(() => expire((value) => value + 1), expiresAt - Date.now());
+    if (expiresAt === undefined) return;
+    const timer = window.setTimeout(() => expire((value) => value + 1), Math.max(0, expiresAt - Date.now()));
     return () => window.clearTimeout(timer);
-  }, [expiresAt, visible, expiryRevision]);
-  if (!visible || !usage?.windows.length || expiresAt <= Date.now()) return null;
-  return <AvailableAccountUsageLine key={usage.accountId ?? "unknown"} usage={usage} backendLabel={backendLabel} />;
+  }, [expiresAt, expiryRevision]);
+  if (!usage || !windows) return null;
+  return <AvailableAccountUsageLine key={usage.accountId ?? "unknown"} usage={usage} windows={windows} backendLabel={backendLabel} />;
 }
 
-function AvailableAccountUsageLine({ usage, backendLabel }: {
+function AvailableAccountUsageLine({ usage, windows, backendLabel }: {
   readonly usage: BackendAccountUsage;
+  readonly windows: NonNullable<ReturnType<typeof currentWindows>>;
   readonly backendLabel: string;
 }): React.JSX.Element {
   const [mode, setMode] = useState<"closed" | "preview" | "pinned">("closed");
@@ -57,12 +98,12 @@ function AvailableAccountUsageLine({ usage, backendLabel }: {
   const openTimer = useRef<number | undefined>(undefined);
   const closeTimer = useRef<number | undefined>(undefined);
   const hovered = useRef(false);
-  const dismissed = useRef(false);
   const pointerDown = useRef(false);
   const restoreFocus = useRef(false);
   const contentId = useId();
   const open = mode !== "closed";
-  const remaining = Math.min(...usage.windows.map(({ remainingPercent }) => remainingPercent));
+  const remaining = windows.selected.window.remainingPercent;
+  const scoped = usage.eligibleThreadIds !== undefined;
   const level = usageBand(remaining);
   const bounds = () => {
     const rect = trigger.current?.closest(".composer")?.getBoundingClientRect();
@@ -95,7 +136,6 @@ function AvailableAccountUsageLine({ usage, backendLabel }: {
       if (openTimer.current === undefined) return;
       window.clearTimeout(openTimer.current);
       openTimer.current = undefined;
-      dismissed.current = true;
     };
     const keyDown = (event: KeyboardEvent) => { if (event.key === "Escape") cancelPending(); };
     const pointerDownOutside = (event: PointerEvent) => {
@@ -111,7 +151,7 @@ function AvailableAccountUsageLine({ usage, backendLabel }: {
   const change = (next: typeof mode) => { modeRef.current = next; setMode(next); };
   const cancelOpen = () => { window.clearTimeout(openTimer.current); openTimer.current = undefined; };
   const cancelClose = () => { window.clearTimeout(closeTimer.current); closeTimer.current = undefined; };
-  const dismiss = () => { cancelOpen(); cancelClose(); dismissed.current = true; change("closed"); };
+  const dismiss = () => { cancelOpen(); cancelClose(); change("closed"); };
   const pointAt = (event: ReactPointerEvent<HTMLButtonElement>) => {
     if (modeRef.current === "pinned") return;
     const rect = event.currentTarget.getBoundingClientRect();
@@ -127,15 +167,15 @@ function AvailableAccountUsageLine({ usage, backendLabel }: {
   return <Popover open={open} onOpenChange={(next) => { if (!next) dismiss(); }}>
     <PopoverAnchor virtualRef={virtualAnchor} />
     <button ref={trigger} type="button" className="account-usage-line" data-level={level}
-      aria-label={`${backendLabel} included usage: ${formatPercent(remaining)} remaining. Show usage details.`}
+      aria-label={`${backendLabel} included usage: ${scoped ? windows.selected.label + ", " : ""}${formatPercent(remaining)} remaining. Show usage details.`}
       aria-expanded={open} aria-controls={open ? contentId : undefined} aria-haspopup="dialog"
       style={{ "--account-usage-remaining": `${remaining}%` } as CSSProperties}
       onPointerEnter={(event) => {
         if (event.pointerType !== "mouse") return;
-        hovered.current = true; dismissed.current = false; pointAt(event); cancelClose(); cancelOpen();
+        hovered.current = true; pointAt(event); cancelClose(); cancelOpen();
         if (modeRef.current === "closed") openTimer.current = window.setTimeout(() => {
           openTimer.current = undefined;
-          if (hovered.current && !dismissed.current) change("preview");
+          if (hovered.current) change("preview");
         }, HOVER_DELAY_MS);
       }}
       onPointerMove={(event) => { if (event.pointerType === "mouse") pointAt(event); }}
@@ -147,16 +187,16 @@ function AvailableAccountUsageLine({ usage, backendLabel }: {
       onPointerUp={() => { pointerDown.current = false; }}
       onPointerCancel={() => { pointerDown.current = false; }}
       onFocus={() => {
-        if (pointerDown.current || dismissed.current) return;
+        if (pointerDown.current || restoreFocus.current) return;
         cancelOpen(); cancelClose(); setAnchorFraction(0.5);
         if (modeRef.current === "closed") change("preview");
       }}
-      onBlur={() => { pointerDown.current = false; dismissed.current = false; scheduleClose(); }}
+      onBlur={() => { pointerDown.current = false; scheduleClose(); }}
       onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); dismiss(); } }}
       onClick={() => {
         pointerDown.current = false; cancelOpen(); cancelClose();
         if (modeRef.current === "pinned") dismiss();
-        else { dismissed.current = false; change("pinned"); }
+        else change("pinned");
       }}>
       <span className="account-usage-track" aria-hidden="true"><span className="account-usage-fill" /></span>
     </button>
@@ -177,13 +217,13 @@ function AvailableAccountUsageLine({ usage, backendLabel }: {
           onClick={() => { restoreFocus.current = true; dismiss(); }}><X size={14} aria-hidden="true" /></button>
       </div>
       <div className="account-usage-windows">
-        {usage.windows.map((window, index) => <div className="account-usage-window" key={index}>
-          <div className="account-usage-window-heading"><span>{windowLabel(window.durationMinutes, index, usage.windows.length)}</span><strong>{formatPercent(window.remainingPercent)} left</strong></div>
+        {windows.rows.map(({ window, label }, index) => <div className="account-usage-window" key={index}>
+          <div className="account-usage-window-heading"><span>{label}</span><strong>{formatPercent(window.remainingPercent)} left</strong></div>
           {window.resetsAt !== null && <p className="account-usage-reset">Resets <time dateTime={new Date(window.resetsAt).toISOString()}>{formatTime(window.resetsAt)}</time></p>}
         </div>)}
       </div>
       {usage.includedUsageAllowed === false && <p className="account-usage-note">Included usage is currently unavailable.</p>}
-      <p className="account-usage-checked">Checked <time dateTime={new Date(usage.capturedAt).toISOString()}>{formatTime(usage.capturedAt)}</time></p>
+      <p className="account-usage-checked">{usage.reportedBy ? `Reported by ${usage.reportedBy}` : "Checked"} <time dateTime={new Date(usage.capturedAt).toISOString()}>{formatTime(usage.capturedAt)}</time></p>
       {usage.accountId && <details className="account-usage-account"><summary>Account identifier</summary><code>{usage.accountId}</code></details>}
     </PopoverContent>
   </Popover>;

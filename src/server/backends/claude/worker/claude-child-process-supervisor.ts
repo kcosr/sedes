@@ -121,12 +121,13 @@ export class ClaudeChildProcessSupervisor {
 
   /**
    * Settles after this supervised process has closed and its whole tree is
-   * proven gone; rejects when that cleanup is unproven.
+   * proven gone; rejects when that cleanup is unproven. A short-lived probe
+   * can request termination immediately instead of waiting for natural exit.
    */
-  processCleanup(spawned: SpawnedProcess): Promise<void> {
+  processCleanup(spawned: SpawnedProcess, mode: "after_exit" | "terminate"): Promise<void> {
     const record = this.#records.get(spawned);
     if (!record) return Promise.reject(new Error("claude_worker_process_unknown"));
-    return record.exited.then(() => this.#cleanupRecord(record));
+    return mode === "terminate" ? this.#cleanupRecord(record) : record.exited.then(() => this.#cleanupRecord(record));
   }
 
   spawn(options: SpawnOptions): SpawnedProcess {
