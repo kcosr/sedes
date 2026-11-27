@@ -74,7 +74,7 @@ User-facing changes are collected here before release. See the
   outside requests are denied. Legacy thread-only policies are disabled for
   review rather than broadened. Saved Agent `list/get/options/create/update`
   contracts advance to version 7 and thread-create to version 6. Agent context
-  advances to version 5, thread status to version 6, and thread listing to version 10.
+  advances to version 5, thread status to version 7, and thread listing to version 11.
   Automation tools that return thread inventory advance to `list@2` and
   `get/create/update/set_state@3`. See [agent tool contracts](docs/internals/agent-tools.md#catalog-and-effects).
   Thread-message transcripts advance to version 5 to identify automatic follow-ups. See [tool policy sets](docs/user/tool-policies.md).
