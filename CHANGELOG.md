@@ -509,6 +509,13 @@ User-facing changes are collected here before release. See the
 
 ### Fixed
 
+- Compatible sidecars can upgrade automatically after Antigravity verifies
+  settled native work and acknowledges outcomes already recorded by Sedes, or when an external
+  OpenCode attachment can close safely. The external daemon keeps running.
+  Settings identifies resources that still block replacement. See
+  [persistent remote services](docs/operator/operations.md#persistent-remote-services).
+  ([#175](https://github.com/kcosr/sedes/pull/175))
+
 - Claude threads keep the name you set in Sedes across daemon restarts and
   workspace refreshes, including names set before the first message. On upgrade,
   Sedes restores the last successful rename when its record is still available.

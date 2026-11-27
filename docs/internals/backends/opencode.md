@@ -101,14 +101,16 @@ Closing one subscription cancels a batch only when every poll in it is cancelled
 and cannot invalidate another thread's poll. Batch slots belong to one carrier
 channel and are not inherited by a reconnect. Stop confirmation binds the runtime identity,
 generation, ownership and state, so streaming text cannot continually invalidate
-a confirmed Stop. At the environment service boundary, stock OpenCode remains
-conservatively unknown for automatic retirement; forced confirmation is stable
-for the exact native owner while detailed inspection and abandonment evidence
-continue to report retained activity. Backend inspection reports a ready resident
-as active even between turns, allowing its unchanged configuration to be applied.
-The `active_work` blocker still requires positively observed work; the separate
-`unknown_state` blocker remains until explicit retirement because stock OpenCode
-cannot prove its complete background inventory is idle.
+a confirmed backend Stop. Backend inspection reports a ready resident as
+active even between turns. Its `unknown_state` blocker reflects stock
+OpenCode's incomplete native background inventory. At the service boundary,
+that uncertainty blocks automatic replacement of an owned daemon. For a
+ready external daemon the snapshot covers the lifetime of the attachment:
+in-flight requests, usable tool routes and calls, observed work, unacknowledged
+mutation results and observation evidence. After fencing admission, retirement
+rechecks that snapshot before closing Sedes ports and subscriptions. It leaves
+the external daemon and its independent native work running. An unconfirmed
+owner or cleanup failure keeps replacement blocked.
 
 Settings admits local, SSH and Linux outbound placement independently of
 owned/external mode. Native configuration and secret references are resolved

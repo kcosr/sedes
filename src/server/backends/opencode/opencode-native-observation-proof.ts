@@ -22,6 +22,18 @@ export class OpenCodeNativeObservationProof {
   constructor(readonly sessionID: string) {}
   get bytes(): number { return this.#bytes + 1_024 + this.#workBytes; }
   get hasWork(): boolean { return this.#unknownWork || this.#unknownExecution || this.#current !== null || this.#pending.size !== 0 || this.#work.size !== 0; }
+  attachmentActivity() {
+    let active = this.#current !== null || this.#work.size > 0;
+    let unknown = this.#unknownWork || this.#unknownExecution;
+    for (const sequence of this.#pending.values()) {
+      // A dispatch pin precedes native admission. Only an observed queue entry
+      // identifies work that is known to have reached the external daemon.
+      if (sequence === null) unknown = true;
+      else active = true;
+      if (active && unknown) break;
+    }
+    return { active, unknown };
+  }
   get currentInputId(): string | null { return this.#current; }
   get authorityEpoch(): number { return this.#epoch; }
   prepareInput(id: string, maximumBytes: number): boolean {

@@ -39,15 +39,17 @@ export class AntigravityHostRegistry {
     });
     admission?.bind(host);
     let unregister = () => {};
-    unregister = this.input.services.register({ resourceId: host.runtimeId, kind: "provider", snapshot: () => {
+    const resourceId = `antigravity:${host.runtimeId}`;
+    unregister = this.input.services.register({ resourceId, kind: "provider", snapshot: () => {
       const { state, revision, blockers } = host.snapshot();
       return { state, revision, blockers };
     },
+      prepareRestart: async () => { await host.inspect(); },
       onDetach: () => host.detach(), stop: async (reason, context) => {
-        const inspection = await host.inspect();
+        const inspection = host.snapshot();
         const retained = new Set(inspection.retainedSessions.map(session => session.handleId));
         await host.stop({ expectedRevision: inspection.revision, force: context.force }, undefined, undefined,
-          evidence => this.input.services.recordAbandonment({ resourceId: host.runtimeId, kind: "antigravity", reason, evidence }));
+          evidence => this.input.services.recordAbandonment({ resourceId, kind: "antigravity", reason, evidence }));
         this.#retired.set(host.runtimeId, retained); this.#trim(); unregister(); this.#hosts.delete(configuration.backendInstanceId);
       } });
     this.#hosts.set(configuration.backendInstanceId, { host, fingerprint: identity(configuration), unregister }); return host;
@@ -77,7 +79,7 @@ export class AntigravityHostRegistry {
     const [backendId, value] = entry;
     const retained = new Set(value.host.snapshot().retainedSessions.map(session => session.handleId));
     await value.host.stop({ expectedRevision, force }, signal, authority,
-      evidence => this.input.services.recordAbandonment({ resourceId: runtimeId, kind: "antigravity", reason: "operator_backend_stop", evidence }));
+      evidence => this.input.services.recordAbandonment({ resourceId: `antigravity:${runtimeId}`, kind: "antigravity", reason: "operator_backend_stop", evidence }));
     this.#retired.set(runtimeId, retained); this.#trim(); value.unregister(); this.#hosts.delete(backendId);
   }
   #trim() { while (this.#retired.size > 128) this.#retired.delete(this.#retired.keys().next().value!); }

@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { SidecarAbandonmentRecord } from "./sidecar-abandonment-archive.js";
 import {
   SIDECAR_SERVICE_MAXIMUM_RESOURCES,
+  blocksSidecarUpgrade,
   sameSidecarServiceConfiguration,
   sameSidecarServiceScope,
   sidecarResourceSnapshotSchema,
@@ -197,11 +198,11 @@ export class PersistentSidecarServiceRegistry {
     });
   }
 
-  /** Refresh stale uncertainty without freezing normal admission or requiring a runtime attachment. */
+  /** Cached activity as well as uncertainty can settle while the controller is away. */
   async refreshStatus(): Promise<SidecarServiceStatus> {
     if (this.#state !== "ready") return this.status();
     await Promise.all([...this.#resources.values()]
-      .filter(participant => this.#snapshot(participant).state === "unknown")
+      .filter(participant => participant.prepareRestart && blocksSidecarUpgrade(this.#snapshot(participant)))
       .map(participant => this.#refresh(participant, 1_000).catch(() => undefined)));
     return this.status();
   }
@@ -312,8 +313,12 @@ export class PersistentSidecarServiceRegistry {
 
   #snapshot(participant: SidecarResourceParticipant): SidecarResourceSnapshot {
     try {
-      if (this.#observationFailures.has(participant)) throw new Error("sidecar_resource_observation_unavailable");
-      return sidecarResourceSnapshotSchema.parse({resourceId: participant.resourceId, kind: participant.kind, ...participant.snapshot()});
+      const resource = sidecarResourceSnapshotSchema.parse({resourceId: participant.resourceId, kind: participant.kind, ...participant.snapshot()});
+      if (this.#observationFailures.has(participant)) {
+        resource.state = "unknown";
+        resource.blockers = [...new Set([...resource.blockers, "unknown_state"] as const)];
+      }
+      return resource;
     } catch {
       return sidecarResourceSnapshotSchema.parse({resourceId: participant.resourceId, kind: participant.kind, state: "unknown", revision: "unknown", blockers: ["unknown_state"]});
     }

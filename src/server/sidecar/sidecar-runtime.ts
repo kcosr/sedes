@@ -16,7 +16,7 @@ import type { RequestScope } from "../identity/identity-provider.js";
 import type { SidecarArtifactRegistration } from "./sidecar-artifact.js";
 import { SidecarProvisionerCleanupError, type SidecarProvisioner } from "./sidecar-provisioner.js";
 import { SidecarServiceManagementError, type SidecarArtifactInstallation, type SidecarServiceControlInput, type SidecarServiceControlBoundary } from "./sidecar-provisioner.js";
-import type { SidecarServiceStatus, SidecarManagementReceipt } from "../../internal/sidecar-protocol/service-management-v1.js";
+import { blocksSidecarUpgrade, type SidecarServiceStatus, type SidecarManagementReceipt } from "../../internal/sidecar-protocol/service-management-v1.js";
 
 const DEFAULT_IDLE_MILLISECONDS = 5 * 60_000;
 
@@ -109,6 +109,8 @@ export interface SidecarRuntimeOwnerOptions<
   readonly executionEnvironmentId: string;
   readonly readDesiredPolicy: () => InstalledExecutionPolicy;
   readonly onPolicyChanged?: () => void;
+  /** Returns true if an admitted backend inspected the existing service's provider evidence. */
+  readonly reconcileForUpgrade?: (incarnation: string, signal: AbortSignal) => Promise<boolean>;
   readonly policyRecovery?: SidecarPolicyRecovery;
   readonly authorizedCapabilities: readonly SidecarAuthorizedCapability[];
   readonly authorizedRuntimeCapabilities: readonly SidecarRuntimeCapability[];
@@ -153,6 +155,7 @@ export interface SidecarRuntimeOwnerOptions<
 export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
   readonly #policy: SidecarPolicyController;
   readonly #readDesiredPolicy: () => InstalledExecutionPolicy;
+  readonly #reconcileForUpgrade: SidecarRuntimeOwnerOptions<Session>["reconcileForUpgrade"];
   readonly #scope: RequestScope;
   readonly #executionEnvironmentId: string;
   readonly #authorizedCapabilities: readonly SidecarAuthorizedCapability[];
@@ -246,6 +249,7 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
       throw new Error("sidecar_runtime_idle_invalid");
     }
     this.#readDesiredPolicy = input.readDesiredPolicy;
+    this.#reconcileForUpgrade = input.reconcileForUpgrade;
     this.#policy = new SidecarPolicyController(input.readDesiredPolicy, input.onPolicyChanged ?? (() => undefined), input.policyRecovery);
     this.#scope = Object.freeze({ ...input.scope });
     this.#executionEnvironmentId = input.executionEnvironmentId;
@@ -624,7 +628,26 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
     if (wasAttached) await this.synchronizePolicy(signal, options.retryPolicy !== false);
     let status = await this.inspectService(signal);
     if (!status) throw new SidecarUnavailableError();
-    if (this.#policy.status?.installed && !this.#policy.conflict && this.#outdated(status) && status.resources.every((resource) => resource.state === "idle" && resource.blockers.length === 0)) {
+    if (this.#canUpgrade(status) && this.#reconcileForUpgrade &&
+      status.resources.some(resource => resource.kind === "provider" && blocksSidecarUpgrade(resource))) {
+      const inspection = AbortSignal.any([signal, this.#attachmentController.signal, AbortSignal.timeout(10_000)]);
+      let inspected: boolean;
+      try {
+        inspected = await withAbort(this.#reconcileForUpgrade(status.serviceIncarnation, inspection), inspection);
+      } catch (error) {
+        signal.throwIfAborted();
+        await this.#assertActive();
+        this.#onBackgroundError(error);
+        return status;
+      }
+      if (inspected) {
+        const fresh = await this.inspectService(signal);
+        if (!fresh) throw new SidecarUnavailableError();
+        if (fresh.serviceIncarnation !== status.serviceIncarnation || fresh.controllerEpoch !== status.controllerEpoch) return fresh;
+        status = fresh;
+      }
+    }
+    if (this.#canUpgrade(status) && !status.resources.some(blocksSidecarUpgrade)) {
       // The service answered, is compatible, and owns no unsettled work: this
       // is the proven-safe idle replacement that needs no confirmation. The
       // service still refuses if work was admitted since this observation.
@@ -634,7 +657,7 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
           expectedResourcesFingerprint: status.resourcesFingerprint, force: false }, signal);
       } catch (error) {
         if (!(error instanceof SidecarServiceManagementError) ||
-          !["sidecar_service_confirmation_stale", "sidecar_service_upgrade_blocked", "sidecar_service_cleanup_unproven"].includes(error.code)) throw error;
+          !["sidecar_service_confirmation_stale", "sidecar_service_upgrade_blocked", "sidecar_service_cleanup_unproven", "sidecar_service_upgrade_inspection_failed"].includes(error.code)) throw error;
       }
       this.#intentionallyDisconnected = false;
       await this.#session(signal);
@@ -644,8 +667,13 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
     return status;
   }
 
-  #outdated(status: SidecarServiceStatus): boolean {
-    return status.runtimeWireVersion === SIDECAR_WIRE_VERSION && (status.artifactSha256 !== this.#artifact.artifactSha256 || status.buildId !== this.#artifact.buildId);
+  #canUpgrade(status: SidecarServiceStatus): boolean {
+    const policy = this.#policy.status;
+    return this.#canAttach() && !!policy?.installed && !this.#policy.conflict &&
+      status.state === "ready" && status.attached && status.attachmentMode === "normal" &&
+      policy.incarnation === status.serviceIncarnation && policy.controllerEpoch === status.controllerEpoch &&
+      status.runtimeWireVersion === SIDECAR_WIRE_VERSION &&
+      (status.artifactSha256 !== this.#artifact.artifactSha256 || status.buildId !== this.#artifact.buildId);
   }
 
   async disconnect(reason = "sidecar_intentionally_disconnected"): Promise<void> {

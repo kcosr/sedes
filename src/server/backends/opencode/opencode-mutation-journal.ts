@@ -182,6 +182,8 @@ export class OpenCodeMutationJournal {
         entry.dispatched ? unknown("opencode_mutation_owner_closed") : refused("opencode_mutation_admission_closed"), entry.dispatched) });
     }
   }
+  get hasPendingMutation(): boolean { return [...this.#entries.values()].some(entry => entry.outcome.status === "pending"); }
+  get hasRetainedMutation(): boolean { return this.#entries.size > 0; }
   snapshot() {
     return { revision: this.#revision, retainedBytes: this.#bytes, operations: [...this.#entries.values()].map(entry => ({
       authority: structuredClone(entry.authority), identity: { ...entry.identity }, method: entry.method, deadlineAt: entry.deadlineAt,

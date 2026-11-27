@@ -164,15 +164,18 @@ describe("OpenCode compact native proof", () => {
     proof.accept(event(1, "session.inbox.enqueued", { inboxID: "msg_owned", item: { type: "user", delivery: "queue", payload: { text: "x" } } }));
     expect(proof.trim(1_024)).toBe(false);
     expect(proof.bytes).toBe(1_024); expect(proof.hasWork).toBe(true);
+    expect(proof.attachmentActivity()).toEqual({ active: false, unknown: true });
     expect(proof.snapshot().currentInputId).toBeNull();
   });
   it("cannot reserve an input outside the runtime proof budget and reclaims only a known refusal", () => {
     const proof = new OpenCodeNativeObservationProof("ses_owned");
     expect(proof.prepareInput("msg_owned", 1_024)).toBe(false); expect(proof.hasWork).toBe(false);
     expect(proof.prepareInput("msg_owned", 2_048)).toBe(true); expect(proof.hasWork).toBe(true);
+    expect(proof.attachmentActivity()).toEqual({ active: false, unknown: true });
     proof.refuseInput("msg_owned"); expect(proof.hasWork).toBe(false); expect(proof.bytes).toBe(1_024);
     proof.prepareInput("msg_owned", 2_048);
     proof.accept(event(1, "session.inbox.enqueued", { inboxID: "msg_owned", item: { type: "user", delivery: "queue", payload: { text: "x" } } }));
     proof.refuseInput("msg_owned"); expect(proof.hasWork).toBe(true);
+    expect(proof.attachmentActivity()).toEqual({ active: true, unknown: false });
   });
 });

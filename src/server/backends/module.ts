@@ -167,6 +167,8 @@ export interface BackendRuntimeInspection {
 export interface BackendRuntimeAdministration {
   /** Read existing runtime state; inspection must not launch provider work. */
   inspect(): Promise<BackendRuntimeInspection>;
+  /** Refresh an existing owner and acknowledge only outcomes proven by scoped application evidence. */
+  reconcileForUpgrade?(signal: AbortSignal): Promise<void>;
   stop(input: { readonly expectedRevision: string; readonly force: boolean }): Promise<void>;
   restart(input: { readonly expectedRevision: string; readonly force: boolean }): Promise<void>;
 }

@@ -206,7 +206,7 @@ function createRuntime(
     managedProviderTerminals, installationAdvisories: NO_ACTIVE_BACKEND_INSTALLATION_ADVISORIES,
     unresolvedSubmissionRecovery: "attach",
     agentToolRuntimeAvailability: input => agentTools.availability(input),
-    administration: antigravityAdministration(context, executionEnvironmentId, port),
+    administration: antigravityAdministration(context, executionEnvironmentId, threadPersistence, port),
     async start(signal) {
       signal?.throwIfAborted();
       if (closed) throw new Error("antigravity_runtime_closed");

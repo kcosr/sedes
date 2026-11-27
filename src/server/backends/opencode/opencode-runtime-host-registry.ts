@@ -13,6 +13,7 @@ import { OpenCodeRuntimeError } from "./opencode-release.js";
 export type { OpenCodeRuntimeConfiguration } from "./opencode-runtime-configuration.js";
 type Resident = {
   readonly runtime: OpenCodeRuntime;
+  readonly resourceId: string;
   readonly configuration: OpenCodeRuntimeConfiguration;
   readonly fingerprint: string;
   readonly startupEnvironmentFingerprint: string;
@@ -155,17 +156,31 @@ export class OpenCodeRuntimeHostRegistry {
     resident.host ??= resident.runtime.nativeHost;
     if (resident.runtime.snapshot().state === "ready") await resident.host?.prepareRetirement().catch(() => undefined);
   }
+  #revision(resident: Resident, native: ReturnType<OpenCodeRuntime["snapshot"]>): string {
+    return configurationFingerprint({ runtimeId: resident.runtime.runtimeId,
+      state: native.state, generation: native.generation ?? null, ownership: native.ownership });
+  }
   #serviceSnapshot(resident: Resident) {
     const native = resident.runtime.snapshot();
-    // Stock background inventory is incomplete even when foreground reads are
-    // empty. Keep that conservative service posture stable while main detaches
-    // and native events/ACKs continue: those do not replace the confirmed owner.
-    // Detailed work and evidence still appear in backend inspection/archival.
-    const blockers: SidecarUpgradeBlocker[] = ["unknown_state"];
-    if (native.state === "cleanup_unproved") blockers.push("cleanup_unproven");
-    return { state: "unknown" as const, blockers,
-      revision: configurationFingerprint({ runtimeId: resident.runtime.runtimeId,
-        state: native.state, generation: native.generation ?? null, ownership: native.ownership }) };
+    const revision = this.#revision(resident, native);
+    const blockers: SidecarUpgradeBlocker[] = [];
+    const host = resident.runtime.nativeHost;
+    if (native.ownership === "owned" || native.state !== "ready" || resident.retiring || !native.generation || !host) {
+      // Terminating an owned daemon requires complete native background inventory.
+      blockers.push("unknown_state");
+      if (native.state === "cleanup_unproved") blockers.push("cleanup_unproven");
+      return { state: "unknown" as const, blockers, revision };
+    }
+    // External retirement disconnects Sedes. Passive ports/SSE may close, but
+    // a native job can still depend on a tool route or resident delivery proof.
+    const activity = host.attachmentActivity();
+    if (resident.runtime.hasAttachmentWork || activity.active) blockers.push("active_work");
+    if (activity.unsettled) blockers.push("unsettled_outcome");
+    if (activity.unknown) {
+      blockers.push("unknown_state");
+      return { state: "unknown" as const, blockers, revision };
+    }
+    return { state: blockers.length ? "active" as const : "idle" as const, blockers, revision };
   }
   #snapshot(resident: Resident) {
     resident.host ??= resident.runtime.nativeHost;
@@ -182,7 +197,7 @@ export class OpenCodeRuntimeHostRegistry {
     // Confirmation authorizes retiring this exact native owner. Streaming deltas,
     // evidence ACKs and newly observed work must not make a confirmed force Stop
     // impossible; current blockers still govern every non-forced retirement.
-    const { revision } = this.#serviceSnapshot(resident);
+    const revision = this.#revision(resident, native);
     return { state, incarnation: resident.runtime.runtimeId, revision, blockers,
       startupEnvironmentFingerprint: resident.startupEnvironmentFingerprint,
       retainedThreadIds: retained?.threadIds ?? [] };
@@ -196,14 +211,14 @@ export class OpenCodeRuntimeHostRegistry {
     if (resident.stopping) return resident.stopping;
     this.#freeze(resident);
     const retiring = (async () => {
-      if (!force && this.#snapshot(resident).blockers.length) throw new SidecarResourceHandoffPendingError();
+      if (!force && this.#serviceSnapshot(resident).blockers.length) throw new SidecarResourceHandoffPendingError();
       resident.retiring = true;
-      if (force) await this.input.services.recordAbandonment({ resourceId: resident.runtime.runtimeId,
+      if (force) await this.input.services.recordAbandonment({ resourceId: resident.resourceId,
         kind: "opencode", reason, evidence: this.#evidence(resident, "before_shutdown") });
       try { await resident.runtime.close(); }
       catch { throw new OpenCodeRuntimeError("opencode_runtime_cleanup_unproven"); }
       finally {
-        if (force) await this.input.services.recordAbandonment({ resourceId: resident.runtime.runtimeId,
+        if (force) await this.input.services.recordAbandonment({ resourceId: resident.resourceId,
           kind: "opencode", reason, evidence: this.#evidence(resident, "after_shutdown") });
       }
       resident.unregister(); this.#byId.delete(resident.runtime.runtimeId);
@@ -229,14 +244,11 @@ export class OpenCodeRuntimeHostRegistry {
         assertLaunch?.(); this.input.services.assertAdmission(controllerEpoch);
         if (resident.frozen || resident.retiring) throw error("stopping");
       } });
-    resident = { runtime, configuration, fingerprint: this.#fingerprint(configuration),
+    resident = { runtime, resourceId: `opencode:${runtime.runtimeId}`, configuration, fingerprint: this.#fingerprint(configuration),
       startupEnvironmentFingerprint: configurationFingerprint(configuration.startupEnvironmentVariables ?? {}),
       unregister: () => {}, frozen: false, retiring: false };
-    resident.unregister = this.input.services.register({ resourceId: runtime.runtimeId, kind: "provider",
+    resident.unregister = this.input.services.register({ resourceId: resident.resourceId, kind: "provider",
       snapshot: () => this.#serviceSnapshot(resident),
-      // Native inventory cannot clear stock OpenCode's unknown-state blocker.
-      // Automatic service polling must not re-read every resident conversation;
-      // explicit backend inspection still refreshes its detailed inventory.
       stop: (reason, { force }) => this.#retire(resident, reason, force) });
     this.#runtimes.set(configuration.instance.id, resident); this.#byId.set(runtime.runtimeId, resident);
     try {
