@@ -514,6 +514,7 @@ User-facing changes are collected here before release. See the
   OpenCode attachment can close safely. The external daemon keeps running.
   Settings identifies resources that still block replacement. See
   [persistent remote services](docs/operator/operations.md#persistent-remote-services).
+  ([#175](https://github.com/kcosr/sedes/pull/175))
 
 - Claude threads keep the name you set in Sedes across daemon restarts and
   workspace refreshes, including names set before the first message. On upgrade,
