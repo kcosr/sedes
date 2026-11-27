@@ -137,6 +137,7 @@ User-facing changes are collected here before release. See the
   own thread from the running turn, success keeps it Parked and failure or
   interruption brings it back to Active.
   See [Park quiet work](docs/user/organize-work.md#park-quiet-work).
+  ([#170](https://github.com/kcosr/sedes/pull/170))
 
 - Android and Electron can read Codex final answers and enabled progress updates
   while the agent writes. Responsive groups ready sentences starting at six
