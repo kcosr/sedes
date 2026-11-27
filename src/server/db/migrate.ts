@@ -1,3 +1,4 @@
+import { parkUntilDoneMigration } from "./migrations/174-park-until-done.js";
 import { claudeLocalTitleMigration } from "./migrations/173-claude-local-title.js";
 import { parkedThreadInventoryMigration } from "./migrations/172-parked-thread-inventory.js";
 import { unresolvedSubmissionRecoveryMigration } from "./migrations/171-unresolved-submission-recovery.js";
@@ -360,6 +361,7 @@ export const backendNormalizedMigrations = [
   unresolvedSubmissionRecoveryMigration,
   parkedThreadInventoryMigration,
   claudeLocalTitleMigration,
+  parkUntilDoneMigration,
 ] as const;
 
 export type DatabaseMigration = {

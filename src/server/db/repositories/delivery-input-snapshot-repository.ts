@@ -33,6 +33,8 @@ const MAXIMUM_OPERATION_ID_LENGTH = 160;
 const MAXIMUM_SKILL_ID_LENGTH = 160;
 
 export type PrepareDeliveryInputSnapshot = {
+  /** Only the actor preparing a new-turn submit can attest its pre-dispatch epoch. */
+  readonly rootSubmit?: true;
   readonly applicationOperationId: string;
   readonly text: string;
   readonly selectedSkillId?: string | null;
@@ -311,12 +313,13 @@ export class DeliveryInputSnapshotRepository {
       const thread = this.database
         .prepare(
           `
-            SELECT 1
-            FROM application_threads
-            WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?
+            SELECT CASE WHEN i.inventory_state <> 'parked' THEN i.progress_park_revision END AS parkRevision
+            FROM application_threads AS t LEFT JOIN thread_principal_state AS i
+              ON i.tenant_id = t.tenant_id AND i.principal_id = t.owner_principal_id AND i.thread_id = t.id
+            WHERE t.tenant_id = ? AND t.owner_principal_id = ? AND t.id = ?
           `,
         )
-        .get(scope.tenantId, scope.principalId, threadId);
+        .get(scope.tenantId, scope.principalId, threadId) as {parkRevision: number | null} | undefined;
       if (!thread) {
         throw new DomainError(
           "not_found",
@@ -330,8 +333,8 @@ export class DeliveryInputSnapshotRepository {
               tenant_id, owner_principal_id, application_thread_id,
               application_operation_id, original_text, selected_skill_id,
               context_excerpts_json, task_contexts_json, attachments_json,
-              origin_json, fingerprint, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              origin_json, fingerprint, created_at, root_submit_park_revision
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `,
         )
         .run(
@@ -349,6 +352,7 @@ export class DeliveryInputSnapshotRepository {
             : JSON.stringify(normalized.origin),
           fingerprint,
           normalized.createdAt,
+          input.rootSubmit ? thread.parkRevision : null,
         );
       return this.find(scope, threadId, normalized.applicationOperationId)!;
     })();

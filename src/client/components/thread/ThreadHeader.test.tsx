@@ -162,6 +162,7 @@ function makeSnapshot({
       interactionMode: "interactive",
       runState,
       operations: [
+        { id: "park", label: { text: runState === "running" ? "Park until done" : "Park" }, available: true },
         ...(renameAvailable
           ? [{ id: "rename", label: { text: "Rename" }, available: true }]
           : []),
@@ -312,6 +313,7 @@ function fixture(
       targetId: "target-1",
     })),
     setThreadPinned: vi.fn(async () => undefined),
+    getThreadArchiveImpact: vi.fn(async () => ({ stashedPrompts: { root: 0, descendants: 0 } })),
     mutateInventory: vi.fn(async () => undefined),
     getThreadForceResetImpact: vi.fn(async () => ({
       blockerFingerprint: "a".repeat(64),
@@ -1426,6 +1428,18 @@ describe("ThreadHeader action menu", () => {
     const forkAction = within(menu).getByRole("menuitem", { name: "Fork" });
     expect(forkAction).toHaveAttribute("data-disabled");
     expect(forkAction).toHaveTextContent("Unavailable");
+  });
+
+  it("parks the running turn from the thread header", async () => {
+    const { applicationStore } = renderHeader({ runState: "running" });
+    const menu = await openThreadActions();
+    const park = within(menu).getByRole("menuitem", { name: "Park until done" });
+    expect(park).not.toHaveAttribute("data-disabled");
+    expect(park).toHaveAccessibleDescription("Mutes progress speech. Returns to Active when this turn ends.");
+    await userEvent.click(park);
+    await waitFor(() => expect(applicationStore.mutateInventory).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "thread-1" }), "park", { expectedStashedPromptCount: 0 },
+    ));
   });
 
   it("creates an independent thread from the source settings", async () => {

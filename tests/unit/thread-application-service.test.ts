@@ -485,6 +485,19 @@ function createService(input?: {
 }
 
 describe("ThreadApplicationService", () => {
+  it.each([
+    ["idle", "Park", true],
+    ["starting", "Park", false],
+    ["running", "Park until done", true],
+    ["stopping", "Park until done", true],
+    ["reconciling", "Park", false],
+  ] as const)("offers the appropriate Park action while %s", async (runState, label, available) => {
+    const { service } = createService({ runState, includeInteraction: false });
+    const snapshot = await service.snapshot(scope, "thread-1");
+    expect(snapshot.capabilities.operations.find(operation => operation.id === "park"))
+      .toMatchObject({ label: { text: label }, available });
+  });
+
   it("restores failed run state and removes Stop through an authoritative replacement after retry cancellation", async () => {
     let pending = true;
     const current = createService({ runState: "failed", includeInteraction: false, isAutomaticModelRetryPending: () => pending });

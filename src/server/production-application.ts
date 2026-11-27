@@ -643,7 +643,8 @@ export async function startProductionApplication(
         .map(connectionProfile);
     };
     let profiles = configuredProfiles();
-    const inventoryRepository = new InventoryRepository(database);
+    const inventoryRepository = new InventoryRepository(database,
+      (eventScope, threadId) => actors?.currentTurnForParking(eventScope, threadId));
     const userInputs = new UserInputRevisionRepository(database);
     const clientControls = new ClientControlService();
     resources.defer("client controls", () => clientControls.close());
@@ -1242,6 +1243,13 @@ export async function startProductionApplication(
       AuthoritativeCompletionObserver | undefined;
     const pageRepository = new PageRepository(database);
     actors = new ConversationActorManager({
+      observeTurnSettlement(eventScope, threadId, hasEnded) {
+        // Commit before completion speech captures its input activity token.
+        // Publication can re-enter the actor, so dispatch it outside this observer.
+        const now = Date.now();
+        const state = inventoryRepository.unparkIfTurnEnded(eventScope, threadId, hasEnded, now);
+        if (state) threadRuntimeFollowUp.defer(() => inventory.publishCommitted(eventScope, [state], now));
+      },
       onModelFeedback: (eventScope, threadId, input) => automaticModelRetries?.onModelFeedback(eventScope, threadId, input.identity, input.automaticRetry),
       applicationPublications: (eventScope, threadId, turnIds) => [
         ...pageRepository.publications(eventScope, threadId, turnIds), ...imageShowRepository.publications(eventScope, threadId, turnIds)],
@@ -1252,6 +1260,7 @@ export async function startProductionApplication(
       },
       onLiveProgressSkipped: (eventScope, threadId, turnId, itemId) =>
         notifications.finishEarlyProgress(eventScope, threadId, turnId, itemId),
+      readProgressParkRevision: (eventScope, threadId) => notifications.readProgressParkRevision(eventScope, threadId),
       captureEarlyReply: (eventScope, threadId, source) => captureTurnEarlyReply(
         notifications, inventoryRepository, completion, userInputs, mutations?.activity, eventScope, threadId, source),
       environments: execution,
@@ -1836,6 +1845,7 @@ export async function startProductionApplication(
     inventory = new InventoryService(
       inventoryRepository,
       {
+        onParked: (eventScope, threadId) => notifications.progressParked(eventScope, threadId),
         publishMany(eventScope, states) {
           requestAutomationReadmission?.();
           scheduler?.rearm();

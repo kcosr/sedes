@@ -117,6 +117,14 @@ order and fenced against newer events and responses completed during the read.
 Application abandonment can release an exact scoped terminal provider receipt,
 but cannot establish native non-consumption or discard a pending callback.
 
+Park during a run belongs to the principal's thread inventory. On Pi SDK,
+native Pi, Codex, Claude, Grok, OpenCode, and Antigravity, only confirmed
+terminal evidence for the turn captured at Park can unpark it, including
+evidence recovered from history. Shared speech policy uses normalized item
+identity and live-progress provenance. It applies to Codex early and ordinary
+progress and to ordinary Pi SDK, Claude, and OpenCode progress. Native Pi,
+Grok, and Antigravity do not publish provisional progress speech.
+
 Client protocol 181 uses `parked` in normalized thread inventory and `park` and
 `unpark` for inventory actions. All compiled backends use the same
 principal-scoped inventory projection and mutations.

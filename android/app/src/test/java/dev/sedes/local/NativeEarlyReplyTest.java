@@ -17,6 +17,7 @@ public class NativeEarlyReplyTest {
         JSONObject value = common(seq == 0 ? "begin" : "append", seq);
         if (seq == 0) {
             NativeVoiceJson.put(value, "event", event);
+            if (event.equals("turn.progress")) NativeVoiceJson.put(value, "progressParkRevision", 0);
             NativeVoiceJson.put(value, "threadTitle", "Project"); NativeVoiceJson.put(value, "userInputRevision", 2);
         }
         NativeVoiceJson.put(value, "text", text); NativeVoiceJson.put(value, "rawStart", start);
@@ -293,6 +294,7 @@ public class NativeEarlyReplyTest {
     private static NativeVoiceQueue.Item progress(String id, String itemId, String raw, NativeVoiceSettings settings) {
         JSONObject notice = NativeVoiceJson.copy(terminal(raw, null, settings).envelope);
         NativeVoiceJson.put(notice, "sourceEventId", id);
+        NativeVoiceJson.put(notice, "progressParkRevision", 0);
         JSONObject payload = notice.optJSONObject("payload"); payload.remove("assistantResult");
         NativeVoiceJson.put(payload, "event", "turn.progress");
         NativeVoiceJson.put(payload, "title", "Agent progress");
@@ -432,6 +434,7 @@ public class NativeEarlyReplyTest {
         assertTrue(queue.addOpening(new NativeVoiceQueue.Item(reply)));
         JSONObject progress = NativeVoiceJson.copy(terminal("Progress.", null, settings).envelope);
         NativeVoiceJson.put(progress, "sourceEventId", "progress");
+        NativeVoiceJson.put(progress, "progressParkRevision", 0);
         JSONObject payload = progress.optJSONObject("payload");
         NativeVoiceJson.put(payload, "event", "turn.progress");
         NativeVoiceJson.put(payload, "progress", NativeVoiceJson.object("itemId", "progress", "phase", "provisional", "text", "P".repeat(12000)));

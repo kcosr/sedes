@@ -375,9 +375,12 @@ begun dispatching.
 
 ## Park quiet work
 
-Use **Park** when a thread can leave the working set until it has new input,
-but should remain readily accessible. Archive is for finished work. **Unpark**
-returns a parked thread to Active.
+Use **Park** to set an idle thread aside until its next input. During a run,
+choose **Park until done** from the thread header or the thread’s sidebar menu.
+The turn keeps running. Its progress speech stops immediately, and the thread
+returns to Active when that turn completes, fails, or is interrupted. A confirmed
+outcome recovered after a disconnect also brings it back. **Unpark** brings it
+back early. New progress can speak again, and skipped updates stay silent.
 
 - Timeline and Flat list place unpinned parked threads in a bottom **Parked**
   section.

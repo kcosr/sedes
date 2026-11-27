@@ -40,7 +40,8 @@ export class EarlyReplyPublication implements EarlyReplyObservation {
   constructor(
     readonly scope: RequestScope, readonly threadId: string, readonly turnId: string, readonly itemId: string,
     readonly event: EarlyReplySource["event"], readonly generation: number, readonly replyId: string, readonly phases: readonly NotificationAssistantResultPhase[],
-    recipients: readonly Recipient[], private readonly authority: EarlyReplyAuthority, private readonly policyCurrent: () => boolean,
+    recipients: readonly Recipient[], private readonly authority: EarlyReplyAuthority, readonly progressParkRevision: number | undefined,
+    private readonly policyCurrent: () => boolean,
     private readonly onRetired: () => void,
   ) {
     // Every released range must fit the authoritative progress text even if that
@@ -97,6 +98,7 @@ export class EarlyReplyPublication implements EarlyReplyObservation {
         const frame: EarlyReplyFrame = this.#seq === 0
           ? {...common, kind: "begin", event: this.event, seq: 0, rawStart: 0, rawEnd: segment.rawEnd,
             text: segment.text, paragraphEnd: segment.paragraphEnd, threadTitle: this.authority.threadTitle,
+            ...(this.event === "turn.progress" ? {progressParkRevision: this.progressParkRevision} : {}),
             userInputRevision: this.authority.userInputRevision, ...(this.authority.origin ? {origin: this.authority.origin} : {})}
           : {...common, kind: "append", ...segment};
         earlyReplyFrameSchema.parse(frame);

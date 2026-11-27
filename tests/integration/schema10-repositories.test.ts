@@ -1710,6 +1710,50 @@ function createAutomationQueueSource(
 }
 
 describe("inactive schema-10 repositories", () => {
+  it("attests the pre-dispatch park revision only for a newly prepared, accepted root submit in its own thread", () => {
+    const {database, scope, threadId, secondThreadId} = createFixture();
+    try {
+      const snapshots = new DeliveryInputSnapshotRepository(database);
+      const submissions = new SubmissionCompletionRepository(database);
+      const inventory = new InventoryRepository(database);
+      const input = (operation: string) => ({
+        applicationOperationId: operation, text: operation, contextExcerpts: [], taskContexts: [], attachments: [], createdAt: 600,
+      });
+      const accept = (operation: string, target = threadId) => submissions.recordAccepted(scope, target, {
+        operationId: operation, acceptedAt: 605, backendCorrelation: operation + "-correlation",
+      });
+      const proof = (operation: string, target = threadId) =>
+        submissions.rootSubmitParkRevision(scope, target, [operation + "-correlation"]);
+      const change = (action: "park" | "unpark") => inventory.transitionInventory(scope, threadId, {
+        change: {action}, now: 600, mutationId: action, expectedRevision: inventory.getInventory(scope, threadId).inventoryRevision,
+      });
+
+      snapshots.prepare(scope, threadId, {...input("prior-root"), rootSubmit: true});
+      change("park");
+      snapshots.prepare(scope, threadId, {...input("muted-root"), rootSubmit: true});
+      change("unpark");
+      for (const operation of ["prior-root", "muted-root"]) {
+        snapshots.prepare(scope, threadId, {...input(operation), rootSubmit: true});
+        accept(operation); // Reconciled acceptance after Unpark cannot refresh the original epoch.
+      }
+      expect(proof("prior-root")).toBe(0);
+      expect(proof("muted-root")).toBeUndefined();
+
+      snapshots.prepare(scope, threadId, input("steer"));
+      accept("steer");
+      expect(proof("steer")).toBeUndefined();
+      snapshots.prepare(scope, threadId, {...input("new-root"), rootSubmit: true});
+      expect(proof("new-root")).toBeUndefined();
+      accept("new-root");
+      expect(submissions.rootSubmitParkRevision(scope, threadId, ["steer-correlation", "new-root-correlation"])).toBe(1);
+      expect(submissions.rootSubmitParkRevision({...scope, principalId: "someone-else"}, threadId, ["new-root-correlation"])).toBeUndefined();
+      snapshots.copyThread(scope, threadId, secondThreadId);
+      accept("new-root", secondThreadId);
+      snapshots.prepare(scope, secondThreadId, {...input("new-root"), rootSubmit: true});
+      expect(proof("new-root", secondThreadId)).toBeUndefined();
+    } finally { database.close(); }
+  });
+
   it("persists immutable scoped delivery input snapshots with exact replay semantics", () => {
     const fixture = createFixture();
     try {

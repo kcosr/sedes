@@ -22,7 +22,7 @@ final class NativeEarlyReply {
     private static final Pattern OTHER_NUMBERS = Pattern.compile("\\p{No}+");
     static final class Frame {
         final String kind, id, event, thread, turn, item, title, origin, text, reason;
-        final long generation, inputRevision;
+        final long generation, inputRevision, progressParkRevision;
         final int seq, start, end;
         final boolean paragraph;
 
@@ -31,6 +31,7 @@ final class NativeEarlyReply {
             kind = value.optString("kind"); id = value.optString("replyId"); thread = value.optString("threadId");
             turn = value.optString("turnId"); item = value.optString("itemId"); generation = value.optLong("generation");
             seq = value.optInt("seq"); inputRevision = value.optLong("userInputRevision", -1);
+            progressParkRevision = value.optLong("progressParkRevision", -1);
             event = value.optString("event", null); title = value.optString("threadTitle", null);
             JSONObject source = value.optJSONObject("origin"); origin = source == null ? null : source.optString("clientId");
             start = value.optInt("rawStart", -1); end = value.optInt("rawEnd", -1);
@@ -85,7 +86,7 @@ final class NativeEarlyReply {
     }
     private static IllegalArgumentException invalid() { return new IllegalArgumentException("invalid_early_reply"); }
     final String id, event, thread, turn, item, title, origin;
-    final long generation, inputRevision, opened;
+    final long generation, inputRevision, progressParkRevision, opened;
     String reservation;
     long lastSpan, urgentSince = -1;
     boolean detached, skipped;
@@ -102,7 +103,7 @@ final class NativeEarlyReply {
     NativeEarlyReply(Frame first, long now) {
         if (!first.kind.equals("begin")) throw invalid();
         id = first.id; event = first.event; thread = first.thread; turn = first.turn; item = first.item; title = first.title;
-        origin = first.origin; generation = first.generation; inputRevision = first.inputRevision; opened = now;
+        origin = first.origin; generation = first.generation; inputRevision = first.inputRevision; progressParkRevision = first.progressParkRevision; opened = now;
         accept(first, now);
     }
     boolean owns(Frame frame) {
@@ -114,7 +115,7 @@ final class NativeEarlyReply {
         if (detached) return false;
         if (frame.seq < frames.size()) {
             boolean sameBegin = frame.seq != 0 || event.equals(frame.event) && Objects.equals(title, frame.title) &&
-                Objects.equals(origin, frame.origin) && inputRevision == frame.inputRevision;
+                Objects.equals(origin, frame.origin) && inputRevision == frame.inputRevision && progressParkRevision == frame.progressParkRevision;
             if (sameBegin && frames.get(frame.seq).matches(frame, source)) return false;
             throw invalid();
         }
@@ -231,7 +232,7 @@ final class NativeEarlyReply {
         if (!event.equals(notice.event)) return false;
         if (!notice.progress()) return true;
         JSONObject progress = notice.envelope.optJSONObject("payload").optJSONObject("progress");
-        return item.equals(progress.optString("itemId"));
+        return item.equals(progress.optString("itemId")) && progressParkRevision == notice.progressParkRevision;
     }
     private JSONObject spokenSection(JSONObject payload) {
         if (event.equals("turn.progress")) return payload.optJSONObject("progress");

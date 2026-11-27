@@ -429,6 +429,21 @@ Authenticated `PUT /api/application/voice-streams/:voiceStreamId/early-reply`
 updates that reservation in place. An interest change takes effect against the
 current stream. Each new connection receives a fresh token.
 
+Client protocol 185 adds a principal- and thread-scoped park revision to
+`turn.progress` voice notifications and their early `begin` frames. A Park
+increments the revision and sends `progress_parked` to native subscribers.
+Devices immediately skip older automatic progress from that thread. Before
+speaking progress, including its preamble, devices require an input context
+with `progressMuted: false` and a matching `progressParkRevision`. This check
+covers queued items that outlive a disconnected device's Park and Unpark.
+The server captures the park revision when the provider introduces a new
+assistant item with a live start or completion, and checks it at ordinary
+delivery. For a late update without an observed opening, including an item
+loaded from history, the accepted root submission can prove the whole turn
+began in the current unparked revision. A Steer cannot supply that proof.
+After a Park, an item with neither form of evidence stays silent. The script
+channel still receives eligible progress events.
+
 A continuously observed Codex commentary item captures subscribers eligible for
 `turn.progress`. A final item captures subscribers eligible for
 `turn.completed` with final response text selected. The server scans plain

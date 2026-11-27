@@ -74,6 +74,33 @@ describe("thread activity authority", { timeout: 30_000 }, () => {
     } finally { acquire.mockRestore(); catalog.mockRestore(); activity.close(); }
   });
 
+  it("retains each thread's last park revision when progress resumes", async () => {
+    const { applicationThreadId: id } = await h.lifecycle.createServerDraft(h.scope, {
+      workspaceId: h.workspaceRecord.id, connectionProfileId: h.connection.id,
+      title: "Park revision", initialText: "",
+    });
+    const capture = () => h.mutations.inputContext(h.scope, id);
+    const transition = (action: "park" | "unpark") => h.inventory.transition(h.scope, id, {
+      expectedRevision: h.inventoryRepository.getInventory(h.scope, id).inventoryRevision,
+      mutationId: randomUUID(), change: { action },
+    });
+    const initial = await capture();
+    expect(initial).toMatchObject({ progressMuted: false, progressParkRevision: 0 });
+    for (const field of ["progressMuted", "progressParkRevision"] as const) {
+      expect(threadInputContextSchema.safeParse({ ...initial, [field]: undefined }).success).toBe(false);
+    }
+    expect(threadInputContextSchema.safeParse({ ...initial, progressParkRevision: -1 }).success).toBe(false);
+    expect(threadInputContextSchema.safeParse({ ...initial, progressMuted: "false" }).success).toBe(false);
+    await transition("park");
+    expect(await capture()).toMatchObject({ progressMuted: true, progressParkRevision: 1 });
+    expect(await h.mutations.inputContext(h.scope, threadId)).toMatchObject({ progressMuted: false, progressParkRevision: 0 });
+    await transition("unpark");
+    expect(await capture()).toMatchObject({ progressMuted: false, progressParkRevision: 1 });
+    await transition("park");
+    expect(await capture()).toMatchObject({ progressMuted: true, progressParkRevision: 2 });
+    await expect(h.mutations.inputContext({ ...h.scope, principalId: randomUUID() }, id)).rejects.toMatchObject({ code: "not_found" });
+  });
+
   it("requires current title text with the same bounds and empty-text semantics as thread summaries", async () => {
     const { activity } = service(() => undefined);
     try {

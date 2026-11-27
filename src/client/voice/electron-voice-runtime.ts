@@ -1,7 +1,7 @@
 import type { PluginListenerHandle } from "@capacitor/core";
 import { z } from "zod";
 import { clientVoiceSettingsSchema, type ClientActionResult, type ClientCommand, type ClientState } from "../../shared/protocol/client-controls.js";
-import { notificationPolicySchema, selectedAssistantResultSchema, voiceNotificationSchema, type NotificationPolicy } from "../../shared/protocol/notification.js";
+import { notificationPolicySchema, progressParkedSchema, selectedAssistantResultSchema, voiceNotificationSchema, type NotificationPolicy } from "../../shared/protocol/notification.js";
 import { earlyReplyFrameSchema, type EarlyReplyFrame } from "../../shared/protocol/early-reply.js";
 import { ElectronEarlyReply, type EarlySpeechChunk } from "./electron-early-reply.js";
 import { ElectronEarlyOutput } from "./electron-early-output.js";
@@ -55,6 +55,10 @@ interface ActiveInteraction {
   clientTarget?: string;
   directInputPending?: boolean;
 }
+function progressParkRevision(item: ElectronVoiceQueueItem): number | undefined {
+  return item.event === "turn.progress" ? item.early?.identity.progressParkRevision ?? item.notification?.progressParkRevision : undefined;
+}
+
 interface SpeechPlayback {
   active: ActiveInteraction;
   playback: ElectronVoicePlayback;
@@ -856,7 +860,26 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
     if (item.early && !item.notification) return this.#earlyEligible(item.early);
     return !item.notification || notificationEligible(item.notification, this.#policy, this.#state.settings, this.#state.originClientId);
   }
-  #frame(event: "notification_policy" | "notification" | "voice_early_reply", raw: unknown): void {
+  #discardParkedProgress(threadId: string, revision: number): void {
+    const stale = (itemThreadId: string | null, itemRevision: number | undefined) =>
+      itemThreadId === threadId && itemRevision !== undefined && itemRevision < revision;
+    // Next suppresses the ordinary seal of an early item, even if it already yielded its queue position.
+    for (const reply of this.#early.values()) {
+      if (stale(reply.identity.threadId, reply.identity.progressParkRevision)) reply.suppressed = true;
+    }
+    for (let index = this.#queue.items.length - 1; index >= 0; index--) {
+      const item = this.#queue.items[index]!;
+      if (stale(item.threadId, progressParkRevision(item))) {
+        this.#queue.items.splice(index, 1);
+        this.#discardQueuedItem(item);
+        this.#queue.drop("progress_parked");
+      }
+    }
+    const active = this.#active?.item;
+    if (active && stale(active.threadId, progressParkRevision(active))) this.#cancelActive();
+    this.#scheduleDrain(); this.#publish();
+  }
+  #frame(event: Parameters<ElectronVoiceConnectionCallbacks["frame"]>[0], raw: unknown): void {
     if (event === "voice_early_reply") {
       const parsed = earlyReplyFrameSchema.safeParse(raw);
       if (parsed.success) this.#earlyFrame(parsed.data);
@@ -867,6 +890,11 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
       return;
     }
     try {
+      if (event === "progress_parked") {
+        const { threadId, progressParkRevision } = progressParkedSchema.parse(raw);
+        this.#discardParkedProgress(threadId, progressParkRevision);
+        return;
+      }
       if (event === "notification_policy") {
         const policy = notificationPolicySchema.parse(raw);
         if (this.#policy && policy.generation < this.#policy.generation) return;
@@ -972,11 +1000,15 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
     }
     this.#state.phase = "idle"; this.#publish();
   }
-  async #inputRevisionCurrent(active: ActiveInteraction, revision: number | undefined): Promise<boolean> {
+  async #turnSpeechCurrent(active: ActiveInteraction, revision: number | undefined): Promise<boolean> {
     const item = active.item!;
     if (!item.threadId || revision === undefined) return true;
     const context = await this.#context(item.threadId, active.abort.signal);
     this.#assertCurrent(active);
+    if (item.event === "turn.progress" && (context.progressMuted || progressParkRevision(item) !== context.progressParkRevision)) {
+      if (item.early) item.early.suppressed = true;
+      return false;
+    }
     if (context.userInputRevision <= revision) return true;
     if (item.event !== "turn.progress") this.#discardSourceControls(item.threadId, item.notification?.payload.turn?.id ?? item.early?.identity.turnId);
     return false;
@@ -992,7 +1024,7 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
     const revision = item.notification?.userInputRevision ?? item.early?.identity.userInputRevision;
     if (revision !== undefined && item.threadId) {
       this.#state.phase = "synthesizing"; this.#publish();
-      if (!await this.#inputRevisionCurrent(active, revision)) { this.#finish(active); return; }
+      if (!await this.#turnSpeechCurrent(active, revision)) { this.#finish(active); return; }
     }
     if (!this.#eligible(item)) { this.#finish(active); return; }
     const text = voiceItemText(item, settings);
@@ -1003,7 +1035,7 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
     if (item.early) {
       // The seal authorizes both a matching lookahead and the remaining terminal speech.
       let sealCheck: Promise<boolean> | undefined;
-      const validateSeal = () => sealCheck ??= this.#inputRevisionCurrent(active, item.notification!.userInputRevision ?? item.early!.identity.userInputRevision);
+      const validateSeal = () => sealCheck ??= this.#turnSpeechCurrent(active, item.notification!.userInputRevision ?? item.early!.identity.userInputRevision);
       if (!item.notification) {
         try { await this.#playEarly(active, settings, modelLimit, validateSeal); }
         catch (error) {

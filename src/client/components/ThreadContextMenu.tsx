@@ -67,6 +67,7 @@ import {
 } from "./thread/ExecutionWorkspaceActions.js";
 import { ExecutionWorkspaceMenu } from "./thread/ExecutionWorkspaceMenu.js";
 import { contextMenuParts } from "./thread/menu-parts.js";
+import { threadParkAction } from "../../shared/thread-parking.js";
 import {
   ParkImpactDialog,
   parkNeedsConfirmation,
@@ -78,6 +79,7 @@ import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuItemDescription,
   ContextMenuLabel,
   ContextMenuSeparator,
   ContextMenuValue,
@@ -413,6 +415,7 @@ export function ThreadContextMenu({
     archiveAction.start();
   };
   const archived = thread.inventoryState === "archived";
+  const parkAction = threadParkAction(thread.runState);
   const latestFork = latestTurnForkDecision(forkState);
   const forkUnavailableDescriptionId = `sidebar-fork-unavailable-${thread.id}`;
 
@@ -676,9 +679,18 @@ export function ThreadContextMenu({
           Unpark
         </ContextMenuItem>
       ) : (
-        <ContextMenuItem onSelect={() => afterSheet(requestPark)}>
+        <ContextMenuItem
+          aria-label={parkAction.label}
+          aria-description={parkAction.description}
+          onSelect={() => afterSheet(requestPark)}
+        >
           <ArrowDownToDot aria-hidden="true" />
-          Park
+          <span className="min-w-0 flex-1">
+            {parkAction.label}
+            {parkAction.description && (
+              <ContextMenuItemDescription>{parkAction.description}</ContextMenuItemDescription>
+            )}
+          </span>
         </ContextMenuItem>
       )}
       {thread.inventoryState === "snoozed" ? (
@@ -950,6 +962,7 @@ export function ThreadContextMenu({
       {parkDialogMounted && (
         <ParkImpactDialog
           open={parkChoicesOpen}
+          runState={thread.runState}
           onOpenChange={setParkChoicesOpen}
           impact={parkImpact}
           loadImpact={() => store.getThreadArchiveImpact(thread.id)}

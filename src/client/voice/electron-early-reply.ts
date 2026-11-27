@@ -40,7 +40,7 @@ export interface EarlySpeechChunk { text: string; frontier?: Frontier; preambleE
 /** Live source and physical request cursors are discarded when a reply gives up its queue position.
  * Only verified, fully drained chunks advance its compact receipt. */
 export class ElectronEarlyReply {
-  readonly identity: Pick<Begin, "replyId" | "event" | "threadId" | "threadTitle" | "turnId" | "itemId" | "generation" | "userInputRevision" | "origin">;
+  readonly identity: Pick<Begin, "replyId" | "event" | "threadId" | "threadTitle" | "turnId" | "itemId" | "generation" | "userInputRevision" | "progressParkRevision" | "origin">;
   readonly openedAt: number;
   lastSpanAt: number;
   raw = "";
@@ -65,8 +65,8 @@ export class ElectronEarlyReply {
   #partialSentence?: string;
   #preambleChunks: EarlySpeechChunk[] = [];
   constructor(frame: Begin, now: number, readonly streamId: string) {
-    const { replyId, event, threadId, threadTitle, turnId, itemId, generation, userInputRevision, origin } = frame;
-    this.identity = { replyId, event, threadId, threadTitle, turnId, itemId, generation, userInputRevision, origin };
+    const { replyId, event, threadId, threadTitle, turnId, itemId, generation, userInputRevision, progressParkRevision, origin } = frame;
+    this.identity = { replyId, event, threadId, threadTitle, turnId, itemId, generation, userInputRevision, progressParkRevision, origin };
     this.openedAt = this.lastSpanAt = now;
     this.receive(frame, now);
   }

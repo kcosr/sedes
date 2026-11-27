@@ -273,6 +273,16 @@ describe("Electron voice live notification stream", () => {
     expect(streams[0]!.url.searchParams.get("voiceStreamId")).toBe(client.voiceStreamId);
   });
 
+  it("delivers progress park frames on the current voice stream with early playback off", async () => {
+    const { client, streams, event, callbacks } = fixture();
+    await client.connect(); client.notifications(true);
+    await vi.waitFor(() => expect(streams).toHaveLength(1));
+    event("notification_policy", policy);
+    const parked = { threadId: "22222222-2222-4222-8222-222222222222", progressParkRevision: 3 };
+    event("progress_parked", parked);
+    await vi.waitFor(() => expect(callbacks.frame).toHaveBeenCalledWith("progress_parked", parked, client.voiceStreamId));
+  });
+
   it("updates the reservation after the handshake and gates early frames without reconnecting", async () => {
     const { client, streams, calls, event, callbacks } = fixture(path =>
       path.endsWith("/early-reply") ? new Response(null, { status: 204 }) : undefined);

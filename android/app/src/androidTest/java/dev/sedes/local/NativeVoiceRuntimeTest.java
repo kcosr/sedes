@@ -2253,6 +2253,54 @@ public class NativeVoiceRuntimeTest {
             assertEquals(destination, opened.getString("threadId"));
         }
     }
+    @Test public void parkingCancelsAnEarlyProgressAnnouncementAndSelectivelyRemovesQueuedProgress() throws Exception {
+        try (Fixture f = new Fixture(false, false)) {
+            f.readyEarlyVoice(); f.settings(NativeVoiceJson.object("speechContent", "both"));
+            f.policy(true, false, "speak", new JSONArray().put("final"), "turn.progress", "turn.partial");
+            String openingId = "abba".repeat(16);
+            f.earlySpan(openingId, "turn.progress", "opening", 0, 0, OPENING);
+            SpeechJob announcement = f.speech.speechRequests.poll(10, TimeUnit.SECONDS);
+            assertNotNull(announcement); assertEquals("Agent progress\n\nEarly", announcement.text);
+            f.itemNotice("turn.progress", "cccc".repeat(16), "ordinary", "Old progress.");
+            f.earlySpan("bbbb".repeat(16), "turn.progress", "buffered", 0, 0, NEXT_SENTENCE);
+            f.itemNotice("turn.partial", "dddd".repeat(16), "partial", "Partial answer.");
+            assertEquals(3, f.queued());
+            f.wire("progress_parked", NativeVoiceJson.object("threadId", UUID.randomUUID().toString(), "progressParkRevision", 1));
+            assertFalse(announcement.cancelled); assertEquals(3, f.queued());
+            f.wire("progress_parked", NativeVoiceJson.object("threadId", f.target, "progressParkRevision", 1));
+            assertTrue(announcement.cancelled); assertEquals(0, f.queued());
+            SpeechJob partial = f.speech.speechRequests.poll(10, TimeUnit.SECONDS);
+            assertNotNull(partial); assertTrue(partial.text.contains("Partial answer."));
+            f.runtime.drained(partial.id); f.flush();
+            assertTrue(f.speech.speechRequests.isEmpty());
+        }
+    }
+
+    @Test public void progressChecksParkBeforeFirstAnnouncementAndAgainForAnOrdinaryItemAfterUnpark() throws Exception {
+        try (Fixture f = new Fixture(false, false)) {
+            f.readyEarlyVoice(); f.settings(NativeVoiceJson.object("speechContent", "both"));
+            f.policy(true, false, "speak", new JSONArray().put("final"), "turn.progress");
+            f.holdPlaybackValidation = true;
+            String progress = "dada".repeat(16);
+            f.earlySpan(progress, "turn.progress", "opening", 0, 0, OPENING);
+            JSONObject current = Fixture.inputContext(f.target);
+            NativeVoiceJson.put(current, "progressMuted", true); NativeVoiceJson.put(current, "progressParkRevision", 1);
+            f.takeClientTarget(f.target).done(200, current, null); f.flush();
+            assertTrue(f.speech.speechRequests.isEmpty());
+            NativeVoiceJson.put(current, "progressMuted", false);
+            f.itemNotice("turn.progress", "bcbc".repeat(16), "ordinary", "Queued before parking.");
+            f.takeClientTarget(f.target).done(200, current, null); f.flush();
+            f.itemNotice("turn.progress", "abcd".repeat(16), "unknown", "Cannot verify.");
+            f.takeClientTarget(f.target).done(503, null, null); f.flush();
+            assertTrue(f.speech.speechRequests.isEmpty());
+            f.earlySpan("ffea".repeat(16), 0, 0, OPENING);
+            NativeVoiceJson.put(current, "progressMuted", true);
+            f.takeClientTarget(f.target).done(200, current, null); f.flush();
+            SpeechJob answer = f.speech.speechRequests.poll(10, TimeUnit.SECONDS);
+            assertNotNull(answer); assertEquals("Agent finished\n\nEarly", answer.text);
+        }
+    }
+
     @Test public void skippingCommentaryPreservesOtherItemsAndAnOrdinaryPartialReclassification() throws Exception {
         try (Fixture f = new Fixture(false, false)) {
             f.readyEarlyVoice(); f.policy(true, false, "speak", new JSONArray().put("final"), "turn.progress", "turn.partial");
@@ -3432,7 +3480,7 @@ public class NativeVoiceRuntimeTest {
             assertEquals("speaking", f.runtime.snapshot().getString("phase")); assertFalse(speech.cancelled);
             assertTrue((boolean) field(item, "followUp"));
             f.runtime.drained(playback); f.flush();
-            JSONObject context = NativeVoiceJson.object("threadId", f.target, "threadTitle", "Current server title", "activityToken", "automatic-retry-epoch", "userInputRevision", 0,
+            JSONObject context = NativeVoiceJson.object("threadId", f.target, "threadTitle", "Current server title", "progressMuted", false, "progressParkRevision", 0, "activityToken", "automatic-retry-epoch", "userInputRevision", 0,
                 "authority", "current", "runState", "idle", "automaticListenEligible", true, "manualListenEligible", true,
                 "steer", NativeVoiceJson.object("availability", "unavailable"));
             for (int validation = 0; validation < 2; validation++) {
@@ -4060,7 +4108,7 @@ public class NativeVoiceRuntimeTest {
                 }
                 f.runtime.failed(focusOwner, "audio_focus_lost"); f.flush();
                 assertTrue("Held focus loss must cancel pending validation", f.runtime.snapshot().isNull("active"));
-                JSONObject context = NativeVoiceJson.object("threadId", f.target, "threadTitle", "Current server title", "activityToken", "automatic-retry-epoch", "userInputRevision", 0,
+                JSONObject context = NativeVoiceJson.object("threadId", f.target, "threadTitle", "Current server title", "progressMuted", false, "progressParkRevision", 0, "activityToken", "automatic-retry-epoch", "userInputRevision", 0,
                     "authority", "current", "runState", "idle", "automaticListenEligible", true, "manualListenEligible", true,
                     "steer", NativeVoiceJson.object("availability", "unavailable"));
                 NativeVoiceProtocol.inputContext(context);
@@ -4183,7 +4231,7 @@ public class NativeVoiceRuntimeTest {
                 if (selectedMode.equals("steer")) {
                     NativeVoiceHttp.Result context = f.contexts.poll(10, TimeUnit.SECONDS); assertNotNull(context);
                     f.settings(NativeVoiceJson.object("ttsModel", "replacement-tts"));
-                    context.done(200, NativeVoiceJson.object("threadId", f.target, "threadTitle", "Current server title", "activityToken", "epoch", "userInputRevision", 0,
+                    context.done(200, NativeVoiceJson.object("threadId", f.target, "threadTitle", "Current server title", "progressMuted", false, "progressParkRevision", 0, "activityToken", "epoch", "userInputRevision", 0,
                         "authority", "current", "runState", "running", "automaticListenEligible", false, "manualListenEligible", true,
                         "steer", NativeVoiceJson.object("availability", "available", "target",
                             NativeVoiceJson.object("kind", "turn", "turnId", "current-turn"))), null);
@@ -7275,6 +7323,7 @@ public class NativeVoiceRuntimeTest {
             NativeVoiceJson.put(frame, "itemId", item);
             if (seq == 0) {
                 NativeVoiceJson.put(frame, "event", event);
+                if (event.equals("turn.progress")) NativeVoiceJson.put(frame, "progressParkRevision", 0);
                 NativeVoiceJson.put(frame, "threadTitle", "Early"); NativeVoiceJson.put(frame, "userInputRevision", 0);
             }
             NativeVoiceJson.put(frame, "rawStart", start); NativeVoiceJson.put(frame, "rawEnd", start + text.length());
@@ -7308,8 +7357,10 @@ public class NativeVoiceRuntimeTest {
                 "message", "Early", "thread", NativeVoiceJson.object("id", target, "title", "Early"),
                 "turn", NativeVoiceJson.object("id", "early-turn"), "progress", NativeVoiceJson.object(
                     "phase", event.equals("turn.partial") ? "partial" : "provisional", "itemId", item, "text", text));
-            wire("notification", NativeVoiceJson.object("sourceEventId", id, "generation", policyGeneration,
-                "voice", "speak", "userInputRevision", 0, "payload", payload));
+            JSONObject notice = NativeVoiceJson.object("sourceEventId", id, "generation", policyGeneration,
+                "voice", "speak", "userInputRevision", 0, "payload", payload);
+            if (event.equals("turn.progress")) NativeVoiceJson.put(notice, "progressParkRevision", 0);
+            wire("notification", notice);
         }
         JSONObject clientSwitch(String selected, boolean listen) {
             return NativeVoiceJson.object("id", UUID.randomUUID().toString(), "action", "switch_thread", "sourceThreadId", target,
@@ -7326,7 +7377,7 @@ public class NativeVoiceRuntimeTest {
                 "replyEventId", reply, "replyStreamIds", reply == null ? new JSONArray() : new JSONArray().put(voiceStream), "expiresAt", command.getLong("expiresAt")));
         }
         static JSONObject inputContext(String target) {
-            return NativeVoiceJson.object("threadId", target, "threadTitle", "Current server title", "activityToken", "client-switch-epoch", "userInputRevision", 0, "authority", "current",
+            return NativeVoiceJson.object("threadId", target, "threadTitle", "Current server title", "progressMuted", false, "progressParkRevision", 0, "activityToken", "client-switch-epoch", "userInputRevision", 0, "authority", "current",
                 "runState", "idle", "automaticListenEligible", false, "manualListenEligible", true, "steer", NativeVoiceJson.object("availability", "unavailable"));
         }
         JSONObject automaticContext() throws Exception {
@@ -7429,6 +7480,7 @@ public class NativeVoiceRuntimeTest {
                 "payload", NativeVoiceJson.object("schemaVersion", 5, "notificationId", id, "event", event,
                     "occurredAt", "2026-10-10T00:00:00Z", "title", "Turn update", "message", "Agent reply",
                     "thread", NativeVoiceJson.object("id", target, "title", "Source thread"), "turn", turn));
+            if (event.equals("turn.progress")) NativeVoiceJson.put(frame, "progressParkRevision", 0);
             if (event.equals("turn.progress") || event.equals("turn.partial")) NativeVoiceJson.put(frame.optJSONObject("payload"), "progress",
                 NativeVoiceJson.object("itemId", id, "phase", event.equals("turn.partial") ? "partial" : "provisional", "text", "Agent update"));
             onOwner(() -> invoke("receive", new Class<?>[] { String.class, JSONObject.class }, "notification", frame)); flush();

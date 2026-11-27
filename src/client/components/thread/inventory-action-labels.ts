@@ -1,12 +1,14 @@
-import type { BulkInventoryAction } from "../../../shared/index.js";
+import { threadParkAction } from "../../../shared/thread-parking.js";
+import type { BulkInventoryAction, ThreadRunState } from "../../../shared/index.js";
 
 /** Labels for the inventory actions a row or stack offers. */
 export function inventoryActionLabel(
   action: BulkInventoryAction | "wake",
+  runState: ThreadRunState = "idle",
 ): string {
   switch (action) {
     case "park":
-      return "Park";
+      return threadParkAction(runState).label;
     case "unpark":
       return "Unpark";
     case "archive":

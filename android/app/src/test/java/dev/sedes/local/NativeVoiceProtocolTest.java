@@ -8,7 +8,7 @@ import org.junit.Test;
 public class NativeVoiceProtocolTest {
     private static final String ID = "13b02f0b-3060-4d6f-a3e0-60b5fa757011";
     private JSONObject context() {
-        return NativeVoiceJson.object("threadId", ID, "threadTitle", "Current server title", "activityToken", "epoch", "userInputRevision", 0, "authority", "current", "runState", "idle",
+        return NativeVoiceJson.object("threadId", ID, "threadTitle", "Current server title", "progressMuted", false, "progressParkRevision", 0, "activityToken", "epoch", "userInputRevision", 0, "authority", "current", "runState", "idle",
             "automaticListenEligible", true, "manualListenEligible", true, "steer", NativeVoiceJson.object("availability", "available", "target", NativeVoiceJson.object("kind", "turn", "turnId", "turn-1")));
     }
     private JSONObject receipt() {

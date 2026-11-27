@@ -7,6 +7,7 @@ export interface EarlyReplySource {
   readonly applicationTurnId: string;
   readonly applicationItemId: string;
   readonly backendCorrelations: readonly string[];
+  readonly progressParkRevision?: number;
 }
 
 type NonFinalPhase = "provisional" | "partial" | "unclassified";
@@ -140,7 +141,7 @@ export class LiveSpeechTracker {
   accept(
     event: BackendConversationEvent, projector: ConversationProjector, activeTurnId: string | undefined,
     capabilities: BackendCapabilityDocument["liveSpeechStarts"] | undefined, continuous: boolean, receivedBeforeGap: boolean,
-    newItemStart: boolean, progressScheduled: boolean,
+    newItemStart: boolean, progressScheduled: boolean, progressParkRevision?: number,
   ): void {
     const itemEvent = event.type === "item_started" || event.type === "item_updated" || event.type === "item_completed" ? event : undefined;
     for (const current of this.#items.values()) {
@@ -199,6 +200,7 @@ export class LiveSpeechTracker {
       event: phase === "final" ? "turn.completed" : "turn.progress",
       applicationTurnId: projectedItem.turnId, applicationItemId: phase === "provisional" ? projector.durableItemId(item) : projectedItem.id,
       backendCorrelations: Object.freeze([...turn.completionCorrelations]),
+      ...(phase === "provisional" && progressParkRevision !== undefined ? {progressParkRevision} : {}),
     };
     let observation: EarlyReplyObservation | null | undefined;
     try { observation = this.capture(source); }

@@ -1,6 +1,7 @@
 import { initialThreadSettingsReady, threadInputDeliveryAvailability } from "./thread-input-readiness.js";
 import { fitApplicationItemsToSnapshot } from "./application-publication-projection.js";
 import type { UsageService } from "../usage/usage-service.js";
+import { threadParkAction } from "../../shared/thread-parking.js";
 import { createHash } from "node:crypto";
 import type { BackendCapabilityDocument } from "../../shared/protocol/backend.js";
 import type { BackendEffectiveSettings } from "../../shared/protocol/backend.js";
@@ -1009,6 +1010,7 @@ function composeCapabilities(input: {
     inFlight ||
     input.actualRunState === "disconnected" ||
     input.actualRunState === "reconciling";
+  const parkAction = threadParkAction(input.actualRunState);
   const canSnooze =
     available &&
     input.inventory.thread.inventoryState === "active" &&
@@ -1190,9 +1192,9 @@ function composeCapabilities(input: {
     ),
     operation(
       "park",
-      "Park",
-      !archived && !mutationBlocked,
-      "Only an inactive, unarchived thread can be parked.",
+      parkAction.label,
+      !archived && (!mutationBlocked || (parkAction.untilDone && input.activeTurnId !== undefined)),
+      "Park requires an unarchived thread that is idle or has a current turn.",
     ),
     {
       id: "snooze",
@@ -1383,6 +1385,7 @@ function composeCapabilities(input: {
         backend: input.backendCapabilities.revision,
         runState: input.runState,
         actualRunState: input.actualRunState,
+        hasActiveTurn: input.activeTurnId !== undefined,
         retryPending: input.retryPending === true,
         inventoryRevision: input.inventory.thread.inventoryRevision,
         threadRevision: input.inventory.thread.threadRevision,

@@ -4,6 +4,7 @@ import { workspaceRootGrant } from "../../execution/workspace-root-grant.js";
 import { createHash, randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import { prepareCached } from "../prepared-statements.js";
+import { activateParkedThread } from "./parked-thread-activation.js";
 import { MAXIMUM_PROJECT_NAME_LENGTH } from "../../../shared/protocol/domain.js";
 import { DomainError } from "../../domain/errors.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
@@ -695,7 +696,10 @@ function bulkInventoryFingerprint(input: {
 export class InventoryRepository {
   readonly #attachments: ComposerAttachmentRepository;
 
-  constructor(readonly database: Database.Database) {
+  constructor(
+    readonly database: Database.Database,
+    readonly currentParkTurn?: (scope: RequestScope, threadId: string) => string | undefined,
+  ) {
     this.#attachments = new ComposerAttachmentRepository(database);
   }
 
@@ -2749,6 +2753,25 @@ export class InventoryRepository {
     })();
   }
 
+  /** Only the terminal status of the exact turn captured at park can consume its target. */
+  unparkIfTurnEnded(
+    scope: RequestScope,
+    threadId: string,
+    hasEnded: (turnId: string) => boolean,
+    now: number,
+  ): InventoryPrincipalStateRecord | undefined {
+    return this.database.transaction(() => {
+      const target = prepareCached(this.database, `
+        SELECT parked_until_turn_id AS turnId FROM thread_principal_state
+        WHERE tenant_id = ? AND principal_id = ? AND thread_id = ?
+          AND inventory_state = 'parked' AND parked_until_turn_id IS NOT NULL
+      `).get(scope.tenantId, scope.principalId, threadId) as { turnId: string } | undefined;
+      if (!target || !hasEnded(target.turnId)) return undefined;
+      activateParkedThread(this.database, scope, threadId, now);
+      return this.getInventory(scope, threadId);
+    })();
+  }
+
   wakeForRuntimeSignal(
     scope: RequestScope,
     threadId: string,
@@ -3448,6 +3471,17 @@ export class InventoryRepository {
         "inventory_revision_conflict",
         "The thread inventory changed in another client.",
       );
+    }
+    if (state.inventoryState === "parked") {
+      // Observe the current execution owner without attaching, in the same
+      // synchronous transaction as the transition and its mutation receipt.
+      const turnId = this.currentParkTurn?.(state, state.threadId);
+      if (turnId) {
+        prepareCached(this.database, `
+          UPDATE thread_principal_state SET parked_until_turn_id = ?
+          WHERE tenant_id = ? AND principal_id = ? AND thread_id = ?
+        `).run(turnId, state.tenantId, state.principalId, state.threadId);
+      }
     }
   }
 

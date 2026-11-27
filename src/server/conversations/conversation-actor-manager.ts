@@ -17,7 +17,7 @@ import type {
 import { callRuntime } from "../runtime/runtime-errors.js";
 import type { ComposerAttachmentDeliveryService } from "../composer-attachments/composer-attachment-delivery-service.js";
 import { ConversationActor } from "./conversation-actor.js";
-import { ConversationProjector } from "./conversation-projector.js";
+import { ConversationProjector, type ProjectedConversationTimeline } from "./conversation-projector.js";
 import { historyConversationHandle } from "./history-conversation-handle.js";
 import { assertConversationRetentionMilliseconds } from "./conversation-retention-policy.js";
 import { assertConversationRuntimeBudget } from "./conversation-runtime-budget-policy.js";
@@ -334,12 +334,24 @@ type NonblockingQuestionObserver = (
   payload: NonblockingQuestionsPayload,
 ) => void;
 
+type TurnSettlementObserver = (
+  scope: ExecutionScope,
+  threadId: string,
+  hasEnded: (turnId: string) => boolean,
+) => void;
+
+function isTurnTerminal(timeline: ProjectedConversationTimeline, turnId: string): boolean {
+  const turn = timeline.turnsById[turnId];
+  return !!turn && turn.status !== "in_progress";
+}
+
 type LiveProgressSkippedObserver = (scope: ExecutionScope, threadId: string, turnId: string, itemId: string) => void;
 
 type CaptureEarlyReplyObserver = (scope: ExecutionScope, threadId: string, source: EarlyReplySource) => EarlyReplyObservation | null | undefined;
 
 export class ConversationActorManager {
   readonly #captureEarlyReply?: CaptureEarlyReplyObserver;
+  readonly #readProgressParkRevision?: (scope: ExecutionScope, threadId: string) => number | undefined;
   readonly #onNonblockingQuestions?: NonblockingQuestionObserver;
   readonly #onHistoricalQuestion?: HistoricalQuestionObserver;
   readonly #environments: ExecutionEnvironmentProvider;
@@ -350,6 +362,7 @@ export class ConversationActorManager {
   readonly #runtimeBudget: number;
   readonly #onAuthoritativeCompletion?: AuthoritativeCompletionObserver;
   readonly #captureResponseVoiceContext?: (scope: ExecutionScope, threadId: string, backendCorrelations: readonly string[]) => CapturedResponseVoiceContext;
+  readonly #observeTurnSettlement?: TurnSettlementObserver;
   readonly #onAuthoritativeSubmission?: AuthoritativeSubmissionObserver;
   readonly #onLiveProgress?: LiveProgressObserver;
   readonly #onLiveProgressSkipped?: LiveProgressSkippedObserver;
@@ -370,8 +383,10 @@ export class ConversationActorManager {
     readonly runtimeBudget: number;
     readonly onAuthoritativeCompletion?: AuthoritativeCompletionObserver;
     readonly captureResponseVoiceContext?: (scope: ExecutionScope, threadId: string, backendCorrelations: readonly string[]) => CapturedResponseVoiceContext;
+    readonly observeTurnSettlement?: TurnSettlementObserver;
     readonly onAuthoritativeSubmission?: AuthoritativeSubmissionObserver;
     readonly captureEarlyReply?: CaptureEarlyReplyObserver;
+    readonly readProgressParkRevision?: (scope: ExecutionScope, threadId: string) => number | undefined;
     readonly onLiveProgress?: LiveProgressObserver;
     readonly onLiveProgressSkipped?: LiveProgressSkippedObserver;
     readonly onModelFeedback?: ModelFeedbackObserver;
@@ -384,8 +399,10 @@ export class ConversationActorManager {
     this.#applicationPublications = input.applicationPublications;
     this.#onAuthoritativeCompletion = input.onAuthoritativeCompletion;
     this.#captureResponseVoiceContext = input.captureResponseVoiceContext;
+    this.#observeTurnSettlement = input.observeTurnSettlement;
     this.#onAuthoritativeSubmission = input.onAuthoritativeSubmission;
     this.#captureEarlyReply = input.captureEarlyReply;
+    this.#readProgressParkRevision = input.readProgressParkRevision;
     this.#onLiveProgress = input.onLiveProgress;
     this.#onLiveProgressSkipped = input.onLiveProgressSkipped;
     this.#onModelFeedback = input.onModelFeedback;
@@ -446,6 +463,13 @@ export class ConversationActorManager {
     // A committed document is durable even if the viewer/runtime departed.
     if (!entry?.actor || entry.eviction || entry.poisoned || this.#closing || this.#maintenance.has(key)) return;
     await entry.actor.refreshApplicationPublications();
+  }
+
+  /** The normalized turn ID survives projection replacement and process restart. */
+  currentTurnForParking(scope: Pick<ExecutionScope, "tenantId" | "principalId">, threadId: string): string | undefined {
+    const observed = this.observeInputRuntime(scope, threadId);
+    if ((!observed?.authoritative && !observed?.reestablishing) || observed.sourceTurnStatus !== "in_progress") return undefined;
+    return observed.activeTurnId;
   }
 
   /** Observe the exclusive owner even when no browser/coordinator lease exists. Never attaches. */
@@ -1543,6 +1567,8 @@ export class ConversationActorManager {
         handle,
         nativeEffects: entry.nativeEffects,
         environmentLease: lease,
+        ...(this.#readProgressParkRevision ? {readProgressParkRevision: () =>
+          this.#readProgressParkRevision!(input.scope, input.binding.applicationThreadId)} : {}),
         ...(this.#captureEarlyReply ? { captureEarlyReply: (source: EarlyReplySource) => {
           const generation = actor?.peekSnapshotState()?.timeline.generation;
           const control = entry.control;
@@ -1595,6 +1621,14 @@ export class ConversationActorManager {
             }
           }
           const timeline = actor?.peekSnapshotState()?.timeline;
+          const includesTurnSettlement = event.type === "projection_replaced" ||
+            (event.type === "projection_events" && event.events.some(update =>
+              update.type === "history_prepend" || (update.type === "turn_upsert" && update.turn.status !== "in_progress")));
+          if (includesTurnSettlement && timeline && !signal.aborted && !entry.controlEnded) {
+            // Even a provider-originated turn with no accepted Sedes submission
+            // can be explicitly parked. A snapshot only resolves an exact ID.
+            this.#observeTurnSettlement?.(input.scope, input.binding.applicationThreadId, id => isTurnTerminal(timeline, id));
+          }
           if (this.#onModelFeedback && !signal.aborted && timeline?.runState === "running") {
             if (event.type === "live_progress" && timeline.activeTurnId === event.applicationTurnId) {
               observeModelFeedback(event.applicationTurnId, event.applicationItemId);
@@ -1656,6 +1690,7 @@ export class ConversationActorManager {
               this.#onLiveProgress(input.scope, input.binding.applicationThreadId, {
                 ...event, ...(progressVoice ? { responseVoice: {
                   userInputRevision: progressVoice.userInputRevision, superseded: progressVoice.superseded,
+                  ...(event.progressParkRevision !== undefined ? {progressParkRevision: event.progressParkRevision} : {}),
                 } } : {}),
               });
             }).catch(() => { try { skip(); } catch { /* Notification settlement is passive. */ } });

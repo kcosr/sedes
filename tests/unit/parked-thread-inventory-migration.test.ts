@@ -178,3 +178,37 @@ describe("migration 172 parked thread inventory", () => {
     }
   });
 });
+
+describe("migration 174 park until done", () => {
+  it("preserves existing parks and advances the voice revision once per committed park", () => {
+    const { database, scope, owner, createThread, migrate, inventory } = fixture();
+    try {
+      const threadId = createThread("Parked before upgrade");
+      const companion = createThread("Active before upgrade");
+      migrate();
+      database.prepare("UPDATE thread_principal_state SET inventory_state = 'parked' WHERE tenant_id=? AND principal_id=? AND thread_id=?")
+        .run(...owner, threadId);
+      applyDatabaseMigrations(database, backendNormalizedMigrations);
+      const stored = (id = threadId) => database.prepare(`
+        SELECT inventory_state AS state, parked_until_turn_id AS target, progress_park_revision AS revision
+        FROM thread_principal_state WHERE tenant_id=? AND principal_id=? AND thread_id=?
+      `).get(...owner, id);
+      expect(stored()).toEqual({ state: "parked", target: null, revision: 1 });
+      expect(stored(companion)).toEqual({ state: "active", target: null, revision: 0 });
+      inventory.transitionInventory(scope, threadId, {
+        expectedRevision: 0, mutationId: randomUUID(), change: { action: "unpark" }, now: 130,
+      });
+      expect(stored()).toEqual({ state: "active", target: null, revision: 1 });
+      const bulk = {
+        action: "park" as const,
+        targets: [{ threadId, expectedRevision: 1 }, { threadId: companion, expectedRevision: 0 }],
+        mutationId: randomUUID(),
+        blockedThreadIds: new Set<string>(),
+        now: 140,
+      };
+      expect(inventory.bulkInventoryTransition(scope, bulk).replayed).toBe(false);
+      expect(inventory.bulkInventoryTransition(scope, bulk).replayed).toBe(true);
+      expect(stored()).toEqual({ state: "parked", target: null, revision: 2 });
+    } finally { database.close(); }
+  });
+});

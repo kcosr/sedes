@@ -5,7 +5,7 @@ import {
   type ClientActionResult, type ClientCommand, type ClientState, type RegisteredClient,
 } from "../../shared/protocol/client-controls.js";
 import { earlyReplySessionSchema, type EarlyReplySession } from "../../shared/protocol/early-reply.js";
-import { notificationPolicySchema, voiceNotificationSchema } from "../../shared/protocol/notification.js";
+import { notificationPolicySchema, progressParkedSchema, voiceNotificationSchema } from "../../shared/protocol/notification.js";
 import { configuredSedesServer, type SedesServerEndpoint } from "../app/server-endpoint.js";
 import { authenticatedFetch, getEndpointCredential, getEndpointProfile } from "../authentication/auth-transport.js";
 
@@ -14,7 +14,7 @@ export interface ElectronVoiceConnectionCallbacks {
   state(): ClientState;
   command(command: ClientCommand): Promise<ClientActionResult>;
   registered(registration: RegisteredClient | null): void;
-  frame(event: "notification_policy" | "notification" | "voice_early_reply", value: unknown, voiceStreamId: string): void;
+  frame(event: "notification_policy" | "notification" | "voice_early_reply" | "progress_parked", value: unknown, voiceStreamId: string): void;
   notificationsChanged(connected: boolean): void;
   failed(code: string): void;
 }
@@ -264,6 +264,8 @@ export class ElectronVoiceConnection implements ElectronVoiceConnectionLike {
         // The server can settle an already-opened receipt while interest is Off.
         const cancellation = raw && typeof raw === "object" && "kind" in raw && raw.kind === "cancel";
         if (cancellation || this.#interest && this.#session.revision >= this.#disableRevision) this.callbacks.frame(event, raw, voiceStreamId);
+      } else if (event === "progress_parked") {
+        this.callbacks.frame(event, progressParkedSchema.parse(JSON.parse(data)), voiceStreamId);
       } else if (event === "notification") {
         this.callbacks.frame(event, voiceNotificationSchema.parse(JSON.parse(data)), voiceStreamId);
       }
@@ -383,7 +385,7 @@ class VoiceEventParser {
     const empty = this.#lineLength === 0;
     this.#lineLength = 0;
     if (empty) {
-      const relevant = ["notification", "notification_policy", "application-live", "voice_early_session", "voice_early_reply"].includes(this.#event);
+      const relevant = ["notification", "notification_policy", "application-live", "progress_parked", "voice_early_session", "voice_early_reply"].includes(this.#event);
       if (relevant && this.#oversized) throw new Error("stream_too_large");
       if (relevant && this.#data.length) this.receive(this.#event, this.#data.join("\n"));
       this.#event = "message"; this.#data = []; this.#characters = 0; this.#oversized = false;

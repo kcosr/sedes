@@ -2,6 +2,7 @@ import { MAX_EARLY_REPLY_FRAMES, type EarlyReplyFrame } from "../../shared/proto
 
 type OpenReply = {
   readonly event: Extract<EarlyReplyFrame, {kind: "begin"}>["event"];
+  readonly progressParkRevision?: number;
   readonly identity: Pick<EarlyReplyFrame, "replyId" | "threadId" | "turnId" | "itemId" | "generation" | "seq">;
 };
 const MAX_REPLIES_PER_RESERVATION = 4096;
@@ -22,6 +23,13 @@ export class EarlyReplyDelivery {
   *openProgressForTurn(threadId: string, turnId: string): Iterable<string> {
     for (const reply of this.#open.values()) {
       if (reply.event === "turn.progress" && reply.identity.threadId === threadId && reply.identity.turnId === turnId) yield reply.identity.replyId;
+    }
+  }
+
+  discardParkedProgress(threadId: string, revision: number, send: (frame: EarlyReplyFrame) => boolean): void {
+    for (const [replyId, reply] of this.#open) {
+      if (reply.identity.threadId === threadId && reply.event === "turn.progress" &&
+          reply.progressParkRevision !== undefined && reply.progressParkRevision < revision) this.terminal(replyId, false, send);
     }
   }
 
@@ -51,6 +59,7 @@ export class EarlyReplyDelivery {
     if (!deliver(outgoing)) return false;
     this.#open.set(replyId, {
       event: frame.kind === "begin" ? frame.event : prior!.event,
+      progressParkRevision: frame.kind === "begin" ? frame.progressParkRevision : prior!.progressParkRevision,
       identity: {replyId, threadId, turnId, itemId, generation, seq: seq + 1},
     });
     return true;

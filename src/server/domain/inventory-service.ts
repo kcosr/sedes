@@ -39,6 +39,7 @@ interface PendingApplicationThreadPublication {
 }
 
 export interface InventoryChangePublisher {
+  onParked?(scope: RequestScope, threadId: string): void;
   publishMany(
     scope: RequestScope,
     states: readonly InventoryPrincipalStateRecord[],
@@ -405,6 +406,10 @@ export class InventoryService {
     now: number,
   ): Promise<void> {
     if (states.length === 0) return;
+    // Stop speech before asynchronous sidebar publication or its retry queue.
+    for (const state of states) {
+      if (state.inventoryState === "parked") this.#publisher.onParked?.(scope, state.threadId);
+    }
     const entries = states.map((state) =>
       this.#queuePublication(scope, state, now),
     );

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { normalizedAbsolutePath } from "../absolute-path.js";
 import type { ClassifiedAssistantResult } from "./completion-result.js";
+import { threadIdSchema } from "./domain.js";
 import type { InteractionKind } from "./interactions.js";
 import { interactionKindSchema } from "./interactions.js";
 import { boundedTextSchema, requireSerializedByteLimit } from "./payload.js";
@@ -228,18 +229,27 @@ export const notificationPolicySchema = z.strictObject({
   generation: z.number().int().nonnegative(), settings: notificationSettingsSchema,
 });
 export type NotificationPolicy = z.infer<typeof notificationPolicySchema>;
+/** Each real Park invalidates provisional speech from all earlier park revisions. */
+export const progressParkedSchema = z.strictObject({
+  threadId: threadIdSchema,
+  progressParkRevision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+});
 export const voiceNotificationSchema = z.strictObject({
   payload: notificationPayloadSchema,
   sourceEventId: identity,
   voice: voiceActionSchema,
   generation: z.number().int().nonnegative(),
   userInputRevision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+  progressParkRevision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
   origin: z.strictObject({ clientId: identity }).optional(),
   recognitionTarget: voiceRecognitionTargetSchema.optional(),
   /** Only state-attention events with the same explicit subject may coalesce. */
   subjectId: identity.optional(),
 }).superRefine((value, context) => {
   const turnEvent = value.payload.event.startsWith("turn.");
+  if ((value.payload.event === "turn.progress") !== (value.progressParkRevision !== undefined)) {
+    context.addIssue({ code: "custom", path: ["progressParkRevision"], message: "Park revision is required exactly for provisional progress." });
+  }
   if (turnEvent !== (value.userInputRevision !== undefined)) {
     context.addIssue({ code: "custom", path: ["userInputRevision"], message: "Input revision is required exactly for turn voice notifications." });
   }

@@ -2,6 +2,8 @@
 export type ResponseVoiceFreshness = {
   readonly userInputRevision: number;
   readonly superseded: boolean;
+  /** Only provisional progress carries the park revision of its live item opening. */
+  readonly progressParkRevision?: number;
 };
 
 export type CapturedResponseVoiceContext = ResponseVoiceFreshness & {

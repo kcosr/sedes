@@ -4405,7 +4405,8 @@ async function main(): Promise<void> {
     throw new Error("e2e_claude_fixture_unhealthy");
   }
 
-  const inventoryRepository = new InventoryRepository(database);
+  const inventoryRepository: InventoryRepository = new InventoryRepository(database,
+    (scope, threadId) => actors.currentTurnForParking(scope, threadId));
   const userInputs = new UserInputRevisionRepository(database);
   const notificationLifecycle = new NotificationLifecycleObserver(
     inventoryRepository,
@@ -4652,6 +4653,11 @@ async function main(): Promise<void> {
   let observeAuthoritativeCompletion:
     AuthoritativeCompletionObserver | undefined;
   const actors = new ConversationActorManager({
+    observeTurnSettlement(scope, threadId, hasEnded) {
+      const now = Date.now();
+      const state = inventoryRepository.unparkIfTurnEnded(scope, threadId, hasEnded, now);
+      if (state) authoritativeCompletionFollowUp.defer(() => inventory.publishCommitted(scope, [state], now));
+    },
     onModelFeedback: (eventScope, threadId, input) => automaticModelRetries?.onModelFeedback(eventScope, threadId, input.identity, input.automaticRetry),
     applicationPublications: (publicationScope, threadId, turnIds) => [
       ...pageRepository.publications(publicationScope, threadId, turnIds),
@@ -4664,6 +4670,7 @@ async function main(): Promise<void> {
     },
     onLiveProgressSkipped: (eventScope, threadId, turnId, itemId) =>
       notifications.finishEarlyProgress(eventScope, threadId, turnId, itemId),
+    readProgressParkRevision: (eventScope, threadId) => notifications.readProgressParkRevision(eventScope, threadId),
     captureEarlyReply: (eventScope, threadId, source) => captureTurnEarlyReply(
       notifications, inventoryRepository, completion, userInputs, mutationsForSubmissions?.activity, eventScope, threadId, source),
     environments: execution,
@@ -5128,6 +5135,7 @@ async function main(): Promise<void> {
   const inventory = new InventoryService(
     inventoryRepository,
     {
+      onParked: (eventScope, threadId) => notifications.progressParked(eventScope, threadId),
       publishMany: (eventScope, states) => {
         applicationSnapshots.handoffStructuralThreadChanges(eventScope, states.map(({ threadId }) => threadId));
         return snapshots.publishMany(eventScope, states.map(({ threadId }) => threadId));

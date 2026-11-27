@@ -53,12 +53,13 @@ User-facing changes are collected here before release. See the
   ([#121](https://github.com/kcosr/sedes/pull/121))
 
 - Upgrade the server and browser/packaged clients together for client protocol
-  **184**. Rebuild Android and Electron clients for native voice snapshot **17**
+  **185**. Rebuild Android and Electron clients for native voice snapshot **17**
   and the early reply subscription for progress updates and final answers. See
   [early reply playback](docs/operator/clients/voice.md#early-reply-playback).
   ([#165](https://github.com/kcosr/sedes/pull/165), [#169](https://github.com/kcosr/sedes/pull/169))
   Thread inventory uses `parked` with `park` and `unpark` actions.
   Existing parked threads and saved sidebar visibility preferences carry over.
+  Provisional voice notifications now carry the thread’s park revision.
   Turn bookmarks may omit the user prompt for replies that continue
   without one. Clients can verify exact abandoned inputs after Force Reset.
   Antigravity targets add a normalized brand and execution configuration.
@@ -129,6 +130,11 @@ User-facing changes are collected here before release. See the
   list can filter to one Group or to ungrouped threads.
   [Sedes tools](docs/user/provider-features.md#let-an-agent-use-sedes-tools).
   ([#166](https://github.com/kcosr/sedes/pull/166))
+
+- Choose **Park until done** in the thread header or sidebar to silence a running
+  thread’s progress immediately. The thread returns to Active when that turn
+  ends, and final replies follow your voice settings.
+  See [Park quiet work](docs/user/organize-work.md#park-quiet-work).
 
 - Android and Electron can read Codex final answers and enabled progress updates
   while the agent writes. Responsive groups ready sentences starting at six

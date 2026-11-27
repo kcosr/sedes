@@ -17,6 +17,7 @@ import type {
   OpenTaskDisposition,
   ThreadArchiveImpact,
 } from "../../../shared/index.js";
+import { threadParkAction } from "../../../shared/thread-parking.js";
 import { DEFAULT_THREAD_TITLE } from "../../../shared/index.js";
 import {
   automationsPath,
@@ -300,6 +301,7 @@ export const ThreadHeader = memo(function ThreadHeader({
   const moveDraft = snapshot.capabilities.operations.find(
     ({ id }) => id === "move_draft",
   );
+  const parkAction = threadParkAction(snapshot.runState);
   const park = snapshot.capabilities.operations.find(
     ({ id }) => id === "park",
   );
@@ -925,11 +927,18 @@ export const ThreadHeader = memo(function ThreadHeader({
                   ) : (
                     <DropdownMenuItem
                       disabled={disabled || park?.available !== true}
+                      aria-label={parkAction.label}
+                      aria-description={parkAction.description}
                       title={park?.unavailableReason?.text}
                       onSelect={keepOpen(() => void requestPark())}
                     >
                       <ArrowDownToDot aria-hidden="true" />
-                      Park
+                      <span className="min-w-0 flex-1">
+                        {parkAction.label}
+                        {parkAction.description && (
+                          <DropdownMenuItemDescription>{parkAction.description}</DropdownMenuItemDescription>
+                        )}
+                      </span>
                       {(disabled || park?.available !== true) && (
                         <ReasonShortcut reason={disabled ? busyReason : "Unavailable"} />
                       )}
@@ -1212,6 +1221,7 @@ export const ThreadHeader = memo(function ThreadHeader({
       />
       <ParkImpactDialog
         open={active && parkChoicesOpen}
+        runState={snapshot.runState}
         onOpenChange={setParkChoicesOpen}
         impact={parkImpact}
         loadImpact={() =>

@@ -22,7 +22,7 @@ function notice(id = "notice", patch: Partial<VoiceNotification> = {}): VoiceNot
 }
 function item(id = "notice", text = "Final answer", event: "turn.completed" | "turn.progress" | "turn.partial" = "turn.completed"): ElectronVoiceQueueItem {
   const original = notice(id);
-  const notification = notice(id, { voice: event === "turn.completed" ? "speakThenListen" : "speak",
+  const notification = notice(id, { ...(event === "turn.progress" ? { progressParkRevision: 0 } : {}), voice: event === "turn.completed" ? "speakThenListen" : "speak",
     payload: { ...original.payload, event, ...(event === "turn.completed" ? { assistantResult: { final: { text } } }
       : { progress: { itemId: id, phase: event === "turn.partial" ? "partial" : "provisional", text } }) } });
   return { id, threadId: THREAD, threadTitle: "Review", event, notification };
@@ -31,7 +31,7 @@ function replay(id = "replay", text = "Replay answer", turnId = "turn-1"): Elect
   return { id, threadId: THREAD, threadTitle: "Review", event: "replay", replay: { threadId: THREAD, turnId, assistantResult: { final: { text } } } };
 }
 const context = (patch: Partial<ThreadInputContext> = {}): ThreadInputContext => ({ threadId: THREAD, threadTitle: "Review",
-  authority: "current", runState: null, activityToken: "activity", sourceTurnId: "turn-1", userInputRevision: 7,
+  authority: "current", runState: null, progressMuted: false, progressParkRevision: 0, activityToken: "activity", sourceTurnId: "turn-1", userInputRevision: 7,
   manualListenEligible: true, automaticListenEligible: true, steer: { availability: "unsupported" }, ...patch });
 
 describe("desktop voice notification policy", () => {

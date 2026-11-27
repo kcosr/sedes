@@ -680,6 +680,20 @@ export class SubmissionCompletionRepository {
     return correlations.some(correlation => statement.get(scope.tenantId, scope.principalId, applicationThreadId, correlation) !== undefined);
   }
 
+  /** A scoped accepted root submission precedes every assistant item on its turn.
+   * Steers, historical fork copies and pre-upgrade snapshots supply no such proof. */
+  rootSubmitParkRevision(scope: RequestScope, threadId: string, correlations: readonly string[]): number | undefined {
+    const row = this.database.prepare(`
+      SELECT s.root_submit_park_revision AS revision FROM submission_completion_observations AS o
+      JOIN delivery_input_snapshots AS s ON s.tenant_id = o.tenant_id AND s.owner_principal_id = o.owner_principal_id
+        AND s.application_thread_id = o.application_thread_id AND s.application_operation_id = o.operation_id
+      WHERE o.tenant_id = ? AND o.owner_principal_id = ? AND o.application_thread_id = ?
+        AND o.backend_correlation IN (SELECT value FROM json_each(?)) AND o.completion_observed_at IS NULL
+        AND s.root_submit_park_revision IS NOT NULL LIMIT 1
+    `).get(scope.tenantId, scope.principalId, threadId, JSON.stringify(correlations)) as {revision: number} | undefined;
+    return row?.revision;
+  }
+
   #nextAttentionCreatedAt(
     scope: RequestScope,
     applicationThreadId: string,

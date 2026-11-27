@@ -234,6 +234,17 @@ thread actions still wait for turn settlement and playback. An interrupted or
 revised turn can change words you already heard. Turning Early reply playback Off
 during a reply returns its remaining eligible text to completion playback.
 
+**Park until done** stops automatic **Turn progress** speech for the selected
+thread on connected devices. It skips the current announcement and any queued
+progress, including an update still being written when you unpark. New updates
+can speak after you unpark. Before starting progress audio, a device checks
+with Sedes that the update is still eligible. Partial answers, requests for input or approval,
+and explicit playback follow their usual settings. The final answer can start
+speaking early while the thread is still Parked. If you selected **Provisional**
+in the completion’s **Response text**, ordinary completion playback reads that
+section before the final answer. When the final answer has already played
+early, its remaining selected sections may follow it.
+
 ### Listening after a reply
 
 Automatic recognition requires **Speak then listen**, **Auto-listen**, and a

@@ -39,6 +39,8 @@ async function fixture(observeNotifications = true) {
   let notifications: NotificationService;
   const harness = await createInMemoryThreadRuntimeHarness({
     retentionMilliseconds: 60_000,
+    persistDeliveryInputSnapshots: true,
+    onParked: (scope, id) => notifications.progressParked(scope, id),
     captureEarlyReply: (scope, threadId, source) => captureTurnEarlyReply(notifications, harness.inventoryRepository,
       completions, new UserInputRevisionRepository(harness.database), harness.mutations.activity, scope, threadId, source),
     onLiveProgress: (scope, threadId, input) => {
@@ -184,6 +186,200 @@ describe("live completion notification provenance", { timeout: 30_000 }, () => {
     } finally { await current.close(); }
   });
 
+  it("drops progress spanning Park and Unpark, then speaks new progress and an early final", async () => {
+    const current = await fixture();
+    const { harness, notifications } = current;
+    const { driver, scope } = harness;
+    const capabilities = driver.capabilities.bind(driver);
+    vi.spyOn(driver, "capabilities").mockImplementation(revision => ({
+      ...capabilities(revision), liveSpeechStarts: { final: true, provisional: true },
+    }));
+    const responses = vi.spyOn(driver, "scheduleScriptedResponse").mockImplementation(() => {});
+    const { revision, silenced: _silenced, ...settings } = notifications.read(scope);
+    notifications.update(scope, { ...settings, expectedRevision: revision, assistantResultPhases: ["final"],
+      delivery: scriptDelivery(["turn.progress", "turn.completed"]) });
+    const frames: string[] = [];
+    notifications.subscribe(scope, frame => frames.push(frame),
+      notifications.reserveVoiceStream(scope, randomUUID(), { enabled: true, revision: 0 }));
+    const early = () => frames.filter(frame => frame.startsWith("event: voice_early_reply\n"))
+      .map(frame => earlyReplyFrameSchema.parse(JSON.parse(frame.split("\n")[1]!.slice("data: ".length))));
+    try {
+      const id = await current.start();
+      const runtime = await harness.runtimes.acquire(scope, id);
+      try {
+        const [record, turn] = responses.mock.calls[0]!;
+        const change = (action: "park" | "unpark") => harness.inventory.transition(scope, id, {
+          expectedRevision: harness.inventoryRepository.getInventory(scope, id).inventoryRevision,
+          change: { action }, mutationId: randomUUID(),
+        });
+        const open = (key: string, phase: "final" | "provisional" = "provisional") => {
+          const item = { backendTurnId: turn.backendTurnId, backendItemId: key,
+            semanticKind: "assistant_message" as const, responsePhase: phase, status: "streaming" as const,
+            sourceOrder: turn.orderedBackendItemIds.length, markdown: { text: key + ". More follows." } };
+          record.snapshot.itemsById[key] = item;
+          turn.orderedBackendItemIds.push(key);
+          driver.emit(record, {type: "item_started", item, liveSpeechStart: phase});
+          return item;
+        };
+        const close = (item: ReturnType<typeof open>) => {
+          const completed = {...item, status: "completed" as const};
+          record.snapshot.itemsById[item.backendItemId] = completed;
+          driver.emit(record, {type: "item_completed", item: completed,
+            ...(item.responsePhase === "provisional" ? {liveProgress: true as const} : {})});
+        };
+
+        const first = open("Already speaking");
+        await vi.waitFor(() => expect(early()).toMatchObject([{kind: "begin", progressParkRevision: 0}]));
+        await change("park");
+        expect(frames.filter(frame => frame.startsWith("event: progress_parked\n"))).toHaveLength(1);
+        expect(early().some(frame => frame.kind === "cancel" && frame.replyId === early()[0]!.replyId)).toBe(true);
+        const muted = open("Started while parked");
+        await runtime.actor.captureSnapshotState();
+        await change("unpark");
+        close(first);
+        close(muted);
+        const audible = open("Started after unpark");
+        await vi.waitFor(() => expect(early().filter(frame => frame.kind === "begin")).toMatchObject([
+          {progressParkRevision: 0}, {progressParkRevision: 1, text: expect.stringContaining("Started after unpark")},
+        ]));
+        close(audible);
+        await vi.waitFor(() => expect(voiceFrames(frames)).toMatchObject([
+          {progressParkRevision: 1, payload: {event: "turn.progress", progress: {text: audible.markdown.text}}},
+        ]));
+        await vi.waitFor(() => expect(current.executor).toHaveBeenCalledTimes(3));
+
+        await change("park");
+        const final = open("Finished the review", "final");
+        await vi.waitFor(() => expect(early().at(-1)).toMatchObject({kind: "begin", event: "turn.completed"}));
+        expect(harness.inventoryRepository.getInventory(scope, id).inventoryState).toBe("parked");
+        close(final);
+        const terminal = {...turn, status: "completed" as const, endedBy: "agent_settled" as const};
+        record.snapshot.turnsById[turn.backendTurnId] = terminal;
+        record.snapshot.runState = "idle";
+        delete record.snapshot.activeBackendTurnId;
+        driver.emit(record, {type: "turn_completed", turn: terminal});
+        driver.emit(record, {type: "run_state_changed", state: "idle"});
+        await vi.waitFor(() => expect(voiceFrames(frames).map(frame => frame.payload.event)).toEqual(["turn.progress", "turn.completed"]));
+        await Promise.all(harness.completionFollowUps.splice(0));
+        expect(harness.inventoryRepository.getInventory(scope, id).inventoryState).toBe("active");
+        const afterUnpark = await harness.mutations.inputContext(scope, id);
+        expect(afterUnpark.automaticListenEligible).toBe(true);
+        expect(voiceFrames(frames).at(-1)?.recognitionTarget).toMatchObject({
+          threadId: id, sourceTurnId: afterUnpark.sourceTurnId, activityToken: afterUnpark.activityToken,
+        });
+      } finally { runtime.release(); }
+    } finally { await current.close(); }
+  });
+
+  it.each(["before submit", "during the turn"] as const)(
+    "checks the root submission before speaking a recovered progress item after parking %s", async parkTime => {
+      const current = await fixture();
+      const { harness, notifications } = current;
+      const { driver, scope } = harness;
+      try {
+        const id = await current.send();
+        const frames: string[] = [];
+        notifications.subscribe(scope, frame => frames.push(frame),
+          notifications.reserveVoiceStream(scope, randomUUID()));
+        const responses = vi.spyOn(driver, "scheduleScriptedResponse").mockImplementation(() => {});
+        const change = (action: "park" | "unpark") => harness.inventory.transition(scope, id, {
+          expectedRevision: harness.inventoryRepository.getInventory(scope, id).inventoryRevision,
+          change: { action }, mutationId: randomUUID(),
+        });
+        if (parkTime === "before submit") {
+          await change("park");
+          await change("unpark");
+        }
+        await harness.mutations.admitInput(scope, id, {
+          mutationId: randomUUID(), origin: { clientId: randomUUID() }, text: "Check the next change", runningPolicy: { mode: "queue" },
+        });
+        await vi.waitFor(() => expect(responses).toHaveBeenCalledOnce());
+        const runtime = await harness.runtimes.acquire(scope, id);
+        try {
+          if (parkTime === "during the turn") await change("park");
+          const [record, turn] = responses.mock.calls[0]!;
+          // The provider snapshot already contains an item whose start Sedes missed.
+          const item = { backendTurnId: turn.backendTurnId, backendItemId: "recovered-progress",
+            semanticKind: "assistant_message" as const, responsePhase: "provisional" as const, status: "streaming" as const,
+            sourceOrder: turn.orderedBackendItemIds.length, markdown: { text: "Reviewing the next change." } };
+          record.snapshot.itemsById[item.backendItemId] = item;
+          turn.orderedBackendItemIds.push(item.backendItemId);
+          if (parkTime === "during the turn") await change("unpark");
+          driver.emit(record, {type: "resnapshot_required", reason: "history_changed"});
+          const replacement = await runtime.actor.captureSnapshotState();
+          expect(Object.values(replacement.timeline.itemsById)).toContainEqual(expect.objectContaining({ markdown: item.markdown }));
+          const publicationsBeforeProgress = current.publications.length;
+          const completed = {...item, status: "completed" as const};
+          record.snapshot.itemsById[item.backendItemId] = completed;
+          driver.emit(record, {type: "item_completed", item: completed, liveProgress: true});
+          await runtime.actor.captureSnapshotState();
+          await vi.waitFor(() => expect(current.publications.length).toBeGreaterThan(publicationsBeforeProgress));
+          await Promise.all(current.publications);
+          expect(voiceFrames(frames).map(notice => notice.progressParkRevision)).toEqual(parkTime === "before submit" ? [1] : []);
+        } finally { runtime.release(); }
+      } finally { await current.close(); }
+    },
+  );
+
+  it.each(["completed", "failed", "interrupted"] as const)(
+    "unparks only the captured turn when a replacement snapshot reports it %s",
+    async outcome => {
+      const current = await fixture();
+      const { harness } = current;
+      const { driver, scope, inventoryRepository } = harness;
+      const responses = vi.spyOn(driver, "scheduleScriptedResponse").mockImplementation(() => {});
+      try {
+        const id = await current.start();
+        const runtime = await harness.runtimes.acquire(scope, id);
+        try {
+          const before = await runtime.actor.captureSnapshotState();
+          const targetId = before.timeline.activeTurnId!;
+          const [record, turn] = responses.mock.calls[0]!;
+          const inventory = () => inventoryRepository.getInventory(scope, id);
+          const park = () => inventoryRepository.parkThread(scope, id, {
+            mutationId: randomUUID(), expectedRevision: inventory().inventoryRevision, now: Date.now(),
+          });
+          const parked = park();
+          const storedTarget = () => harness.database.prepare(
+            "SELECT parked_until_turn_id AS target, progress_park_revision AS revision FROM thread_principal_state WHERE tenant_id=? AND principal_id=? AND thread_id=?",
+          ).get(scope.tenantId, scope.principalId, id);
+          expect(storedTarget()).toEqual({ target: targetId, revision: 1 });
+          expect(inventoryRepository.unparkIfTurnEnded({ ...scope, principalId: randomUUID() }, id, () => true, Date.now())).toBeUndefined();
+
+          const oldTurn = { backendTurnId: "older-turn", orderedBackendItemIds: [], status: "completed" as const };
+          record.snapshot.orderedBackendTurnIds.unshift(oldTurn.backendTurnId);
+          record.snapshot.turnsById[oldTurn.backendTurnId] = oldTurn;
+          const replace = async () => {
+            driver.emit(record, { type: "resnapshot_required", reason: "history_changed" });
+            return runtime.actor.captureSnapshotState();
+          };
+          const replaced = await replace();
+          expect(replaced.timeline.generation).not.toBe(before.timeline.generation);
+          expect(replaced.timeline.activeTurnId).toBe(targetId);
+          expect(inventory()).toMatchObject({ inventoryState: "parked", inventoryRevision: parked.state.inventoryRevision });
+
+          // A provider-originated turn need not retain an application input
+          // correlation. Its confirmed normalized end still fulfills this park.
+          const terminal = { ...turn, status: outcome };
+          delete terminal.completionCorrelations;
+          record.snapshot.turnsById[turn.backendTurnId] = terminal;
+          record.snapshot.runState = "idle";
+          delete record.snapshot.activeBackendTurnId;
+          const ended = await replace();
+          expect(ended.timeline.turnsById[targetId]?.status).toBe(outcome);
+          expect(inventory()).toMatchObject({ inventoryState: "active", inventoryRevision: parked.state.inventoryRevision + 1, wokeAt: null });
+          expect(storedTarget()).toEqual({ target: null, revision: 1 });
+          await Promise.all(harness.completionFollowUps.splice(0));
+
+          const idlePark = park();
+          await replace();
+          expect(storedTarget()).toEqual({ target: null, revision: 2 });
+          expect(inventory()).toEqual(idlePark.state);
+        } finally { runtime.release(); }
+      } finally { await current.close(); }
+    },
+  );
+
   it("keeps a running thread snoozed when its accepted reply completes and shows unread attention", async () => {
     const current = await fixture();
     const { harness } = current;
@@ -200,7 +396,9 @@ describe("live completion notification provenance", { timeout: 30_000 }, () => {
       const before = await harness.threads.snapshot(harness.scope, threadId);
       expect(before.runState).toBe("running");
       expect(before.capabilities.operations.find(({ id }) => id === "snooze")?.available).toBe(true);
-      expect(before.capabilities.operations.find(({ id }) => id === "park")?.available).toBe(false);
+      expect(before.capabilities.operations.find(({ id }) => id === "park")).toMatchObject({
+        available: true, label: { text: "Park until done" },
+      });
       const snoozedAt = Date.now() + 1;
       const snoozedUntil = snoozedAt + 60_000;
       await harness.inventory.transition(harness.scope, threadId, {

@@ -331,6 +331,7 @@ function fixture(
   onModelFeedback?: ModelFeedbackObserver,
   captureEarlyReply?: ConstructorParameters<typeof ConversationActorManager>[0]["captureEarlyReply"],
   onLiveProgressSkipped?: ConstructorParameters<typeof ConversationActorManager>[0]["onLiveProgressSkipped"],
+  readProgressParkRevision?: ConstructorParameters<typeof ConversationActorManager>[0]["readProgressParkRevision"],
 ) {
   const closeOrder: string[] = [];
   const handle = new FakeHandle(closeOrder);
@@ -396,6 +397,7 @@ function fixture(
     ...(onAuthoritativeSubmission ? { onAuthoritativeSubmission } : {}),
     ...(onLiveProgress ? { onLiveProgress } : {}),
     ...(onLiveProgressSkipped ? { onLiveProgressSkipped } : {}),
+    ...(readProgressParkRevision ? { readProgressParkRevision } : {}),
     ...(captureEarlyReply ? { captureEarlyReply } : {}),
     ...(onModelFeedback ? { onModelFeedback } : {}),
     ...(captureResponseVoiceContext ? { captureResponseVoiceContext } : {}),
@@ -6441,6 +6443,49 @@ describe("ConversationActorManager", () => {
       handle.emit(0, { type: "item_updated", item: { ...item, responsePhase: phase }, liveProgress: true }, 3);
       await acquired.actor.captureSnapshotState();
       expect(observed).toHaveBeenCalledTimes(1);
+    } finally { acquired.release(); await manager.close(); }
+  });
+
+  it("freezes each progress item's park revision at opening, even without early speech or an initial phase", async () => {
+    const progress = vi.fn<LiveProgressObserver>();
+    let parkRevision: number | undefined = 0;
+    const { driver, handle, manager } = fixture(undefined, undefined, 10, undefined, 8, progress,
+      () => ({userInputRevision: 1, subscriberWatermark: 1, superseded: false}), undefined, undefined, undefined, undefined,
+      () => parkRevision);
+    const base = snapshot("running", "");
+    handle.establishmentSnapshots[0] = {...base, turnsById: {"turn-1": {
+      ...base.turnsById["turn-1"]!, completionCorrelations: ["accepted-input"],
+    }}};
+    const acquired = await manager.acquire({scope, binding, workspace, opaqueBindingDetail: "opaque", driver});
+    try {
+      let sequence = 0;
+      const open = (id: string) => {
+        const item = {backendItemId: id, backendTurnId: "turn-1", semanticKind: "assistant_message" as const,
+          sourceOrder: sequence + 1, status: "streaming" as const, markdown: {text: id}};
+        handle.emit(0, {type: "item_started", item}, sequence++);
+        return item;
+      };
+      const before = open("before");
+      parkRevision = undefined;
+      const during = open("during");
+      parkRevision = 1;
+      const after = open("after");
+      for (const item of [before, during, after]) handle.emit(0, {type: "item_completed", liveProgress: true,
+        item: {...item, status: "completed", responsePhase: "provisional"}}, sequence++);
+      // OpenCode and Claude can first introduce a complete item in a projection
+      // burst, then confirm its progress after the associated tools settle.
+      const burst = {...after, backendItemId: "burst", sourceOrder: sequence, status: "completed" as const, markdown: {text: "burst"}};
+      handle.emit(0, {type: "item_completed", item: burst}, sequence++);
+      handle.emit(0, {type: "item_updated", item: {...burst, responsePhase: "provisional"}, liveProgress: true}, sequence++);
+      // An item hydrated at attach has no observed opening. An earlier park
+      // makes its later classification insufficient evidence for automatic speech.
+      handle.emit(0, {type: "item_updated", item: {...base.itemsById["item-1"]!, semanticKind: "assistant_message",
+        markdown: {text: "hydrated"}, responsePhase: "provisional", status: "completed"}, liveProgress: true}, sequence++);
+      handle.emit(0, {type: "item_updated", item: {...burst, backendItemId: "late", sourceOrder: sequence,
+        markdown: {text: "late"}, responsePhase: "provisional"}, liveProgress: true}, sequence++);
+      await vi.waitFor(() => expect(progress).toHaveBeenCalledTimes(6));
+      expect(progress.mock.calls.map(([, , item]) => [item.text.text, item.responseVoice?.progressParkRevision]))
+        .toEqual([["before", 0], ["during", undefined], ["after", 1], ["burst", 1], ["hydrated", undefined], ["late", undefined]]);
     } finally { acquired.release(); await manager.close(); }
   });
 

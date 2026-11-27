@@ -1,6 +1,7 @@
 import type { ClassifiedAssistantResult } from "../../shared/protocol/completion-result.js";
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import type { EarlyReplyFrame, EarlyReplyInterest } from "../../shared/protocol/early-reply.js";
+import { readProgressParkState } from "../db/repositories/progress-park-state.js";
 import { EarlyReplyDelivery } from "./early-reply-delivery.js";
 import { EarlyReplyPublication, type EarlyReplyAuthority } from "./early-reply-publication.js";
 import { notificationSourceId, progressNotificationKey, scopedReplyKey, turnNotificationKey } from "./notification-identity.js";
@@ -162,6 +163,37 @@ export class NotificationService {
     throw new DomainError("not_found", "The voice stream reservation is unavailable.");
   }
 
+  /** An item observed while parked or without scope authority cannot authorize later playback. */
+  readProgressParkRevision(scope: RequestScope, threadId: string): number | undefined {
+    const state = readProgressParkState(this.input.repository.database, scope, threadId);
+    return state.progressMuted ? undefined : state.progressParkRevision;
+  }
+
+  #progressCurrent(scope: RequestScope, threadId: string | undefined, revision: number | undefined): boolean {
+    try { return !!threadId && revision !== undefined && this.readProgressParkRevision(scope, threadId) === revision; }
+    catch { return false; }
+  }
+
+  progressParked(scope: RequestScope, threadId: string): void {
+    if (this.#closed) return;
+    let progressParkRevision: number;
+    try { ({progressParkRevision} = readProgressParkState(this.input.repository.database, scope, threadId)); }
+    catch { this.#report("The progress park revision could not be read."); return; }
+    if (!progressParkRevision) return;
+    for (const group of this.#earlyReplies.values()) {
+      if (group.event === "turn.progress" && group.threadId === threadId && sameScope(scope, group.scope) &&
+          group.progressParkRevision !== undefined && group.progressParkRevision < progressParkRevision) group.dispose();
+    }
+    for (const stream of this.#voiceStreams.values()) {
+      const subscriber = stream.subscriber;
+      if (!subscriber || !sameScope(scope, stream.scope)) continue;
+      // Stop buffered audio before the per-item cancel can advance a device queue.
+      this.#deliver(subscriber, "progress_parked", {threadId, progressParkRevision});
+      stream.early?.delivery.discardParkedProgress(threadId, progressParkRevision,
+        frame => this.#deliver(subscriber, "voice_early_reply", frame));
+    }
+  }
+
   /** Freeze the precise opt-in reservations before awaiting submission admission. */
   captureEarlyReply(scope: RequestScope, threadId: string, source: EarlyReplySource,
     captureAuthority: () => EarlyReplyAuthority | undefined): EarlyReplyObservation | undefined {
@@ -177,7 +209,7 @@ export class NotificationService {
       return [{voiceStreamId: reservation.voiceStreamId, send: (frame: EarlyReplyFrame) =>
         delivery.send(frame, outgoing => this.#deliver(subscriber, "voice_early_reply", outgoing))}];
     });
-    if (!recipients.length) return;
+    if (!recipients.length || (source.event === "turn.progress" && !this.#progressCurrent(scope, threadId, source.progressParkRevision))) return;
     const key = scopedReplyKey(scope, replyId);
     if (this.#earlyReplies.has(key) || [...this.#earlyReplies.values()].filter(group => sameScope(scope, group.scope)).length >= 64) return;
     const {generation, settings} = this.input.repository.readDispatch(scope);
@@ -187,7 +219,8 @@ export class NotificationService {
     if (!authority) return;
     const publication = new EarlyReplyPublication(scope, threadId, source.applicationTurnId, source.applicationItemId,
       source.event, generation, replyId, settings.assistantResultPhases,
-      recipients, authority, () => this.input.repository.readDispatch(scope).generation === generation,
+      recipients, authority, source.progressParkRevision, () => this.input.repository.readDispatch(scope).generation === generation &&
+        (source.event !== "turn.progress" || this.#progressCurrent(scope, threadId, source.progressParkRevision)),
       () => { if (this.#earlyReplies.get(key) === publication) this.#earlyReplies.delete(key); });
     this.#earlyReplies.set(key, publication);
     return publication;
@@ -339,12 +372,13 @@ export class NotificationService {
       const channels = dispatch.settings.delivery[event.event];
       const script = channels.script && this.#pending.length < MAX_PENDING;
       const superseded = event.event.startsWith("turn.") && responseVoice?.superseded === true;
+      const parkedProgress = event.event === "turn.progress" && !this.#progressCurrent(scope, event.thread?.id, responseVoice?.progressParkRevision);
       // Completion recipients must also predate the first live observation.
-      const recipients = provenance !== "live" || channels.voice === "none" || superseded ? []
+      const recipients = provenance !== "live" || channels.voice === "none" || superseded || parkedProgress ? []
         : [...this.#subscribers].filter((subscriber) => sameScope(scope, subscriber.scope) &&
           (subscriberWatermark === undefined || subscriber.sequence <= subscriberWatermark));
       const suppressionReason = provenance !== "live" ? "recovered"
-        : superseded ? "superseded_by_input"
+        : superseded ? "superseded_by_input" : parkedProgress ? "progress_parked"
         : channels.voice === "none" ? "voice_disabled" : !recipients.length ? "no_recipients" : undefined;
       if (!script && !recipients.length) { decision(suppressionReason, 0, channels.voice); return; }
       const payload = notificationPayload(event, dispatch.settings, assistantResult);
@@ -395,6 +429,7 @@ export class NotificationService {
       const envelope = {
         payload, sourceEventId,
         voice, generation, ...context,
+        ...(payload.event === "turn.progress" ? {progressParkRevision: responseVoice?.progressParkRevision} : {}),
         ...(payload.event.startsWith("turn.") && responseVoice ? { userInputRevision: responseVoice.userInputRevision } : {}),
       };
       const publish = (recognitionTarget: VoiceRecognitionTarget | undefined) => {
@@ -404,6 +439,7 @@ export class NotificationService {
             suppressionReason: this.#closed ? "service_closed" : "policy_changed" });
           return;
         }
+        if (payload.event === "turn.progress" && !this.#progressCurrent(scope, payload.thread?.id, responseVoice?.progressParkRevision)) return;
         const value = voiceNotificationSchema.parse({ ...envelope, recognitionTarget });
         let attemptedCount = 0;
         let deliveredCount = 0;

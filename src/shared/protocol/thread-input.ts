@@ -94,6 +94,8 @@ export const threadInputContextSchema = z.strictObject({
   threadTitle: boundedDisplayTextSchema.shape.text,
   activityToken: z.string().min(1).max(160),
   userInputRevision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  progressMuted: z.boolean(),
+  progressParkRevision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   authority: z.enum(["current", "unbound", "unavailable"]),
   runState: threadRunStateSchema.nullable(),
   sourceTurnId: applicationTurnIdSchema.optional(),

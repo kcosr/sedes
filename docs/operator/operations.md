@@ -647,7 +647,7 @@ directory, including `overlay.sqlite`, before upgrading.
 
 Migration 172 converts the stored inventory value from `settled` to `parked`.
 Upgrade the server, browser, Android, and Electron clients together to client
-protocol 184. The inventory actions are `park` and `unpark`, and the affected
+protocol 185. The inventory actions are `park` and `unpark`, and the affected
 thread and automation tools publish new schemas. See
 [agent tool contracts](../internals/agent-tools.md#catalog-and-effects).
 
@@ -655,6 +655,12 @@ Migration 173 restores each Claude thread’s most recent successful Sedes
 rename when its record in `overlay.sqlite` contains the title. This can
 replace a newer name set in Claude Code. To change a restored name, rename
 the thread in Sedes. The migration works while Claude is offline.
+
+Migration 174 records the turn associated with a new running-thread Park and
+the thread’s progress speech revision. New root submissions retain that revision
+for playback checks after reconnect. Previously parked threads keep their manual
+Park. Rebuild packaged clients for the updated voice notification and input-context
+wire contracts.
 
 Before an upgrade:
 
