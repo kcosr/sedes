@@ -174,7 +174,7 @@ User-facing changes are collected here before release. See the
   as **Extra High**. Codex Saved Agents use the same reasoning labels as threads.
   Upgrade Antigravity execution sidecars with the server for runtime capability **5**.
   See [Antigravity setup](docs/operator/backends/antigravity.md).
-  ([#144](https://github.com/kcosr/sedes/pull/144))
+  ([#144](https://github.com/kcosr/sedes/pull/144), [#168](https://github.com/kcosr/sedes/pull/168))
 
 - Enable **Highlight questions in agent replies** under **Settings > Appearance
   > Chat formatting** to show completed questions in red with an underline.
@@ -536,7 +536,7 @@ User-facing changes are collected here before release. See the
   Reattaching preserves pending approvals, and Send reflects a prompt still
   waiting for background work. The reference CLI is 1.5.18 and the minimum
   remains 1.5.14.
-  ([#144](https://github.com/kcosr/sedes/pull/144))
+  ([#144](https://github.com/kcosr/sedes/pull/144), [#168](https://github.com/kcosr/sedes/pull/168))
 
 - Accepted Steers remain visible until their matching message arrives. Force
   Reset and queue withdrawal clear stale Steer cards across clients and release
