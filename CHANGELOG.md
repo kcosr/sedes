@@ -472,7 +472,7 @@ User-facing changes are collected here before release. See the
   search this project or all threads, or drop a sidebar thread at the insertion
   caret. The shared 256 KiB input budget still applies. See [thread references](docs/user/files-and-context.md#reference-another-thread)
   and [Task references](docs/user/tasks-and-automations.md#add-a-task-to-a-prompt).
-  ([#83](https://github.com/kcosr/sedes/pull/83))
+  ([#83](https://github.com/kcosr/sedes/pull/83), [#171](https://github.com/kcosr/sedes/pull/171))
 
 - Android playback **Stop** now releases the retained voice destination as well
   as clearing queued speech. The next recording honors an explicit choice or
