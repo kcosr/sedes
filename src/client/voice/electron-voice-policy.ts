@@ -126,8 +126,7 @@ export function voiceItemText(item: ElectronVoiceQueueItem, settings: NativeVoic
   return preparedVoiceItem(item, settings).text;
 }
 
-export function voiceChunkRanges(text: string, limit: number): Array<{ text: string; end: number }> {
-  const chunks: Array<{ text: string; end: number }> = [];
+export function* voiceChunkRanges(text: string, limit: number): Generator<{ text: string; end: number }, void> {
   let start = 0;
   while (start < text.length) {
     let end = Math.min(text.length, start + limit);
@@ -142,13 +141,12 @@ export function voiceChunkRanges(text: string, limit: number): Array<{ text: str
     }
     if (end <= start) throw new Error("Invalid speech text limit.");
     const chunk = text.slice(start, end);
-    if (chunk.trim()) chunks.push({ text: chunk, end });
+    if (chunk.trim()) yield { text: chunk, end };
     start = end;
   }
-  return chunks;
 }
 export function voiceChunks(text: string, limit: number): string[] {
-  return voiceChunkRanges(text, limit).map(chunk => chunk.text);
+  return Array.from(voiceChunkRanges(text, limit), chunk => chunk.text);
 }
 export function notificationEligible(notice: VoiceNotification, policy: NotificationPolicy | null,
   settings: NativeVoiceSettings, clientId: string | null): boolean {

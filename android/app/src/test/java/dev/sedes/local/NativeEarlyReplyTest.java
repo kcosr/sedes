@@ -109,6 +109,46 @@ public class NativeEarlyReplyTest {
         assertEquals("ous.", oversized.take());
         assertNull(oversized.reply.next(null));
     }
+    private static NativeEarlyReply.Part drainBeforeLastWord(Sentences stream, String sentence) {
+        int goal = sentence.lastIndexOf(' ') + 1;
+        NativeEarlyReply.Part part;
+        do {
+            part = stream.reply.next(null); assertNotNull(part);
+            stream.reply.drained(part);
+        } while (part.preparedEnd < goal);
+        assertEquals(goal, part.preparedEnd);
+        return part;
+    }
+    @Test public void responsiveCombinesTheUnsubmittedTailOfAnOversizedSentenceWithNewWords() {
+        String first = "Supercalifragilistic expialidocious words keep going now.";
+        for (String more : new String[]{" A b c d e.", " A b c d e f."}) {
+            Sentences stream = new Sentences("responsive", 20, first, false);
+            NativeEarlyReply.Part drained = drainBeforeLastWord(stream, first);
+            stream.append(more, false);
+            NativeEarlyReply.Part combined = stream.reply.next(null);
+            assertEquals("now." + more, combined.text);
+            NativeVoiceSettings messages = settings("messages");
+            NativeVoiceQueue.Item correction = terminal(first + " Replaced.", null, messages);
+            assertTrue(stream.reply.agreesWith(drained, correction));
+            assertFalse(stream.reply.agreesWith(combined, correction));
+            assertEquals("now. Replaced.", stream.reply.terminal(correction, messages, ID));
+        }
+    }
+    @Test public void naturalCombinesAPhysicalTailOnlyAtAQualifiedParagraphEndpoint() {
+        String first = "word ".repeat(63) + "now.", next = " a b c d e f g h i j k l m n.";
+        for (boolean paragraphBreak : new boolean[]{false, true}) {
+            Sentences stream = new Sentences("natural", 35, first, paragraphBreak);
+            drainBeforeLastWord(stream, first);
+            stream.append(next, false);
+            if (paragraphBreak) {
+                assertEquals("now.", stream.reply.next(null).text);
+                stream.append("", true);
+            }
+            assertEquals("now." + next, stream.take());
+            NativeVoiceSettings messages = settings("messages");
+            assertEquals("Afterward.", stream.reply.terminal(terminal(first + next + " Afterward.", null, messages), messages, ID));
+        }
+    }
     @Test public void responsiveStartsEveryGroupAtSixWordsAndReleasesTheTailOnYieldOrSeal() {
         NativeVoiceSettings messages = settings("messages");
         for (String event : new String[]{"turn.progress", "turn.completed"}) {

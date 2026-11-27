@@ -12,7 +12,7 @@ const minimumWords = { responsive: 6, balanced: 15, natural: 15 };
 const longParagraphWords = 60;
 const wordSegmenter = new Intl.Segmenter("und", { granularity: "word" });
 
-function wordCount(text: string): number {
+function wordCount(text: string, maximum = Infinity): number {
   let count = 0;
   let previousEnd = -1;
   for (const { segment, index } of wordSegmenter.segment(text)) {
@@ -22,6 +22,7 @@ function wordCount(text: string): number {
     const numericSuffix = index === previousEnd && /^\p{No}+$/u.test(segment);
     if (!joinedWord && !numericSuffix) {
       count++;
+      if (count === maximum) break;
     }
     previousEnd = index + segment.length;
   }
@@ -61,7 +62,8 @@ export class ElectronEarlyReply {
   #nextSentence = 0;
   #qualifiedThrough = -1;
   #prepared = "";
-  #physical: EarlySpeechChunk[] = [];
+  #partialSentence?: string;
+  #preambleChunks: EarlySpeechChunk[] = [];
   constructor(frame: Begin, now: number, readonly streamId: string) {
     const { replyId, event, threadId, threadTitle, turnId, itemId, generation, userInputRevision, origin } = frame;
     this.identity = { replyId, event, threadId, threadTitle, turnId, itemId, generation, userInputRevision, origin };
@@ -105,10 +107,16 @@ export class ElectronEarlyReply {
     return { ...settings, ...this.#presentation };
   }
 
+  #preparedThrough(index: number, clean: boolean): string {
+    if (index === this.#nextSentence && this.#partialSentence !== undefined) return this.#partialSentence;
+    return electronSpeechText(this.raw.slice(0, this.#ends[index]!.end), clean);
+  }
+
   #bodyEnd(mode: Exclude<NativeEarlyReplyPlaybackMode, "off">, clean: boolean, limit: number): number | undefined {
     const first = this.#nextSentence;
     const eligible: number[] = [];
-    const previousWords = this.#ends[first - 1]?.totalWords ?? 0;
+    const previousWords = this.#partialSentence === undefined ? this.#ends[first - 1]?.totalWords ?? 0
+      : this.#ends[first]!.totalWords - wordCount(this.#partialSentence.slice(this.#prepared.length), minimumWords[mode]);
     // A qualified group can span several physical requests. Its remaining
     // sentences are already eligible, even if its last request is short.
     for (let index = first; index < this.#ends.length; index++) {
@@ -122,7 +130,7 @@ export class ElectronEarlyReply {
 
     // Measure prepared speech, including normalized paragraph separators. A
     // large backlog only needs logarithmically many cumulative Markdown renders.
-    const fits = (index: number) => electronSpeechText(this.raw.slice(0, this.#ends[index]!.end), clean)
+    const fits = (index: number) => this.#preparedThrough(index, clean)
       .slice(this.#prepared.length).trimStart().length <= limit;
     if (fits(lastEligible)) return lastEligible;
     let low = first, high = lastEligible - 1;
@@ -139,38 +147,44 @@ export class ElectronEarlyReply {
 
   /** Requests are planned from exact cumulative Markdown, including separators supplied across frames. */
   next(settings: NativeVoiceSettings, mode: NativeEarlyReplyPlaybackMode, limit: number): EarlySpeechChunk | undefined {
-    if (this.#physical.length) return this.#physical.shift();
+    if (this.#preambleChunks.length) return this.#preambleChunks.shift();
     if (this.retired || this.#yield === "presentation" || mode === "off") return;
     if (!this.#presentation && settings.speechContent === "both") {
       this.#presentation = { cleanSpeechText: settings.cleanSpeechText, speechContent: settings.speechContent };
       this.#preamble = prepareSpeechParts([earlyReplyAnnouncement(this.identity.event), this.identity.threadTitle], settings);
       for (const chunk of voiceChunkRanges(this.#preamble, limit)) {
-        this.#physical.push({ text: chunk.text, preambleEnd: chunk.end });
+        this.#preambleChunks.push({ text: chunk.text, preambleEnd: chunk.end });
       }
-      return this.#physical.shift();
+      return this.#preambleChunks.shift();
     }
     const endIndex = this.#bodyEnd(mode, settings.cleanSpeechText, limit);
     if (endIndex === undefined) return;
     const end = this.#ends[endIndex]!.end;
     const raw = this.raw.slice(0, end);
-    const prepared = electronSpeechText(raw, settings.cleanSpeechText);
+    const prepared = this.#preparedThrough(endIndex, settings.cleanSpeechText);
     if (!prepared.startsWith(this.#prepared)) {
       this.#yield = "presentation"; return;
     }
     const addition = prepared.slice(this.#prepared.length).trimStart();
-    const startOffset = prepared.length - addition.length;
-    const directMapping = prepared === raw.trimEnd();
-    for (const chunk of voiceChunkRanges(addition, limit)) {
-      const offset = startOffset + chunk.end;
-      // Most prose maps 1:1, including chunks within long groups. For Markdown
-      // whose cleanup changes offsets, verify the complete group and inner spoken offset.
-      const rawEnd = directMapping ? offset : end;
-      this.#physical.push({ text: chunk.text, frontier: { rawEnd, rawHash: digest(raw.slice(0, rawEnd)), preparedEnd: offset,
-        preparedHash: digest(prepared.slice(0, offset)) } });
+    const chunk = voiceChunkRanges(addition, limit).next().value;
+    const offset = chunk ? prepared.length - addition.length + chunk.end : prepared.length;
+    this.#prepared = prepared.slice(0, offset);
+    if (offset === prepared.length) {
+      this.#nextSentence = endIndex + 1;
+      this.#partialSentence = undefined;
+    } else {
+      // Only commit this request. The remainder can share the next request with
+      // a later sentence that arrives before the next lookahead slot opens.
+      this.#partialSentence = prepared;
+      this.#qualifiedThrough = Math.max(this.#qualifiedThrough, endIndex);
     }
-    this.#nextSentence = endIndex + 1; this.#prepared = prepared;
-    if (this.#physical.length) this.#presentation ??= { cleanSpeechText: settings.cleanSpeechText, speechContent: settings.speechContent };
-    return this.#physical.shift();
+    if (!chunk) return;
+    this.#presentation ??= { cleanSpeechText: settings.cleanSpeechText, speechContent: settings.speechContent };
+    // When cleanup changes offsets, verify the raw group and the exact prepared
+    // prefix delivered by this request. A 1:1 source also has a raw inner offset.
+    const rawEnd = prepared === raw.trimEnd() ? offset : end;
+    return { text: chunk.text, frontier: { rawEnd, rawHash: digest(raw.slice(0, rawEnd)), preparedEnd: offset,
+      preparedHash: digest(this.#prepared) } };
   }
 
   matches(final: string, clean: boolean, frontier = this.frontier): boolean {
@@ -215,7 +229,7 @@ export class ElectronEarlyReply {
   detach(): void {
     this.retired = true; clearTimeout(this.timer); this.timer = undefined;
     this.raw = ""; this.rawBytes = 0;
-    this.#prepared = ""; this.#frames.clear(); this.#ends.length = 0; this.#physical.length = 0;
+    this.#partialSentence = undefined; this.#prepared = ""; this.#frames.clear(); this.#ends.length = 0; this.#preambleChunks.length = 0;
     this.cancelLookahead?.(); this.cancelLookahead = undefined;
     this.changed?.(); this.changed = undefined;
   }

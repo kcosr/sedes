@@ -82,6 +82,37 @@ describe("Electron early phrasing and source reconciliation", () => {
     expect(reply.next(settings, "responsive", cap)?.text).toBe("A B C D. E F.");
     expect(reply.next(settings, "responsive", cap)).toBeUndefined();
   });
+  it.each([
+    [" A b c d e f.", true],
+    [" A b c d e.", true],
+    [" A b c d.", false],
+  ] as const)("counts the unsent end of a split sentence with fresh Responsive text %s", (fresh, qualifies) => {
+    const original = "Supercalifragilistic expialidocious words keep going now.";
+    const reply = source(original);
+    const next = () => reply.next(settings, "responsive", 20);
+    expect(next()?.text).toBe("Supercalifragilistic");
+    expect(next()?.text.trim()).toBe("expialidocious");
+    const lastDrained = next()!;
+    expect(lastDrained.text).toBe("words keep going ");
+    reply.frontier = lastDrained.frontier;
+    append(reply, 1, fresh);
+    const pending = next()!;
+    expect(pending.text).toBe(qualifies ? "now." + fresh : "now.");
+    expect(next()).toBeUndefined();
+    const corrected = original.replace("now.", "again.") + fresh;
+    expect(reply.matches(corrected, true, pending.frontier)).toBe(false);
+    reply.detach(); expect(reply.matches(corrected, true)).toBe(true);
+  });
+  it.each([false, true])("applies Natural's paragraph requirement when catching up a split sentence (closed %s)", closed => {
+    const word = "w".repeat(30);
+    const reply = source((word + " ").repeat(14) + "now.", true);
+    const next = () => reply.next(settings, "natural", 34)?.text;
+    for (let i = 0; i < 14; i++) expect(next()).toBe(word + " ");
+    const fresh = " " + sentence(14, "x").trimEnd();
+    append(reply, 1, fresh, closed);
+    expect(next()).toBe(closed ? "now." + fresh : "now.");
+    expect(next()).toBeUndefined();
+  });
   it.each(["responsive", "balanced", "natural"] as const)("speaks the Both preamble immediately and only once in %s", mode => {
     const reply = source("Yes.");
     const both = { ...settings, speechContent: "both" as const };

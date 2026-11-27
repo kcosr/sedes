@@ -51,8 +51,11 @@ final class NativeEarlyReply {
                 Objects.equals(reason, frame.reason) && (frame.text == null || source.substring(start, end).equals(frame.text));
         }
         int words(StringBuilder source) {
-            if (words >= 0) return words;
-            String text = source.substring(start, end).replace('–', ' ').replace('—', ' ');
+            if (words < 0) words = countWords(source.substring(start, end));
+            return words;
+        }
+        static int countWords(String input) {
+            String text = input.replace('–', ' ').replace('—', ' ');
             BreakIterator bounds = BreakIterator.getWordInstance(Locale.ROOT);
             bounds.setText(text);
             Matcher lettersOrNumbers = WORD_CHARACTER.matcher(text);
@@ -66,7 +69,7 @@ final class NativeEarlyReply {
                 if (!numericSuffix && !joinedWord && ++count == LONG_PARAGRAPH_WORDS) break;
                 previousEnd = to;
             }
-            return words = count;
+            return count;
         }
         private static boolean joinsWords(char c) {
             return c == '\'' || c == '‘' || c == '’' || c == '-' || c == '‐' || c == '‑';
@@ -158,7 +161,9 @@ final class NativeEarlyReply {
         String previous = prepared(raw);
         if (spoken > previous.length()) throw invalid();
         boolean insideSentence = spoken < previous.length();
-        int end = insideSentence ? raw : readyEnd(raw, spoken, group);
+        boolean roomForNextSentence = raw < source.length() && previous.length() - skipSeparators(previous, spoken) < limit;
+        int end = insideSentence && !roomForNextSentence ? raw
+            : readyEnd(raw, spoken, group, insideSentence ? previous.substring(spoken) : "");
         if (!insideSentence && end == raw) return null;
         group = Math.max(group, end);
         String text = prepared(end);
@@ -181,9 +186,13 @@ final class NativeEarlyReply {
         return start;
     }
     /** Choose the farthest eligible boundary that fits. The first qualifying group can span multiple requests. */
-    private int readyEnd(int raw, int spoken, int owedThrough) {
+    private int readyEnd(int raw, int spoken, int owedThrough, String remainingSentence) {
         ArrayList<Integer> eligible = new ArrayList<>();
         int words = 0, paragraphWords = 0;
+        if (!remainingSentence.isEmpty()) {
+            eligible.add(raw);
+            words = Segment.countWords(remainingSentence);
+        }
         int minimum = mode.equals("responsive") ? RESPONSIVE_WORDS : BALANCED_WORDS;
         boolean natural = mode.equals("natural");
         for (Segment frame : frames) {
