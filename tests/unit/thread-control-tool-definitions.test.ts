@@ -15,6 +15,12 @@ import {
   createThreadSetStateToolDefinition,
 } from "../../src/server/agent-tools/tools/thread-control-tools.js";
 
+import {
+  createThreadGroupCreateToolDefinition,
+  createThreadSetGroupToolDefinition,
+  createThreadSetPinnedToolDefinition,
+} from "../../src/server/agent-tools/tools/thread-organization-tools.js";
+
 function services(): AgentThreadControlToolServices {
   return {
     messages: {
@@ -46,6 +52,18 @@ function services(): AgentThreadControlToolServices {
         archivedThreadCount: input.includeDescendants ? 3 : 1,
       })),
       restore: vi.fn(async (_scope, input) => ({ threadId: input.threadId })),
+      setPinned: vi.fn(async (_scope, input) => ({
+        threadId: input.threadId ?? input.environmentAuthority.defaults.threadId!,
+        pinned: input.pinned,
+      })),
+      setGroup: vi.fn(async (_scope, input) => ({
+        threadId: input.threadId ?? input.environmentAuthority.defaults.threadId!,
+        groupId: input.groupId,
+      })),
+      createGroup: vi.fn(async (_scope, input) => ({
+        threadId: input.threadId ?? input.environmentAuthority.defaults.threadId!,
+        groupId: "5d90f8cc-d73d-4cdc-b03a-37c80f7f9433",
+      })),
       setState: vi.fn(async (_scope, input) => ({
         threadId: input.threadId ?? input.environmentAuthority.defaults.threadId!,
         lifecycle: input.lifecycle,
@@ -122,7 +140,7 @@ function context(): TrustedToolInvocationContext {
 }
 
 describe("thread control tool definitions", () => {
-  it("registers exactly the six canonical contracts with truthful effects", () => {
+  it("registers the conversation and lifecycle contracts with truthful effects", () => {
     const value = services();
     const definitions: AgentToolDefinition[] = [
       createThreadMessagesToolDefinition(value),
@@ -210,6 +228,35 @@ describe("thread control tool definitions", () => {
       },
     ]);
     expect(definitions.at(-1)?.execution.concurrencyClass).toBe("thread_inventory_write");
+  });
+
+  it("exposes separately addressable organization writes and requires an explicit desired value", async () => {
+    const value = services();
+    const pin = createThreadSetPinnedToolDefinition(value);
+    const group = createThreadSetGroupToolDefinition(value);
+    const create = createThreadGroupCreateToolDefinition(value);
+    const registry = new AgentToolRegistry();
+    const id = "5d90f8cc-d73d-4cdc-b03a-37c80f7f9433";
+    const definitions: AgentToolDefinition[] = [pin, group, create];
+    for (const tool of definitions) {
+      registry.register(tool);
+      expect(tool.execution).toMatchObject({ concurrencyClass: "thread_inventory_write", uncertainExternalOutcome: true });
+      expect(registry.validatesInput(tool.id, 1, {})).toBe(false);
+    }
+    expect(registry.validatesInput(group.id, 1, { groupId: null })).toBe(true);
+    expect(registry.validatesInput(group.id, 1, { groupId: "Design" })).toBe(false);
+    expect(registry.validatesInput(group.id, 1, { groupId: id, name: "Design" })).toBe(false);
+    expect(registry.validatesInput(create.id, 1, { name: "Design", members: [] })).toBe(false);
+    expect(registry.validatesInput(pin.id, 1, { pinned: true, expectedRevision: 1 })).toBe(false);
+    const ctx = context();
+    const authority = { environmentAuthority: ctx.environmentAuthority, mutationId: ctx.mutationId };
+    const scope = { tenantId: ctx.tenantId, principalId: ctx.principalId };
+    await pin.execute({ pinned: false }, ctx);
+    await group.execute({ threadId: "thread-1", groupId: null }, ctx);
+    await create.execute({ name: "Design" }, ctx);
+    expect(value.inventory.setPinned).toHaveBeenCalledWith(scope, { pinned: false, ...authority });
+    expect(value.inventory.setGroup).toHaveBeenCalledWith(scope, { threadId: "thread-1", groupId: null, ...authority });
+    expect(value.inventory.createGroup).toHaveBeenCalledWith(scope, { name: "Design", ...authority });
   });
 
   it("keeps public inputs closed and enforces the messages and send bounds", () => {

@@ -1,11 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import { AgentManagementService } from "../../src/server/agent-tools/application/agent-management-service.js";
 import { ConversationBindingRepository } from "../../src/server/db/repositories/conversation-binding-repository.js";
+import { AutomationRepository } from "../../src/server/db/repositories/automation-repository.js";
 import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
 import { savedAgentDatabase } from "../support/saved-agent-fixture.js";
 import { randomUUID } from "node:crypto";
 import type { TaskScope } from "../../src/shared/protocol/tasks.js";
 import type { NormalizedThreadSummary } from "../../src/shared/protocol/conversation.js";
+import { ThreadGroupRepository } from "../../src/server/db/repositories/thread-group-repository.js";
+import { DatabaseAgentToolApplicationReader } from "../../src/server/agent-tools/application/database-agent-tool-application-reader.js";
 import { DatabaseAgentToolSourceAuthority } from "../../src/server/agent-tools/application/database-agent-tool-source-authority.js";
 import { TaskRepository } from "../../src/server/db/repositories/task-repository.js";
 import { TaskService } from "../../src/server/domain/task-service.js";
@@ -281,6 +284,89 @@ describe("AgentManagementService discovery", () => {
       await expect(f.management.listThreads(f.scope,undefined,{pageSize:1,cursor:first.nextCursor},{...authority,resourceScope:{allowOtherEnvironments:false,allowOtherProjects:true}})).rejects.toMatchObject({code:"cursor_invalid"});
       expect((await f.management.listThreads(f.scope,undefined,{scope:{kind:"workspace",workspaceId:f.workspaceB.id},pageSize:10},authority)).items).toEqual([]);
     } finally {f.database.close();}
+  });
+
+  it("filters Group membership before pagination and binds the chosen filter to the cursor", async () => {
+    const current = discoveryFixture();
+    try {
+      const groups = new ThreadGroupRepository(current.database);
+      const { groupId } = groups.createAndAssign(current.scope, current.older.id, {
+        name: "Planning",
+        members: [current.older, current.tiedFirst, current.newer].map(({ id }) => ({
+          threadId: id, expectedRevision: 0,
+        })),
+        mutationId: randomUUID(),
+        now: 6_000,
+      });
+      const automations = new AutomationRepository(current.database);
+      for (const name of ["Morning", "Evening"]) {
+        automations.createDefinition(current.scope, {
+          anchorThreadId: current.tiedFirst.id, name, prompt: "Run", runMode: "same_thread",
+          enabled: true, precheck: null, schedule: { kind: "date_time", runAt: 9_000 },
+          misfirePolicy: null, nextRunAt: 9_000, now: 6_000,
+        });
+      }
+      const authority = {
+        ...current.environmentAuthority,
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false },
+      };
+      const list = (filter: { groupId?: string | null; cursor?: string; hasAutomation?: boolean }, pageSize = 10) =>
+        current.management.listThreads(current.scope, undefined, { ...filter, pageSize }, authority);
+
+      const expectedGroup = { id: groupId, name: "Planning" };
+      expect((await list({})).items.map(({ id, group }) => [id, group])).toEqual([
+        [current.tiedFirst.id, expectedGroup], [current.tiedSecond.id, null],
+        [current.older.id, expectedGroup],
+      ]);
+      expect((await list({ groupId: null })).items.map(({ id }) => id)).toEqual([current.tiedSecond.id]);
+      expect((await list({ groupId, hasAutomation: true })).items.map(({ id }) => id)).toEqual([current.tiedFirst.id]);
+      expect((await list({ groupId, hasAutomation: false })).items.map(({ id }) => id)).toEqual([current.older.id]);
+      const first = await list({ groupId }, 1);
+      expect(first.items.map(({ id }) => id)).toEqual([current.tiedFirst.id]);
+      expect(first.nextCursor).toEqual(expect.any(String));
+      await expect(list({ groupId, cursor: first.nextCursor }, 1)).resolves.toEqual({
+        items: [expect.objectContaining({ id: current.older.id, group: expectedGroup })],
+      });
+      await expect(list({ cursor: first.nextCursor }, 1)).rejects.toMatchObject({ code: "cursor_invalid" });
+      const all = await list({}, 1);
+      await expect(list({ groupId: null, cursor: all.nextCursor }, 1)).rejects.toMatchObject({ code: "cursor_invalid" });
+      await expect(list({ groupId: randomUUID() })).resolves.toEqual({ items: [] });
+    } finally {
+      current.database.close();
+    }
+  });
+
+  it("reads the current Group name on status and clears membership after deletion", async () => {
+    const current = discoveryFixture();
+    try {
+      const groups = new ThreadGroupRepository(current.database);
+      const threadId = current.older.id;
+      const sources = new DatabaseAgentToolSourceAuthority(current.database, new Uint8Array(32));
+      const reader = new DatabaseAgentToolApplicationReader(current.database,
+        { resolve: async () => current.scope },
+        { snapshot: vi.fn().mockResolvedValue({ thread: { runState: "idle" } }) },
+        sources,
+      );
+      const authority = {
+        ...current.environmentAuthority,
+        resolvedResourceRefs: [{ kind: "thread" as const, id: threadId,
+          environmentId: current.environment.id, projectId: current.workspaceA.projectId,
+          workspaceId: current.workspaceA.id }],
+      };
+      const status = () => reader.readThreadStatus(current.scope, threadId, authority, new AbortController().signal);
+      const { groupId } = groups.createAndAssign(current.scope, threadId, {
+        name: "Ideas", members: [{ threadId, expectedRevision: 0 }], mutationId: randomUUID(), now: 6_000,
+      });
+      expect((await status())?.group).toEqual({ id: groupId, name: "Ideas" });
+      groups.rename(current.scope, groupId!, { name: "Notes", expectedRevision: 0, mutationId: randomUUID(), now: 7_000 });
+      expect((await status())?.group).toEqual({ id: groupId, name: "Notes" });
+      groups.delete(current.scope, groupId!, { expectedRevision: 1, expectedMemberCount: 1, mutationId: randomUUID(), now: 8_000 });
+      expect((await status())?.group).toBeNull();
+      await expect(current.management.listThreads(current.scope, undefined,
+        { groupId, pageSize: 10 }, current.environmentAuthority)).resolves.toEqual({ items: [] });
+    } finally {
+      current.database.close();
+    }
   });
 
   it("includes bounded automation counts when listing threads", async () => {

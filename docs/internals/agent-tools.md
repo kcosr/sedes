@@ -390,9 +390,9 @@ The canonical catalog groups operations under:
 - **Context** — bounded source-thread/application context;
 - **Files** — source-thread linked-worktree discovery and thread worktree
   preference selection;
-- **Threads** — inventory, status, messages, creation, send, fork,
-  park/unpark, snooze/wake, archive/restore, thread/template tool settings, and
-  related controls;
+- **Threads** — inventory, status, messages, creation, send, fork, pinning,
+  Group discovery, creation and membership, park/unpark, snooze/wake,
+  archive/restore, and thread/template tool settings;
 - **Execution** — environment/backend configuration, runtime lifecycle,
   default connections and tool-policy administration;
 - **Client controls** — current-client navigation, interaction completion,
@@ -413,14 +413,49 @@ across all supported tool presentations.
 the change retired a finished one-time reminder, so the definition they return
 has left the collection; a replay of the same mutation returns the same result.
 
-`thread.status@6` and `thread.list@10` include the current principal's read-only
-`pinned` flag. Along with `agent.context@5`, their backend
-field distinguishes native `pi_native` from embedded `pi`. There is no
-thread-pin mutation tool. Thread reads and `automation.list@2`,
+`thread.status@7` and each `thread.list@11` item include the current
+principal's `pinned` flag and `group`. The latter is either `{ id, name }`
+or `null` for an ungrouped thread. On `thread.list`, omit `groupId` to search
+across Groups, pass `null` to find only ungrouped threads, or pass a Group
+UUID to find its members. All three queries observe the caller's thread scope
+and other filters. Continue a page with the same filter.
+
+Along with `agent.context@5`, the thread reads distinguish native `pi_native`
+from embedded `pi` in the backend field. Thread reads and `automation.list@2`,
 `automation.get@3`, `automation.create@3`, `automation.update@3`, and
 `automation.set_state@3` report parked inventory as `parked`.
-`thread.status@6` and `thread.list@10` include `snoozedUntil` as an ISO timestamp
-and `wakeReminder` as text or null for snoozed threads.
+For snoozed threads, `thread.status` and `thread.list` also return
+`snoozedUntil` as an ISO timestamp and `wakeReminder` as text or null.
+
+Each of these four tools has its own grant in **Threads**.
+
+| Tool | Input | Result |
+| --- | --- | --- |
+| `thread.set_pinned@1` | Required `pinned` boolean and optional `threadId` | `{ threadId, pinned }` |
+| `thread_group.list@1` | Optional `query`, `pageSize`, and `cursor` | A page of Group IDs and names, including empty Groups. |
+| `thread.set_group@1` | Required `groupId` and optional `threadId`. A UUID assigns the thread, and `null` removes it. | `{ threadId, groupId }` |
+| `thread_group.create@1` | Required `name` and optional `threadId` | `{ threadId, groupId }` for the new Group and its founding thread. |
+
+Group IDs and names belong to the principal and are visible across projects
+and environments with the directory grant. Use `thread.list` to discover
+admitted members. A rename preserves the Group's UUID and subsequent reads
+return the new name. Deletion clears its memberships. A write to a deleted
+Group ID returns `not_found`.
+
+The three writes check the target thread's resource scope. Omit `threadId` to
+use the calling thread or the Tool client's configured default. A caller
+without a default must provide an ID. Pin and Group changes are independent
+of lifecycle and can be made on archived threads. Creating a Group and
+assigning its founding thread commit together.
+
+Pin and membership writes take absolute values. Repeating a value the thread
+already has succeeds without advancing its revision. Sedes checks the pin or
+assignment revision internally and reports a conflict if a concurrent change
+wins. Re-read the thread after a conflict or an uncertain reply before
+issuing a fresh write. A fresh invocation gets its own mutation ID.
+In particular, after an uncertain create, inspect the thread and directory
+before trying again. An existing normalized name causes a conflict, and a
+rename or deletion can free that name for a different Group.
 
 `thread.set_state@1` (`sedes_thread_set_state`) changes an admitted thread's
 lifecycle to `parked`, `snoozed`, or `active`. Omit `threadId` to target the

@@ -2,6 +2,7 @@ import { Type } from "typebox";
 import type { ToolPolicySelection } from "../../../shared/protocol/tool-policies.js";
 import type { AgentToolPresentation } from "../../../shared/protocol/conversation.js";
 import { z } from "zod";
+import { threadGroupIdSchema } from "../../../shared/protocol/thread-groups.js";
 import { createThreadTitleSchema } from "../../../shared/protocol/api.js";
 import type { AgentToolDefinition } from "../contracts/agent-tool-contracts.js";
 import {
@@ -19,6 +20,8 @@ import {
   isoDateSchema,
   sharedAdapters,
   targetIdentifierSchema,
+  threadGroupIdToolSchema,
+  threadGroupMembershipToolSchema,
   threadSnoozeOutputProperties,
   threadTitleSchema,
 } from "./management-tool-schemas.js";
@@ -43,6 +46,7 @@ const threadListLastActivityAfterSchema = z.iso.datetime();
 export type ThreadListInput = {
   readonly scope?: AgentThreadListScope;
   readonly query?: string;
+  readonly groupId?: string | null;
   readonly lifecycle?: AgentThreadSummary["lifecycle"];
   readonly lastActivityAfter?: string;
   readonly hasAutomation?: boolean;
@@ -150,9 +154,10 @@ const threadItemSchema = Type.Object(
       maxLength: 17,
     }),
     automations: automationsSchema,
+    group: threadGroupMembershipToolSchema,
     pinned: Type.Boolean({ description: "Whether this thread is pinned for the current user." }),
   },
-  { additionalProperties: false, maxProperties: 12 },
+  { additionalProperties: false, maxProperties: 13 },
 );
 
 const threadListScopeSchema = Type.Union(
@@ -231,6 +236,9 @@ export function createThreadListToolDefinition(
                 "ASCII-case-insensitive title substring to match; non-ASCII characters match exactly.",
             }),
           ),
+          groupId: Type.Optional(Type.Union([threadGroupIdToolSchema, Type.Null()], {
+            description: "Match one Group UUID. Use null for ungrouped threads. Omit to include all Groups and ungrouped threads.",
+          })),
           lifecycle: Type.Optional(
             Type.String({
               enum: ["active", "snoozed", "parked", "archived"],
@@ -266,7 +274,7 @@ export function createThreadListToolDefinition(
         {
           $schema: AGENT_TOOL_JSON_SCHEMA_DIALECT,
           additionalProperties: false,
-          maxProperties: 7,
+          maxProperties: 8,
         },
       ),
     ),
@@ -307,6 +315,7 @@ export function createThreadListToolDefinition(
       cli: { command: threadListManifest.id },
     },
     async execute(input, context) {
+      if (typeof input.groupId === "string") threadGroupIdSchema.parse(input.groupId);
       const lastActivityAfter =
         input.lastActivityAfter === undefined
           ? undefined

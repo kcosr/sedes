@@ -3,6 +3,9 @@ import type {
   InventoryRepository,
   InventoryTransition,
 } from "../../db/repositories/inventory-repository.js";
+import { threadGroupIdSchema } from "../../../shared/protocol/thread-groups.js";
+import type { ThreadGroupRepository } from "../../db/repositories/thread-group-repository.js";
+import type { ThreadGroupService } from "../../domain/thread-group-service.js";
 import type { InventoryService } from "../../domain/inventory-service.js";
 import type { ThreadArchiveService } from "../../domain/thread-archive-service.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
@@ -50,7 +53,22 @@ export interface ThreadSetStateToolInput {
   readonly reminder?: string;
 }
 
-type AgentThreadSetStateInput = ThreadSetStateToolInput & {
+export interface ThreadSetPinnedToolInput {
+  readonly threadId?: string;
+  readonly pinned: boolean;
+}
+
+export interface ThreadSetGroupToolInput {
+  readonly threadId?: string;
+  readonly groupId: string | null;
+}
+
+export interface ThreadGroupCreateToolInput {
+  readonly threadId?: string;
+  readonly name: string;
+}
+
+type ThreadMutationContext = {
   readonly mutationId: string;
   readonly environmentAuthority: TrustedEnvironmentAuthorityGrant;
 };
@@ -94,7 +112,7 @@ function parseSnoozeChange(
 }
 
 /**
- * Principal-scoped agent boundary for reversible inventory lifecycle changes.
+ * Principal-scoped agent boundary for thread organization and lifecycle changes.
  * The server reads the current revision immediately before the existing
  * revision-checked domain mutation; callers never supply tenancy or revision
  * authority.
@@ -106,7 +124,9 @@ export class AgentThreadInventoryControlService {
       readonly threads: Pick<InventoryRepository, "getThread">;
       readonly lineage: Pick<ThreadLineageRepository, "listFamilyThreadIds">;
       readonly archives: Pick<ThreadArchiveService, "archive" | "park">;
-      readonly transitions: Pick<InventoryService, "transition">;
+      readonly transitions: Pick<InventoryService, "transition" | "setPinned">;
+      readonly groupAssignments: Pick<ThreadGroupRepository, "getAssignment">;
+      readonly groups: Pick<ThreadGroupService, "updateAssignment">;
     },
   ) {}
 
@@ -174,17 +194,10 @@ export class AgentThreadInventoryControlService {
 
   async setState(
     scope: RequestScope,
-    input: AgentThreadSetStateInput,
+    input: ThreadSetStateToolInput & ThreadMutationContext,
   ): Promise<AgentThreadSetStateResult> {
-    const { lifecycle, environmentAuthority } = input;
-    const threadId = input.threadId ?? environmentAuthority.defaults.threadId;
-    if (threadId === undefined) {
-      throw new CanonicalAgentToolRequestError(
-        "invalid_input",
-        "Provide threadId when the caller has no default thread.",
-      );
-    }
-    this.#requireAdmittedThread(scope, threadId, environmentAuthority);
+    const { lifecycle } = input;
+    const threadId = this.#requireAdmittedThread(scope, input.threadId, input.environmentAuthority);
     const current = this.input.inventory.getInventory(scope, threadId);
     if (current.inventoryState === "archived") {
       throw new CanonicalAgentToolRequestError(
@@ -221,11 +234,61 @@ export class AgentThreadInventoryControlService {
     return { threadId, lifecycle, ...projectAgentThreadSnooze(state) };
   }
 
+  async setPinned(scope: RequestScope, input: ThreadSetPinnedToolInput & ThreadMutationContext) {
+    const threadId = this.#requireAdmittedThread(scope, input.threadId, input.environmentAuthority);
+    const current = this.input.inventory.getInventory(scope, threadId);
+    if (Boolean(current.pinned) !== input.pinned) {
+      await this.input.transitions.setPinned(scope, threadId, {
+        pinned: input.pinned,
+        expectedRevision: current.pinRevision,
+        mutationId: input.mutationId,
+      });
+    }
+    return { threadId, pinned: input.pinned };
+  }
+
+  async setGroup(scope: RequestScope, input: ThreadSetGroupToolInput & ThreadMutationContext) {
+    const threadId = this.#requireAdmittedThread(scope, input.threadId, input.environmentAuthority);
+    const { groupId } = input;
+    if (groupId !== null && !threadGroupIdSchema.safeParse(groupId).success) {
+      throw new CanonicalAgentToolRequestError("invalid_input", "Provide a Group UUID or null.");
+    }
+    const current = this.input.groupAssignments.getAssignment(scope, threadId);
+    if (current.groupId !== groupId) {
+      await this.input.groups.updateAssignment(scope, threadId, {
+        ...(groupId === null ? { action: "remove" } : { action: "assign", groupId }),
+        expectedRevision: current.revision,
+        mutationId: input.mutationId,
+      });
+    }
+    return { threadId, groupId };
+  }
+
+  async createGroup(scope: RequestScope, input: ThreadGroupCreateToolInput & ThreadMutationContext) {
+    const threadId = this.#requireAdmittedThread(scope, input.threadId, input.environmentAuthority);
+    const current = this.input.groupAssignments.getAssignment(scope, threadId);
+    const { groupId } = await this.input.groups.updateAssignment(scope, threadId, {
+      action: "create",
+      name: input.name,
+      members: [{ threadId, expectedRevision: current.revision }],
+      mutationId: input.mutationId,
+    });
+    if (groupId === null) throw new Error("agent_thread_group_creation_missing_id");
+    return { threadId, groupId };
+  }
+
   #requireAdmittedThread(
     scope: RequestScope,
-    threadId: string,
+    requestedThreadId: string | undefined,
     environmentAuthority: TrustedEnvironmentAuthorityGrant,
-  ): void {
+  ): string {
+    const threadId = requestedThreadId ?? environmentAuthority.defaults.threadId;
+    if (threadId === undefined) {
+      throw new CanonicalAgentToolRequestError(
+        "invalid_input",
+        "Provide threadId when the caller has no default thread.",
+      );
+    }
     const thread = this.input.threads.getThread(scope, threadId).thread;
     requireAdmittedResource(environmentAuthority, {
       kind: "thread",
@@ -234,5 +297,6 @@ export class AgentThreadInventoryControlService {
       projectId: thread.projectId,
       workspaceId: thread.workspaceId,
     });
+    return threadId;
   }
 }

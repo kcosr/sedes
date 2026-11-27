@@ -35,6 +35,9 @@ environments off, a project needs an active location on the current environment
 before its shared records are accessible. Global Tasks,
 global Workpads, Saved Agents, and client devices remain shared account
 resources. A client result hides an out-of-scope default-thread reference.
+The Group directory grant exposes account-wide Group IDs and names, including
+empty Groups. Finding members or changing a thread's Group requires access
+to the thread under the usual scope rules.
 HTML Pages, image display, and worktree operations keep their narrower
 source-thread or source-workspace restrictions.
 

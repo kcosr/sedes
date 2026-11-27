@@ -17,6 +17,16 @@ export const cursorSchema = Type.String({ minLength: 1, maxLength: 2_048 });
 export const pageSizeSchema = Type.Integer({ minimum: 1, maximum: 100 });
 export const isoDateSchema = Type.String({ minLength: 20, maxLength: 40 });
 export const threadTitleSchema = Type.String({ minLength: 1, maxLength: 240 });
+export const threadGroupIdToolSchema = Type.String({
+  minLength: 36, maxLength: 36, description: "Thread Group UUID.",
+});
+export const threadGroupSummaryToolSchema = Type.Object(
+  { id: threadGroupIdToolSchema, name: Type.String({ minLength: 1, maxLength: 120 }) },
+  { additionalProperties: false, maxProperties: 2 },
+);
+export const threadGroupMembershipToolSchema = Type.Union([threadGroupSummaryToolSchema, Type.Null()], {
+  description: "The current user's Group for this thread, or null when ungrouped.",
+});
 export const threadSnoozeOutputProperties = {
   snoozedUntil: Type.Optional(
     Type.String({

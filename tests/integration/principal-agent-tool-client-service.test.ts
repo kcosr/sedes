@@ -14,6 +14,8 @@ import {
   createThreadAgentToolPolicyDependencies,
 } from "../../src/server/conversations/thread-agent-tool-policy-dependencies.js";
 import { ConversationBindingRepository } from "../../src/server/db/repositories/conversation-binding-repository.js";
+import { ThreadGroupRepository } from "../../src/server/db/repositories/thread-group-repository.js";
+import type { AgentThreadControlToolServices } from "../../src/server/agent-tools/tools/thread-control-tools.js";
 import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
 import { PrincipalAgentToolClientRepository } from "../../src/server/db/repositories/principal-agent-tool-client-repository.js";
 import type { RequestScope } from "../../src/server/identity/identity-provider.js";
@@ -103,11 +105,14 @@ function fixture() {
               backend: "pi" as const,
               lifecycle: "active" as const,
               pinned: false,
+              group: null,
               activity: "idle" as const,
             }
           : undefined,
     },
     management,
+    threadGroupDirectory: new ThreadGroupRepository(database),
+    threadControl: unavailableDomainService<AgentThreadControlToolServices>(),
     workpads: new WorkpadAgentToolService({ workpads: new WorkpadService(new WorkpadRepository(database), { publishWorkpadChange: async () => undefined, handoffThreadChange: () => undefined }), authorityReader: authority }),
     automations: unavailableDomainService<AutomationAgentToolService>(),
     threadCreation: unavailableDomainService<AgentThreadCreationService>(),
@@ -196,7 +201,7 @@ function replacement(
 
 const statusRequest = {
   toolId: "thread.status",
-  schemaVersion: 6,
+  schemaVersion: 7,
   requestId: "principal-client-status",
   input: { threadId: "target-thread" },
 } as const;
@@ -260,7 +265,7 @@ describe("principal agent-tool client persistence and admission", () => {
       ).toEqual(["workspace.list", "thread.status"]);
       expect(
         value.service().describeMany(created.credential, ["thread.status"])[0],
-      ).toMatchObject({ id: "thread.status", schemaVersion: 6 });
+      ).toMatchObject({ id: "thread.status", schemaVersion: 7 });
       expect(() =>
         value.service().describeMany(created.credential, ["agent.context"]),
       ).toThrowError(expect.objectContaining({ code: "not_found" }));
@@ -302,6 +307,42 @@ describe("principal agent-tool client persistence and admission", () => {
           },
         }),
       ).toThrowError(expect.objectContaining({ code: "permission_denied" }));
+    } finally {
+      value.database.close();
+    }
+  });
+
+  it("grants Group discovery and individual thread organization operations independently", async () => {
+    const value = fixture();
+    try {
+      const groups = new ThreadGroupRepository(value.database);
+      const { groupId } = groups.createAndAssign(value.scope, value.thread.id, {
+        name: "Planning",
+        members: [{ threadId: value.thread.id, expectedRevision: 0 }],
+        mutationId: randomUUID(),
+        now: 200,
+      });
+      const service = value.service();
+      const { credential } = createClient(value, { toolIds: ["thread_group.list", "thread.set_group"] });
+      expect(service.catalogSummaries(credential).map(({ id }) => id)).toEqual([
+        "thread.set_group", "thread_group.list",
+      ]);
+      const directory = await service.invoke(credential, {
+        toolId: "thread_group.list", schemaVersion: 1, requestId: randomUUID(), input: {},
+      }, new AbortController().signal);
+      expect(directory).toEqual({
+        invocationId: expect.any(String),
+        state: "completed",
+        output: { items: [{ id: groupId, name: "Planning" }] },
+      });
+      for (const [toolId, input] of [
+        ["thread_group.create", { name: "Another" }],
+        ["thread.set_pinned", { pinned: true }],
+      ] as const) {
+        expect(() => service.admitInvocation(credential, {
+          toolId, schemaVersion: 1, requestId: randomUUID(), input,
+        })).toThrowError(expect.objectContaining({ code: "not_found" }));
+      }
     } finally {
       value.database.close();
     }
@@ -455,8 +496,10 @@ describe("principal agent-tool client persistence and admission", () => {
       expect(new Set(optionIds)).toEqual(
         value.repository.eligibility.eligibleToolIds,
       );
-      expect(optionIds).toHaveLength(37);
-      expect(optionIds).toContain("thread.set_state");
+      expect(optionIds).toHaveLength(41);
+      expect(optionIds).toEqual(expect.arrayContaining([
+        "thread.set_state", "thread.set_pinned", "thread.set_group", "thread_group.list", "thread_group.create",
+      ]));
       expect(optionIds).not.toContain("agent.context");
       expect(optionIds).not.toContain("automation.resolve");
       expect(optionIds).not.toContain("automation.acknowledge");
@@ -853,7 +896,7 @@ describe("principal agent-tool client persistence and admission", () => {
       expect(() =>
         value.service().admitInvocation(created.credential, {
           toolId: "thread.list",
-          schemaVersion: 10,
+          schemaVersion: 11,
           requestId: "principal-client-default-workspace",
           input: { scope: { kind: "default_workspace" } },
         }),
@@ -888,7 +931,7 @@ describe("principal agent-tool client persistence and admission", () => {
       expect(() =>
         value.service().admitInvocation(created.credential, {
           toolId: "thread.list",
-          schemaVersion: 10,
+          schemaVersion: 11,
           requestId: "principal-client-removed-default-workspace",
           input: { scope: { kind: "default_workspace" } },
         }),

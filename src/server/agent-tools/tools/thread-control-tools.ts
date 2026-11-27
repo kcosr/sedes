@@ -257,7 +257,7 @@ export interface AgentThreadControlToolServices {
   readonly forks: Pick<ThreadForkService, "forkAgent" | "forkPrincipalClient">;
   readonly inventory: Pick<
     AgentThreadInventoryControlService,
-    "archive" | "restore" | "setState"
+    "archive" | "restore" | "setState" | "setPinned" | "setGroup" | "createGroup"
   >;
 }
 

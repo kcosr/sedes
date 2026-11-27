@@ -14,6 +14,7 @@ import type { AgentThreadCreationService } from "../tools/thread-management-tool
 import type { SavedAgentCanonicalToolService } from "../tools/saved-agent-management-tools.js";
 import type { AutomationAgentToolService } from "../tools/automation-agent-tool-service.js";
 import type { AgentToolApplicationReader } from "../tools/agent-tool-readers.js";
+import type { ThreadGroupDirectoryReader } from "../tools/thread-group-list-tool.js";
 import type { AgentThreadControlToolServices } from "../tools/thread-control-tools.js";
 import type { WebSearchExecutor } from "../tools/web-search-tool.js";
 import type { AgentThreadWorktreeService } from "../tools/thread-worktree-tools.js";
@@ -31,10 +32,14 @@ const artifactUrls = Object.freeze(
 );
 const historicalArtifactHashes: Readonly<Record<string, string>> =
   Object.freeze({
+    "thread.status.v6.json":
+      "c579e59ecbd10b9e486e2c655e82a52045896894cbc93fa0088db9abd90acb89",
     "thread.status.v5.json":
       "ecf7628f2898b5587e8b94cef78e2f4ee8e87851f27fc28998035f6c7c823f07",
     "thread.list.v6.json":
       "e5c223751b3bf821218ae9939224994a0c6e68670ca8f3e7a74e6ff7d35ca536",
+    "thread.list.v10.json":
+      "9fde2a9046d3d2f7eb0d4742dde155fe4d59776dc26ca4cc6135769cfd6e132a",
     "thread.list.v9.json":
       "d4d2c91e216fd37951eafedddb2bf8842431fd277e9ce04bd8766f1a61f52001",
     "automation.get.v1.json":
@@ -153,6 +158,7 @@ function definitions(): readonly AgentToolDefinition[] {
     automations: artifactAutomations,
     threadCreation: artifactThreadCreation,
     savedAgents: artifactSavedAgents,
+    threadGroupDirectory: unavailableDomainService<ThreadGroupDirectoryReader>("group_directory"),
     threadControl: artifactThreadControl,
     webSearch: artifactWebSearch,
     threadWorktrees: artifactThreadWorktrees,

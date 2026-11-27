@@ -44,6 +44,12 @@ import {
   createThreadSendToolDefinition,
   createThreadSetStateToolDefinition,
 } from "../tools/thread-control-tools.js";
+import { createThreadGroupListToolDefinition, type ThreadGroupDirectoryReader } from "../tools/thread-group-list-tool.js";
+import {
+  createThreadSetPinnedToolDefinition,
+  createThreadSetGroupToolDefinition,
+  createThreadGroupCreateToolDefinition,
+} from "../tools/thread-organization-tools.js";
 import { createThreadStatusToolDefinition } from "../tools/thread-status-tool.js";
 import { createEnvironmentListToolDefinition } from "../tools/environment-list-tool.js";
 import { createWorkspaceListToolDefinition } from "../tools/workspace-list-tool.js";
@@ -117,6 +123,7 @@ export function createCanonicalAgentToolDefinitions(input: {
   readonly automations?: AutomationAgentToolService;
   readonly threadCreation?: AgentThreadCreationService;
   readonly savedAgents?: SavedAgentCanonicalToolService;
+  readonly threadGroupDirectory?: ThreadGroupDirectoryReader;
   readonly threadControl?: AgentThreadControlToolServices;
   readonly webSearch?: WebSearchExecutor;
   readonly threadWorktrees?: AgentThreadWorktreeService;
@@ -180,6 +187,7 @@ export function createCanonicalAgentToolDefinitions(input: {
         ]
       : []),
     createThreadStatusToolDefinition(input.application),
+    ...(input.threadGroupDirectory ? [createThreadGroupListToolDefinition(input.threadGroupDirectory)] : []),
     ...(input.threadControl
       ? [
           createThreadMessagesToolDefinition(input.threadControl),
@@ -188,6 +196,9 @@ export function createCanonicalAgentToolDefinitions(input: {
           createThreadArchiveToolDefinition(input.threadControl),
           createThreadRestoreToolDefinition(input.threadControl),
           createThreadSetStateToolDefinition(input.threadControl),
+          createThreadSetPinnedToolDefinition(input.threadControl),
+          createThreadSetGroupToolDefinition(input.threadControl),
+          createThreadGroupCreateToolDefinition(input.threadControl),
         ]
       : []),
     ...serviceBackedDefinitions,

@@ -25,6 +25,8 @@ import { InventoryRepository } from "../../src/server/db/repositories/inventory-
 import { ProviderFeatureMutationRepository } from "../../src/server/db/repositories/provider-feature-mutation-repository.js";
 import { TaskRepository } from "../../src/server/db/repositories/task-repository.js";
 import { ThreadLineageRepository } from "../../src/server/db/repositories/thread-lineage-repository.js";
+import { ThreadGroupRepository } from "../../src/server/db/repositories/thread-group-repository.js";
+import { ThreadGroupService } from "../../src/server/domain/thread-group-service.js";
 import { ThreadArchiveService } from "../../src/server/domain/thread-archive-service.js";
 import { InventoryService } from "../../src/server/domain/inventory-service.js";
 import { DomainError } from "../../src/server/domain/errors.js";
@@ -276,6 +278,54 @@ function fixture(nativeArchive?: {
   };
 }
 
+function agentInventory(current: ReturnType<typeof fixture>) {
+  const { scope, rootId: threadId } = current;
+  const { thread } = current.inventory.getThread(scope, threadId);
+  const defaults = {
+    kind: "thread_agent" as const,
+    threadId,
+    workspaceId: thread.workspaceId,
+    environmentId: thread.environmentId,
+    projectId: thread.projectId,
+  };
+  const resolver = new AgentToolEnvironmentAuthorityResolver(
+    new DatabaseAgentToolSourceAuthority(current.database, new Uint8Array(32)),
+  );
+  const resourceScope = { allowOtherEnvironments: false, allowOtherProjects: false };
+  const groupAssignments = new ThreadGroupRepository(current.database);
+  const publishGroups = vi.fn(async () => {});
+  const publishPin = vi.fn(async () => {});
+  const service = new AgentThreadInventoryControlService({
+    inventory: current.inventory,
+    threads: current.inventory,
+    lineage: current.lineage,
+    archives: current.service,
+    groupAssignments,
+    groups: new ThreadGroupService(groupAssignments, { publishAuthoritativeReplacement: publishGroups }),
+    transitions: new InventoryService(current.inventory, {
+      publishMany: () => undefined,
+      publishApplicationThread: publishPin,
+    }),
+  });
+  function mutation(
+    id: "thread.set_state" | "thread.set_pinned" | "thread.set_group" | "thread_group.create",
+    input: unknown,
+  ) {
+    const tool = CANONICAL_AGENT_TOOL_MANIFEST[id];
+    return {
+      mutationId: randomUUID(),
+      environmentAuthority: createTrustedEnvironmentAuthorityGrant({
+        ...resolver.resolve({ tool, scope, input, defaults, resourceScope }),
+        tool, defaults, resourceScope,
+        callerKind: "thread_agent",
+        policyIdentity: { ownerKind: "thread", ownerId: threadId, revision: 1 },
+        admittedEnvironmentIds: [thread.environmentId],
+      }),
+    };
+  }
+  return { service, mutation, groupAssignments, publishPin, publishGroups };
+}
+
 describe("thread family archive service", () => {
   it("commits inventory and synchronizes native archive inside the maintenance fence before publication", async () => {
     let fenced = false;
@@ -520,41 +570,10 @@ describe("thread family archive service", () => {
     const current = fixture();
     try {
       const { scope, rootId: threadId } = current;
-      const { thread } = current.inventory.getThread(scope, threadId);
-      const defaults = {
-        kind: "thread_agent" as const,
-        threadId,
-        workspaceId: thread.workspaceId,
-        environmentId: thread.environmentId,
-        projectId: thread.projectId,
-      };
-      const resolver = new AgentToolEnvironmentAuthorityResolver(
-        new DatabaseAgentToolSourceAuthority(current.database, new Uint8Array(32)),
-      );
-      const tool = CANONICAL_AGENT_TOOL_MANIFEST["thread.set_state"];
-      const resourceScope = { allowOtherEnvironments: false, allowOtherProjects: false };
-      const service = new AgentThreadInventoryControlService({
-        inventory: current.inventory,
-        threads: current.inventory,
-        lineage: current.lineage,
-        archives: current.service,
-        transitions: new InventoryService(current.inventory, {
-          publishMany: () => undefined,
-          publishApplicationThread: () => undefined,
-        }),
-      });
+      const { service, mutation } = agentInventory(current);
       const setState = (input: ThreadSetStateToolInput) => service.setState(scope, {
         ...input,
-        mutationId: randomUUID(),
-        environmentAuthority: createTrustedEnvironmentAuthorityGrant({
-          ...resolver.resolve({ tool, scope, input, defaults, resourceScope }),
-          tool,
-          defaults,
-          callerKind: "thread_agent",
-          resourceScope,
-          policyIdentity: { ownerKind: "thread", ownerId: threadId, revision: 1 },
-          admittedEnvironmentIds: [thread.environmentId],
-        }),
+        ...mutation("thread.set_state", input),
       });
       const inventory = () => current.inventory.getInventory(scope, threadId);
       const task = current.tasks.create(scope, {
@@ -623,6 +642,69 @@ describe("thread family archive service", () => {
         code: "conflict", message: expect.stringContaining("thread.restore"),
       });
       expect(inventory().inventoryState).toBe("archived");
+    } finally {
+      current.database.close();
+    }
+  });
+
+  it("organizes archived threads using independent pin and membership revisions", async () => {
+    const current = fixture();
+    try {
+      const { scope, rootId: threadId, childId } = current;
+      const { service, mutation, groupAssignments, publishPin, publishGroups } = agentInventory(current);
+      const setPin = (pinned: boolean) => service.setPinned(scope, {
+        pinned, ...mutation("thread.set_pinned", { pinned }),
+      });
+      const create = (name: string) => service.createGroup(scope, {
+        name, ...mutation("thread_group.create", { name }),
+      });
+      const setGroup = (target: string, groupId: string | null) => {
+        const input = { threadId: target, groupId };
+        return service.setGroup(scope, { ...input, ...mutation("thread.set_group", input) });
+      };
+      const inventory = () => current.inventory.getInventory(scope, threadId);
+      current.inventory.transitionInventory(scope, threadId, {
+        expectedRevision: inventory().inventoryRevision,
+        mutationId: randomUUID(), change: { action: "archive" }, now: Date.now(),
+      });
+      const archivedRevision = inventory().inventoryRevision;
+      const { groupId } = await create(" Design  ");
+      await expect(create("design")).rejects.toMatchObject({ code: "group_name_conflict" });
+      expect(groupAssignments.list(scope).map(({ name }) => name)).toEqual(["Design"]);
+      await expect(setPin(true)).resolves.toEqual({ threadId, pinned: true });
+      await expect(setPin(true)).resolves.toEqual({ threadId, pinned: true });
+      expect(publishPin).toHaveBeenCalledTimes(1);
+      expect(inventory()).toMatchObject({ pinRevision: 1, inventoryState: "archived", inventoryRevision: archivedRevision });
+      await expect(setGroup(childId, groupId)).resolves.toEqual({ threadId: childId, groupId });
+      await expect(setGroup(threadId, groupId)).resolves.toEqual({ threadId, groupId });
+      expect(groupAssignments.getAssignment(scope, threadId).revision).toBe(1);
+      await expect(setGroup(threadId, null)).resolves.toEqual({ threadId, groupId: null });
+      await expect(setGroup(threadId, null)).resolves.toEqual({ threadId, groupId: null });
+      expect(publishGroups).toHaveBeenCalledTimes(3);
+      expect(groupAssignments.getAssignment(scope, threadId).revision).toBe(2);
+      const group = groupAssignments.get(scope, groupId);
+      groupAssignments.rename(scope, groupId, {
+        name: "Ready", expectedRevision: group.revision, mutationId: randomUUID(), now: Date.now(),
+      });
+      await expect(setGroup(threadId, groupId)).resolves.toEqual({ threadId, groupId });
+      const otherPrincipalId = randomUUID();
+      const foreignGroupId = randomUUID();
+      current.database.prepare("INSERT INTO principals(tenant_id, id, kind, created_at) VALUES (?, ?, 'local_human', 0)")
+        .run(scope.tenantId, otherPrincipalId);
+      current.database.prepare(`
+        INSERT INTO thread_groups(tenant_id, principal_id, id, name, name_key, created_at, updated_at)
+        VALUES (?, ?, ?, 'Private', 'private', 0, 0)
+      `).run(scope.tenantId, otherPrincipalId, foreignGroupId);
+      await expect(setGroup(threadId, foreignGroupId)).rejects.toMatchObject({ code: "not_found" });
+      expect(groupAssignments.getAssignment(scope, threadId)).toMatchObject({ groupId, revision: 3 });
+      const renamed = groupAssignments.get(scope, groupId);
+      groupAssignments.delete(scope, groupId, {
+        expectedRevision: renamed.revision, expectedMemberCount: 2, mutationId: randomUUID(), now: Date.now(),
+      });
+      await expect(setGroup(threadId, groupId)).rejects.toMatchObject({ code: "not_found" });
+      expect(groupAssignments.getAssignment(scope, threadId)).toMatchObject({ groupId: null, revision: 4 });
+      await expect(setPin(false)).resolves.toEqual({ threadId, pinned: false });
+      expect(inventory()).toMatchObject({ pinRevision: 2, inventoryState: "archived", inventoryRevision: archivedRevision });
     } finally {
       current.database.close();
     }

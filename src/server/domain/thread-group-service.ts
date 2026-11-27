@@ -11,7 +11,7 @@ import type { RequestScope } from "../identity/identity-provider.js";
 export class ThreadGroupService {
   constructor(
     readonly repository: ThreadGroupRepository,
-    readonly applicationSnapshots: ApplicationSnapshotPublicationBoundary,
+    readonly applicationSnapshots: Pick<ApplicationSnapshotPublicationBoundary, "publishAuthoritativeReplacement">,
   ) {}
 
   async updateAssignment(

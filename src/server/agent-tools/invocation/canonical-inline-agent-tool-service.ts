@@ -50,6 +50,7 @@ import type { ExecutionConfigurationTools } from "../execution/execution-configu
 import type { RuntimeAgentToolService } from "../tools/runtime-agent-tool-service.js";
 import type { PolicyManagementAgentToolService } from "../tools/policy-management-agent-tool-service.js";
 import type { AgentManagementService } from "../application/agent-management-service.js";
+import type { ThreadGroupDirectoryReader } from "../tools/thread-group-list-tool.js";
 import type { AgentThreadCreationService } from "../tools/thread-management-tools.js";
 import type { SavedAgentCanonicalToolService } from "../tools/saved-agent-management-tools.js";
 import type { AutomationAgentToolService } from "../tools/automation-agent-tool-service.js";
@@ -321,6 +322,7 @@ export class CanonicalInlineAgentToolService {
     readonly automations?: AutomationAgentToolService;
     readonly threadCreation?: AgentThreadCreationService;
     readonly savedAgents?: SavedAgentCanonicalToolService;
+    readonly threadGroupDirectory?: ThreadGroupDirectoryReader;
     readonly threadControl?: AgentThreadControlToolServices;
     readonly webSearch?: import("../tools/web-search-tool.js").WebSearchExecutor;
     readonly threadWorktrees?: AgentThreadWorktreeService;
