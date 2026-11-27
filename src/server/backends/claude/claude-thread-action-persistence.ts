@@ -125,6 +125,12 @@ export class ClaudeThreadActionPersistence implements ThreadActionPersistencePro
           input.expectedThreadRevision,
         );
       if (changed.changes !== 1) throw threadChanged();
+      const settings = this.database.prepare(`
+        UPDATE claude_thread_settings SET local_title_override = 1, updated_at = max(updated_at, ?)
+        WHERE tenant_id = ? AND owner_principal_id = ? AND application_thread_id = ?
+          AND backend_instance_id = ?
+      `).run(input.now, scope.tenantId, scope.principalId, applicationThreadId, this.backendInstanceId);
+      if (settings.changes !== 1) throw threadChanged();
       this.#advanceInventoryGeneration(scope);
     })();
   }

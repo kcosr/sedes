@@ -651,6 +651,10 @@ protocol 183. The inventory actions are `park` and `unpark`, and the affected
 thread and automation tools publish new schemas. See
 [agent tool contracts](../internals/agent-tools.md#catalog-and-effects).
 
+Migration 173 restores each Claude thread’s most recent successful Sedes
+rename from the records retained in `overlay.sqlite`. The migration runs
+entirely in SQLite and works while Claude is offline.
+
 Before an upgrade:
 
 1. Settle active work and resolve or explicitly review uncertain creation,

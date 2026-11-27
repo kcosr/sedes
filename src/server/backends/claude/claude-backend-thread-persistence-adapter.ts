@@ -452,6 +452,18 @@ export class ClaudeBackendThreadPersistenceAdapter implements BackendThreadPersi
     return serializeClaudeBindingDetail(detail);
   }
 
+  preservesLocalTitle(scope: RequestScope, applicationThreadId: string): boolean {
+    this.#assertScope(scope);
+    const settings = this.database.prepare(`
+      SELECT local_title_override AS localTitleOverride FROM claude_thread_settings
+      WHERE tenant_id = ? AND owner_principal_id = ? AND application_thread_id = ?
+        AND backend_instance_id = ?
+    `).get(scope.tenantId, scope.principalId, applicationThreadId, this.#backendInstanceId) as
+      { readonly localTitleOverride: number } | undefined;
+    if (!settings) throw targetMismatch();
+    return settings.localTitleOverride === 1;
+  }
+
   #assertThreadConnection(
     scope: RequestScope,
     applicationThreadId: string,

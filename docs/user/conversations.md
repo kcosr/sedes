@@ -338,6 +338,10 @@ unbound Sedes draft title. After binding, rename is available only when the
 backend supports its native rename operation; Sedes updates the provider and
 the Sedes title together. Renaming never creates a thread or changes history.
 
+Claude threads use Claude’s suggested title until you rename them in Sedes.
+Sedes keeps the name you choose through restarts and workspace refreshes,
+including names you set before sending the first message.
+
 ### Create an empty thread with the same settings
 
 From an existing thread, choose **New with same settings** in **Thread

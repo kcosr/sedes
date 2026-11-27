@@ -34,7 +34,7 @@ function fixture() {
     title,
     now: 120,
   }).id;
-  const migrate = () => applyDatabaseMigrations(database, backendNormalizedMigrations);
+  const migrate = () => applyDatabaseMigrations(database, backendNormalizedMigrations.filter(({ version }) => version <= 172));
   return { database, scope, inventory, workspace, owner, createThread, migrate };
 }
 

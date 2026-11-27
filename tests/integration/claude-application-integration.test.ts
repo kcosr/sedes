@@ -5,6 +5,7 @@ import type {
   Query,
   SDKControlInitializeResponse,
   SDKMessage,
+  SDKSessionInfo,
   SDKUserMessage,
   SessionMessage,
 } from "@anthropic-ai/claude-agent-sdk";
@@ -36,6 +37,9 @@ import {
   DatabaseThreadApplicationPresentationReader,
   directThreadExecutionWorkspaceReader,
 } from "../../src/server/conversations/database-thread-application-readers.js";
+import { BackendDiscoveryService, EXHAUSTIVE_DISCOVERY_SCAN } from "../../src/server/conversations/backend-discovery-service.js";
+import { ThreadMutationGateway } from "../../src/server/conversations/thread-mutation-gateway.js";
+import { ThreadLineageRepository } from "../../src/server/db/repositories/thread-lineage-repository.js";
 import { ConversationActorManager } from "../../src/server/conversations/conversation-actor-manager.js";
 import { ConversationLifecycleService } from "../../src/server/conversations/conversation-lifecycle-service.js";
 import {
@@ -71,7 +75,7 @@ import { OverlayRepository } from "../support/schema9/overlay-repository.js";
 import { ThreadInventoryService } from "../support/schema9/thread-inventory-service.js";
 
 const CLAUDE_CONFIG_DIRECTORY = claudeConfigDirectory(process.env);
-import { threadAgentToolPolicyReaderDependencies } from "../support/thread-agent-tool-policy.js";
+import { threadAgentToolPolicyReaderDependencies, threadAgentToolPolicyRepository } from "../support/thread-agent-tool-policy.js";
 import { createFakeAgentToolSourceCapabilities } from "../helpers/fake-agent-tool-source-capabilities.js";
 
 const agentToolSourceCapabilities =
@@ -150,7 +154,7 @@ class FakeClaudeSdk implements ClaudeSdkFacade {
     } as const;
   }
 
-  async listSessions() {
+  async listSessions(): Promise<SDKSessionInfo[]> {
     return [];
   }
 
@@ -319,14 +323,17 @@ function connectionProfile(
 }
 
 describe("Claude production application integration", () => {
-  it.each(["echo", "stamps", "native"] as const)("creates, submits, persists, projects, and fails closed through normalized application services (%s)", async (signals) => {
+  async function createApplication(sdk: FakeClaudeSdk) {
     const database = openOverlayDatabase(":memory:");
     const resources = new StartupResourceStack();
-    const sdk = new FakeClaudeSdk(signals);
-    sdk.deferResult = true;
     let actors: ConversationActorManager | undefined;
-    let releaseObservedActor: (() => void) | undefined;
     let execution: LocalExecutionEnvironment | undefined;
+    const close = async () => {
+      await actors?.close().catch(() => undefined);
+      await resources.dispose().catch(() => undefined);
+      execution?.close();
+      database.close();
+    };
     try {
       const scope = new SingleUserIdentityProvider(database).getScope();
       const legacyInventory = new ThreadInventoryService(
@@ -568,6 +575,98 @@ describe("Claude production application integration", () => {
         workspaceId: workspace.id,
         connectionProfileId: connection.id,
       });
+      return { database, scope, workspace, instance, connection, registry, usage, runtimeModules, inventory,
+        bindings, targets, actors, completion, lifecycleTargets, lifecycle, resolvedTarget, close };
+    } catch (error) {
+      await close();
+      throw error;
+    }
+  }
+
+  it.each(["draft", "bound"] as const)("keeps a manual %s rename when Claude rediscovers a generated customTitle", async (whenRenamed) => {
+    const sdk = new FakeClaudeSdk();
+    const app = await createApplication(sdk);
+    const { scope, database, workspace, connection, inventory, bindings, lifecycle } = app;
+    const actorTargets = new DatabaseActorTargetResolver(app.targets);
+    const gateway = new ThreadMutationGateway({
+      bindings, inventory, lifecycle, actors: app.actors, completions: app.completion,
+      operations: new ConversationOperationRepository(database),
+      agentToolPolicies: threadAgentToolPolicyRepository(database),
+      // Draft rename remains available when Claude's runtime is offline.
+      actionPersistence: whenRenamed === "draft" ? new Map() : app.runtimeModules.actionPersistence,
+      runtimes: {
+        acquire: async (requestScope: typeof scope, threadId: string) =>
+          app.actors.acquire(await actorTargets.resolve(requestScope, threadId), { idleRelease: "retain" }),
+      } as never,
+      forks: {} as never, queue: {} as never, queueGateway: {} as never,
+      interactions: {} as never, presentation: {} as never, publishThreadSnapshot: async () => {},
+    });
+    try {
+      const draft = await lifecycle.createServerDraft(scope, {
+        id: THREAD_ID, workspaceId: workspace.id, connectionProfileId: connection.id,
+        title: "New thread", initialText: "First message",
+      });
+      const readThread = () => inventory.getThread(scope, draft.applicationThreadId).thread;
+      const manualTitle = "My Sedes title";
+      const rename = (expectedThreadRevision: number) => gateway.mutate(scope, draft.applicationThreadId, {
+        kind: "perform", mutationId: crypto.randomUUID(), expectedThreadRevision,
+        operation: { action: "rename", title: manualTitle },
+      });
+      // The pinned SDK can return the generated name in customTitle when the
+      // explicit rename is outside its transcript metadata read windows.
+      const generatedTitle = "Claude-generated title";
+      const lastModified = Date.now() + 10_000;
+      vi.spyOn(sdk, "listSessions").mockResolvedValue([{
+        sessionId: SESSION_ID, cwd: workspace.canonicalPath,
+        customTitle: generatedTitle, summary: "Claude summary", lastModified,
+      }]);
+      const discovery = new BackendDiscoveryService({
+        targets: app.targets, bindings, inventory, lineage: new ThreadLineageRepository(database),
+        persistence: app.runtimeModules.discoveryPersistence, connectionProfileId: connection.id,
+        forks: { reconcileDiscoveredFork: async () => undefined },
+        onAncestryReconciliationConflict: (_scope, error) => { throw error; },
+        onForkReconciliationError: (_scope, error) => { throw error; },
+      });
+      const startupScan = { kind: "bounded_recent", maximumPages: 1 } as const;
+      const scan = (policy: typeof startupScan | typeof EXHAUSTIVE_DISCOVERY_SCAN) =>
+        discovery.discoverWorkspace(scope, workspace.id, policy, new AbortController().signal);
+
+      if (whenRenamed === "draft") {
+        await expect(rename(readThread().revision)).resolves.toMatchObject({ status: "accepted" });
+        expect(readThread()).toMatchObject({ title: manualTitle, backingState: "unbound" });
+        expect(sdk.renameSession).not.toHaveBeenCalled();
+      }
+      await expect(lifecycle.startFirstSend(scope, draft.applicationThreadId, {
+        attemptId: "claude-first-attempt", mutationId: MUTATION_ID,
+        expectedThreadRevision: readThread().revision, expectedDraftRevision: draft.draft.revision,
+      })).resolves.toMatchObject({ status: "bound", binding: { backendConversationId: SESSION_ID } });
+
+      if (whenRenamed === "bound") {
+        await expect(rename(readThread().revision - 1)).rejects.toMatchObject({ code: "conflict" });
+        await expect(scan(startupScan)).resolves.toMatchObject({ completion: "complete", conversationsSeen: 1 });
+        expect(readThread().title).toBe(generatedTitle);
+        await expect(rename(readThread().revision)).resolves.toMatchObject({ status: "accepted" });
+        expect(sdk.renameSession).toHaveBeenCalledExactlyOnceWith(SESSION_ID, manualTitle,
+          { dir: workspace.canonicalPath }, expect.any(Object));
+      }
+
+      for (const policy of [startupScan, EXHAUSTIVE_DISCOVERY_SCAN]) {
+        await expect(scan(policy)).resolves.toMatchObject({ completion: "complete", conversationsSeen: 1 });
+        expect(readThread()).toMatchObject({ title: manualTitle, lastActivityAt: lastModified });
+      }
+    } finally {
+      await gateway.close();
+      await app.close();
+    }
+  });
+
+  it.each(["echo", "stamps", "native"] as const)("creates, submits, persists, projects, and fails closed through normalized application services (%s)", async (signals) => {
+    const sdk = new FakeClaudeSdk(signals);
+    sdk.deferResult = true;
+    const { database, scope, workspace, instance, connection, registry, usage, runtimeModules, inventory,
+      bindings, targets, actors, completion, lifecycleTargets, lifecycle, resolvedTarget, close } = await createApplication(sdk);
+    let releaseObservedActor: (() => void) | undefined;
+    try {
       await probeClaudeSdkDirect({
         sdk,
         executablePath: process.execPath,
@@ -878,10 +977,7 @@ describe("Claude production application integration", () => {
       }
     } finally {
       releaseObservedActor?.();
-      await actors?.close().catch(() => undefined);
-      await resources.dispose().catch(() => undefined);
-      execution?.close();
-      database.close();
+      await close();
     }
   });
 });

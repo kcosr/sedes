@@ -42,6 +42,7 @@ function fixture(
       id TEXT NOT NULL,
       backend_instance_id TEXT NOT NULL,
       backing_state TEXT NOT NULL,
+      title TEXT NOT NULL DEFAULT 'Original name',
       revision INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
       PRIMARY KEY(tenant_id, owner_principal_id, id)
@@ -57,6 +58,7 @@ function fixture(
       desired_effort TEXT,
       desired_permission_mode TEXT,
       desired_revision INTEGER NOT NULL DEFAULT 0,
+      local_title_override INTEGER NOT NULL DEFAULT 0,
       effective_model TEXT,
       effective_model_state TEXT NOT NULL,
       effective_model_generation INTEGER,
@@ -153,6 +155,25 @@ function setModel(
 }
 
 describe("ClaudeThreadActionPersistence", () => {
+  it("rolls back a bound rename if it cannot protect the title for this backend", () => {
+    const { database, persistence } = fixture("low");
+    database.prepare("UPDATE application_threads SET backing_state = 'bound'").run();
+    database.prepare("DELETE FROM claude_thread_settings").run();
+
+    expect(() => persistence.persistAccepted(scope, applicationThreadId, {
+      mutationId: "rename-a",
+      expectedThreadRevision: 1,
+      settingsGuard: { kind: "proven_applied" },
+      operation: { action: "rename", title: "Manual name" },
+      now: 2,
+    })).toThrow("The Claude thread or settings changed in another client.");
+
+    expect(database.prepare("SELECT title, revision FROM application_threads").get())
+      .toEqual({ title: "Original name", revision: 1 });
+    expect(database.prepare("SELECT inventory_generation FROM principal_generations").get())
+      .toEqual({ inventory_generation: 0 });
+  });
+
   it("routes scoped compaction without changing application settings or inventory", () => {
     const { database, settings, persistence } = fixture("low");
     const before = settings.get(scope, applicationThreadId);
