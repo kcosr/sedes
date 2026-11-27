@@ -429,22 +429,25 @@ function fixture(
 }
 
 describe("parked turn settlement", () => {
-  it.each(["turn_updated", "turn_completed"] as const)("accepts a status-only native %s and ignores projected turn upserts", async type => {
+  it.each([
+    ["turn_updated", "completed"], ["turn_completed", "completed"],
+    ["turn_completed", "failed"], ["turn_updated", "interrupted"],
+  ] as const)("accepts a status-only native %s reporting %s and ignores projected turn upserts", async (type, status) => {
     const { driver, handle, managerOptions } = fixture();
     const observed = vi.fn();
     const manager = new ConversationActorManager({
       ...managerOptions,
-      observeTurnSettlement(_scope, _threadId, hasEnded) {
-        observed(hasEnded(projectedTurnId));
+      observeTurnSettlement(_scope, _threadId, outcomeForTurn) {
+        observed(outcomeForTurn(projectedTurnId));
       },
     });
     // A passive tail can have a terminal display status with no observed end.
     const initial = snapshot();
-    const turn = { backendTurnId: "turn-1", status: "completed" as const, orderedBackendItemIds: ["item-1"] };
+    const turn = { backendTurnId: "turn-1", status, orderedBackendItemIds: ["item-1"] };
     handle.establishmentSnapshots[0] = { ...initial, turnsById: { "turn-1": turn } };
     const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver }, { idleRelease: "retain" });
     try {
-      expect(observed.mock.calls).toEqual([[false]]);
+      expect(observed.mock.calls).toEqual([[undefined]]);
       observed.mockClear();
       handle.emit(0, { type: "item_started", item: { backendItemId: "notice", backendTurnId: "turn-1",
         semanticKind: "notice", sourceOrder: 1, status: "completed", tone: "info", text: { text: "Updated metadata" } } }, 0);
@@ -455,7 +458,7 @@ describe("parked turn settlement", () => {
       expect(observed).not.toHaveBeenCalled();
       handle.emit(0, { type, turn: updatedTurn }, 2);
       await acquired.actor.captureSnapshotState();
-      expect(observed.mock.calls).toEqual([[true]]);
+      expect(observed.mock.calls).toEqual([[status]]);
     } finally { acquired.release(); await manager.close(); }
   });
 });

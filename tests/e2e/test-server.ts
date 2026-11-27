@@ -4653,9 +4653,9 @@ async function main(): Promise<void> {
   let observeAuthoritativeCompletion:
     AuthoritativeCompletionObserver | undefined;
   const actors = new ConversationActorManager({
-    observeTurnSettlement(scope, threadId, hasEnded) {
+    observeTurnSettlement(scope, threadId, outcomeForTurn) {
       const now = Date.now();
-      const state = inventoryRepository.unparkIfTurnEnded(scope, threadId, hasEnded, now);
+      const state = inventoryRepository.unparkIfTurnEnded(scope, threadId, outcomeForTurn, now);
       if (state) authoritativeCompletionFollowUp.defer(() => inventory.publishCommitted(scope, [state], now));
     },
     onModelFeedback: (eventScope, threadId, input) => automaticModelRetries?.onModelFeedback(eventScope, threadId, input.identity, input.automaticRetry),

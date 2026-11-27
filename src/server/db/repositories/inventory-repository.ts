@@ -30,6 +30,8 @@ import {
   serializeTaskReferences,
 } from "../composer-tasks-json.js";
 
+export type ParkedTurnOutcome = "completed" | "failed" | "interrupted" | "owner_stopped";
+
 export type InventoryState = "active" | "snoozed" | "parked" | "archived";
 export type InventoryWakeReason =
   "manual" | "deadline" | "completion" | "failure" | "needs-input" | "activity";
@@ -1966,7 +1968,7 @@ export class InventoryRepository {
       const next = this.#nextInventory(current, input.change, input.now);
       if (next !== current) {
         if (change.action === "snooze") input.assertSnoozeAllowed?.();
-        this.#writeInventory(next, change.action === "park");
+        this.#writeInventory(next);
         this.#bumpGeneration(scope);
       }
       const state =
@@ -2075,7 +2077,7 @@ export class InventoryRepository {
     scope: RequestScope,
     threadId: string,
     input: {
-      readonly untilTurnEnds?: boolean;
+      readonly selfParkTurnId?: string;
       readonly expectedRevision: number;
       readonly mutationId: string;
       readonly now: number;
@@ -2142,7 +2144,7 @@ export class InventoryRepository {
         input.now,
       );
       if (next !== current) {
-        this.#writeInventory(next, input.untilTurnEnds === true);
+        this.#writeInventory(next, input.selfParkTurnId);
         this.#bumpGeneration(scope);
       }
       const state =
@@ -2525,7 +2527,7 @@ export class InventoryRepository {
         this.#assertTransitionNotBlocked(scope, current.threadId, transition);
         return this.#nextInventory(current, transition, input.now);
       });
-      for (const next of nextStates) this.#writeInventory(next, input.action === "park");
+      for (const next of nextStates) this.#writeInventory(next);
       if (nextStates.length > 0) this.#bumpGeneration(scope);
 
       const disposition = input.openTaskDisposition ?? "keep";
@@ -2779,17 +2781,29 @@ export class InventoryRepository {
   unparkIfTurnEnded(
     scope: RequestScope,
     threadId: string,
-    hasEnded: (turnId: string) => boolean,
+    outcomeForTurn: (turnId: string) => ParkedTurnOutcome | undefined,
     now: number,
     expectedParkRevision?: number,
   ): InventoryPrincipalStateRecord | undefined {
     return this.database.transaction(() => {
       const target = prepareCached(this.database, `
-        SELECT parked_until_turn_id AS turnId, progress_park_revision AS revision FROM thread_principal_state
+        SELECT parked_until_turn_id AS turnId, progress_park_revision AS revision, park_keep_on_success AS keepOnSuccess
+        FROM thread_principal_state
         WHERE tenant_id = ? AND principal_id = ? AND thread_id = ?
           AND inventory_state = 'parked' AND parked_until_turn_id IS NOT NULL
-      `).get(scope.tenantId, scope.principalId, threadId) as { turnId: string; revision: number } | undefined;
-      if (!target || (expectedParkRevision !== undefined && expectedParkRevision !== target.revision) || !hasEnded(target.turnId)) return undefined;
+      `).get(scope.tenantId, scope.principalId, threadId) as { turnId: string; revision: number; keepOnSuccess: number } | undefined;
+      if (!target || (expectedParkRevision !== undefined && expectedParkRevision !== target.revision)) return undefined;
+      const outcome = outcomeForTurn(target.turnId);
+      if (!outcome) return undefined;
+      if (target.keepOnSuccess && outcome === "completed") {
+        // A successful self-park becomes an ordinary idle park. Consume its
+        // target once so late or repeated evidence cannot reopen the thread.
+        prepareCached(this.database, `
+          UPDATE thread_principal_state SET parked_until_turn_id = NULL, park_keep_on_success = 0
+          WHERE tenant_id = ? AND principal_id = ? AND thread_id = ?
+        `).run(scope.tenantId, scope.principalId, threadId);
+        return undefined;
+      }
       activateParkedThread(this.database, scope, threadId, now);
       return this.getInventory(scope, threadId);
     })();
@@ -3462,7 +3476,7 @@ export class InventoryRepository {
     }
   }
 
-  #writeInventory(state: InventoryPrincipalStateRecord, untilTurnEnds = false): void {
+  #writeInventory(state: InventoryPrincipalStateRecord, selfParkTurnId?: string): void {
     const result = prepareCached(this.database,
         `
           UPDATE thread_principal_state
@@ -3495,15 +3509,15 @@ export class InventoryRepository {
         "The thread inventory changed in another client.",
       );
     }
-    if (untilTurnEnds && state.inventoryState === "parked") {
+    if (state.inventoryState === "parked") {
       // Observe the current execution owner without attaching, in the same
       // synchronous transaction as the transition and its mutation receipt.
       const turnId = this.currentParkTurn?.(state, state.threadId);
       if (turnId) {
         prepareCached(this.database, `
-          UPDATE thread_principal_state SET parked_until_turn_id = ?
+          UPDATE thread_principal_state SET parked_until_turn_id = ?, park_keep_on_success = ?
           WHERE tenant_id = ? AND principal_id = ? AND thread_id = ?
-        `).run(turnId, state.tenantId, state.principalId, state.threadId);
+        `).run(turnId, turnId === selfParkTurnId ? 1 : 0, state.tenantId, state.principalId, state.threadId);
       }
     }
   }

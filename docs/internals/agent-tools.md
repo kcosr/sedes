@@ -464,10 +464,15 @@ future ISO `until` and accepts an optional `reminder` up to 1,000 characters.
 Set a parked thread to `active` before snoozing it. The active transition
 unparks or wakes the thread according to its current lifecycle. A thread
 already in the requested state keeps its current state and
-snooze details. Parking through this tool or its CLI command, `sedes thread
-set-state`, mutes automatic progress speech and keeps the thread parked when
-the current turn ends. Running and queued work, Tasks, and stashes stay
-attached. Use `thread.restore` for an archived thread.
+snooze details. Parking through the tool or its CLI command, `sedes thread
+set-state`, mutes automatic progress speech. A running target returns to
+Active on confirmed completion, failure, or interruption, including an outcome
+learned during recovery. When Sedes verifies that the calling agent is
+parking its own thread from that exact turn, success keeps the thread Parked.
+Failure or interruption still returns it to Active. Tool clients follow the
+ordinary running-thread behavior even when targeting their default thread.
+Running and queued work, Tasks, and stashes stay attached. Use `thread.restore`
+for an archived thread.
 
 The tool uses the shared principal-scoped inventory mutation and the same
 presentations as archive and restore. Pi SDK and native Pi use their supported

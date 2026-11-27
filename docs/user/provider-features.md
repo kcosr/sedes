@@ -182,8 +182,11 @@ can inherit named policy sets through Account → Environment → Backend → Ag
 and upgrade behavior.
 
 Grant `thread.set_state` to let an agent park, unpark, snooze, or wake a thread
-within its tool scope. With no target, the tool uses the agent's own thread. A
-snooze takes a future wake time and an optional reminder. The `thread.status`
+within its tool scope. With no target, the tool uses the agent's own thread.
+An agent can park its own thread from the current turn to keep it Parked on
+success. Failure or interruption returns it to Active. Parking another running
+thread brings it back when that turn ends. A snooze takes a future wake time
+and an optional reminder. The `thread.status`
 and `thread.list` reads show the wake time and reminder of snoozed threads.
 
 The **Threads** catalog has four separate grants for organizing work.

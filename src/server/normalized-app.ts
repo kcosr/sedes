@@ -2985,7 +2985,6 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
         return;
       } else if (body.action === "park") {
         await dependencies.threadArchives.park(requestScope, threadId, {
-          untilTurnEnds: true,
           expectedRevision: body.expectedRevision,
           mutationId: body.mutationId,
           expectedStashedPromptCount: body.expectedStashedPromptCount,

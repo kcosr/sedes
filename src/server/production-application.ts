@@ -1247,11 +1247,11 @@ export async function startProductionApplication(
     let checkParkedAfterControlChange: ((backendId: string, threadId: string) => void) | undefined;
     actors = new ConversationActorManager({
       onControlChanged: (backendId, threadId) => checkParkedAfterControlChange?.(backendId, threadId),
-      observeTurnSettlement(eventScope, threadId, hasEnded) {
+      observeTurnSettlement(eventScope, threadId, outcomeForTurn) {
         // Commit before completion speech captures its input activity token.
         // Publication can re-enter the actor, so dispatch it outside this observer.
         const now = Date.now();
-        const state = inventoryRepository.unparkIfTurnEnded(eventScope, threadId, hasEnded, now);
+        const state = inventoryRepository.unparkIfTurnEnded(eventScope, threadId, outcomeForTurn, now);
         if (state) threadRuntimeFollowUp.defer(() => inventory.publishCommitted(eventScope, [state], now));
       },
       onModelFeedback: (eventScope, threadId, input) => automaticModelRetries?.onModelFeedback(eventScope, threadId, input.identity, input.automaticRetry),
@@ -2238,6 +2238,11 @@ export async function startProductionApplication(
       agentToolEnvironmentAuthority,
       agentToolSources,
       runtimes, clientControlTools,
+      (eventScope, threadId) => {
+        const source = actors?.observeInputRuntime(eventScope, threadId);
+        return source?.authoritative && source.sourceTurnStatus === "in_progress" &&
+          source.sourceTurnId === source.activeTurnId ? source.activeTurnId : undefined;
+      },
     );
     const principalClientAgentTools = new PrincipalAgentToolClientService(
       toolProvenanceKey,

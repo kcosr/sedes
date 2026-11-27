@@ -381,9 +381,9 @@ export async function createInMemoryThreadRuntimeHarness(options: {
   let observeCompletion: AuthoritativeCompletionObserver | undefined;
   const completionFollowUps: Promise<void>[] = [];
   const actors = new ConversationActorManager({
-    observeTurnSettlement(eventScope, threadId, hasEnded) {
+    observeTurnSettlement(eventScope, threadId, outcomeForTurn) {
       const now = Date.now();
-      const state = inventoryRepository.unparkIfTurnEnded(eventScope, threadId, hasEnded, now);
+      const state = inventoryRepository.unparkIfTurnEnded(eventScope, threadId, outcomeForTurn, now);
       if (state) completionFollowUps.push(new Promise<void>(resolve => setImmediate(resolve))
         .then(() => inventory.publishCommitted(eventScope, [state], now)));
     },

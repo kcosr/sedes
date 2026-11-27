@@ -834,7 +834,8 @@ describe("early Electron reply playback", () => {
     expect(h.texts()).toEqual([preamble, "It passed. Now we can continue.", "Done."]);
   });
 
-  const yesOpening = { ...opening, text: "Yes.", rawEnd: 4 };
+  const yesFragment = { text: "Yes.", rawEnd: 4 };
+  const yesOpening = { ...opening, ...yesFragment };
   const yesReply = "Yes. This is a test.";
 
   describe.each(["responsive", "balanced", "natural"] as const)("%s handoff", mode => {
@@ -842,7 +843,7 @@ describe("early Electron reply playback", () => {
       const h = await setup(mode);
       const drain = deferred<void>();
       h.playback.finish.mockImplementationOnce(() => drain.promise);
-      h.early({ ...yesOpening, event: frame.event }); await h.waiting();
+      h.early({ ...frame, ...yesFragment }); await h.waiting();
       expect(h.texts()).toEqual([]);
       h.early({ ...append, text: yesReply.slice(4), rawStart: 4, rawEnd: yesReply.length });
       h.early({ ...common, kind: "yield", reason: "item_done", seq: 2 });
@@ -1049,6 +1050,55 @@ describe("early Electron reply playback", () => {
     const disabled = policy(); disabled.settings.delivery["turn.progress"].voice = "none";
     h.current().callbacks.frame("notification_policy", disabled, h.current().voiceStreamId!);
     h.early({ ...commentary, replyId: "b".repeat(64) }); await h.idle(); expect(h.texts()).toEqual([firstBody]);
+  });
+
+  it("drops the prefetched rest of a progress announcement when Park arrives after its seal", async () => {
+    const h = await setup("responsive", { speechContent: "both", speechTextLimit: 18 });
+    const drain = deferred<void>();
+    h.playback.finish.mockImplementationOnce(() => drain.promise);
+    h.early({ ...commentary, ...yesFragment });
+    await vi.waitFor(() => expect(h.texts()).toEqual(["Agent progress\n", "\nThread A"]));
+    const staged = h.speech.speak.mock.calls[1]![0].requestId;
+    h.progress(yesReply);
+    h.current().callbacks.frame("progress_parked", { threadId: THREAD, progressParkRevision: 1 }, h.current().voiceStreamId!);
+    expect(h.speech.cancel).toHaveBeenCalledWith({ requestId: staged });
+    drain.resolve();
+    h.request(async () => Response.json({ ...context(), progressParkRevision: 1, progressMuted: false }));
+    h.progress(yesReply); // A duplicate seal after Unpark cannot finish the announcement or start its body.
+    await h.idle();
+    expect(h.playback.append).toHaveBeenCalledOnce();
+    expect(h.texts()).toEqual(["Agent progress\n", "\nThread A"]);
+  });
+
+  it("checks the park revision before promoting sealed progress prefetched during its preamble", async () => {
+    const h = await setup("responsive", { speechContent: "both" }), drain = deferred<void>();
+    h.playback.finish.mockImplementationOnce(() => drain.promise);
+    h.early({ ...commentary, ...yesFragment });
+    await vi.waitFor(() => expect(h.playback.finish).toHaveBeenCalledOnce());
+    h.early({ ...append, text: yesReply.slice(4), rawStart: 4, rawEnd: yesReply.length });
+    h.early({ ...common, kind: "yield", reason: "item_done", seq: 2 });
+    await vi.waitFor(() => expect(h.texts()).toEqual([progressPreamble, yesReply]));
+    const staged = h.speech.speak.mock.calls[1]![0].requestId;
+    // Both Park and Unpark occurred after the preamble reached the device, before the seal check.
+    h.request(async () => Response.json({ ...context(), progressParkRevision: 1, progressMuted: false }));
+    h.progress(yesReply);
+    drain.resolve(); await h.idle();
+    expect(h.speech.cancel).toHaveBeenCalledWith({ requestId: staged });
+    expect(h.playback.append).toHaveBeenCalledOnce();
+    expect(h.texts()).toEqual([progressPreamble, yesReply]);
+  });
+
+  it("keeps a held progress fragment muted through its late seal after Unpark", async () => {
+    const h = await setup("responsive");
+    h.early({ ...commentary, ...yesFragment }); await h.waiting();
+    h.early({ ...common, kind: "yield", reason: "observation_ended", seq: 1 }); await h.idle();
+    expect(h.texts()).toEqual([]);
+    h.current().callbacks.frame("progress_parked", { threadId: THREAD, progressParkRevision: 1 }, h.current().voiceStreamId!);
+    h.request(async () => Response.json({ ...context(), progressParkRevision: 1, progressMuted: false }));
+    h.progress(yesReply);
+    h.progress("New progress.", "next", "next-item", "provisional", 1);
+    await h.idle();
+    expect(h.texts()).toEqual(["New progress."]);
   });
 
   it("parking discards this thread's current, buffered and queued progress but keeps other voice work", async () => {

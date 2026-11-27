@@ -893,7 +893,7 @@ describe("production configuration reconciliation", () => {
     const bindings = new ConversationBindingRepository(database);
     const pi = new PiConversationRepository(database);
     const installationKey = await loadOrCreateToolProvenanceKey(cwd);
-    const seed = async (evidence: "answered" | "user only" | "other turn" | "signed root" | "wrong session") => {
+    const seed = async (evidence: "answered" | "failed" | "interrupted" | "user only" | "other turn" | "signed root" | "wrong session", selfPark = false) => {
       const sessionId = randomUUID(), sessionFile = path.join(sessions, `${sessionId}.jsonl`);
       const userId = evidence === "other turn" ? "other-user" : backendTurnId;
       const timestamp = new Date(now).toISOString();
@@ -912,9 +912,9 @@ describe("production configuration reconciliation", () => {
             applicationOperationId: marker.applicationOperationId, requestFingerprint: marker.requestFingerprint, userEntryId: userId,
           }, { conversationId: evidence === "wrong session" ? randomUUID() : sessionId, installationKey }),
         }] : []),
-        ...(evidence === "answered" || evidence === "other turn" ? [
+        ...(evidence === "answered" || evidence === "other turn" || evidence === "failed" || evidence === "interrupted" ? [
           { type: "message", id: "answer", parentId: userId, timestamp, message: {
-            role: "assistant", content: [{ type: "text", text: "Review finished." }], stopReason: "stop", timestamp: now,
+            role: "assistant", content: [{ type: "text", text: "Review finished." }], stopReason: evidence === "failed" ? "error" : evidence === "interrupted" ? "aborted" : "stop", timestamp: now,
           } },
         ] : []),
         // Move the answered turn outside the SDK's ten-turn snapshot. Recovery
@@ -928,11 +928,15 @@ describe("production configuration reconciliation", () => {
       const { id } = bindings.createUnboundThread(scope, { workspaceId: workspace.id, connectionProfileId: profile.id, title: evidence, now });
       bindings.bindDiscoveredConversation(scope, id, { backendConversationId: sessionId, now });
       pi.saveBindingDetails(scope, id, { backendConversationId: sessionId, opaqueBindingDetail: serializePiBindingDetail(sessionId, sessionFile), nativeSessionPath: sessionFile });
-      inventory.parkThread(scope, id, { untilTurnEnds: true, mutationId: randomUUID(), expectedRevision: inventory.getInventory(scope, id).inventoryRevision, now });
+      inventory.parkThread(scope, id, {
+        ...(selfPark ? { selfParkTurnId: applicationTurnIdForBackendTurn({ backendInstanceId, sourceApplicationThreadId: id, backendTurnId }) } : {}),
+        mutationId: randomUUID(), expectedRevision: inventory.getInventory(scope, id).inventoryRevision, now,
+      });
       return id;
     };
     const answered = await seed("answered"), pending = await seed("user only"), other = await seed("other turn");
-    const signed = await seed("signed root"), wrongSession = await seed("wrong session");
+    const signed = await seed("signed root", true), wrongSession = await seed("wrong session");
+    const selfSuccess = await seed("answered", true), selfFailure = await seed("failed", true), selfInterrupted = await seed("interrupted", true);
     expect(database.prepare("SELECT count(*) AS count FROM submission_completion_observations").get()).toEqual({ count: 0 });
     await application!.close();
     application = undefined;
@@ -944,8 +948,11 @@ describe("production configuration reconciliation", () => {
     const pass = recover.mock.calls.findIndex(([input]) => input.backendInstanceId === backendInstanceId);
     expect(await recover.mock.results[pass]!.value).toBe(true);
     const recovered = new InventoryRepository(restarted.service.repository.database);
-    for (const id of [answered, signed]) expect(recovered.getInventory(scope, id).inventoryState).toBe("active");
-    for (const id of [pending, other, wrongSession]) expect(recovered.getInventory(scope, id).inventoryState).toBe("parked");
+    for (const id of [answered, signed, selfFailure, selfInterrupted]) expect(recovered.getInventory(scope, id).inventoryState).toBe("active");
+    for (const id of [pending, other, wrongSession, selfSuccess]) expect(recovered.getInventory(scope, id).inventoryState).toBe("parked");
+    expect(restarted.service.repository.database.prepare(
+      "SELECT parked_until_turn_id AS target, park_keep_on_success AS keep FROM thread_principal_state WHERE thread_id = ?",
+    ).get(selfSuccess)).toEqual({ target: null, keep: 0 });
     expect(attach).not.toHaveBeenCalled();
   }, 15_000);
 

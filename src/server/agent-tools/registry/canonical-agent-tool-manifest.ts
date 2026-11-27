@@ -625,7 +625,7 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
     id: "thread.set_state",
     schemaVersion: 1,
     description:
-      "Parks, unparks, snoozes, or wakes one Sedes thread. Omit threadId to target the calling thread or the Tool client's configured default. Parking keeps Tasks and stashes attached. Set a parked thread to active before snoozing it. A thread already in the requested lifecycle keeps its current settings. Use thread.restore for archived threads.",
+      "Parks, unparks, snoozes, or wakes one Sedes thread. Omit threadId to target the calling thread or the Tool client's configured default. Parking mutes progress speech. A running thread returns to Active when that turn ends. If an agent parks its own thread from that same turn, success keeps it parked and failure or interruption returns it to Active. Parking keeps Tasks and stashes attached. Set a parked thread to active before snoozing it. A thread already in the requested lifecycle keeps its current settings. Use thread.restore for archived threads.",
     catalog: { groupId: "threads", label: "Set thread state", order: 85 },
     effects: { application: "write", modelUsage: "none", external: "none" },
   }),

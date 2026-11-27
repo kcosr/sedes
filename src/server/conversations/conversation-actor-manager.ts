@@ -17,7 +17,7 @@ import type {
 import { callRuntime } from "../runtime/runtime-errors.js";
 import type { ComposerAttachmentDeliveryService } from "../composer-attachments/composer-attachment-delivery-service.js";
 import { ConversationActor } from "./conversation-actor.js";
-import { ConversationProjector, hasConfirmedTurnEnd } from "./conversation-projector.js";
+import { ConversationProjector, confirmedTurnOutcome } from "./conversation-projector.js";
 import { historyConversationHandle } from "./history-conversation-handle.js";
 import { assertConversationRetentionMilliseconds } from "./conversation-retention-policy.js";
 import { assertConversationRuntimeBudget } from "./conversation-runtime-budget-policy.js";
@@ -337,7 +337,7 @@ type NonblockingQuestionObserver = (
 type TurnSettlementObserver = (
   scope: ExecutionScope,
   threadId: string,
-  hasEnded: (turnId: string) => boolean,
+  outcomeForTurn: (turnId: string) => ReturnType<typeof confirmedTurnOutcome>,
 ) => void;
 
 type LiveProgressSkippedObserver = (scope: ExecutionScope, threadId: string, turnId: string, itemId: string) => void;
@@ -1585,8 +1585,9 @@ export class ConversationActorManager {
           const sink = this.#captureEarlyReply!(input.scope, input.binding.applicationThreadId, source);
           return sink && afterSubmissionAdmission(sink, observationChain, isCurrent);
         } } : {}),
-        onTerminalTurn: applicationTurnId => {
-          if (!signal.aborted) this.#observeTurnSettlement?.(input.scope, input.binding.applicationThreadId, id => id === applicationTurnId);
+        onTerminalTurn: (applicationTurnId, outcome) => {
+          if (!signal.aborted) this.#observeTurnSettlement?.(input.scope, input.binding.applicationThreadId, id =>
+            id === applicationTurnId ? outcome : undefined);
         },
         onEarlyProgressSkipped: source => this.#onLiveProgressSkipped?.(input.scope, input.binding.applicationThreadId,
           source.applicationTurnId, source.applicationItemId),
@@ -1628,7 +1629,7 @@ export class ConversationActorManager {
             (event.type === "projection_events" && event.events.some(update => update.type === "history_prepend"));
           if (receivedHistory && timeline && !signal.aborted) {
             this.#observeTurnSettlement?.(input.scope, input.binding.applicationThreadId, id =>
-              hasConfirmedTurnEnd(timeline.turnsById[id]));
+              confirmedTurnOutcome(timeline.turnsById[id]));
           }
           if (this.#onModelFeedback && !signal.aborted && timeline?.runState === "running") {
             if (event.type === "live_progress" && timeline.activeTurnId === event.applicationTurnId) {

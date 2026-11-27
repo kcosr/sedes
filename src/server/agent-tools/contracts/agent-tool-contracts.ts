@@ -318,6 +318,8 @@ export interface TrustedClientTurn {
 }
 
 export interface TrustedToolInvocationContext {
+  /** Exact source turn captured at admission of a thread agent's self-park. */
+  readonly selfParkTurnId?: string;
   readonly clientTurn?: TrustedClientTurn;
   readonly invocationId: string;
   /** Fresh per execution and never exposed as transport retry identity. */

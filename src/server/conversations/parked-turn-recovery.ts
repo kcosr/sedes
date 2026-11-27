@@ -1,9 +1,9 @@
 import { backendHistoryPageSchema, backendTurnSchema } from "../../shared/protocol/backend.js";
-import type { InventoryPrincipalStateRecord, InventoryRepository } from "../db/repositories/inventory-repository.js";
+import type { InventoryPrincipalStateRecord, InventoryRepository, ParkedTurnOutcome } from "../db/repositories/inventory-repository.js";
 import type { RequestScope } from "../identity/identity-provider.js";
 import { MAXIMUM_TARGETED_TURN_LOOKUP_CANDIDATES } from "./conversation-actor.js";
 import type { AcquireConversationActorInput } from "./conversation-actor-manager.js";
-import { applicationTurnIdForBackendTurn, hasConfirmedTurnEnd } from "./conversation-projector.js";
+import { applicationTurnIdForBackendTurn, confirmedTurnOutcome } from "./conversation-projector.js";
 import type { DatabaseActorTargetResolver } from "./database-conversation-adapters.js";
 
 export interface ParkedTurnRetry {
@@ -13,37 +13,39 @@ export interface ParkedTurnRetry {
   readonly lastError?: string;
 }
 
-async function historyConfirmsEnd(
+async function readParkedTurnOutcome(
   target: AcquireConversationActorInput,
   turnId: string,
   signal: AbortSignal,
   readAllowed: () => boolean,
-): Promise<boolean> {
+): Promise<ParkedTurnOutcome | undefined> {
   const { scope, binding, workspace, opaqueBindingDetail, driver } = target;
   const matchesBackendTurnId = (backendTurnId: string) => applicationTurnIdForBackendTurn({
     backendInstanceId: binding.backendInstanceId, sourceApplicationThreadId: binding.applicationThreadId, backendTurnId,
   }) === turnId;
   const reader = await driver.openHistory({ scope, binding, workspace, opaqueBindingDetail, signal });
   try {
-    if (!readAllowed()) return false;
+    if (!readAllowed()) return undefined;
     // Establish the reader's immutable cut before locating an older target.
     const { snapshot, history } = await reader.readSnapshot({ signal });
-    if (!readAllowed()) return false;
+    if (!readAllowed()) return undefined;
     let id = snapshot.orderedBackendTurnIds.find(matchesBackendTurnId);
     let turns = snapshot.turnsById;
     if (id === undefined) {
-      if (!history.operational || history.previousCursor === undefined) return false;
+      if (!history.operational || history.previousCursor === undefined) return undefined;
       const found = await reader.locateTurn({ matchesBackendTurnId, maximumTurnCandidates: MAXIMUM_TARGETED_TURN_LOOKUP_CANDIDATES, signal });
-      if (found.status !== "found" || !readAllowed()) return false;
+      if (found.status !== "found" || !readAllowed()) return undefined;
       const page = backendHistoryPageSchema.parse(found.page);
       id = page.orderedBackendTurnIds[0];
-      if (page.orderedBackendTurnIds.length !== 1 || page.previousCursor !== undefined || !id || !matchesBackendTurnId(id)) return false;
+      if (page.orderedBackendTurnIds.length !== 1 || page.previousCursor !== undefined || !id || !matchesBackendTurnId(id)) return undefined;
       turns = page.turnsById;
     }
     const turn = turns[id];
-    if (turn?.backendTurnId !== id) return false;
-    return hasConfirmedTurnEnd(backendTurnSchema.parse(turn)) ||
-      (await reader.confirmTurnOwnerStopped?.({ backendTurnId: id, signal }) === true);
+    if (turn?.backendTurnId !== id) return undefined;
+    const outcome = confirmedTurnOutcome(backendTurnSchema.parse(turn));
+    if (outcome) return outcome;
+    if (await reader.confirmTurnOwnerStopped?.({ backendTurnId: id, signal })) return "owner_stopped";
+    return undefined;
   } finally { await reader.close(); }
 }
 
@@ -88,9 +90,9 @@ export async function recoverParkedTurns(input: {
           remaining = true;
           continue;
         }
-        const confirmed = await historyConfirmsEnd(target, turnId, signal, readAllowed);
-        if (confirmed && readAllowed()) {
-          const changed = inventory.unparkIfTurnEnded(scope, threadId, id => id === turnId, Date.now(), progressParkRevision);
+        const outcome = await readParkedTurnOutcome(target, turnId, signal, readAllowed);
+        if (outcome && readAllowed()) {
+          const changed = inventory.unparkIfTurnEnded(scope, threadId, id => id === turnId ? outcome : undefined, Date.now(), progressParkRevision);
           retries.delete(threadId);
           if (changed) await input.publish(changed);
           continue;

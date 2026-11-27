@@ -133,7 +133,9 @@ User-facing changes are collected here before release. See the
 
 - Choose **Park until done** in the thread header or sidebar to silence a running
   thread’s progress immediately. The thread returns to Active when that turn
-  ends, and final replies follow your voice settings.
+  ends, and final replies follow your voice settings. When an agent parks its
+  own thread from the running turn, success keeps it Parked and failure or
+  interruption brings it back to Active.
   See [Park quiet work](docs/user/organize-work.md#park-quiet-work).
 
 - Android and Electron can read Codex final answers and enabled progress updates

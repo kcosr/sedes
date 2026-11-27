@@ -180,6 +180,33 @@ describe("migration 172 parked thread inventory", () => {
 });
 
 describe("migration 174 park until done", () => {
+  it("binds self-park policy to the exact current turn and ignores superseded reads and mutation retries", () => {
+    const { database, scope, createThread } = fixture();
+    try {
+      const threadId = createThread("Current turn");
+      applyDatabaseMigrations(database, backendNormalizedMigrations);
+      let activeTurn = "original";
+      const inventory = new InventoryRepository(database, () => activeTurn);
+      const first = { selfParkTurnId: activeTurn, expectedRevision: 0, mutationId: randomUUID(), now: 150 };
+      inventory.parkThread(scope, threadId, first);
+      const stored = () => database.prepare(`
+        SELECT parked_until_turn_id AS turn, park_keep_on_success AS keep, progress_park_revision AS epoch
+        FROM thread_principal_state WHERE tenant_id = ? AND principal_id = ? AND thread_id = ?
+      `).get(scope.tenantId, scope.principalId, threadId);
+      expect(stored()).toEqual({ turn: "original", keep: 1, epoch: 1 });
+      inventory.transitionInventory(scope, threadId, { change: { action: "unpark" }, expectedRevision: 1, mutationId: randomUUID(), now: 151 });
+      // The new turn took over before the self-park request from the old turn committed.
+      activeTurn = "replacement";
+      inventory.parkThread(scope, threadId, { ...first, mutationId: randomUUID(), expectedRevision: 2, now: 152 });
+      expect(stored()).toEqual({ turn: "replacement", keep: 0, epoch: 2 });
+      expect(inventory.parkThread(scope, threadId, { ...first, selfParkTurnId: undefined }).replayed).toBe(true);
+      expect(inventory.unparkIfTurnEnded(scope, threadId, () => "interrupted", 153, 1)).toBeUndefined();
+      expect(stored()).toEqual({ turn: "replacement", keep: 0, epoch: 2 });
+      expect(inventory.unparkIfTurnEnded(scope, threadId, id => id === activeTurn ? "completed" : undefined, 154, 2)?.inventoryState).toBe("active");
+      expect(stored()).toEqual({ turn: null, keep: 0, epoch: 2 });
+    } finally { database.close(); }
+  });
+
   it("preserves existing parks and advances the voice revision once per committed park", () => {
     const { database, scope, owner, createThread, migrate, inventory } = fixture();
     try {
@@ -190,15 +217,15 @@ describe("migration 174 park until done", () => {
         .run(...owner, threadId);
       applyDatabaseMigrations(database, backendNormalizedMigrations);
       const stored = (id = threadId) => database.prepare(`
-        SELECT inventory_state AS state, parked_until_turn_id AS target, progress_park_revision AS revision
+        SELECT inventory_state AS state, parked_until_turn_id AS target, park_keep_on_success AS keep, progress_park_revision AS revision
         FROM thread_principal_state WHERE tenant_id=? AND principal_id=? AND thread_id=?
       `).get(...owner, id);
-      expect(stored()).toEqual({ state: "parked", target: null, revision: 1 });
-      expect(stored(companion)).toEqual({ state: "active", target: null, revision: 0 });
+      expect(stored()).toEqual({ state: "parked", target: null, keep: 0, revision: 1 });
+      expect(stored(companion)).toEqual({ state: "active", target: null, keep: 0, revision: 0 });
       inventory.transitionInventory(scope, threadId, {
         expectedRevision: 0, mutationId: randomUUID(), change: { action: "unpark" }, now: 130,
       });
-      expect(stored()).toEqual({ state: "active", target: null, revision: 1 });
+      expect(stored()).toEqual({ state: "active", target: null, keep: 0, revision: 1 });
       const bulk = {
         action: "park" as const,
         targets: [{ threadId, expectedRevision: 1 }, { threadId: companion, expectedRevision: 0 }],
@@ -208,7 +235,7 @@ describe("migration 174 park until done", () => {
       };
       expect(inventory.bulkInventoryTransition(scope, bulk).replayed).toBe(false);
       expect(inventory.bulkInventoryTransition(scope, bulk).replayed).toBe(true);
-      expect(stored()).toEqual({ state: "parked", target: null, revision: 2 });
+      expect(stored()).toEqual({ state: "parked", target: null, keep: 0, revision: 2 });
     } finally { database.close(); }
   });
 });

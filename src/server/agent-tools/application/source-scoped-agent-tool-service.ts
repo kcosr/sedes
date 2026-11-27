@@ -23,6 +23,7 @@ import {
   type ResolvedEnvironmentAuthority,
 } from "../environment/environment-authority.js";
 import type { TrustedAgentToolCallerDefaults } from "../contracts/agent-tool-contracts.js";
+import type { ThreadSetStateToolInput } from "./agent-thread-inventory-control-service.js";
 import { DomainError } from "../../domain/errors.js";
 
 export interface AgentToolSourceRevalidator {
@@ -44,6 +45,7 @@ export class SourceScopedAgentToolService implements BackendAgentToolFacade {
       acquireAgentToolExecutionAuthority(scope: TrustedAgentToolSource["scope"], sourceThreadId: string): Promise<AgentToolExecutionAuthorityLease>;
     },
     readonly clientControls?: ClientControlToolService,
+    readonly currentSourceTurn?: (scope: TrustedAgentToolSource["scope"], sourceThreadId: string) => string | undefined,
   ) {}
 
   eligibleCatalog(
@@ -123,6 +125,15 @@ export class SourceScopedAgentToolService implements BackendAgentToolFacade {
     try {
       const source = this.#resolveSource(input.source, input.signal);
       let admitted = this.#admit(input, source);
+      // A tool may wait for execution authority while its original turn ends.
+      // Bind this exception before that wait. Plain tool clients never enter here.
+      let selfParkTurnId: string | undefined;
+      if (input.request.toolId === "thread.set_state") {
+        const request = input.request.input as ThreadSetStateToolInput;
+        if (request.lifecycle === "parked" && (request.threadId ?? source.sourceThreadId) === source.sourceThreadId) {
+          selfParkTurnId = this.currentSourceTurn?.(source.scope, source.sourceThreadId);
+        }
+      }
       let clientTurn: TrustedClientTurn | undefined;
       if (input.request.toolId.startsWith("client.")) {
         if (!this.clientControls) throw this.#unavailable();
@@ -150,6 +161,7 @@ export class SourceScopedAgentToolService implements BackendAgentToolFacade {
         admitted.policy.resourceScope,
         sourceAuthority ? AbortSignal.any([executionSignal, sourceAuthority.signal]) : executionSignal,
         clientTurn,
+        selfParkTurnId,
       );
     } catch (error) {
       if (
@@ -284,6 +296,7 @@ export class SourceScopedAgentToolService implements BackendAgentToolFacade {
     resourceScope: BackendAgentToolPolicy["resourceScope"],
     signal: AbortSignal,
     clientTurn?: TrustedClientTurn,
+    selfParkTurnId?: string,
   ) {
     const environmentAuthority = createTrustedEnvironmentAuthorityGrant({
       ...resolved,
@@ -305,6 +318,7 @@ export class SourceScopedAgentToolService implements BackendAgentToolFacade {
     });
     return this.canonical.invoke<Output>(input.request, {
       scope: source.scope,
+      ...(selfParkTurnId ? { selfParkTurnId } : {}),
       ...(clientTurn ? { clientTurn } : {}),
       environmentAuthority,
       adapter: input.adapter,

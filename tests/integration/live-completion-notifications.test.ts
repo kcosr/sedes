@@ -321,9 +321,12 @@ describe("live completion notification provenance", { timeout: 30_000 }, () => {
     },
   );
 
-  it.each(["completed", "failed", "interrupted"] as const)(
-    "unparks only the captured turn when a replacement snapshot reports it %s",
-    async outcome => {
+  it.each([
+    ["ordinary", "completed"], ["ordinary", "failed"], ["ordinary", "interrupted"],
+    ["self", "completed"], ["self", "failed"], ["self", "interrupted"],
+  ] as const)(
+    "settles a %s park when a replacement snapshot confirms the captured turn %s",
+    async (parkedBy, outcome) => {
       const current = await fixture();
       const { harness } = current;
       const { driver, scope, inventoryRepository } = harness;
@@ -337,7 +340,7 @@ describe("live completion notification provenance", { timeout: 30_000 }, () => {
           const [record, turn] = responses.mock.calls[0]!;
           const inventory = () => inventoryRepository.getInventory(scope, id);
           const park = () => inventoryRepository.parkThread(scope, id, {
-            untilTurnEnds: true,
+            ...(parkedBy === "self" ? { selfParkTurnId: targetId } : {}),
             mutationId: randomUUID(), expectedRevision: inventory().inventoryRevision, now: Date.now(),
           });
           const parked = park();
@@ -345,7 +348,7 @@ describe("live completion notification provenance", { timeout: 30_000 }, () => {
             "SELECT parked_until_turn_id AS target, progress_park_revision AS revision FROM thread_principal_state WHERE tenant_id=? AND principal_id=? AND thread_id=?",
           ).get(scope.tenantId, scope.principalId, id);
           expect(storedTarget()).toEqual({ target: targetId, revision: 1 });
-          expect(inventoryRepository.unparkIfTurnEnded({ ...scope, principalId: randomUUID() }, id, () => true, Date.now())).toBeUndefined();
+          expect(inventoryRepository.unparkIfTurnEnded({ ...scope, principalId: randomUUID() }, id, () => "completed", Date.now())).toBeUndefined();
 
           const oldTurn = { backendTurnId: "older-turn", orderedBackendItemIds: [], status: "completed" as const };
           record.snapshot.orderedBackendTurnIds.unshift(oldTurn.backendTurnId);
@@ -368,10 +371,18 @@ describe("live completion notification provenance", { timeout: 30_000 }, () => {
           delete record.snapshot.activeBackendTurnId;
           const ended = await replace();
           expect(ended.timeline.turnsById[targetId]?.status).toBe(outcome);
-          expect(inventory()).toMatchObject({ inventoryState: "active", inventoryRevision: parked.state.inventoryRevision + 1, wokeAt: null });
+          const keep = parkedBy === "self" && outcome === "completed";
+          expect(inventory()).toMatchObject({ inventoryState: keep ? "parked" : "active",
+            inventoryRevision: parked.state.inventoryRevision + (keep ? 0 : 1), wokeAt: null });
           expect(storedTarget()).toEqual({ target: null, revision: 1 });
           await Promise.all(harness.completionFollowUps.splice(0));
 
+          if (keep) {
+            expect(inventoryRepository.unparkIfTurnEnded(scope, id, () => "failed", Date.now())).toBeUndefined();
+            expect(inventory()).toEqual(parked.state);
+            inventoryRepository.transitionInventory(scope, id, { expectedRevision: inventory().inventoryRevision,
+              mutationId: randomUUID(), change: { action: "unpark" }, now: Date.now() });
+          }
           const idlePark = park();
           await replace();
           expect(storedTarget()).toEqual({ target: null, revision: 2 });

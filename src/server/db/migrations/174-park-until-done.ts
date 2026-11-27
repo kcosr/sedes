@@ -6,6 +6,8 @@ export const parkUntilDoneMigration: DatabaseMigration = {
   sql: `
 ALTER TABLE thread_principal_state ADD COLUMN parked_until_turn_id TEXT
   CHECK (parked_until_turn_id IS NULL OR length(parked_until_turn_id) BETWEEN 1 AND 160);
+ALTER TABLE thread_principal_state ADD COLUMN park_keep_on_success INTEGER NOT NULL DEFAULT 0
+  CHECK (park_keep_on_success = 0 OR (park_keep_on_success = 1 AND parked_until_turn_id IS NOT NULL));
 ALTER TABLE thread_principal_state ADD COLUMN progress_park_revision INTEGER NOT NULL DEFAULT 0
   CHECK (progress_park_revision BETWEEN 0 AND 9007199254740991);
 
@@ -28,7 +30,7 @@ WHEN OLD.inventory_state <> NEW.inventory_state
   AND (OLD.inventory_state = 'parked' OR NEW.inventory_state = 'parked')
 BEGIN
   UPDATE thread_principal_state
-    SET parked_until_turn_id = NULL,
+    SET parked_until_turn_id = NULL, park_keep_on_success = 0,
         progress_park_revision = progress_park_revision + (NEW.inventory_state = 'parked')
     WHERE tenant_id = NEW.tenant_id AND principal_id = NEW.principal_id AND thread_id = NEW.thread_id;
 END;

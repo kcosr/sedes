@@ -777,7 +777,7 @@ export function createThreadSetStateToolDefinition(
         name: "sedes_thread_set_state",
         label: "Set Sedes thread state",
         promptSnippet:
-          "Park or snooze a Sedes thread, or make a parked or snoozed thread active.",
+          "Park, snooze, or activate a Sedes thread. Parking your own thread from its current turn keeps it parked on success and returns it to Active on failure or interruption.",
       },
       mcp: { name: "sedes_thread_set_state" },
       http: { invocation: "inline" },
@@ -788,6 +788,8 @@ export function createThreadSetStateToolDefinition(
         { tenantId: context.tenantId, principalId: context.principalId },
         {
           ...request,
+          ...(context.subject.kind === "thread_agent" && context.subject.sourceThreadId === (request.threadId ?? context.defaults.threadId) &&
+            context.selfParkTurnId ? { selfParkTurnId: context.selfParkTurnId } : {}),
           mutationId: context.mutationId,
           environmentAuthority: context.environmentAuthority,
         },

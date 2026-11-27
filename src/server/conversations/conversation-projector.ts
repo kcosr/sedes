@@ -244,10 +244,12 @@ function opaqueId(namespace: string, ...parts: readonly string[]): string {
 }
 
 /** Some passive histories assign display statuses even when the terminal record is absent. */
-export function hasConfirmedTurnEnd(turn: Pick<BackendTurn, "status" | "endedBy"> | undefined): boolean {
-  return turn !== undefined && (turn.status === "completed"
-    ? turn.endedBy === "agent_settled" || turn.endedBy === "steer"
-    : (turn.status === "failed" || turn.status === "interrupted") && turn.endedBy === turn.status);
+export function confirmedTurnOutcome(turn: Pick<BackendTurn, "status" | "endedBy"> | undefined): Exclude<BackendTurn["status"], "in_progress"> | undefined {
+  if (turn?.status === "completed") {
+    return turn.endedBy === "agent_settled" || turn.endedBy === "steer" ? turn.status : undefined;
+  }
+  if (turn && (turn.status === "failed" || turn.status === "interrupted") && turn.endedBy === turn.status) return turn.status;
+  return undefined;
 }
 
 export function applicationTurnIdForBackendTurn(input: {
