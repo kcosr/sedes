@@ -143,7 +143,12 @@ describe("retained Antigravity native history", () => {
       }
       return connect(identity);
     });
-    if (races === 2) await expect(f.store.read(f.identity)).rejects.toThrow("antigravity_parent_history_changed");
+    if (races === 2) {
+      const { native } = await f.store.read(f.identity);
+      expect(native.steps[0]?.subagents?.[0]?.state).toBe("unknown");
+      expect(native.steps[1]?.continuation?.content).toBe("Child update 1");
+      expect(antigravityNativeActivity(native)).toMatchObject({ unknown: true, agents: 1 });
+    }
     const { native } = await f.store.read(f.identity);
     expect(native.steps[0]?.subagents?.[0]?.state).toBe("failed");
     expect(native.steps[1]?.continuation).toMatchObject({ id: wakeId, sender: childId, content: `Child update ${races}` });

@@ -99,9 +99,10 @@ remains unavailable even after the foreground reply finishes. A standalone
 quota notice after a proven executor failure leaves the turn failed, with the
 quota message visible when you reopen the thread. If a subagent fails on quota,
 Antigravity 1.5.18 can report the failure to its parent on the child's behalf.
-Once native records confirm the failure and show that the parent finished
-processing the report, the subagent stops counting as active. Stop and Send
-can then recover when all other work has settled. Pending work and undelivered
+Once native records confirm the child failed and both the launching and
+report-handling executions ended, the subagent stops counting as active.
+Either parent execution can finish with a final reply that requests no tools.
+Stop and Send can then recover when all other work has settled. Pending work and undelivered
 outcomes block ordinary runtime retirement. A disconnected runtime is not evidence that work stopped.
 
 Remote instances require an execution sidecar advertising

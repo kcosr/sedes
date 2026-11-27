@@ -1,5 +1,5 @@
 import type { AntigravityNativeHistory, AntigravityNativeStep } from "../native-schema.js";
-import { antigravityTerminatedExecutionHeads, antigravityNativeTerminalOutcome, antigravityUnstartedInputs } from "../native-execution.js";
+import { antigravityExecutionEvidence, antigravityNativeTerminalOutcome } from "../native-execution.js";
 
 const activeStatuses = new Set([1, 2, 8, 9, 11]);
 const terminalStatuses = new Set([3, 4, 5, 6, 7, 12]);
@@ -8,9 +8,9 @@ export function antigravityNativeActivity(history: AntigravityNativeHistory): { 
   let active = false, unknown = false, foregroundActive = false, pendingContinuations = false;
   const agents = new Set<string>(), commands = new Set<string>(), other = new Set<string>();
   const commandTerminals = new Set(history.steps.flatMap(step => step.commandStatus && terminalStatuses.has(step.commandStatus.status) ? [step.commandStatus.commandId] : []));
-  const terminated = antigravityTerminatedExecutionHeads(history), unstarted = antigravityUnstartedInputs(history);
+  const { terminated, settledHeads, unstarted } = antigravityExecutionEvidence(history);
   const endedExecutionCovers = (step: AntigravityNativeStep) =>
-    step.executionId !== undefined && (terminated.get(step.executionId)?.index ?? -1) >= step.index;
+    step.executionId !== undefined && (settledHeads.get(step.executionId) ?? -1) >= step.index;
   const childFailureReported = (sessionId: string, launch: AntigravityNativeStep) => {
     if (!endedExecutionCovers(launch)) return false;
     let report: AntigravityNativeStep | undefined;

@@ -19,7 +19,7 @@ const MAXIMUM_EXECUTOR_BYTES = 32 * 1024 * 1024;
 const MAXIMUM_EXECUTOR_ROW_BYTES = 8 * 1024 * 1024;
 const MAXIMUM_EXECUTOR_ROWS = 100_000;
 type ChildReference = { sessionId: string; workspaceUris: readonly string[] };
-type ReadBudget = { remainingBytes: number; remainingRows: number; remainingExecutorBytes: number; remainingExecutorRows: number;
+type ReadBudget = { readonly retryParentChange: boolean; remainingBytes: number; remainingRows: number; remainingExecutorBytes: number; remainingExecutorRows: number;
   remainingSessions: number; ancestors: ReadonlySet<string> };
 export type NativeReadCancellation = Pick<AbortSignal, "throwIfAborted">;
 type Size = { count: number; bytes: number };
@@ -50,11 +50,11 @@ export class AntigravityNativeHistoryStore {
   read(identity: AntigravityIdentity, signal?: NativeReadCancellation): Promise<AntigravityHistory> {
     return this.#serialize(async () => {
       if (this.#closed) throw new AntigravityError("antigravity_history_reader_closed");
-      const read = () => readNative(this, identity, signal, { remainingBytes: MAXIMUM_HISTORY_BYTES, remainingRows: MAXIMUM_ROWS,
+      const read = (retryParentChange: boolean) => readNative(this, identity, signal, { retryParentChange, remainingBytes: MAXIMUM_HISTORY_BYTES, remainingRows: MAXIMUM_ROWS,
         remainingExecutorBytes: MAXIMUM_EXECUTOR_BYTES, remainingExecutorRows: MAXIMUM_EXECUTOR_ROWS,
         remainingSessions: 32, ancestors: new Set() });
-      try { return await read(); } catch (error) {
-        if (error instanceof ParentHistoryChangedError) return read();
+      try { return await read(true); } catch (error) {
+        if (error instanceof ParentHistoryChangedError) return read(false);
         throw error;
       }
     });
@@ -228,7 +228,8 @@ async function readNative(store: AntigravityNativeHistoryStore, identity: Antigr
         steps.push(projected);
       }
       const parent = string(metadata.parent_conversation_id);
-      return antigravityNativeHistorySchema.parse({ steps, executions, revision: hash.digest("hex"), ...(parent ? { parentSessionId: parent } : {}) });
+      return antigravityNativeHistorySchema.parse({ steps, executions, revision: hash.digest("hex"),
+        ...(!includeExecutions ? { executorReceiptsOmitted: true } : {}), ...(parent ? { parentSessionId: parent } : {}) });
     })();
     database.exec("ROLLBACK"); transactionOpen = false;
     const nativeBytes = Buffer.byteLength(JSON.stringify(native));
@@ -241,7 +242,6 @@ async function readNative(store: AntigravityNativeHistoryStore, identity: Antigr
     const { native, childReferences } = own;
     // Child databases are read passively under the same aggregate bounds.
     // A launch result grants only its exact native child, never an arbitrary path.
-    const aggregate = createHash("sha256").update(native.revision);
     const childSteps = new Map<number, AntigravityNativeStep>();
     let hasFailedChild = false;
     for (const step of native.steps) {
@@ -261,20 +261,31 @@ async function readNative(store: AntigravityNativeHistoryStore, identity: Antigr
           const state = childState(child.native);
           if (state === "failed") hasFailedChild = true;
           childStep.subagents.push({ sessionId: reference.sessionId, state, revision: child.native.revision });
-          aggregate.update(JSON.stringify([reference.sessionId, state, child.native.revision]));
         } catch (error) {
           if (error instanceof ParentHistoryChangedError) throw error;
           checkCancellation(); childStep.subagents.push({ sessionId: reference.sessionId, state: "unknown" });
-          aggregate.update(JSON.stringify([reference.sessionId, "unknown"]));
         }
       }
     }
     // The child ERROR receipt and absence of its message are read from
     // different databases. Resample the same parent after reading its children
     // so a message committed during traversal cannot be missed, even on cache hits.
-    if (hasFailedChild && (await store.connection(identity) !== entry || dataVersion() !== version))
-      throw new ParentHistoryChangedError();
+    if (hasFailedChild) {
+      if (await store.connection(identity) !== entry) throw new ParentHistoryChangedError();
+      if (dataVersion() !== version) {
+        if (budget.retryParentChange) throw new ParentHistoryChangedError();
+        // A streaming parent can change on both reads. Preserve its transcript
+        // and withhold child failure proof until a later stable observation.
+        for (const step of childSteps.values()) for (const child of step.subagents ?? [])
+          if (child.state === "failed") child.state = "unknown";
+      }
+    }
     checkCancellation();
+    const aggregate = createHash("sha256").update(native.revision);
+    for (const step of childSteps.values()) for (const child of step.subagents ?? []) {
+      const evidence = child.revision ? [child.sessionId, child.state, child.revision] : [child.sessionId, child.state];
+      aggregate.update(JSON.stringify(evidence));
+    }
     const revision = childReferences.size ? aggregate.digest("hex") : native.revision;
     if (own.aggregate?.revision === revision) return { ...identity, native: own.aggregate };
     const result = childReferences.size ? { ...native, revision, steps: native.steps.map(step => childSteps.get(step.index) ?? step) } : native;

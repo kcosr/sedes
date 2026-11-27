@@ -261,13 +261,18 @@ govern background quiescence. When a child fails without sending its own
 completion message, stock CLI 1.5.18 can send the parent a system-authored
 subagent error notice. The reader recognizes the qualified message shape,
 checks the parent recipient, matches the child name in the title and body,
-and extracts the child ID from the body. The wording identifies the notice. To settle the child, Sedes
-requires its exact `ERROR` receipt and terminal executor receipts covering both
-the launch and the later notice in their respective parent executions. A notice
-that is missing, unrecognized or still awaiting execution keeps the expected
-child message outstanding. The reader rechecks the parent database after
-reading the children and retries a changed snapshot. Each delivered child
-message still requires evidence that the parent processed it. A successfully
+and extracts the child ID from the body. The wording identifies the notice.
+Sedes requires the child's exact `ERROR` receipt and checks the launch and
+the later notice against their respective parent executions. Each must have a
+qualifying terminal executor receipt or a final planner response with no tool
+calls at the settled head of that execution. Normal completion requires a complete
+executor inventory with either a matching `NO_TOOL_CALL` receipt or no receipt
+for that execution. A missing, unrecognized or
+unprocessed notice keeps the expected child message outstanding. After reading
+the children, the reader rechecks the parent database and retries once if it
+changed. If the parent changes again during the retry, the history remains
+readable and the affected child state is unknown. Each delivered child message
+still requires evidence that the parent processed it. A successfully
 completed child still requires its own completion message.
 
 Conversation-scoped steering uses concurrent ACP prompt requests. A native user

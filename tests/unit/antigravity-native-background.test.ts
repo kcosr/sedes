@@ -377,7 +377,8 @@ describe("Antigravity native background authority", () => {
       const insert = parent.prepare("INSERT INTO executor_metadata VALUES (?, zeroblob(?))");
       if (kind === "one oversized row") insert.run(1, 8 * 1024 * 1024 + 1);
       else for (let index = 1; index <= 5; index++) insert.run(index, 7 * 1024 * 1024);
-      const history = await f.read(); expect(history.native.steps).toHaveLength(1); expect(history.native.executions).toEqual([]);
+      const history = await f.read(); expect(history.native.steps).toHaveLength(1);
+      expect(history.native).toMatchObject({ executions: [], executorReceiptsOmitted: true });
     } finally { f.close(); }
   });
   it("does not let executor rows consume the root and child step budget", async () => {
@@ -484,6 +485,45 @@ describe("Antigravity native background authority", () => {
     const notificationReceipt = { ...receipt, executionId: "notification", lastStepIndex: head.index };
     const history = { revision: "a".repeat(64), steps: [launch, message, head], executions: [receipt, notificationReceipt] };
 
+    const finalResponse = (executionId: string, index: number): AntigravityNativeStep => ({
+      executionId, index, type: 15, status: 3, hasSubtrajectory: false,
+      response: { text: "done", thinking: "", stopReason: 2, toolCalls: [] },
+    });
+    it.each(["launch", "notice", "both"] as const)("accepts a normal terminal planner response for the %s execution", normal => {
+      const launchFinal = normal === "notice" ? { ...head, executionId: "launch", index: 1 } : finalResponse("launch", 1);
+      const noticeFinal = normal === "launch" ? { ...head, index: 3 } : finalResponse("notification", 3);
+      const steps = [launch, launchFinal, { ...message, index: 2 }, noticeFinal];
+      const receipts = [launchFinal, noticeFinal].map(step => ({
+        executionId: step.executionId!, lastStepIndex: step.index,
+        terminationReason: step.response ? 4 : 2, proceededWithAutoContinue: false,
+      }));
+      const settled = { active: false, unknown: false, pendingContinuations: false, agents: 0 };
+      expect(antigravityNativeActivity({ ...history, steps, executions: receipts })).toMatchObject(settled);
+      // A completed planner response is also proof before its NO_TOOL_CALL receipt is written.
+      expect(antigravityNativeActivity({ ...history, steps, executions: receipts.filter(r => r.terminationReason !== 4) })).toMatchObject(settled);
+    });
+    it("uses the same normal planner head when one execution owns both launch and notice", () => {
+      const steps = [launch, { ...message, executionId: "launch" }, finalResponse("launch", 2)];
+      expect(antigravityNativeActivity({ ...history, steps, executions: [] })).toMatchObject({ active: false, pendingContinuations: false, agents: 0 });
+      expect(antigravityNativeActivity({ ...history, steps, executions: [], executorReceiptsOmitted: true }))
+        .toMatchObject({ active: true, pendingContinuations: true, agents: 1 });
+    });
+    it("requires a settled planner head from the exact execution and rejects contradictory receipts", () => {
+      const done = finalResponse("notification", 2);
+      const noToolCall = { ...notificationReceipt, terminationReason: 4 };
+      const activity = (tail: AntigravityNativeStep[], executions: typeof receipt[]) =>
+        antigravityNativeActivity({ ...history, steps: [launch, message, ...tail], executions: [receipt, ...executions] });
+      const outstanding = { active: true, pendingContinuations: true, agents: 1 };
+      expect(activity([finalResponse("unrelated", 2)], [])).toMatchObject(outstanding);
+      const calling = { ...done, response: { ...done.response!, toolCalls: [{ id: "read", name: "read_file", argumentsJson: "{}" }] } };
+      expect(activity([calling], [noToolCall])).toMatchObject(outstanding);
+      expect(activity([done, { ...head, index: 3 }], [])).toMatchObject(outstanding);
+      expect(activity([{ ...head, status: 2 }, { ...done, index: 3 }], [])).toMatchObject(outstanding);
+      expect(activity([done], [{ ...noToolCall, proceededWithAutoContinue: true }])).toMatchObject(outstanding);
+      expect(activity([done], [noToolCall, noToolCall])).toMatchObject(outstanding);
+      expect(activity([done], [{ ...noToolCall, lastStepIndex: message.index }])).toMatchObject(outstanding);
+      expect(activity([done], [{ ...noToolCall, terminationReason: 12 }])).toMatchObject(outstanding);
+    });
     it.each([
       { evidence: "missing", executions: [] },
       { evidence: "stale", executions: [{ ...receipt, lastStepIndex: -1 }] },

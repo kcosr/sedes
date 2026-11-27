@@ -544,7 +544,7 @@ User-facing changes are collected here before release. See the
 
 - Antigravity quota failures settle the turn even when the CLI appends a
   separate error notice. Stop and Send recover when a quota-failed subagent
-  sends no completion message of its own and native receipts confirm that
+  sends no completion message of its own and native records confirm that
   the parent processed Antigravity’s failure notice and the work ended.
   Recoverable tool errors let the agent keep working.
   Reattaching preserves pending approvals, and Send reflects a prompt still
