@@ -76,7 +76,7 @@ describe("voice settings page", () => {
     fireEvent.keyDown(trigger, { key: "ArrowDown" });
     const list = await screen.findByRole("listbox");
     expect(within(list).getAllByRole("option")).toHaveLength(4);
-    expect(within(list).getByRole("option", { name: "Balanced" })).toHaveAccessibleDescription("Start with one sentence, then group ready sentences.");
+    expect(within(list).getByRole("option", { name: "Balanced" })).toHaveAccessibleDescription("Read ready sentences once they total 15 words.");
     fireEvent.click(screen.getByRole("option", { name: /^Balanced/ }));
     await waitFor(() => expect(fake.plugin.setEarlyReplyPlayback).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1,
       expectedEarlyReplyRevision: 7, earlyReplyPlayback: "balanced" }));

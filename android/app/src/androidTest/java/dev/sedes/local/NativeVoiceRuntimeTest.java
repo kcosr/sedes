@@ -2142,11 +2142,14 @@ public class NativeVoiceRuntimeTest {
         }
     }
 
+    private static final String OPENING = "Here is the first spoken sentence.";
+    private static final String NEXT_SENTENCE = "Here is the next spoken sentence.";
+
     @Test public void earlySpeechOwnsOnePositionWhileWaitingAndSealsWithoutRepeating() throws Exception {
         try (Fixture f = new Fixture(false, false)) {
-            f.readyEarlyVoice("responsive");
+            f.readyEarlyVoice();
             String id = "abba".repeat(16);
-            String firstSentence = "It passed.", next = " Good.", opening = firstSentence + next;
+            String firstSentence = "It passed.", next = " All four checks passed.", opening = firstSentence + next;
             f.earlySpan(id, 0, 0, firstSentence);
             assertTrue(f.speech.speechRequests.isEmpty());
             f.earlySpan(id, 1, firstSentence.length(), next);
@@ -2159,7 +2162,7 @@ public class NativeVoiceRuntimeTest {
             assertTrue(waiting.getJSONObject("actions").getBoolean("canSkip"));
             assertTrue(f.speech.transcriptions.isEmpty());
             f.receiveReply("Other reply.", false); assertEquals(1, f.queued());
-            String secondGroup = " More words follow.";
+            String secondGroup = " Six more words follow this opening.";
             f.earlySpan(id, 2, opening.length(), secondGroup);
             SpeechJob more = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(more);
             assertEquals(secondGroup.trim(), more.text); assertEquals(1, f.queued());
@@ -2175,26 +2178,26 @@ public class NativeVoiceRuntimeTest {
         try (Fixture f = new Fixture(false, false)) {
             f.readyEarlyVoice(); f.settings(NativeVoiceJson.object("autoListen", true));
             String id = "bada".repeat(16);
-            f.earlySpan(id, "turn.progress", "comment", 0, 0, "First.");
+            f.earlySpan(id, "turn.progress", "comment", 0, 0, OPENING);
             assertTrue(f.speech.speechRequests.isEmpty()); assertTrue(f.runtime.snapshot().isNull("active"));
             f.policy(true, false, "none", new JSONArray(), "turn.progress");
             f.settings(NativeVoiceJson.object("speechContent", "announcements"));
-            f.earlySpan(id, "turn.progress", "comment", 0, 0, "First.");
+            f.earlySpan(id, "turn.progress", "comment", 0, 0, OPENING);
             assertTrue(f.speech.speechRequests.isEmpty()); assertTrue(f.runtime.snapshot().isNull("active"));
             f.settings(NativeVoiceJson.object("audioMode", "input", "speechContent", "messages"));
-            f.earlySpan(id, "turn.progress", "comment", 0, 0, "First.");
+            f.earlySpan(id, "turn.progress", "comment", 0, 0, OPENING);
             assertTrue(f.speech.speechRequests.isEmpty()); assertTrue(f.runtime.snapshot().isNull("active"));
             f.settings(NativeVoiceJson.object("audioMode", "speak"));
-            f.earlySpan(id, "turn.progress", "comment", 0, 0, "First.");
+            f.earlySpan(id, "turn.progress", "comment", 0, 0, OPENING);
             SpeechJob first = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(first);
-            assertEquals("First.", first.text);
+            assertEquals(OPENING, first.text);
             assertEquals("turn.progress", f.runtime.snapshot().getJSONObject("active").getString("eventKind"));
             f.runtime.playbackSubmitted(first.id); f.runtime.drained(first.id); f.flush();
-            f.itemNotice("turn.progress", id, "comment", "First. **Tail.**");
+            f.itemNotice("turn.progress", id, "comment", OPENING + " **Tail.**");
             SpeechJob tail = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(tail);
             assertEquals("Tail.", tail.text);
             f.runtime.drained(tail.id); f.flush();
-            f.itemNotice("turn.progress", id, "comment", "First. **Tail.**");
+            f.itemNotice("turn.progress", id, "comment", OPENING + " **Tail.**");
             assertTrue(f.speech.speechRequests.isEmpty()); assertTrue(f.runtime.snapshot().isNull("active"));
             assertTrue(f.speech.transcriptions.isEmpty()); assertTrue(f.contexts.isEmpty());
         }
@@ -2209,9 +2212,9 @@ public class NativeVoiceRuntimeTest {
             assertEquals("accepted", f.clientCommand(command).getString("status"));
             f.holdPlaybackValidation = true;
             JSONObject stale = Fixture.inputContext(f.target); NativeVoiceJson.put(stale, "userInputRevision", 1);
-            f.earlySpan(id, event, "comment", 0, 0, "First.");
+            f.earlySpan(id, event, "comment", 0, 0, OPENING);
             f.takeClientTarget(f.target).done(200, stale, null); f.flush();
-            f.itemNotice(event, id, "comment", "First. Tail.");
+            f.itemNotice(event, id, "comment", OPENING + " Tail.");
             f.takeClientTarget(f.target).done(200, stale, null); f.flush();
             f.itemNotice(event, "acac".repeat(16), "ordinary", "Other.");
             f.takeClientTarget(f.target).done(200, stale, null); f.flush();
@@ -2233,29 +2236,29 @@ public class NativeVoiceRuntimeTest {
         try (Fixture f = new Fixture(false, false)) {
             f.readyEarlyVoice(); f.policy(true, false, "speak", new JSONArray().put("final"), "turn.progress", "turn.partial");
             String firstId = "abab".repeat(16), secondId = "baba".repeat(16), finalId = "ffff".repeat(16);
-            f.earlySpan(firstId, "turn.progress", "first-comment", 0, 0, "Skipped.");
+            f.earlySpan(firstId, "turn.progress", "first-comment", 0, 0, OPENING);
             SpeechJob first = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(first);
             assertNull(f.command("skipCurrentPlayback", NativeVoiceJson.object("interactionId", firstId)));
             assertTrue(first.cancelled);
-            f.earlySpan(secondId, "turn.progress", "second-comment", 0, 0, "Updated.");
+            f.earlySpan(secondId, "turn.progress", "second-comment", 0, 0, NEXT_SENTENCE);
             SpeechJob second = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(second);
-            assertEquals("Updated.", second.text);
-            f.itemNotice("turn.progress", firstId, "first-comment", "Skipped. Later.");
+            assertEquals(NEXT_SENTENCE, second.text);
+            f.itemNotice("turn.progress", firstId, "first-comment", OPENING + " Later.");
             assertEquals(0, f.queued());
             assertNull(f.command("skipCurrentPlayback", NativeVoiceJson.object("interactionId", secondId)));
             f.itemNotice("turn.partial", secondId, "second-comment", "Authoritative partial.");
             SpeechJob partial = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(partial);
             assertEquals("Authoritative partial.", partial.text);
             f.runtime.drained(partial.id); f.flush();
-            f.earlySpan(finalId, 0, 0, "Final.");
+            f.earlySpan(finalId, 0, 0, "This is the separate final response.");
             SpeechJob answer = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(answer);
-            assertEquals("Final.", answer.text);
+            assertEquals("This is the separate final response.", answer.text);
         }
     }
     @Test public void bothReintroducesYieldedReplyWhenQueuedPlaybackReachesSpeakerAfterTerminalArrival() throws Exception {
         try (Fixture f = new Fixture(false, false)) {
             f.readyEarlyVoice(); f.settings(NativeVoiceJson.object("speechContent", "both"));
-            String id = "eefa".repeat(16); f.earlySpan(id, 0, 0, "Opening.");
+            String id = "eefa".repeat(16); f.earlySpan(id, 0, 0, OPENING);
             SpeechJob title = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(title); assertEquals("Agent finished\n\nEarly", title.text);
             f.runtime.playbackSubmitted(title.id); f.runtime.drained(title.id); f.flush();
             SpeechJob opening = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(opening);
@@ -2264,7 +2267,7 @@ public class NativeVoiceRuntimeTest {
             JSONObject yield = f.earlyFrame(id, "yield", 1); NativeVoiceJson.put(yield, "reason", "item_done");
             f.wire(NativeVoiceSse.EARLY_REPLY, yield);
             f.runtime.drained(opening.id); f.flush(); SpeechJob silent = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(silent);
-            f.earlyTerminal(id, "Opening. Remaining.");
+            f.earlyTerminal(id, OPENING + " Remaining.");
             assertEquals("The audible replay and A's terminal are waiting", 2, f.queued());
             String skipped = f.runtime.snapshot().getJSONObject("active").getString("id");
             assertNull(f.command("skipCurrentPlayback", NativeVoiceJson.object("interactionId", skipped)));
@@ -2279,7 +2282,7 @@ public class NativeVoiceRuntimeTest {
             f.readyEarlyVoice(); f.settings(NativeVoiceJson.object("speechContent", "both"));
             java.util.concurrent.atomic.AtomicLong clock = new java.util.concurrent.atomic.AtomicLong(10000);
             f.onOwner(() -> set(f.runtime, "earlyClock", (java.util.function.LongSupplier)clock::get));
-            String id = "cede".repeat(16); f.earlySpan(id, 0, 0, "Opening.");
+            String id = "cede".repeat(16); f.earlySpan(id, 0, 0, OPENING);
             for (int request = 0; request < 2; request++) {
                 SpeechJob part = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(part);
                 f.runtime.playbackSubmitted(part.id); f.runtime.drained(part.id); f.flush();
@@ -2312,7 +2315,7 @@ public class NativeVoiceRuntimeTest {
             f.readyEarlyVoice();
             java.util.concurrent.atomic.AtomicLong clock = new java.util.concurrent.atomic.AtomicLong(100);
             f.onOwner(() -> set(f.runtime, "earlyClock", (java.util.function.LongSupplier)clock::get));
-            String id = "ceda".repeat(16); f.earlySpan(id, 0, 0, "Opening.");
+            String id = "ceda".repeat(16); f.earlySpan(id, 0, 0, OPENING);
             SpeechJob first = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(first);
             f.runtime.drained(first.id); f.flush();
             assertEquals("waiting_for_reply_text", f.runtime.snapshot().getString("phase"));
@@ -2329,12 +2332,12 @@ public class NativeVoiceRuntimeTest {
             f.readyEarlyVoice(); f.settings(NativeVoiceJson.object("autoListen", true));
             String id = "eaba".repeat(16);
             f.holdPlaybackValidation = waitingForOpeningValidation;
-            f.earlySpan(id, 0, 0, "Opening.");
+            f.earlySpan(id, 0, 0, OPENING);
             NativeVoiceHttp.Result old = waitingForOpeningValidation ? f.takeClientTarget(f.target) : null;
             SpeechJob opening = waitingForOpeningValidation ? null : f.speech.speechRequests.poll(10, TimeUnit.SECONDS);
             if (!waitingForOpeningValidation) assertNotNull(opening);
             f.holdPlaybackValidation = true;
-            f.earlyTerminal(id, "Opening. Final.", true);
+            f.earlyTerminal(id, OPENING + " Final.", true);
             if (old != null) { old.done(200, Fixture.inputContext(f.target), null); f.flush(); }
             else { f.runtime.drained(opening.id); f.flush(); }
             NativeVoiceHttp.Result authoritative = f.takeClientTarget(f.target);
@@ -2348,16 +2351,16 @@ public class NativeVoiceRuntimeTest {
     @Test public void localAudioFailureReleasesOpeningOrMakesOneOrdinaryAttemptAfterSeal() throws Exception {
         for (boolean sealed : new boolean[]{false, true}) try (Fixture f = new Fixture(false, false)) {
             f.readyEarlyVoice();
-            String id = "eaaa".repeat(16); f.earlySpan(id, 0, 0, "First.");
+            String id = "eaaa".repeat(16); f.earlySpan(id, 0, 0, OPENING);
             SpeechJob early = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(early);
-            if (sealed) f.earlyTerminal(id, "First. Tail.");
+            if (sealed) f.earlyTerminal(id, OPENING + " Tail.");
             f.runtime.failed(early.id, "playback_failed"); f.flush(); assertTrue(early.cancelled);
             if (!sealed) {
                 assertTrue(f.runtime.snapshot().isNull("active")); assertTrue(f.speech.speechRequests.isEmpty());
-                f.earlyTerminal(id, "First. Tail.");
+                f.earlyTerminal(id, OPENING + " Tail.");
             }
             SpeechJob ordinary = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(ordinary);
-            assertEquals("First. Tail.", ordinary.text);
+            assertEquals(OPENING + " Tail.", ordinary.text);
             f.runtime.failed(early.id, "playback_failed"); f.runtime.failed(ordinary.id, "invalid_pcm"); f.flush();
             assertTrue(f.runtime.snapshot().isNull("active")); assertTrue(f.speech.speechRequests.isEmpty());
         }
@@ -2365,8 +2368,8 @@ public class NativeVoiceRuntimeTest {
     @Test public void stagedAudioErrorCancelsStagedRequestAndResumesOnlyAtAuthoritativeTerminal() throws Exception {
         for (boolean drainWins : new boolean[]{false, true}) try (Fixture f = new Fixture(false, false)) {
             f.readyEarlyVoice(); String id = "cfed".repeat(16);
-            f.earlySpan(id, 0, 0, "First."); SpeechJob first = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(first);
-            f.earlySpan(id, 1, 6, " Second.");
+            f.earlySpan(id, 0, 0, OPENING); SpeechJob first = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(first);
+            f.earlySpan(id, 1, OPENING.length(), " " + NEXT_SENTENCE);
             SpeechJob staged = f.stageNextWhilePlaying();
             if (drainWins) {
                 ((NativeVoiceAudio)field(f.runtime, "audio")).discardStaged(staged.id);
@@ -2374,26 +2377,27 @@ public class NativeVoiceRuntimeTest {
             } else {
                 f.runtime.failed(staged.id, "invalid_pcm"); f.flush();
                 assertNull(field(field(f.runtime, "active"), "stagedTimeout"));
-                assertFalse(first.cancelled); f.earlySpan(id, 2, 14, " Third.");
+                assertFalse(first.cancelled); f.earlySpan(id, 2, OPENING.length() + 1 + NEXT_SENTENCE.length(), " Third.");
                 assertTrue(f.speech.speechRequests.isEmpty());
                 f.runtime.drained(first.id); f.flush();
             }
             assertTrue(staged.cancelled);
             assertTrue(f.runtime.snapshot().isNull("active")); assertTrue(f.speech.speechRequests.isEmpty());
-            f.earlyTerminal(id, "First. Second. Third.");
+            f.earlyTerminal(id, OPENING + " " + NEXT_SENTENCE + " Third.");
             SpeechJob suffix = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(suffix);
-            assertEquals("Second. Third.", suffix.text);
+            assertEquals(NEXT_SENTENCE + " Third.", suffix.text);
         }
     }
     @Test public void sealedStagedAudioErrorPreservesPrecedingChunkAndUsesOrdinaryProviderFailurePolicy() throws Exception {
         try (Fixture f = new Fixture(false, false)) {
-            f.readyEarlyVoice(); f.settings(NativeVoiceJson.object("speechTextLimit", 8, "autoListen", true));
+            f.readyEarlyVoice(); f.settings(NativeVoiceJson.object("speechTextLimit", 14, "autoListen", true));
             String id = "ddca".repeat(16);
-            f.earlySpan(id, 0, 0, "First."); SpeechJob first = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(first);
+            f.earlySpan(id, 0, 0, "A B C D E F.");
+            SpeechJob first = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(first);
             f.runtime.drained(first.id); f.flush();
-            f.earlyTerminal(id, "First. Second. Third.", true);
-            SpeechJob second = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(second); assertEquals("Second.", second.text.trim());
-            SpeechJob staged = f.stageNextWhilePlaying(); assertEquals("Third.", staged.text.trim());
+            f.earlyTerminal(id, "A B C D E F. Second chunk. Third chunk.", true);
+            SpeechJob second = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(second); assertEquals("Second chunk.", second.text.trim());
+            SpeechJob staged = f.stageNextWhilePlaying(); assertEquals("Third chunk.", staged.text.trim());
             f.runtime.failed(staged.id, "invalid_pcm"); f.flush(); assertTrue(staged.cancelled);
             assertFalse(second.cancelled); f.runtime.drained(second.id); f.flush();
             assertTrue(f.runtime.snapshot().isNull("active")); assertTrue(f.speech.speechRequests.isEmpty());
@@ -2403,9 +2407,9 @@ public class NativeVoiceRuntimeTest {
     @Test public void definitiveSuppressionAfterSupersessionLetsOnlySubmittedPhysicalChunkDrain() throws Exception {
         try (Fixture f = new Fixture(false, false)) {
             f.readyEarlyVoice(); String id = "ddce".repeat(16);
-            f.earlySpan(id, 0, 0, "First."); SpeechJob first = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(first);
+            f.earlySpan(id, 0, 0, OPENING); SpeechJob first = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(first);
             f.runtime.playbackSubmitted(first.id); f.flush(); f.receiveReply("Other.", false);
-            f.earlySpan(id, 1, 6, " Unsent.");
+            f.earlySpan(id, 1, OPENING.length(), " Unsent.");
             for (int n = 0; n < 2; n++) {
                 JSONObject cancel = f.earlyFrame(id, "cancel", n + 2);
                 NativeVoiceJson.put(cancel, "reason", n == 0 ? "superseded" : "publication_suppressed");
@@ -2426,9 +2430,9 @@ public class NativeVoiceRuntimeTest {
                 f.settings(NativeVoiceJson.object("autoListen", true));
                 f.policy(true, false, "speakThenListen", new JSONArray().put("final"));
                 String id = "acbd".repeat(16);
-                f.earlySpan(id, 0, 0, "First.");
+                f.earlySpan(id, 0, 0, OPENING);
                 SpeechJob first = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(first);
-                f.earlySpan(id, 1, 6, " Buffered."); assertEquals(0, f.queued());
+                f.earlySpan(id, 1, OPENING.length(), " Buffered."); assertEquals(0, f.queued());
                 assertNull(command, f.command(command, NativeVoiceJson.object("interactionId", id)));
                 assertTrue("Retire the whole spoken reply", first.cancelled);
                 RecognitionJob capture = null; String captureInteraction = null;
@@ -2443,8 +2447,8 @@ public class NativeVoiceRuntimeTest {
                     assertEquals("manual", manual.getString("eventKind"));
                     assertEquals(f.target, manual.getString("recognitionThreadId"));
                 }
-                f.earlySpan(id, 2, 16, " Late.");
-                f.earlyTerminal(id, "First. Buffered. Late. Final.", true);
+                f.earlySpan(id, 2, OPENING.length() + " Buffered.".length(), " Late.");
+                f.earlyTerminal(id, OPENING + " Buffered. Late. Final.", true);
                 f.runtime.drained(first.id); f.flush();
                 assertTrue(command, f.speech.speechRequests.isEmpty()); assertTrue(command, f.contexts.isEmpty());
                 assertTrue("No automatic capture", f.speech.transcriptions.isEmpty());
@@ -2461,7 +2465,7 @@ public class NativeVoiceRuntimeTest {
     @Test public void offEdgeSerializesBeforeReenableAndAdmitsDefinitiveCancellationWhileOff() throws Exception {
         try (Fixture f = new Fixture(false, false)) {
             f.readyEarlyVoice(); String id = "aa44".repeat(16);
-            f.earlySpan(id, 0, 0, "First."); assertNotNull(f.speech.speechRequests.poll(10, TimeUnit.SECONDS));
+            f.earlySpan(id, 0, 0, OPENING); assertNotNull(f.speech.speechRequests.poll(10, TimeUnit.SECONDS));
             f.holdInterest = true;
             assertNull(f.command("setEarlyReplyPlayback", NativeVoiceJson.object("expectedEarlyReplyRevision", 1, "earlyReplyPlayback", "off")));
             JSONObject off = f.interests.poll(10, TimeUnit.SECONDS); assertNotNull(off);
@@ -2482,17 +2486,17 @@ public class NativeVoiceRuntimeTest {
             f.readyEarlyVoice();
             String current = f.receiveReply("Another reply.", false);
             assertNotNull(f.speech.speechRequests.poll(10, TimeUnit.SECONDS));
-            String id = "ccdd".repeat(16); f.earlySpan(id, 0, 0, "Opening."); assertEquals(1, f.queued());
+            String id = "ccdd".repeat(16); f.earlySpan(id, 0, 0, OPENING); assertEquals(1, f.queued());
             assertNull(f.command("stopPlayback", NativeVoiceJson.object("interactionId", current)));
-            assertEquals(0, f.queued()); f.earlyTerminal(id, "Opening. Tail.");
+            assertEquals(0, f.queued()); f.earlyTerminal(id, OPENING + " Tail.");
             assertTrue(f.speech.speechRequests.isEmpty()); assertTrue(f.speech.transcriptions.isEmpty());
 
-            String released = "4422".repeat(16); f.earlySpan(released, 0, 0, "First.");
+            String released = "4422".repeat(16); f.earlySpan(released, 0, 0, OPENING);
             SpeechJob first = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(first);
             f.runtime.playbackSubmitted(first.id); f.runtime.drained(first.id); f.flush();
             JSONObject yield = f.earlyFrame(released, "yield", 1); NativeVoiceJson.put(yield, "reason", "markup");
             f.wire(NativeVoiceSse.EARLY_REPLY, yield); assertEquals("idle", f.runtime.snapshot().getString("phase"));
-            f.earlyTerminal(released, "First. **Tail.**");
+            f.earlyTerminal(released, OPENING + " **Tail.**");
             SpeechJob tail = f.speech.speechRequests.poll(10, TimeUnit.SECONDS);
             assertNotNull(tail); assertEquals("Tail.", tail.text);
         }
@@ -7147,12 +7151,11 @@ public class NativeVoiceRuntimeTest {
             });
             assertTrue(runtime.snapshot().getJSONObject("actions").getBoolean("canStart"));
         }
-        void readyEarlyVoice() throws Exception { readyEarlyVoice("balanced"); }
-        void readyEarlyVoice(String phrasing) throws Exception {
+        void readyEarlyVoice() throws Exception {
             readyClientVoice("speak");
             settings(NativeVoiceJson.object("speechContent", "messages", "cleanSpeechText", true));
             policy(true, false, "speak", new JSONArray().put("final"));
-            assertNull(command("setEarlyReplyPlayback", NativeVoiceJson.object("expectedEarlyReplyRevision", 0, "earlyReplyPlayback", phrasing)));
+            assertNull(command("setEarlyReplyPlayback", NativeVoiceJson.object("expectedEarlyReplyRevision", 0, "earlyReplyPlayback", "responsive")));
             wire(NativeVoiceSse.EARLY_SESSION, NativeVoiceJson.object("voiceStreamId", voiceStream, "revision", 0, "token", "A".repeat(43)));
             JSONObject enable = interests.poll(10, TimeUnit.SECONDS); assertNotNull(enable); assertTrue(enable.getBoolean("enabled"));
         }

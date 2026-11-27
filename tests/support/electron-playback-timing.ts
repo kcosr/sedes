@@ -118,11 +118,11 @@ export async function runDesktopTiming(endpoint: string, mode: "responsive" | "o
     await runtime.setEarlyReplyPlayback({ ...command, expectedEarlyReplyRevision: 0, earlyReplyPlayback: mode });
     await runtime.updateSettings({ ...command, expectedRevision: initial.settingsRevision, patch: { audioMode: "speak",
       speechContent: "messages", autoListen: false, speechProvider: "server", speechEndpoint: endpoint, sttModel: "parakeet-local",
-      ttsModel: "kokoro-local", ttsVoice: "af_heart", speechTextLimit: 12 } });
+      ttsModel: "kokoro-local", ttsVoice: "af_heart", speechTextLimit: 28 } });
     callbacks.frame("notification_policy", { generation: 1, settings: { enabled: true, silenced: false, revision: 1,
       scriptPath: "", arguments: [], timeoutSeconds: 30, assistantResultPhases: ["final"], delivery: defaultNotificationDelivery() } }, stream);
     callbacks.notificationsChanged(true);
-    const sentences = Array.from({ length: count }, (_, i) => `Go to ${String(i + 1).padStart(2, "0")}.`);
+    const sentences = Array.from({ length: count }, (_, i) => `We are ready for part ${String(i + 1).padStart(2, "0")}.`);
     const began = meter.currentTime * meter.sampleRate;
     if (mode === "responsive") {
       const waiting = waitState(state => state.phase === "waiting_for_reply_text" && receivedAt.length === count);

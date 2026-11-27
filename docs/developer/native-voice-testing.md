@@ -178,8 +178,10 @@ The early-reply case attaches a paced Codex RPC fixture to the production
 Sedes server. It runs the Electron voice client over application SSE and sends
 its synthesis requests through the desktop transport to the loopback speech
 server. The fixture withholds turn completion until PCM reaches the playback
-sink. This checks the time ordering without depending on model speed or a
-sound device. Use physical-device listening and output timestamps to evaluate
+sink. A Both-mode case exercises the three phrasing settings. Another host
+case holds the next synthesis slot while sentences arrive, then checks that
+the device sends the accumulated sentences together. Use physical-device
+listening and output timestamps to evaluate
 first audible word and inter-sentence gaps.
 
 To measure desktop scheduling, add `SEDES_VOICE_DESKTOP_TIMING=1` to the host
@@ -211,25 +213,24 @@ env -u NODE_ENV SEDES_RUN_REAL_OPENCODE=1 \
 
 Use `-t 'plays a held live Codex reply in the packaged Android background service'`
 to select both device cases. Each pairs through the Sedes HTTP API, saves the
-credentials in the native keystores, enables Responsive playback, and backgrounds
+credentials in the native keystores, enables early playback, and backgrounds
 the Activity. The host waits for the registered client's input to be accepted
 before it streams an answer. Each synthesis request supplies 24,000 PCM frames
 at 24 kHz with zero startup pre-roll.
 
-- Both cases select **Both** and check that the device makes zero speech requests
-  for the initial short sentence. When the next sentence arrives, Android requests
-  the preamble and then both sentences together. In the final-answer case the host waits for Android
-  to drain “Agent finished,” the thread title, and the opening sentence while
-  the turn is still running. It then releases the remaining text and completes
-  the turn. The host checks all three requests and physical drains in
-  `android-early-reply.log`.
-- In the progress case, “Agent progress,” the thread title, and the grouped opening
-  drain before the commentary item closes. Closing the item releases
-  its remaining sentence while the turn is still running.
-  Android then selects Next on a second commentary item. The host sends that
-  item's remaining text and a distinct final answer. The test checks the exact
-  synthesis inputs, all six physical drains, and zero microphone captures in
-  `android-early-progress.log`.
+- Both cases select **Both**. The host supplies a short opening sentence and
+  withholds further text until the notification type and thread title drain
+  in the background. It checks that the preamble was the only synthesis request.
+  It then supplies enough words for the selected mode and checks that the
+  opening sentences reach the speech server together.
+- The final-answer case uses Responsive. The grouped opening drains while the
+  turn is still running. The host releases the remaining text, completes the turn,
+  and checks all three requests and physical drains in `android-early-reply.log`.
+- The progress case uses Balanced. Closing the commentary item releases its
+  short remainder while the turn is still running. Android selects Next on a
+  second commentary item. The host sends its remaining text and a distinct final answer.
+  It checks the synthesis inputs, six physical drains, and zero microphone
+  captures in `android-early-progress.log`.
 
 An explicit serial is required. The harness verifies that it is an emulator,
 clears `dev.sedes.local` application data between scenarios, installs the

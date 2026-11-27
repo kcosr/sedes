@@ -573,7 +573,7 @@ public class NativeVoiceE2eTest {
                 "identity", enrollment.get().getString("navigationNamespace")));
             await(() -> !runtime.snapshot().isNull("clientConnectionToken"), 45000, "registered packaged Android client");
             command("setEarlyReplyPlayback", NativeVoiceJson.object("expectedEarlyReplyRevision", runtime.snapshot().getJSONObject("speech").getLong("earlyReplyRevision"),
-                "earlyReplyPlayback", "responsive"));
+                "earlyReplyPlayback", required(args, "earlyMode")));
             command("updateSettings", NativeVoiceJson.object("expectedRevision", runtime.snapshot().getLong("settingsRevision"), "patch",
                 NativeVoiceJson.object("speechProvider", "server", "speechEndpoint", endpoint, "ttsModel", "kokoro-local",
                     "sttModel", "parakeet-local", "ttsVoice", "af_heart", "speechContent", "both", "autoListen", false, "startupPreRollMs", 0)));
@@ -602,9 +602,11 @@ public class NativeVoiceE2eTest {
         Bundle admission = new Bundle();
         admission.putString("voiceAdmission", submitRegisteredInput(server, thread, input));
         instrumentation.sendStatus(0, admission);
-        await(() -> runtime.snapshot().optString("phase").equals("waiting_for_reply_text") && newPlaybackDrains(audio, baseline).isEmpty(),
-            45000, "Responsive held the short opening before synthesis");
-        reportVoiceStage("voiceShortHeld", new JSONObject());
+        await(() -> runtime.snapshot().optString("phase").equals("waiting_for_reply_text") && newPlaybackDrains(audio, baseline).size() == 1,
+            45000, "preamble physically drained while only the first short sentence was available");
+        JSONObject preamble = assertPlaybackDrain(newPlaybackDrains(audio, baseline).get(0), 24_000, 24_000);
+        String firstId = runtime.snapshot().getJSONObject("active").getString("id");
+        reportVoiceStage("voicePreamble", NativeVoiceJson.object("drain", preamble, "interactionId", firstId));
         int openingDrains = 2; // The preamble and grouped opening drain before the item closes.
         await(() -> runtime.snapshot().optString("phase").equals("waiting_for_reply_text") && newPlaybackDrains(audio, baseline).size() == openingDrains,
             45000, "opening sentence physically drained before the source item completed");
@@ -615,7 +617,7 @@ public class NativeVoiceE2eTest {
         assertEquals(0, waiting.getJSONObject("queue").getInt("count"));
         assertEquals(0, supplied.get());
         JSONObject first = assertPlaybackDrain(newPlaybackDrains(audio, baseline).get(openingDrains - 1), 24_000, 24_000);
-        String firstId = waiting.getJSONObject("active").getString("id");
+        assertEquals(firstId, waiting.getJSONObject("active").getString("id"));
         reportVoiceStage("voiceOpening", NativeVoiceJson.object("drain", first, "foreground", false, "interactionId", firstId));
         await(() -> idleVoice(runtime.snapshot()) && newPlaybackDrains(audio, baseline).size() == openingDrains + 1, 45000, "terminal suffix drained");
         if (progress) {

@@ -12,6 +12,7 @@ import { setEndpointCredential, setEndpointProfile } from "../../src/client/auth
 import { configuredSedesServer } from "../../src/client/app/server-endpoint.js";
 import { ElectronVoiceConnection } from "../../src/client/voice/electron-voice-connection.js";
 import { ElectronVoiceRuntime } from "../../src/client/voice/electron-voice-runtime.js";
+import type { NativeEarlyReplyPlaybackMode } from "../../src/client/voice/native-voice-plugin.js";
 import { electronSpeech } from "../../src/client/voice/electron-speech-plugin.js";
 import { SpeechTransport, type AudioChunk } from "../support/electron-speech-transport.js";
 import { OutboundCodexFixture } from "../support/outbound-codex-fixture.js";
@@ -87,7 +88,7 @@ describe("native voice production pipeline with loopback providers", () => {
     expect(observations.transcriptions.at(-1)).toMatchObject({ sampleRate: 16000, bytes: 32000 });
   });
 
-  async function withCodexPlayback(scenario: string, speechContent: "messages" | "both", run: (input: {
+  async function withCodexPlayback(scenario: string, speechContent: "messages" | "both", mode: NativeEarlyReplyPlaybackMode, run: (input: {
     threadId: string; codex: OutboundCodexFixture; desktop: ElectronVoiceRuntime;
     pcm: Buffer[]; frames: VoiceFrame[]; holdDrain: () => { until: Promise<void>; release: () => void };
   }) => Promise<void>): Promise<void> {
@@ -146,7 +147,7 @@ describe("native voice production pipeline with loopback providers", () => {
       const state = await desktop.setConnection({ profileId, serverOrigin: app.url, identity });
       expect(state.errors).toEqual([]);
       const command = { expectedConnectionGeneration: state.connectionGeneration };
-      await desktop.setEarlyReplyPlayback({ ...command, expectedEarlyReplyRevision: state.speech.earlyReplyRevision, earlyReplyPlayback: "responsive" });
+      await desktop.setEarlyReplyPlayback({ ...command, expectedEarlyReplyRevision: state.speech.earlyReplyRevision, earlyReplyPlayback: mode });
       await desktop.updateSettings({ ...command, expectedRevision: state.settingsRevision, patch: {
         audioMode: "speak", speechContent, autoListen: false, ignoreOtherDevices: false,
         speechProvider: "server", speechEndpoint: speech.endpoint, sttModel: "parakeet-local", ttsModel: "kokoro-local", ttsVoice: "af_heart",
@@ -173,7 +174,7 @@ describe("native voice production pipeline with loopback providers", () => {
   }
 
   it.each(["after-drain", "while-speaking"] as const)("streams a qualified live Codex sentence through the Electron runtime and seals it %s", async timing => {
-    await withCodexPlayback(timing, "messages", async ({ threadId, codex, desktop, pcm, frames, holdDrain }) => {
+    await withCodexPlayback(timing, "messages", "responsive", async ({ threadId, codex, desktop, pcm, frames, holdDrain }) => {
       const opening = "The first sentence reaches the speaker while the response is still running.";
       const ending = "The remaining sentence arrives after completion.";
       const answer = codex.startAnswer("final_answer");
@@ -223,21 +224,36 @@ describe("native voice production pipeline with loopback providers", () => {
     });
   });
 
-  it("speaks the type and thread title before live progress and final text in Both", async () => {
-    await withCodexPlayback("preamble", "both", async ({ threadId, codex, desktop }) => {
+  it.each(["responsive", "balanced", "natural"] as const)("plays the progress and final preambles before the %s body is ready", async mode => {
+    await withCodexPlayback(`preamble-${mode}`, "both", mode, async ({ threadId, codex, desktop, pcm, frames }) => {
       const title = "Early playback qualification";
       const requests: string[] = [];
       const spoken = async () => (await speech.observations()).speech.map(request => request.text);
-      for (const [phase, label, short, sentence] of [
-        ["commentary", "Agent progress", "Yes.", "The check is running."],
-        ["final_answer", "Agent finished", "It passed.", "The file passed inspection."],
+      for (const [phase, label, short] of [
+        ["commentary", "Agent progress", "Yes."],
+        ["final_answer", "Agent finished", "It passed."],
       ] as const) {
         const item = codex.startAnswer(phase);
         item.append(short + " The");
+        requests.push(label + "\n\n" + title);
+        await expect.poll(spoken, { timeout: 15_000 }).toEqual(requests);
         await waitForSpeech(async () => (await desktop.getState()).phase === "waiting_for_reply_text");
-        expect(await spoken()).toEqual(requests);
-        item.append(sentence.slice(3) + " All");
-        requests.push(label + "\n\n" + title, short + " " + sentence);
+        expect(Buffer.concat(pcm).length).toBe(requests.length * speech.pcm.length);
+
+        const sentence = mode === "responsive" ? "The first inspection is running."
+          : "The first inspection is still running and the remaining files are currently being checked.";
+        let opening = short + " " + sentence;
+        if (mode === "natural") {
+          const firstFrame = frames.length;
+          item.append(sentence.slice(3) + " More");
+          await waitForSpeech(() => frames.slice(firstFrame).some(({ event, value }) => event === "voice_early_reply" && value.text?.includes(sentence)));
+          expect(await spoken()).toEqual(requests);
+          item.append(" details follow.\n\nAll");
+          opening += " More details follow.";
+        } else {
+          item.append(sentence.slice(3) + " All");
+        }
+        requests.push(opening);
         await expect.poll(spoken, { timeout: 15_000 }).toEqual(requests);
         await waitForSpeech(async () => (await desktop.getState()).phase === "waiting_for_reply_text");
         expect((await app.thread(threadId)).runState).toBe("running");
@@ -252,8 +268,34 @@ describe("native voice production pipeline with loopback providers", () => {
     });
   });
 
+  it("synthesizes the accumulated sentences together when the lookahead slot becomes available", async () => {
+    await withCodexPlayback("catch-up", "messages", "responsive", async ({ codex, desktop, frames, holdDrain }) => {
+      const answer = codex.startAnswer("final_answer");
+      const held = holdDrain();
+      const first = "The first group is being spoken.";
+      const second = "The second group is available now.";
+      const backlog = "Two sentences arrive while playback is busy. They belong in one request.";
+      const spoken = async () => (await speech.observations()).speech.map(request => request.text);
+      answer.append(first + " The");
+      await expect.poll(spoken, { timeout: 15_000 }).toEqual([first]);
+      answer.append(second.slice(3) + " Two");
+      await expect.poll(spoken, { timeout: 15_000 }).toEqual([first, second]);
+      answer.append(backlog.slice(3) + " Done");
+      await waitForSpeech(() => frames.some(({ event, value }) => event === "voice_early_reply" && value.text?.includes("one request.")));
+      expect(await spoken()).toEqual([first, second]);
+      held.release();
+      await expect.poll(spoken, { timeout: 15_000 }).toEqual([first, second, backlog]);
+      await waitForSpeech(async () => (await desktop.getState()).phase === "waiting_for_reply_text");
+      answer.append(".");
+      answer.complete();
+      codex.completeTurn();
+      await expect.poll(spoken, { timeout: 15_000 }).toEqual([first, second, backlog, "Done."]);
+      await waitForSpeech(async () => (await desktop.getState()).phase === "idle");
+    });
+  });
+
   it("streams Codex commentary before item completion and seals each progress item independently", async () => {
-    await withCodexPlayback("commentary", "messages", async ({ threadId, codex, desktop, frames, pcm, holdDrain }) => {
+    await withCodexPlayback("commentary", "messages", "responsive", async ({ threadId, codex, desktop, frames, pcm, holdDrain }) => {
       const starts = () => frames.filter(({ event, value }) => event === "voice_early_reply" && value.kind === "begin").map(frame => frame.value);
       const notices = () => frames.filter(frame => frame.event === "notification").map(frame => voiceNotificationSchema.parse(frame.value));
       const spoken = async () => (await speech.observations()).speech.map(request => request.text);
@@ -314,7 +356,7 @@ describe("native voice production pipeline with loopback providers", () => {
         muted.append("This commentary is muted. It should stay silent.");
         muted.complete();
         const final = codex.startAnswer("final_answer");
-        const conclusion = "Both files have been checked.";
+        const conclusion = "Both configuration files have been checked.";
         const suffix = "They contain the same configuration.";
         final.append(conclusion + " They");
         await waitForSpeech(async () => starts().length === 3 && (await spoken()).includes(conclusion));
@@ -648,7 +690,7 @@ describe("native voice production pipeline with loopback providers", () => {
     let output = "";
     try {
       const threadId = await createVoiceCodexThread(app, socketPath, `android-early-codex-${earlyKind}`);
-      const args = { serverOrigin: app.url, threadId, earlyKind,
+      const args = { serverOrigin: app.url, threadId, earlyKind, earlyMode: progress ? "balanced" : "responsive",
         speechEndpoint: speech.endpoint, speechToken: speech.token, pairingCode: app.authentication.createPairing({ kind: "management" }).token,
         initialText: "Describe early and final speech." };
       device = adb(["shell", "am", "instrument", "-w", "-r", "-e", "class", "dev.sedes.local.NativeVoiceE2eTest#nativeBackgroundEarlyReply",
@@ -670,7 +712,7 @@ describe("native voice production pipeline with loopback providers", () => {
         return context.sourceTurnId && context.steer.availability === "available";
       }, 180_000);
 
-      const waitForStage = async (stage: "voiceShortHeld" | "voiceOpening" | "voiceProgressSettled" | "voiceSkipped") => {
+      const waitForStage = async (stage: "voicePreamble" | "voiceOpening" | "voiceProgressSettled" | "voiceSkipped") => {
         const marker = new RegExp(`^INSTRUMENTATION_STATUS: ${stage}=(.+)$`, "mu");
         return JSON.parse(await waitForSpeech(() => {
           requireRunningDevice();
@@ -679,22 +721,26 @@ describe("native voice production pipeline with loopback providers", () => {
       };
       const spoken = async () => (await speech.observations()).speech.map(request => request.text);
       const short = progress ? "Yes." : "It passed.";
-      const opening = short + " The reply is still being written.";
+      const sentence = progress ? "The first inspection is still running and the remaining files are currently being checked." : "The file passed inspection.";
+      const opening = short + " " + sentence;
       const suffix = "All done.";
+      const preamble = (progress ? "Agent progress" : "Agent finished") + "\n\n" + title;
       const answer = codex.startAnswer(progress ? "commentary" : "final_answer");
       answer.append(short + " The");
-      await waitForStage("voiceShortHeld");
-      expect(await spoken()).toEqual([]);
-      answer.append(" reply is still being written. All");
+      const announced = await waitForStage("voicePreamble");
+      expect(announced.drain).toMatchObject({ sampleRate: 24_000, writtenFrames: 24_000 });
+      expect(announced.drain.playedFrames).toBeGreaterThanOrEqual(24_000);
+      expect(await spoken()).toEqual([preamble]);
+      answer.append(sentence.slice(3) + " All");
       const evidence = await waitForStage("voiceOpening");
       expect(evidence).toMatchObject({ foreground: false, drain: { sampleRate: 24_000, writtenFrames: 24_000 } });
       expect(evidence.drain.playedFrames).toBeGreaterThanOrEqual(24_000);
+      expect(evidence.interactionId).toBe(announced.interactionId);
       expect((await app.thread(threadId)).runState).toBe("running");
-      const preamble = (progress ? "Agent progress" : "Agent finished") + "\n\n" + title;
       expect(await spoken()).toEqual([preamble, opening]);
       answer.append(suffix.slice(3));
       answer.complete();
-      const skippedOpening = "I am still examining the second file.";
+      const skippedOpening = "I am still examining the second file before I can finish checking the complete response.";
       const finalText = "The final response still reaches the speaker.";
       if (progress) {
         expect(await waitForStage("voiceProgressSettled")).toEqual({ interactionId: evidence.interactionId });

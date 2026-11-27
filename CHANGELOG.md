@@ -124,12 +124,11 @@ User-facing changes are collected here before release. See the
 ### Added
 
 - Android and Electron can read Codex final answers and enabled progress updates
-  while the agent writes. Choose Responsive, Balanced, or Natural phrasing in
-  Voice settings. With **Both**, the device speaks the notification type and
-  thread title before the first sentence. Responsive groups short sentences until
-  they total three words, then reads any remaining words when the message ends.
-  Early playback defaults to Off. Skipping a progress update
-  leaves later updates and the final answer eligible to play.
+  while the agent writes. Responsive groups ready sentences starting at six
+  words, Balanced at fifteen, and Natural prefers paragraph breaks. With
+  **Both**, the device can announce the notification type and thread title
+  while it waits for the message text. Early playback defaults to Off.
+  Skipping a progress update leaves later updates and the final answer eligible.
   [Voice settings](docs/operator/clients/voice.md#early-reply-playback).
   ([#165](https://github.com/kcosr/sedes/pull/165))
 

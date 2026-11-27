@@ -440,6 +440,19 @@ answer uses the turn outcome ID. Devices match that notification to the
 existing queue item, then play any remaining text. A revised prefix can
 require reading the corrected text again.
 
+A `begin` carries the first eligible segment of a classified live item. Once
+that message reaches the front of the queue and passes the device's input
+freshness check, **Both** can start the type and thread title preamble. Word
+counts apply only to message text. The device groups unscheduled whole sentences
+when starting or prefetching a request. Responsive requires
+six words and Balanced fifteen. Natural requires fifteen words plus a paragraph
+end or a sentence ending at or beyond word sixty of its paragraph. Every mode
+takes the furthest qualifying ending already available, up to the device and
+provider request limits. Larger qualified groups can span physical requests.
+An explicit server `yield` releases the remaining eligible prefix, including
+a short tail. A matching notification supplies the rest of the message after
+reconciliation with audio already played.
+
 Skipping retires the whole message. Newer input, stream loss, policy changes,
 and deadlines retire live playback independently of ordinary notification
 delivery. Scripts, microphone activation, and deferred controls follow their

@@ -17,7 +17,7 @@ import org.json.JSONObject;
 final class NativeEarlyReply {
     static final int MAX_BYTES = NativeVoiceEarlyFrames.MAX_PREFIX_BYTES;
     static final long MAX_LIFETIME = 600_000, MAX_WAIT = 60_000, URGENT_WAIT = 2000;
-    private static final int MIN_RESPONSIVE_WORDS = 3;
+    private static final int RESPONSIVE_WORDS = 6, BALANCED_WORDS = 15, LONG_PARAGRAPH_WORDS = 60;
     private static final Pattern WORD_CHARACTER = Pattern.compile("[\\p{L}\\p{N}]");
     private static final Pattern OTHER_NUMBERS = Pattern.compile("\\p{No}+");
     static final class Frame {
@@ -63,7 +63,7 @@ final class NativeEarlyReply {
                 // A standalone fraction counts as a word. An adjacent suffix such as m² stays with its unit.
                 boolean numericSuffix = previousEnd == from && otherNumbers.region(from, to).matches();
                 boolean joinedWord = previousEnd >= 0 && from == previousEnd + 1 && joinsWords(text.charAt(previousEnd));
-                if (!numericSuffix && !joinedWord && ++count == MIN_RESPONSIVE_WORDS) break;
+                if (!numericSuffix && !joinedWord && ++count == LONG_PARAGRAPH_WORDS) break;
                 previousEnd = to;
             }
             return words = count;
@@ -74,9 +74,10 @@ final class NativeEarlyReply {
     }
     static final class Part {
         final String text;
-        final int rawEnd, preparedEnd, preambleEnd;
-        Part(String text, int rawEnd, int preparedEnd, int preambleEnd) {
+        final int rawEnd, preparedEnd, preambleEnd, groupEnd;
+        Part(String text, int rawEnd, int preparedEnd, int preambleEnd, int groupEnd) {
             this.text = text; this.rawEnd = rawEnd; this.preparedEnd = preparedEnd; this.preambleEnd = preambleEnd;
+            this.groupEnd = groupEnd;
         }
     }
     private static IllegalArgumentException invalid() { return new IllegalArgumentException("invalid_early_reply"); }
@@ -87,7 +88,7 @@ final class NativeEarlyReply {
     boolean yielded, detached, skipped;
     private final ArrayList<Segment> frames = new ArrayList<>();
     private StringBuilder source = new StringBuilder();
-    private int rawBytes, rawEnd, preparedEnd, preambleEnd;
+    private int rawBytes, rawEnd, preparedEnd, preambleEnd, groupEnd;
     private byte[] rawHash, preparedHash;
     private String mode, cachedPrepared, preamble;
     private int cachedRawEnd = -1;
@@ -148,44 +149,68 @@ final class NativeEarlyReply {
         int raw = reserved == null ? rawEnd : reserved.rawEnd;
         int spoken = reserved == null ? preparedEnd : reserved.preparedEnd;
         int headerEnd = reserved == null ? preambleEnd : reserved.preambleEnd;
-        String prepared = prepared(raw);
-        if (spoken > prepared.length()) throw invalid();
-        int end = raw;
-        if (spoken == prepared.length()) {
-            end = readyEnd(raw);
-            if (end == raw) return null;
-            String full = prepared(end);
-            if (!full.startsWith(prepared)) throw invalid();
-            prepared = full;
-        }
+        int group = reserved == null ? groupEnd : reserved.groupEnd;
         int headerStart = skipSeparators(preamble, headerEnd);
         if (headerStart < preamble.length()) {
             String text = NativeVoiceQueue.firstChunk(preamble, headerStart, limit);
-            return new Part(text, raw, spoken, headerStart + text.length());
+            return new Part(text, raw, spoken, headerStart + text.length(), group);
         }
-        int start = skipSeparators(prepared, spoken);
-        if (start == prepared.length()) throw invalid();
-        String chunk = NativeVoiceQueue.firstChunk(prepared, start, limit);
-        return new Part(chunk, end, start + chunk.length(), headerEnd);
+        String previous = prepared(raw);
+        if (spoken > previous.length()) throw invalid();
+        boolean insideSentence = spoken < previous.length();
+        int end = insideSentence ? raw : readyEnd(raw, spoken, group);
+        if (!insideSentence && end == raw) return null;
+        group = Math.max(group, end);
+        String text = prepared(end);
+        int start = skipSeparators(text, spoken);
+        if (text.length() - start > limit) {
+            // An eligible group can exceed the device limit. Keep its remainder eligible across physical requests.
+            ArrayList<Integer> sentenceEnds = new ArrayList<>();
+            if (insideSentence) sentenceEnds.add(raw);
+            for (Segment frame : frames) if (frame.start < frame.end && frame.end > raw && frame.end <= end) sentenceEnds.add(frame.end);
+            end = fittingEnd(sentenceEnds, spoken);
+            text = prepared(end);
+            start = skipSeparators(text, spoken);
+        }
+        if (!text.startsWith(previous) || start == text.length()) throw invalid();
+        String chunk = NativeVoiceQueue.firstChunk(text, start, limit);
+        return new Part(chunk, end, start + chunk.length(), headerEnd, group);
     }
     private static int skipSeparators(String text, int start) {
         while (start < text.length() && Character.isWhitespace(text.charAt(start))) start++;
         return start;
     }
-    private int readyEnd(int raw) {
-        int end = raw, words = 0;
-        boolean responsive = mode.equals("responsive");
+    /** Choose the farthest eligible boundary that fits. The first qualifying group can span multiple requests. */
+    private int readyEnd(int raw, int spoken, int owedThrough) {
+        ArrayList<Integer> eligible = new ArrayList<>();
+        int words = 0, paragraphWords = 0;
+        int minimum = mode.equals("responsive") ? RESPONSIVE_WORDS : BALANCED_WORDS;
+        boolean natural = mode.equals("natural");
         for (Segment frame : frames) {
-            if (frame.end <= raw) continue;
-            if (mode.equals("balanced") && end > raw && frame.end - raw > 240) return end;
-            end = frame.end;
-            if (responsive) {
-                words += frame.words(source);
-                if (words >= MIN_RESPONSIVE_WORDS) return end;
-            } else if (frame.paragraph || mode.equals("balanced") && raw == 0 ||
-                mode.equals("natural") && end - raw >= 320) return end;
+            if (frame.end < 0) continue;
+            int count = frame.words(source);
+            paragraphWords += count;
+            if (frame.end > raw) {
+                words += count;
+                if (frame.end <= owedThrough || yielded || words >= minimum && (!natural || frame.paragraph || paragraphWords >= LONG_PARAGRAPH_WORDS))
+                    eligible.add(frame.end);
+            }
+            if (frame.paragraph) paragraphWords = 0;
         }
-        return (responsive || mode.equals("natural")) && !yielded ? raw : end;
+        return eligible.isEmpty() ? raw : fittingEnd(eligible, spoken);
+    }
+    private int fittingEnd(List<Integer> ends, int spoken) {
+        int first = 0, last = ends.size() - 1;
+        // Usually the entire backlog fits. Only render intermediate prefixes when the size limit is binding.
+        String text = prepared(ends.get(last));
+        if (text.length() - skipSeparators(text, spoken) <= limit) return ends.get(last);
+        while (first < last) {
+            int middle = (first + last + 1) / 2;
+            text = prepared(ends.get(middle));
+            if (text.length() - skipSeparators(text, spoken) <= limit) first = middle;
+            else last = middle - 1;
+        }
+        return ends.get(first);
     }
     boolean matchesNotice(NativeVoiceQueue.Item notice) {
         if (!event.equals(notice.event)) return false;
@@ -203,16 +228,24 @@ final class NativeEarlyReply {
         JSONObject section = spokenSection(terminal.envelope.optJSONObject("payload"));
         if (section == null) return false;
         String raw = section.optString("text");
-        return raw.startsWith(source.substring(0, part.rawEnd)) && prepare(raw, cleanup).startsWith(prepared(part.rawEnd).substring(0, part.preparedEnd));
+        String prefix = prepared(part.rawEnd).substring(0, part.preparedEnd);
+        return raw.startsWith(source.substring(0, verifiedEnd(part.rawEnd, prefix))) && prepare(raw, cleanup).startsWith(prefix);
     }
     void drained(Part part) {
         if (part == null || detached) return;
-        rawEnd = part.rawEnd; preparedEnd = part.preparedEnd; preambleEnd = part.preambleEnd;
+        rawEnd = part.rawEnd; preparedEnd = part.preparedEnd; preambleEnd = part.preambleEnd; groupEnd = part.groupEnd;
+    }
+    private int verifiedEnd(int sentenceEnd, String preparedPrefix) {
+        // Ordinary prose maps directly even when a provider request ended mid-sentence.
+        return preparedPrefix.length() <= sentenceEnd && preparedPrefix.contentEquals(source.subSequence(0, preparedPrefix.length()))
+            ? preparedPrefix.length() : sentenceEnd;
     }
     void detach() {
         if (detached) return;
         if (preparedEnd > 0) {
-            rawHash = hash(source.substring(0, rawEnd)); preparedHash = hash(prepared(rawEnd).substring(0, preparedEnd));
+            String prefix = prepared(rawEnd).substring(0, preparedEnd);
+            rawEnd = verifiedEnd(rawEnd, prefix);
+            rawHash = hash(source.substring(0, rawEnd)); preparedHash = hash(prefix);
         }
         frames.clear(); frames.trimToSize(); source = null; cachedPrepared = null; cachedRawEnd = -1; rawBytes = 0; detached = true;
     }

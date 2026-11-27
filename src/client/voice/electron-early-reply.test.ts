@@ -16,47 +16,83 @@ function append(reply: ElectronEarlyReply, seq: number, text: string, paragraphE
   expect(reply.receive({ ...common, seq, kind: "append", rawStart: reply.raw.length, rawEnd: reply.raw.length + text.length, text, paragraphEnd }, 10)).toBe("accepted");
 }
 describe("Electron early phrasing and source reconciliation", () => {
-  it.each([
-    ["balanced", ["First.", "Second. Third.", "Fourth."]],
-    ["natural", ["First. Second. Third.", "Fourth."]],
-  ] as const)("groups whole ready sentences within paragraphs for %s", (mode, expected) => {
-    const reply = source("First. ");
-    append(reply, 1, "Second. "); append(reply, 2, "Third.\n\n", true); append(reply, 3, "Fourth.", true);
-    const chunks = [];
-    for (let chunk = reply.next(settings, mode, 1000); chunk; chunk = reply.next(settings, mode, 1000)) chunks.push(chunk.text);
-    expect(chunks).toEqual(expected);
-  });
-  it("uses the shared three-word readiness cases for Responsive speech", () => {
+  const sentence = (count: number, word: string) => Array(count).fill(word).join(" ") + ". ";
+  it("uses the shared six-word readiness cases for Responsive speech", () => {
     const corpus: { text: string; ready: boolean }[] = JSON.parse(readFileSync(
       new URL("../../../android/app/src/test/resources/early-reply-responsive.json", import.meta.url), "utf8"));
     for (const { text, ready } of corpus) {
       expect(!!source(text).next(settings, "responsive", 1000), text).toBe(ready);
     }
   });
-  it("batches Responsive sentences across paragraphs and starts a fresh count for each group", () => {
-    const reply = source("First.\n\n", true);
-    const next = () => reply.next(settings, "responsive", 1000)?.text;
-    expect(next()).toBeUndefined();
-    append(reply, 1, "Second. "); expect(next()).toBeUndefined();
-    append(reply, 2, "Third. "); expect(next()).toBe("First.\n\nSecond. Third.");
-    append(reply, 3, "Already three words. "); expect(next()).toBe("Already three words.");
-    append(reply, 4, "It passed. "); expect(next()).toBeUndefined();
-    append(reply, 5, "Done. "); expect(next()).toBe("It passed. Done.");
-    append(reply, 6, "Yes."); expect(next()).toBeUndefined();
-    reply.receive({ ...common, seq: 7, kind: "yield", reason: "markup" }, 20);
-    expect(next()).toBe("Yes."); expect(next()).toBeUndefined();
+  it.each([["responsive", 6], ["balanced", 15], ["natural", 15]] as const)(
+    "starts each %s group at %i words and releases a short tail on yield", (mode, minimum) => {
+      const first = sentence(minimum - 1, "short");
+      const reply = source(first, true);
+      const next = () => reply.next(settings, mode, 1000)?.text;
+      expect(next()).toBeUndefined();
+      append(reply, 1, "Done. ", true); expect(next()).toBe(first + "Done.");
+      append(reply, 2, "One. Two."); expect(next()).toBeUndefined();
+      reply.receive({ ...common, seq: 3, kind: "yield", reason: "item_done" }, 20);
+      expect(next()).toBe("One. Two."); expect(next()).toBeUndefined();
+    });
+  it.each(["responsive", "balanced", "natural"] as const)("packs the farthest ready %s endpoint under the provider limit", mode => {
+    const a = sentence(15, "a"), b = sentence(15, "b"), c = sentence(15, "c");
+    const reply = source(a, true); append(reply, 1, b, true); append(reply, 2, c, true);
+    const limit = (a + b).trimEnd().length;
+    expect(reply.next(settings, mode, limit)?.text).toBe((a + b).trimEnd());
+    expect(reply.next(settings, mode, limit)?.text).toBe(c.trimEnd());
   });
-  it("releases a long open Natural paragraph at 320 raw units and a short available tail at yield", () => {
-    const reply = source("A".repeat(301) + ". ");
+  it("carries short paragraphs forward without ending Natural speech inside a short open paragraph", () => {
+    const first = sentence(8, "a"), second = sentence(7, "b"), third = sentence(20, "c");
+    const reply = source(first, true); append(reply, 1, second, true); append(reply, 2, third);
+    expect(reply.next(settings, "natural", 4096)?.text).toBe((first + second).trimEnd());
     expect(reply.next(settings, "natural", 4096)).toBeUndefined();
-    append(reply, 1, "B".repeat(20) + ". "); append(reply, 2, "Small. ");
-    expect(reply.next(settings, "natural", 4096)?.text).toBe("A".repeat(301) + ". " + "B".repeat(20) + ".");
-    expect(reply.next(settings, "natural", 4096)).toBeUndefined();
-    reply.receive({ ...common, seq: 3, kind: "yield", reason: "item_done" }, 20);
-    expect(reply.next(settings, "natural", 4096)?.text).toBe("Small.");
+    append(reply, 3, "", true);
+    expect(reply.next(settings, "natural", 4096)?.text).toBe(third.trimEnd());
+  });
+  it("counts Natural's 60 words from the paragraph start across requests and resets at its actual end", () => {
+    const pre = sentence(59, "a"), endpoint = "Ready. ", remainder = sentence(14, "b"), nextParagraph = sentence(15, "c");
+    const reply = source(pre);
+    const next = () => reply.next(settings, "natural", 4096)?.text;
+    expect(next()).toBeUndefined();
+    append(reply, 1, endpoint); expect(next()).toBe((pre + endpoint).trimEnd());
+    append(reply, 2, remainder); expect(next()).toBeUndefined();
+    append(reply, 3, "Done. "); expect(next()).toBe(remainder + "Done.");
+    append(reply, 4, "", true); append(reply, 5, nextParagraph);
+    expect(next()).toBeUndefined();
+    append(reply, 6, "", true); expect(next()).toBe(nextParagraph.trimEnd());
+  });
+  it("qualifies an oversized group before splitting and preserves sentence boundaries and the short remainder", () => {
+    const reply = source("Extraordinarily. ");
+    const next = () => reply.next(settings, "responsive", 9)?.text;
+    expect(next()).toBeUndefined();
+    append(reply, 1, "Two words. "); expect(next()).toBeUndefined();
+    append(reply, 2, "And three more.");
+    const chunks = [];
+    for (let text = next(); text; text = next()) chunks.push(text);
+    expect(chunks.every(text => text.length <= 9)).toBe(true);
+    expect(chunks).toEqual(["Extraordi", "narily.", "Two ", "words.", "And ", "three ", "more."]);
+  });
+  it("packs new sentences with the still-owed tail of an oversized group", () => {
+    const first = "Extraordinary developments. ";
+    const cap = first.trimEnd().length;
+    const reply = source(first); append(reply, 1, "A B C D. ");
+    expect(reply.next(settings, "responsive", cap)?.text).toBe(first.trimEnd());
+    append(reply, 2, "E F.");
+    expect(reply.next(settings, "responsive", cap)?.text).toBe("A B C D. E F.");
+    expect(reply.next(settings, "responsive", cap)).toBeUndefined();
+  });
+  it.each(["responsive", "balanced", "natural"] as const)("speaks the Both preamble immediately and only once in %s", mode => {
+    const reply = source("Yes.");
+    const both = { ...settings, speechContent: "both" as const };
+    expect(reply.next(both, mode, 1000)?.text).toBe("Agent finished\n\nTitle");
+    expect(reply.next(both, mode, 1000)).toBeUndefined();
+    reply.receive({ ...common, seq: 1, kind: "yield", reason: "markup" }, 20);
+    expect(reply.next(both, mode, 1000)?.text).toBe("Yes.");
+    expect(reply.next(both, mode, 1000)).toBeUndefined();
   });
   it("recognizes a fully drained physical prefix even when later words in the same sentence were corrected", () => {
-    const reply = source("Alpha alpha alpha alpha tail. ");
+    const reply = source("Alpha alpha alpha alpha long tail. ");
     const first = reply.next(settings, "responsive", 12)!;
     expect(first.text).toBe("Alpha alpha ");
     reply.frontier = first.frontier;

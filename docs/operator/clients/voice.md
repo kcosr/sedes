@@ -189,17 +189,26 @@ in Notifications. If Codex supplies the label later, ordinary playback starts
 when the progress update or turn finishes. Partial answers use their existing
 notification when the message finishes.
 
-| Choice | What you hear |
+| Choice | When the device can start the next group of message text |
 | --- | --- |
-| Off | The device waits for the progress update or turn to finish. |
-| Responsive | Read complete sentences as they arrive. A one- or two-word sentence joins the next complete sentence until the group has at least three words. |
-| Balanced | The opening sentence plays first. Later requests group ready sentences in the same paragraph, aiming for 240 characters. |
-| Natural | The device waits for a paragraph break, or for complete sentences to reach 320 characters in a longer paragraph. |
+| Off | When the progress update or turn finishes. |
+| Responsive | At a sentence ending, once at least **6 words** are ready. |
+| Balanced | At a sentence ending, once at least **15 words** are ready. |
+| Natural | At a paragraph break, once at least **15 words** are ready. In a paragraph that has reached **60 words**, any sentence ending also qualifies. |
 
-In Responsive, “It passed. The tests are green.” plays as one request. If the
-progress update or final answer ends with only “It passed.” left to read, it
-plays then. Short sentences stay within their own message. Balanced and Natural
-measure their length targets in UTF-16 units, including spaces between sentences.
+The word minimum applies to each new group. When several sentences are ready,
+the device takes as many as it can through a qualifying ending, within the
+device and speech provider’s request limits. If a qualifying group exceeds a
+limit, the device divides it into requests, preferring whole sentences. The
+60-word count in Natural carries across requests until the next paragraph.
+
+For example, “It passed. The tests are green.” supplies six words. Responsive
+can speak both sentences together. Balanced and Natural wait for more text.
+In every mode, when the message ends, the device reads whatever is left, even
+a single “Yes.” If the server ends early delivery before the message finishes,
+the device can speak the short remainder of the eligible prefix. Each group stays
+within its own message.
+
 An eligible plain-prose opening can play early. Markdown such as links, code,
 and lists moves the remaining text to playback when the message finishes. The
 queue gives each progress update and the final answer a separate position. **Next** skips
@@ -213,8 +222,10 @@ Between sentences, the microphone stays closed. If a reply yields its
 queue position, the device can play another notification and return to the
 remaining text when the progress update or turn finishes.
 
-With **Both**, each message starts with “Agent progress” or “Agent finished,”
-then the thread title, then the message text. Later sentences continue directly.
+With **Both**, the first eligible segment lets the device start the preamble
+as soon as the message reaches the speaker. It says “Agent progress” or
+“Agent finished,” then the thread title. The preamble can play while the device
+waits for enough body words. Later sentences continue directly.
 If another item speaks before a reply resumes, the device reintroduces the
 reply before reading the remaining text. “Agent finished” can introduce a final
 answer while the agent is still writing. Automatic listening and deferred

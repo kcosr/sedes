@@ -27,9 +27,9 @@ import { VoiceSpeechContent } from "./VoiceSpeechContent.js";
 
 const earlyReplyOptions = [
   ["off", "Off", "Wait for the progress update or turn to finish."],
-  ["responsive", "Responsive", "Read complete sentences as they arrive. Group short ones until they total three words."],
-  ["balanced", "Balanced", "Start with one sentence, then group ready sentences."],
-  ["natural", "Natural", "Prefer paragraphs, with breaks in long paragraphs."],
+  ["responsive", "Responsive", "Read ready sentences once they total 6 words."],
+  ["balanced", "Balanced", "Read ready sentences once they total 15 words."],
+  ["natural", "Natural", "Group at least 15 words at paragraph breaks. Allow sentence breaks once a paragraph reaches 60 words."],
 ] as const;
 const toggles = [
   ["pinDefaultVoiceThread", "Pin default thread", "Use this as the initial recording target while viewing other threads."],

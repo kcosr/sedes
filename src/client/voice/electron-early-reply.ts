@@ -8,10 +8,11 @@ import type { NativeEarlyReplyPlaybackMode, NativeVoiceSettings } from "./native
 type Begin = Extract<EarlyReplyFrame, { kind: "begin" }>;
 const encoder = new TextEncoder();
 const digest = (text: string) => bytesToHex(sha256(encoder.encode(text)));
-const responsiveMinimumWords = 3;
+const minimumWords = { responsive: 6, balanced: 15, natural: 15 };
+const longParagraphWords = 60;
 const wordSegmenter = new Intl.Segmenter("und", { granularity: "word" });
 
-function responsiveWordCount(text: string): number {
+function wordCount(text: string): number {
   let count = 0;
   let previousEnd = -1;
   for (const { segment, index } of wordSegmenter.segment(text)) {
@@ -21,7 +22,6 @@ function responsiveWordCount(text: string): number {
     const numericSuffix = index === previousEnd && /^\p{No}+$/u.test(segment);
     if (!joinedWord && !numericSuffix) {
       count++;
-      if (count === responsiveMinimumWords) break;
     }
     previousEnd = index + segment.length;
   }
@@ -56,9 +56,10 @@ export class ElectronEarlyReply {
   changed?: () => void;
   cancelLookahead?: () => void;
   readonly #frames = new Map<number, string>();
-  readonly #ends: Array<{ end: number; paragraph: boolean; words?: number }> = [];
+  readonly #ends: Array<{ end: number; paragraph: boolean; totalWords: number; paragraphWords: number }> = [];
   #presentation?: Pick<NativeVoiceSettings, "cleanSpeechText" | "speechContent">;
   #nextSentence = 0;
+  #qualifiedThrough = -1;
   #prepared = "";
   #physical: EarlySpeechChunk[] = [];
   constructor(frame: Begin, now: number, readonly streamId: string) {
@@ -81,8 +82,12 @@ export class ElectronEarlyReply {
     if (frame.kind === "begin" || frame.kind === "append") {
       const bytes = encoder.encode(frame.text).length;
       if (frame.rawStart !== this.raw.length || this.rawBytes + bytes > MAX_EARLY_REPLY_BYTES) return "invalid";
-      if (frame.text) this.#ends.push({ end: frame.rawEnd, paragraph: frame.paragraphEnd });
-      else {
+      if (frame.text) {
+        const previous = this.#ends.at(-1);
+        const words = wordCount(frame.text);
+        this.#ends.push({ end: frame.rawEnd, paragraph: frame.paragraphEnd, totalWords: (previous?.totalWords ?? 0) + words,
+          paragraphWords: (previous && !previous.paragraph ? previous.paragraphWords : 0) + words });
+      } else {
         const last = this.#ends.at(-1);
         if (!last || last.paragraph) return "invalid";
         last.paragraph = true;
@@ -100,47 +105,57 @@ export class ElectronEarlyReply {
     return { ...settings, ...this.#presentation };
   }
 
-  #responsiveEnd(first: number): number | undefined {
-    let count = 0;
+  #bodyEnd(mode: Exclude<NativeEarlyReplyPlaybackMode, "off">, clean: boolean, limit: number): number | undefined {
+    const first = this.#nextSentence;
+    const eligible: number[] = [];
+    const previousWords = this.#ends[first - 1]?.totalWords ?? 0;
+    // A qualified group can span several physical requests. Its remaining
+    // sentences are already eligible, even if its last request is short.
     for (let index = first; index < this.#ends.length; index++) {
       const span = this.#ends[index]!;
-      span.words ??= responsiveWordCount(this.raw.slice(this.#ends[index - 1]?.end ?? 0, span.end));
-      count += span.words;
-      if (count >= responsiveMinimumWords) return index;
+      if (index <= this.#qualifiedThrough || this.yielded || span.totalWords - previousWords >= minimumWords[mode] &&
+          (mode !== "natural" || span.paragraph || span.paragraphWords >= longParagraphWords)) eligible.push(index);
     }
-    if (this.yielded) return this.#ends.length - 1;
+    if (!eligible.length) return;
+    const firstEligible = eligible[0]!, lastEligible = eligible.at(-1)!;
+    if (first === lastEligible) return first;
+
+    // Measure prepared speech, including normalized paragraph separators. A
+    // large backlog only needs logarithmically many cumulative Markdown renders.
+    const fits = (index: number) => electronSpeechText(this.raw.slice(0, this.#ends[index]!.end), clean)
+      .slice(this.#prepared.length).trimStart().length <= limit;
+    if (fits(lastEligible)) return lastEligible;
+    let low = first, high = lastEligible - 1;
+    while (low <= high) {
+      const middle = Math.floor((low + high) / 2);
+      if (fits(middle)) low = middle + 1;
+      else high = middle - 1;
+    }
+    const fitting = eligible.findLast(index => index <= high);
+    if (fitting !== undefined) return fitting;
+    this.#qualifiedThrough = Math.max(this.#qualifiedThrough, firstEligible);
+    return Math.max(first, high);
   }
 
   /** Requests are planned from exact cumulative Markdown, including separators supplied across frames. */
   next(settings: NativeVoiceSettings, mode: NativeEarlyReplyPlaybackMode, limit: number): EarlySpeechChunk | undefined {
     if (this.#physical.length) return this.#physical.shift();
-    const first = this.#nextSentence, start = first ? this.#ends[first - 1]!.end : 0;
-    let endIndex = first;
-    const firstSentence = this.#ends[first];
-    if (!firstSentence || this.retired || this.#yield === "presentation" || mode === "off") return;
-    if (mode === "responsive") {
-      const ready = this.#responsiveEnd(first);
-      if (ready === undefined) return;
-      endIndex = ready;
-    } else if (mode === "balanced" && first > 0) {
-      while (!this.#ends[endIndex]!.paragraph && this.#ends[endIndex + 1] && this.#ends[endIndex + 1]!.end - start <= 240) endIndex++;
-    } else if (mode === "natural") {
-      while (!this.#ends[endIndex]!.paragraph && this.#ends[endIndex]!.end - start < 320) {
-        if (!this.#ends[endIndex + 1]) { if (!this.yielded) return; break; }
-        endIndex++;
+    if (this.retired || this.#yield === "presentation" || mode === "off") return;
+    if (!this.#presentation && settings.speechContent === "both") {
+      this.#presentation = { cleanSpeechText: settings.cleanSpeechText, speechContent: settings.speechContent };
+      this.#preamble = prepareSpeechParts([earlyReplyAnnouncement(this.identity.event), this.identity.threadTitle], settings);
+      for (const chunk of voiceChunkRanges(this.#preamble, limit)) {
+        this.#physical.push({ text: chunk.text, preambleEnd: chunk.end });
       }
+      return this.#physical.shift();
     }
+    const endIndex = this.#bodyEnd(mode, settings.cleanSpeechText, limit);
+    if (endIndex === undefined) return;
     const end = this.#ends[endIndex]!.end;
     const raw = this.raw.slice(0, end);
     const prepared = electronSpeechText(raw, settings.cleanSpeechText);
     if (!prepared.startsWith(this.#prepared)) {
       this.#yield = "presentation"; return;
-    }
-    if (!first && settings.speechContent === "both") {
-      this.#preamble = prepareSpeechParts([earlyReplyAnnouncement(this.identity.event), this.identity.threadTitle], settings);
-      for (const chunk of voiceChunkRanges(this.#preamble, limit)) {
-        this.#physical.push({ text: chunk.text, preambleEnd: chunk.end });
-      }
     }
     const addition = prepared.slice(this.#prepared.length).trimStart();
     const startOffset = prepared.length - addition.length;
