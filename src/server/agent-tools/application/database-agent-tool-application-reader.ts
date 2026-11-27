@@ -22,6 +22,11 @@ import {
   requireAdmittedResource,
   type TrustedEnvironmentAuthorityGrant,
 } from "../environment/environment-authority.js";
+import {
+  projectThreadGroup,
+  threadGroupMembershipJoins,
+  type ThreadGroupMembershipRow,
+} from "./thread-group-membership-read.js";
 import { projectAgentThreadSnooze } from "./thread-snooze-presentation.js";
 
 function activity(runState: ThreadRunState): ThreadStatusResult["activity"] {
@@ -103,6 +108,7 @@ export class DatabaseAgentToolApplicationReader
       .prepare(
         `
           SELECT backend.kind AS backendKind, principal.pinned,
+            thread_group.id AS groupId, thread_group.name AS groupName,
             principal.inventory_state AS inventoryState,
             principal.snoozed_until AS snoozedUntil,
             principal.wake_reminder_text AS wakeReminderText
@@ -111,6 +117,7 @@ export class DatabaseAgentToolApplicationReader
             ON principal.tenant_id = thread.tenant_id
             AND principal.principal_id = thread.owner_principal_id
             AND principal.thread_id = thread.id
+          ${threadGroupMembershipJoins}
           JOIN agent_backend_instances AS backend
             ON backend.tenant_id = thread.tenant_id
             AND backend.id = thread.backend_instance_id
@@ -119,19 +126,20 @@ export class DatabaseAgentToolApplicationReader
         `,
       )
       .get(scope.tenantId, scope.principalId, threadId) as
-      | {
+      | (ThreadGroupMembershipRow & {
           readonly backendKind: BackendKind;
           readonly pinned: 0 | 1;
           readonly inventoryState: ThreadStatusResult["lifecycle"];
           readonly snoozedUntil: number | null;
           readonly wakeReminderText: string | null;
-        }
+        })
       | undefined;
     if (!row) return undefined;
     return {
       threadId: source.id,
       backend: row.backendKind,
       pinned: row.pinned === 1,
+      group: projectThreadGroup(row),
       lifecycle: row.inventoryState,
       ...projectAgentThreadSnooze(row),
       activity: activity(snapshot.thread.runState),

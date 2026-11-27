@@ -264,6 +264,10 @@ pinned. Pinning is independent of Active, Snoozed, Parked, and Archived state.
 Pin state follows you across clients. The selected view, Pinned-only setting,
 and whether the Pinned section is expanded are local browser preferences.
 
+Grant `thread.set_pinned` to let an agent pin or unpin a thread. For example,
+“pin this thread” targets the conversation where you ask. An agent can also
+pin an archived thread while it stays archived.
+
 ## Create and use Groups
 
 Each thread may belong to one persistent Group. From a thread's context menu,
@@ -297,6 +301,13 @@ Groups remain available until explicitly deleted.
 
 Group membership survives snooze, park, and archive. Card-density rows show
 the Group as a quick-filter badge; compact rows omit the badge.
+
+An agent with `thread_group.list` can look up your Groups by name, including
+empty Groups. Grant `thread.set_group` to let it move a thread into an
+existing Group or remove it, including while the thread is archived. Grant
+`thread_group.create` separately to let it create a named Group with one
+thread as its first member. To find the threads it can access in a Group, the
+agent uses the Group filter on `thread.list`.
 
 ## Stack related rows
 

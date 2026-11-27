@@ -64,6 +64,7 @@ const outputSchema = {
 } as const satisfies CanonicalAgentToolRootSchema;
 
 const threadControl = {} as AgentThreadControlToolServices;
+const threadGroupDirectory = { listDirectoryPage: () => ({ items: [] }) };
 const webSearch = {
   search: vi.fn(async () => ({
     text: "answer",
@@ -164,7 +165,7 @@ describe("AgentToolRegistry", () => {
         ({ id, schemaVersion }) => `${id}@${schemaVersion}`,
       ),
     );
-    expect(CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES).toHaveLength(89);
+    expect(CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES).toHaveLength(93);
   });
 
   it("assembles the complete production catalog only with every domain adapter", () => {
@@ -179,6 +180,7 @@ describe("AgentToolRegistry", () => {
       threadCreation,
       savedAgents,
       threadControl,
+      threadGroupDirectory,
       webSearch,
       threadWorktrees,
       workpads: {} as WorkpadAgentToolService,
@@ -247,6 +249,7 @@ describe("AgentToolRegistry", () => {
       threadCreation: {} as AgentThreadCreationService,
       savedAgents: {} as SavedAgentCanonicalToolService,
       threadControl,
+      threadGroupDirectory,
       webSearch,
       threadWorktrees,
       workpads: {} as WorkpadAgentToolService,
@@ -258,7 +261,7 @@ describe("AgentToolRegistry", () => {
     });
     const summaries = canonical.catalogSummaries("cli", "thread_agent");
 
-    expect(summaries).toHaveLength(89);
+    expect(summaries).toHaveLength(93);
     expect(
       Buffer.byteLength(JSON.stringify({ tools: summaries }), "utf8"),
     ).toBeLessThanOrEqual(AGENT_TOOL_MAXIMUM_CATALOG_SUMMARY_BYTES);
@@ -345,6 +348,7 @@ describe("AgentToolRegistry", () => {
       threadCreation: {} as AgentThreadCreationService,
       savedAgents: {} as SavedAgentCanonicalToolService,
       threadControl,
+      threadGroupDirectory,
       webSearch,
       threadWorktrees,
       workpads: {} as WorkpadAgentToolService,
@@ -456,6 +460,7 @@ describe("AgentToolRegistry", () => {
       threadCreation: {} as AgentThreadCreationService,
       savedAgents: {} as SavedAgentCanonicalToolService,
       threadControl,
+      threadGroupDirectory,
       webSearch,
       threadWorktrees,
       workpads: {} as WorkpadAgentToolService,
@@ -523,6 +528,8 @@ describe("AgentToolRegistry", () => {
         "thread.list.v6.json",
         "thread.list.v9.json",
         "thread.status.v5.json",
+        "thread.status.v6.json",
+        "thread.list.v10.json",
         "removed.tool.v1.json",
         "legacy.json",
         "README.json.tmp",
@@ -557,14 +564,14 @@ describe("AgentToolRegistry", () => {
     expect(registry.resolveAdapterName("cli", "thread.status").id).toBe(
       "thread.status",
     );
-    expect(registry.artifact("thread.status", 6)).toMatchObject({
+    expect(registry.artifact("thread.status", 7)).toMatchObject({
       deployment: { eligible: true },
       adapters: {
         http: { invocation: "inline" },
         cli: { command: "thread.status" },
       },
     });
-    expect(() => registry.get("thread.status", 5)).toThrow();
+    expect(() => registry.get("thread.status", 6)).toThrow();
   });
 
   it("names every MCP presentation like its Pi native tool", () => {
@@ -577,7 +584,7 @@ describe("AgentToolRegistry", () => {
     expect(
       registry.resolveAdapterName("mcp", "sedes_thread_status").id,
     ).toBe("thread.status");
-    expect(registry.artifact("thread.status", 6)).toMatchObject({
+    expect(registry.artifact("thread.status", 7)).toMatchObject({
       exposure: { adapters: ["cli", "http", "mcp", "pi_rpc", "pi_sdk"] },
       adapters: { mcp: { name: "sedes_thread_status" } },
       execution: { adapterWaitCeilingMilliseconds: { mcp: 30_000 } },

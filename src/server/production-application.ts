@@ -2138,6 +2138,8 @@ export async function startProductionApplication(
         threads: inventoryRepository,
         lineage: lineageRepository,
         archives: threadArchives,
+        groupAssignments: threadGroupRepository,
+        groups: threadGroups,
         transitions: inventory,
       }),
     };
@@ -2196,6 +2198,7 @@ export async function startProductionApplication(
       automations: automationAgentTools,
       savedAgents,
       threadCreation: savedAgents,
+      threadGroupDirectory: threadGroupRepository,
       threadControl: threadControlAgentTools,
       webSearch,
       threadWorktrees: new ThreadWorktreeAgentToolService(

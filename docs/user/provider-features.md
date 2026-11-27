@@ -186,6 +186,19 @@ within its tool scope. With no target, the tool uses the agent's own thread. A
 snooze takes a future wake time and an optional reminder. The `thread.status`
 and `thread.list` reads show the wake time and reminder of snoozed threads.
 
+The **Threads** catalog has four separate grants for organizing work.
+
+- `thread.set_pinned` pins or unpins a thread.
+- `thread_group.list` lists the IDs and names of your Groups, including empty
+  Groups. Use `thread.list` to find members within the agent's tool scope.
+- `thread.set_group` assigns a thread to an existing Group or removes it.
+- `thread_group.create` creates a named Group and moves one thread into it.
+
+The three writes default to the agent's own thread or a Tool client's
+configured default thread. They also accept a specific thread within scope.
+Organizing an archived thread leaves it archived. Both `thread.status` and
+`thread.list` show the thread's pin and current Group.
+
 Delegated work is evaluated under the destination thread's own policy. An
 agent cannot give a newly created thread broader tools or scope than its own.
 See the [Agent-tools contract](../internals/agent-tools.md) for the complete

@@ -50,6 +50,7 @@ const sourceThreadIds: Record<BackendKind, string> = {
   antigravity: "019196f7-a0a8-7bc4-a89b-8cf013978416",
 };
 const targetThreadId = "019196f7-a0a8-7bc4-a89b-8cf013978420";
+const groupId = "019196f7-a0a8-7bc4-a89b-8cf013978423";
 const childThreadId = "019196f7-a0a8-7bc4-a89b-8cf013978421";
 
 afterEach(async () => {
@@ -161,6 +162,10 @@ function fixture() {
           "thread.archive",
           "thread.restore",
           "thread.set_state",
+          "thread.set_pinned",
+          "thread.set_group",
+          "thread_group.list",
+          "thread_group.create",
         ],
       },
     ]),
@@ -270,6 +275,19 @@ function fixture() {
         requireThread(input.threadId);
         return { threadId: input.threadId };
       },
+      async setPinned(requestScope, input) {
+        expect(requestScope).toEqual(scope);
+        return { threadId: input.threadId ?? input.environmentAuthority.defaults.threadId!, pinned: input.pinned };
+      },
+      async setGroup(requestScope, input) {
+        expect(requestScope).toEqual(scope);
+        return { threadId: input.threadId ?? input.environmentAuthority.defaults.threadId!, groupId: input.groupId };
+      },
+      async createGroup(requestScope, input) {
+        expect(requestScope).toEqual(scope);
+        expect(input.name).toBe("Review");
+        return { threadId: input.threadId ?? input.environmentAuthority.defaults.threadId!, groupId };
+      },
       async setState(
         requestScope: RequestScope,
         input: Parameters<AgentThreadControlToolServices["inventory"]["setState"]>[1],
@@ -280,7 +298,7 @@ function fixture() {
         return { threadId, lifecycle: input.lifecycle };
       },
     },
-  };
+  } satisfies AgentThreadControlToolServices;
   const application = {
     async readThreadStatus(requestScope: RequestScope, threadId: string) {
       expect(requestScope).toEqual(scope);
@@ -290,6 +308,7 @@ function fixture() {
         backend: "pi" as const,
         lifecycle: "active" as const,
         pinned: false,
+        group: null,
         activity: "idle" as const,
       };
     },
@@ -345,6 +364,12 @@ function fixture() {
   const canonical = new CanonicalInlineAgentToolService({
     application,
     threadControl: controls,
+    threadGroupDirectory: {
+      listDirectoryPage(requestScope) {
+        expect(requestScope).toEqual(scope);
+        return { items: [{ id: groupId, name: "Review" }] };
+      },
+    },
     additionalDefinitions: [threadCreation],
     invocationId: () => "agent-control-invocation",
     mutationId: () => "019196f7-a0a8-7bc4-a89b-8cf013978430",
@@ -467,6 +492,10 @@ describe("agent control tools through canonical adapters", () => {
             "thread.archive",
             "thread.restore",
             "thread.set_state",
+            "thread.set_pinned",
+            "thread.set_group",
+            "thread_group.list",
+            "thread_group.create",
           ]),
         );
       await request(value.app)
@@ -494,7 +523,7 @@ describe("agent control tools through canonical adapters", () => {
       expect(
         value.canonical
           .catalog(adapter, "thread_agent")
-          .filter(({ id }) => id.startsWith("thread."))
+          .filter(({ catalog }) => catalog.groupId === "threads")
           .map(({ id }) => id),
       ).toEqual([
         "thread.status",
@@ -505,6 +534,10 @@ describe("agent control tools through canonical adapters", () => {
         "thread.archive",
         "thread.restore",
         "thread.set_state",
+        "thread.set_pinned",
+        "thread.set_group",
+        "thread_group.list",
+        "thread_group.create",
       ]);
       if (backend === "pi") {
         await expect(
@@ -595,9 +628,7 @@ describe("agent control tools through canonical adapters", () => {
                 ? 5
                 : toolId === "thread.send"
                   ? 2
-                : toolId === "thread.status"
-                  ? 4
-                  : 1,
+                : 1,
           requestId,
           input,
         });
@@ -642,7 +673,7 @@ describe("agent control tools through canonical adapters", () => {
       )
       .send({
         toolId: "thread.status",
-        schemaVersion: 6,
+        schemaVersion: 7,
         requestId: "status-parent",
         input: { threadId: targetThreadId },
       })
@@ -781,6 +812,10 @@ describe("agent control tools through canonical adapters", () => {
         "thread.archive",
         "thread.restore",
         "thread.set_state",
+        "thread.set_pinned",
+        "thread.set_group",
+        "thread_group.list",
+        "thread_group.create",
       ]);
       const created = JSON.parse(
         (
@@ -887,6 +922,12 @@ describe("agent control tools through canonical adapters", () => {
       expect(JSON.parse((await run([
         "thread", "set-state", "--thread-id", targetThreadId, "--lifecycle", "parked", "--json",
       ], "individual")).stdout)).toEqual({ threadId: targetThreadId, lifecycle: "parked" });
+      const named = async (...args: string[]) => JSON.parse((await run([...args, "--json"], "individual")).stdout);
+      expect(await named("thread", "set-pinned", "--pinned", "false")).toEqual({ threadId: sourceThreadId, pinned: false });
+      expect(await named("thread-group", "create", "--name", "Review")).toEqual({ threadId: sourceThreadId, groupId });
+      expect(await named("thread-group", "list")).toEqual({ items: [{ id: groupId, name: "Review" }] });
+      expect(await named("thread", "set-group", "--group-id", groupId)).toEqual({ threadId: sourceThreadId, groupId });
+      expect(await named("thread", "set-group", "--group-id-json", "null")).toEqual({ threadId: sourceThreadId, groupId: null });
       value.policies.get(sourceThreadId)!.presentation = {
         surface: "cli", mode: "progressive",
       };

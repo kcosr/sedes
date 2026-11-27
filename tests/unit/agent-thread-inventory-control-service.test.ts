@@ -69,7 +69,9 @@ describe("AgentThreadInventoryControlService", () => {
       },
       lineage: { listFamilyThreadIds: vi.fn() },
       archives: { archive: vi.fn(), park },
-      transitions: { transition },
+      transitions: { transition, setPinned: vi.fn() },
+      groupAssignments: { getAssignment: vi.fn() },
+      groups: { updateAssignment: vi.fn() },
     });
 
     await expect(service.setState(scope, {
@@ -80,6 +82,58 @@ describe("AgentThreadInventoryControlService", () => {
     expect(getInventory).not.toHaveBeenCalled();
     expect(park).not.toHaveBeenCalled();
     expect(transition).not.toHaveBeenCalled();
+  });
+
+  it("checks target admission before reading even an already-satisfied pin or membership", async () => {
+    const getInventory = vi.fn();
+    const getAssignment = vi.fn();
+    const service = new AgentThreadInventoryControlService({
+      inventory: { getInventory },
+      threads: { getThread: vi.fn(() => thread("thread-1", "environment-1", "moved-workspace")) },
+      lineage: { listFamilyThreadIds: vi.fn() },
+      archives: { archive: vi.fn(), park: vi.fn() },
+      transitions: { transition: vi.fn(), setPinned: vi.fn() },
+      groupAssignments: { getAssignment },
+      groups: { updateAssignment: vi.fn() },
+    });
+    const context = { environmentAuthority, mutationId: "mutation-1" };
+    for (const request of [
+      () => service.setPinned(scope, { ...context, pinned: false }),
+      () => service.setGroup(scope, { ...context, groupId: null }),
+      () => service.createGroup(scope, { ...context, name: "Planning" }),
+    ]) {
+      await expect(request()).rejects.toMatchObject({ code: "permission_denied" });
+    }
+    expect(getInventory).not.toHaveBeenCalled();
+    expect(getAssignment).not.toHaveBeenCalled();
+  });
+
+  it("reports revision conflicts from concurrent edits without retrying a write", async () => {
+    const getInventory = vi.fn(() => ({ pinRevision: 11, pinned: 0 }) as never);
+    const setPinned = vi.fn().mockRejectedValue(new DomainError("pin_revision_conflict", "Pin changed."));
+    const getAssignment = vi.fn(() => ({ threadId: "thread-1", groupId: null, revision: 6 }));
+    const updateAssignment = vi.fn().mockRejectedValue(new DomainError("group_assignment_revision_conflict", "Group changed."));
+    const service = new AgentThreadInventoryControlService({
+      inventory: { getInventory },
+      threads: { getThread: vi.fn(() => thread("thread-1")) },
+      lineage: { listFamilyThreadIds: vi.fn() },
+      archives: { archive: vi.fn(), park: vi.fn() },
+      transitions: { transition: vi.fn(), setPinned },
+      groupAssignments: { getAssignment },
+      groups: { updateAssignment },
+    });
+    const context = { mutationId: "mutation-1", environmentAuthority };
+    await expect(service.setPinned(scope, { ...context, pinned: true }))
+      .rejects.toMatchObject({ code: "pin_revision_conflict" });
+    expect(setPinned).toHaveBeenCalledExactlyOnceWith(scope, "thread-1", {
+      mutationId: "mutation-1", expectedRevision: 11, pinned: true,
+    });
+    const groupId = "5d90f8cc-d73d-4cdc-b03a-37c80f7f9433";
+    await expect(service.setGroup(scope, { ...context, groupId }))
+      .rejects.toMatchObject({ code: "group_assignment_revision_conflict" });
+    expect(updateAssignment).toHaveBeenCalledExactlyOnceWith(scope, "thread-1", {
+      action: "assign", groupId, mutationId: "mutation-1", expectedRevision: 6,
+    });
   });
 
   it("archives from the current scoped revision and preserves explicit family/task choices", async () => {
@@ -93,7 +147,9 @@ describe("AgentThreadInventoryControlService", () => {
       threads: { getThread },
       lineage: { listFamilyThreadIds },
       archives: { archive, park: vi.fn() },
-      transitions: { transition },
+      transitions: { transition, setPinned: vi.fn() },
+      groupAssignments: { getAssignment: vi.fn() },
+      groups: { updateAssignment: vi.fn() },
     });
 
     await expect(
@@ -127,7 +183,9 @@ describe("AgentThreadInventoryControlService", () => {
       threads: { getThread },
       lineage: { listFamilyThreadIds: vi.fn(() => ["thread-1"]) },
       archives: { archive, park: vi.fn() },
-      transitions: { transition },
+      transitions: { transition, setPinned: vi.fn() },
+      groupAssignments: { getAssignment: vi.fn() },
+      groups: { updateAssignment: vi.fn() },
     });
 
     await service.archive(scope, {
@@ -170,7 +228,9 @@ describe("AgentThreadInventoryControlService", () => {
       threads: { getThread: vi.fn((_scope, id: string) => thread(id)) },
       lineage: { listFamilyThreadIds: vi.fn(() => ["thread-1"]) },
       archives: { archive, park: vi.fn() },
-      transitions: { transition },
+      transitions: { transition, setPinned: vi.fn() },
+      groupAssignments: { getAssignment: vi.fn() },
+      groups: { updateAssignment: vi.fn() },
     });
 
     await expect(
@@ -199,7 +259,9 @@ describe("AgentThreadInventoryControlService", () => {
         listFamilyThreadIds: vi.fn(() => ["thread-1", "thread-2"]),
       },
       archives: { archive, park: vi.fn() },
-      transitions: { transition: vi.fn() },
+      transitions: { transition: vi.fn(), setPinned: vi.fn() },
+      groupAssignments: { getAssignment: vi.fn() },
+      groups: { updateAssignment: vi.fn() },
     });
 
     await expect(
@@ -232,7 +294,9 @@ describe("AgentThreadInventoryControlService", () => {
         listFamilyThreadIds: vi.fn(() => ["thread-1", "thread-2"]),
       },
       archives: { archive, park: vi.fn() },
-      transitions: { transition: vi.fn() },
+      transitions: { transition: vi.fn(), setPinned: vi.fn() },
+      groupAssignments: { getAssignment: vi.fn() },
+      groups: { updateAssignment: vi.fn() },
     });
 
     await expect(

@@ -166,6 +166,7 @@ describe("Sedes CLI", () => {
       threadCreation: {} as NonNullable<Dependencies["threadCreation"]>,
       savedAgents: {} as NonNullable<Dependencies["savedAgents"]>,
       threadControl: {} as NonNullable<Dependencies["threadControl"]>,
+      threadGroupDirectory: {} as NonNullable<Dependencies["threadGroupDirectory"]>,
       threadWorktrees: {} as NonNullable<Dependencies["threadWorktrees"]>,
       webSearch: {} as NonNullable<Dependencies["webSearch"]>,
       executionConfiguration: {} as NonNullable<Dependencies["executionConfiguration"]>,
@@ -649,7 +650,7 @@ describe("Sedes CLI", () => {
           return json({ csrfToken: "csrf" });
         expect(JSON.parse(String(init?.body))).toMatchObject({
           toolId: "thread.status",
-          schemaVersion: 6,
+          schemaVersion: 7,
           input: { threadId: targetThreadId },
         });
         return json({
@@ -661,6 +662,7 @@ describe("Sedes CLI", () => {
             lifecycle: "parked",
             activity: "idle",
             pinned: false,
+            group: null,
           },
         });
       },

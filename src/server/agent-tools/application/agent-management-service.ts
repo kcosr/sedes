@@ -40,6 +40,12 @@ import {
   projectAgentThreadSnooze,
   type AgentThreadSnoozeFields,
 } from "./thread-snooze-presentation.js";
+import {
+  projectThreadGroup,
+  threadGroupMembershipJoins,
+  type AgentThreadGroup,
+  type ThreadGroupMembershipRow,
+} from "./thread-group-membership-read.js";
 
 export const AGENT_MANAGEMENT_DEFAULT_PAGE_SIZE = 50;
 export const AGENT_MANAGEMENT_MAXIMUM_PAGE_SIZE = 100;
@@ -91,6 +97,7 @@ export interface AgentThreadSummary extends AgentThreadSnoozeFields {
   readonly backend: BackendKind;
   readonly lifecycle: NormalizedThreadSummary["inventoryState"];
   readonly pinned: boolean;
+  readonly group: AgentThreadGroup | null;
   readonly activity: AgentThreadActivity;
   readonly automations: AgentThreadAutomations;
 }
@@ -366,6 +373,7 @@ export class AgentManagementService {
     request: {
       readonly scope?: AgentThreadListScope;
       readonly query?: string;
+      readonly groupId?: string | null;
       readonly lifecycle?: AgentThreadSummary["lifecycle"];
       readonly lastActivityAfter?: string;
       readonly hasAutomation?: boolean;
@@ -422,6 +430,7 @@ export class AgentManagementService {
       ),
       request.query ?? null,
       request.lifecycle ?? null,
+      request.groupId === undefined ? "all" : request.groupId,
       request.lastActivityAfter ?? null,
       request.hasAutomation ?? null,
       request.pageSize,
@@ -453,16 +462,22 @@ export class AgentManagementService {
       conditions.push("instr(lower(thread.title), lower(?)) > 0");
       parameters.push(request.query);
     }
+    if (request.groupId !== undefined) {
+      conditions.push("membership.group_id IS ?");
+      parameters.push(request.groupId);
+    }
     if (request.lifecycle !== undefined) {
       conditions.push("principal.inventory_state = ?");
       parameters.push(request.lifecycle);
     }
     if (request.hasAutomation !== undefined) {
-      conditions.push(
-        request.hasAutomation
-          ? "definition.id IS NOT NULL"
-          : "definition.id IS NULL",
-      );
+      conditions.push(`${request.hasAutomation ? "EXISTS" : "NOT EXISTS"} (
+        SELECT 1 FROM automation_definitions AS definition
+        WHERE definition.tenant_id = thread.tenant_id
+          AND definition.owner_principal_id = thread.owner_principal_id
+          AND definition.anchor_thread_id = thread.id
+          AND definition.deleted_at IS NULL
+      )`);
     }
     if (lastActivityAfter !== undefined) {
       conditions.push("thread.last_activity_at > ?");
@@ -478,6 +493,7 @@ export class AgentManagementService {
       .prepare(
         `
           SELECT thread.id, thread.last_activity_at AS sort, principal.pinned,
+            thread_group.id AS groupId, thread_group.name AS groupName,
             principal.inventory_state AS inventoryState,
             principal.snoozed_until AS snoozedUntil,
             principal.wake_reminder_text AS wakeReminderText,
@@ -490,6 +506,7 @@ export class AgentManagementService {
             ON principal.tenant_id = thread.tenant_id
             AND principal.principal_id = thread.owner_principal_id
             AND principal.thread_id = thread.id
+          ${threadGroupMembershipJoins}
           INNER JOIN agent_backend_instances AS backend
             ON backend.tenant_id = thread.tenant_id
             AND backend.id = thread.backend_instance_id
@@ -501,17 +518,12 @@ export class AgentManagementService {
             ON environment.tenant_id = thread.tenant_id
             AND environment.owner_principal_id = thread.owner_principal_id
             AND environment.id = thread.environment_id
-          LEFT JOIN automation_definitions AS definition
-            ON definition.tenant_id = thread.tenant_id
-            AND definition.owner_principal_id = thread.owner_principal_id
-            AND definition.anchor_thread_id = thread.id
-            AND definition.deleted_at IS NULL
           WHERE ${conditions.join(" AND ")}
           ORDER BY thread.last_activity_at DESC, thread.id ASC
           LIMIT ?
         `,
       )
-      .all(...parameters, request.pageSize + 1) as Array<{
+      .all(...parameters, request.pageSize + 1) as Array<ThreadGroupMembershipRow & {
       readonly id: string;
       readonly sort: number;
       readonly pinned: number;
@@ -565,6 +577,7 @@ export class AgentManagementService {
           lifecycle: row.inventoryState,
           ...projectAgentThreadSnooze(row),
           pinned: row.pinned === 1,
+          group: projectThreadGroup(row),
           activity: activity(runState),
           automations: summary.automations,
         };

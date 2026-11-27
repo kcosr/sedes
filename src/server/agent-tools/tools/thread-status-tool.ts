@@ -10,7 +10,7 @@ import type {
   ThreadStatusResult,
 } from "./agent-tool-readers.js";
 import { CANONICAL_AGENT_TOOL_MANIFEST } from "../registry/canonical-agent-tool-manifest.js";
-import { threadSnoozeOutputProperties } from "./management-tool-schemas.js";
+import { threadGroupMembershipToolSchema, threadSnoozeOutputProperties } from "./management-tool-schemas.js";
 
 const manifest = CANONICAL_AGENT_TOOL_MANIFEST["thread.status"];
 export const threadStatusToolId = manifest.id;
@@ -50,12 +50,13 @@ export const threadStatusToolContract = {
           maxLength: 17,
           enum: ["idle", "running", "waiting_for_input"],
         }),
+        group: threadGroupMembershipToolSchema,
         pinned: Type.Boolean({ description: "Whether this thread is pinned for the current user." }),
       },
       {
         $schema: AGENT_TOOL_JSON_SCHEMA_DIALECT,
         additionalProperties: false,
-        maxProperties: 7,
+        maxProperties: 8,
       },
     ),
   ),

@@ -73,6 +73,7 @@ function createCrossEnvironmentComposition() {
     backend: "pi" as const,
     lifecycle: "active" as const,
     pinned: false,
+    group: null,
     activity: "idle" as const,
   }));
   const canonical = new CanonicalInlineAgentToolService({
@@ -163,7 +164,7 @@ function invokeRemoteThreadStatus(
     adapter: "cli",
     request: {
       toolId: "thread.status",
-      schemaVersion: 6,
+      schemaVersion: 7,
       requestId: "cross-environment-request",
       input: { threadId: "remote-thread" },
     },
@@ -275,7 +276,7 @@ firstAuthority, testAgentToolExecutionAuthority);
         adapter: "http",
         request: {
           toolId: "thread.status",
-          schemaVersion: 6,
+          schemaVersion: 7,
           requestId: "pre-restart-active-work",
           input: { threadId: thread.thread.id },
         },
@@ -503,6 +504,18 @@ secondAuthority, testAgentToolExecutionAuthority);
             restore: vi.fn(async (_scope, input) => ({
               threadId: input.threadId,
             })),
+            setPinned: vi.fn(async (_scope, input) => ({
+              threadId: input.threadId ?? thread.thread.id,
+              pinned: input.pinned,
+            })),
+            setGroup: vi.fn(async (_scope, input) => ({
+              threadId: input.threadId ?? thread.thread.id,
+              groupId: input.groupId,
+            })),
+            createGroup: vi.fn(async (_scope, input) => ({
+              threadId: input.threadId ?? thread.thread.id,
+              groupId: "019196f7-a0a8-7bc4-a89b-8cf013978435",
+            })),
             setState: vi.fn(async (_scope, input) => ({
               threadId: input.threadId ?? thread.thread.id,
               lifecycle: input.lifecycle,
@@ -541,6 +554,9 @@ sourceAuthority, testAgentToolExecutionAuthority);
         "thread.archive",
         "thread.restore",
         "thread.set_state",
+        "thread.set_pinned",
+        "thread.set_group",
+        "thread_group.create",
         "client.list", "client.end_interaction", "client.switch_thread", "client.settings.get", "client.settings.update", "client.replay_turn",
       ]);
       expect(providerTools.eligibleCatalog("cli").map(({ id }) => id)).toEqual(
@@ -682,7 +698,7 @@ sourceAuthority, testAgentToolExecutionAuthority);
       await associated(request(app).post("/api/agent-tool-invocations"))
         .send({
           toolId: "thread.status",
-          schemaVersion: 6,
+          schemaVersion: 7,
           requestId: "status-request",
           input: { threadId: thread.thread.id },
         })
@@ -694,6 +710,7 @@ sourceAuthority, testAgentToolExecutionAuthority);
             lifecycle: "parked",
             activity: "waiting_for_input",
             pinned: false,
+            group: null,
           }),
         );
       expect(snapshot).toHaveBeenCalledWith(scope, thread.thread.id);
@@ -719,7 +736,7 @@ sourceAuthority, testAgentToolExecutionAuthority);
       await associated(request(app).post("/api/agent-tool-invocations"))
         .send({
           toolId: "thread.status",
-          schemaVersion: 6,
+          schemaVersion: 7,
           requestId: "snoozed-status-request",
           input: { threadId: thread.thread.id },
         })
@@ -733,6 +750,7 @@ sourceAuthority, testAgentToolExecutionAuthority);
             wakeReminder: "Review the build",
             activity: "waiting_for_input",
             pinned: false,
+            group: null,
           }),
         );
       await associated(request(app).post("/api/agent-tool-invocations"))

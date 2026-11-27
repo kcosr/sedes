@@ -300,6 +300,7 @@ describe("CanonicalInlineAgentToolService", () => {
       snoozedUntil,
       wakeReminder,
       pinned: false,
+      group: null,
       activity: "waiting_for_input" as const,
     }));
     const service = new CanonicalInlineAgentToolService({
@@ -310,7 +311,7 @@ describe("CanonicalInlineAgentToolService", () => {
       service.invoke(
         {
           toolId: "thread.status",
-          schemaVersion: 6,
+          schemaVersion: 7,
           requestId: "request-3",
           input: { threadId: "target-thread" },
         },
@@ -324,6 +325,7 @@ describe("CanonicalInlineAgentToolService", () => {
         snoozedUntil,
         wakeReminder,
         pinned: false,
+        group: null,
         activity: "waiting_for_input",
       },
     });
@@ -343,7 +345,7 @@ describe("CanonicalInlineAgentToolService", () => {
       service.invoke(
         {
           toolId: "thread.status",
-          schemaVersion: 6,
+          schemaVersion: 7,
           requestId: "missing",
           input: { threadId: "missing-thread" },
         },
@@ -385,7 +387,7 @@ describe("CanonicalInlineAgentToolService", () => {
     const invocation = service.invoke(
       {
         toolId: "thread.status",
-        schemaVersion: 6,
+        schemaVersion: 7,
         requestId: "in-flight-cancel",
         input: { threadId: "target-thread" },
       },
@@ -469,7 +471,7 @@ describe("CanonicalInlineAgentToolService", () => {
       const invocation = service.invoke(
         {
           toolId: "thread.status",
-          schemaVersion: 6,
+          schemaVersion: 7,
           requestId: "deadline",
           input: { threadId: "target-thread" },
         },

@@ -527,18 +527,18 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
   "thread.status": manifestEntry({
     environmentAuthority: { kind: "direct_resource", resource: "thread" },
     id: "thread.status",
-    schemaVersion: 6,
+    schemaVersion: 7,
     description:
-      "Returns a Sedes thread's lifecycle, activity, read-only pin state, and any snooze deadline and reminder.",
+      "Returns a Sedes thread's lifecycle, activity, pin state, Group membership, and any snooze deadline and reminder.",
     catalog: { groupId: "threads", label: "Thread status", order: 10 },
     effects: { application: "read", modelUsage: "none", external: "none" },
   }),
   "thread.list": manifestEntry({
     environmentAuthority: { kind: "scoped_query", resource: "thread" },
     id: "thread.list",
-    schemaVersion: 10,
+    schemaVersion: 11,
     description:
-      "Searches admitted Sedes threads with lifecycle, activity, read-only pin state, and snooze details. Defaults to the caller's configured environment with newest activity first.",
+      "Searches admitted Sedes threads with lifecycle, activity, pin state, Group membership, and snooze details. Filter by groupId, or use null for ungrouped threads. Defaults to the caller's configured environment with newest activity first.",
     catalog: { groupId: "threads", label: "List threads", order: 20 },
     effects: { application: "read", modelUsage: "none", external: "none" },
   }),
@@ -627,6 +627,42 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
     description:
       "Parks, unparks, snoozes, or wakes one Sedes thread. Omit threadId to target the calling thread or the Tool client's configured default. Parking keeps Tasks and stashes attached. Set a parked thread to active before snoozing it. A thread already in the requested lifecycle keeps its current settings. Use thread.restore for archived threads.",
     catalog: { groupId: "threads", label: "Set thread state", order: 85 },
+    effects: { application: "write", modelUsage: "none", external: "none" },
+  }),
+  "thread.set_pinned": manifestEntry({
+    environmentAuthority: { kind: "direct_resource", resource: "thread", defaultToSource: true },
+    id: "thread.set_pinned",
+    schemaVersion: 1,
+    description:
+      "Pins or unpins a thread for the current user, including archived threads. Omit threadId for the calling thread or configured default. Setting the current pin value succeeds without changing it.",
+    catalog: { groupId: "threads", label: "Set thread pin", order: 86 },
+    effects: { application: "write", modelUsage: "none", external: "none" },
+  }),
+  "thread.set_group": manifestEntry({
+    environmentAuthority: { kind: "direct_resource", resource: "thread", defaultToSource: true },
+    id: "thread.set_group",
+    schemaVersion: 1,
+    description:
+      "Moves one thread into an existing Group, or removes it when groupId is null. Accepts archived threads. Omit threadId for the calling thread or configured default. Setting the current membership succeeds without changing it.",
+    catalog: { groupId: "threads", label: "Set thread Group", order: 87 },
+    effects: { application: "write", modelUsage: "none", external: "none" },
+  }),
+  "thread_group.list": manifestEntry({
+    environmentAuthority: { kind: "environment_neutral" },
+    id: "thread_group.list",
+    schemaVersion: 1,
+    description:
+      "Lists the current user's Group IDs and names across projects and environments, including empty Groups. Use thread.list with groupId to find admitted members.",
+    catalog: { groupId: "threads", label: "List thread Groups", order: 88 },
+    effects: { application: "read", modelUsage: "none", external: "none" },
+  }),
+  "thread_group.create": manifestEntry({
+    environmentAuthority: { kind: "direct_resource", resource: "thread", defaultToSource: true },
+    id: "thread_group.create",
+    schemaVersion: 1,
+    description:
+      "Creates a named Group and assigns one founding thread, including an archived thread. Omit threadId for the calling thread or configured default. Duplicate names conflict. After an uncertain result, check the thread and Group directory before retrying.",
+    catalog: { groupId: "threads", label: "Create thread Group", order: 89 },
     effects: { application: "write", modelUsage: "none", external: "none" },
   }),
   "saved_agent.list": manifestEntry({

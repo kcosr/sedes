@@ -201,7 +201,7 @@ describe("agent-tool environment authority", () => {
   });
 
   it("declares an explicit disposition for the complete canonical catalog", () => {
-    expect(CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES).toHaveLength(89);
+    expect(CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES).toHaveLength(93);
     expect(
       CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES.every(
         ({ environmentAuthority }) => environmentAuthority.kind.length > 0,
@@ -440,18 +440,24 @@ describe("agent-tool environment authority", () => {
       resolver.resolve(request("saved_agent.get", { agentId: "agent-a" }))
         .targetEnvironmentIds,
     ).toEqual([]);
+    expect(resolver.resolve(request("thread_group.list", {})).resolvedResourceRefs).toEqual([]);
     expect(resolver.resolve({...request("environment.list",{}), defaults:{kind:"principal_client",environmentId:"env-a"},admittedEnvironmentIds:["env-a"]}).targetEnvironmentIds).toEqual([]);
   });
 
-  it("defaults thread lifecycle changes to the caller and enforces scope", () => {
+  it.each([
+    ["thread.set_state", { lifecycle: "parked" }],
+    ["thread.set_pinned", { pinned: true }],
+    ["thread.set_group", { groupId: null }],
+    ["thread_group.create", { name: "Planning" }],
+  ] as const)("defaults %s to the caller and enforces scope", (toolId, input) => {
     const resolver = new AgentToolEnvironmentAuthorityResolver(reader);
-    const change = request("thread.set_state", { lifecycle: "parked" });
+    const change = request(toolId, input);
     const resourceScope = { allowOtherEnvironments: false, allowOtherProjects: false };
     expect(resolver.resolve({ ...change, resourceScope }).resolvedResourceRefs)
       .toMatchObject([{ kind: "thread", id: "thread-a" }]);
     expect(() => resolver.resolve({
       ...change, resourceScope,
-      input: { threadId: "thread-b", lifecycle: "parked" },
+      input: { ...input, threadId: "thread-b" },
     })).toThrow(expect.objectContaining({ code: "permission_denied" }));
 
     const principal = {

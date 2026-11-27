@@ -58,7 +58,7 @@ function fakeClient(
     state: "completed" as const,
     output:
       request.toolId === "thread.status"
-        ? { threadId, backend: "codex_app_server", lifecycle: "active", activity: "idle", pinned: false }
+        ? { threadId, backend: "codex_app_server", lifecycle: "active", activity: "idle", pinned: false, group: null }
         : { backend: "codex_app_server", threadId, workspaceId: "workspace-1" },
   })),
 ) {
@@ -174,7 +174,7 @@ describe("sedes mcp server", () => {
   it("delivers standard PNG blocks through the official MCP client", async () => {
     const media = { type: "image" as const, mimeType: "image/png" as const,
       data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j3x8AAAAASUVORK5CYII=" };
-    const output = { threadId, backend: "codex_app_server", lifecycle: "active", activity: "idle", pinned: false };
+    const output = { threadId, backend: "codex_app_server", lifecycle: "active", activity: "idle", pinned: false, group: null };
     const { mcp } = await connect(fakeClient(catalog(), async () => ({ invocationId: "image-call", state: "completed", output, modelContent: [media] })));
     await mcp.listTools();
     const result = await mcp.callTool({ name: "sedes_thread_status", arguments: { threadId } });
@@ -212,9 +212,9 @@ describe("sedes mcp server", () => {
     expect(status).toMatchObject({
       title: "Thread status",
       inputSchema: { type: "object", additionalProperties: false },
-      outputSchema: { type: "object", required: ["activity", "backend", "lifecycle", "pinned", "threadId"] },
+      outputSchema: { type: "object", required: ["activity", "backend", "group", "lifecycle", "pinned", "threadId"] },
       annotations: { readOnlyHint: true, openWorldHint: false },
-      _meta: { "sedes/toolId": "thread.status", "sedes/schemaVersion": 6 },
+      _meta: { "sedes/toolId": "thread.status", "sedes/schemaVersion": 7 },
     });
     expect(status.inputSchema).not.toHaveProperty("$schema");
     expect(status.outputSchema).not.toHaveProperty("$schema");
@@ -248,6 +248,7 @@ describe("sedes mcp server", () => {
       lifecycle: "active",
       activity: "idle",
       pinned: false,
+      group: null,
     });
     expect(JSON.parse((result.content as { text: string }[])[0]!.text)).toEqual(
       result.structuredContent,
@@ -255,7 +256,7 @@ describe("sedes mcp server", () => {
     expect(client.invoke).toHaveBeenCalledWith(
       {
         toolId: "thread.status",
-        schemaVersion: 6,
+        schemaVersion: 7,
         requestId: "tool-request-1",
         input: { threadId },
       },
@@ -405,18 +406,18 @@ describe("sedes mcp server", () => {
       arguments: { action: "describe", toolIds: ["thread.status"] },
     });
     expect(described.structuredContent).toMatchObject({
-      tools: [{ id: "thread.status", schemaVersion: 6 }],
+      tools: [{ id: "thread.status", schemaVersion: 7 }],
     });
 
     const read = await mcp.callTool({
       name: "sedes_read",
-      arguments: { toolId: "thread.status", schemaVersion: 6, input: { threadId } },
+      arguments: { toolId: "thread.status", schemaVersion: 7, input: { threadId } },
     });
     expect(read.structuredContent).toMatchObject({ threadId, lifecycle: "active" });
 
     const wrongLane = await mcp.callTool({
       name: "sedes_act",
-      arguments: { toolId: "thread.status", schemaVersion: 6, input: { threadId } },
+      arguments: { toolId: "thread.status", schemaVersion: 7, input: { threadId } },
     });
     expect(wrongLane.isError).toBe(true);
     expect((wrongLane.content as { text: string }[])[0]!.text).toContain("sedes_read");

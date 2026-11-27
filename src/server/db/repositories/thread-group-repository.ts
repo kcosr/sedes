@@ -22,6 +22,11 @@ export interface ThreadGroupAssignmentRecord {
   readonly revision: number;
 }
 
+export interface ThreadGroupDirectoryPage {
+  readonly items: readonly Pick<ThreadGroupRecord, "id" | "name">[];
+  readonly nextCursor?: string;
+}
+
 interface GroupMutationReceipt {
   readonly operationKind: string;
   readonly requestFingerprint: string;
@@ -52,6 +57,22 @@ function normalizeName(name: string): { name: string; nameKey: string } {
   };
 }
 
+function directoryCursorPosition(cursor: string, expectedFingerprint: string): string {
+  const invalid = () => new DomainError("cursor_invalid", "The thread Group directory cursor is invalid.");
+  if (cursor.length > 2_048 || !/^[A-Za-z0-9_-]+$/.test(cursor)) throw invalid();
+  let position: unknown;
+  try {
+    position = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
+  } catch {
+    throw invalid();
+  }
+  if (!Array.isArray(position) || position.length !== 2 || position[0] !== expectedFingerprint ||
+      typeof position[1] !== "string" || position[1].length === 0 || position[1].length > 240) {
+    throw invalid();
+  }
+  return position[1];
+}
+
 function isUniqueConstraint(error: unknown): boolean {
   return (
     error instanceof Error &&
@@ -65,6 +86,44 @@ function isUniqueConstraint(error: unknown): boolean {
 /** Principal-scoped persistence for durable groups and singular membership. */
 export class ThreadGroupRepository {
   constructor(readonly database: Database.Database) {}
+
+  listDirectoryPage(
+    scope: RequestScope,
+    input: {
+      readonly query?: string;
+      readonly cursor?: string;
+      readonly pageSize: number;
+      readonly authorityDigest: string;
+    },
+  ): ThreadGroupDirectoryPage {
+    const { pageSize } = input;
+    if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > 100) {
+      throw new DomainError("bad_request", "The Group directory page size must be between 1 and 100.");
+    }
+    const queryKey = input.query === undefined ? "" : normalizeName(input.query).nameKey;
+    const queryFingerprint = fingerprint([
+      "thread_group.list", scope.tenantId, scope.principalId, input.authorityDigest, queryKey, pageSize,
+    ]);
+    const after = input.cursor === undefined ? "" : directoryCursorPosition(input.cursor, queryFingerprint);
+    // name_key is nonempty and unique within this principal, including for empty Groups.
+    const rows = this.database.prepare(`
+      SELECT id, name, name_key AS nameKey
+      FROM thread_groups
+      WHERE tenant_id = ? AND principal_id = ? AND name_key > ? AND instr(name_key, ?) > 0
+      ORDER BY name_key
+      LIMIT ?
+    `).all(scope.tenantId, scope.principalId, after, queryKey, pageSize + 1) as Array<{
+      id: string; name: string; nameKey: string;
+    }>;
+    const retained = rows.slice(0, pageSize);
+    const last = retained.at(-1);
+    return {
+      items: retained.map(({ id, name }) => ({ id, name })),
+      ...(rows.length > pageSize && last ? {
+        nextCursor: Buffer.from(JSON.stringify([queryFingerprint, last.nameKey])).toString("base64url"),
+      } : {}),
+    };
+  }
 
   list(scope: RequestScope): readonly ThreadGroupRecord[] {
     return this.database
