@@ -381,7 +381,14 @@ test("dragging individual threads creates a group and adds to its stack", async 
     const composer = page.getByTestId("composer");
     const message = composer.getByRole("textbox");
     await message.fill("Compare both.");
-    await message.press("Home");
+    const lineStart = await message.evaluate(element => {
+      const range = document.createRange();
+      range.setStart(element.firstChild!, 0);
+      range.collapse(true);
+      const caret = range.getBoundingClientRect();
+      return { x: caret.left, y: caret.top + caret.height / 2 };
+    });
+    await page.mouse.click(lineStart.x, lineStart.y);
     await expect.poll(() => message.evaluate(element => element.ownerDocument.getSelection()?.focusOffset)).toBe(0);
     const bounds = (await composer.boundingBox())!;
     const editorBounds = (await message.boundingBox())!;
