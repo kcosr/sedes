@@ -28,11 +28,12 @@ import { SavedAgentService } from "../../src/server/domain/saved-agent-service.j
 import type { NormalizedAgentConfigurationOverrides } from "../../src/shared/protocol/saved-agents.js";
 import { savedAgentDatabase, insertPreRootGrantWorkspace } from "../support/saved-agent-fixture.js";
 
-function antigravityConnection({ database, scope }: ReturnType<typeof savedAgentDatabase>) {
+function antigravityConnection({ database, scope }: ReturnType<typeof savedAgentDatabase>,
+  releases = compiledBackendModuleCatalog.protocolReleases()) {
   const profiles = new BackendConfigurationRepository(database);
   const environmentId = profiles.listProfiles(scope)[0]!.executionEnvironmentId;
   const configuration = new ConfigurationRepository(database, () => 220);
-  const projection = new ConfigurationProjection(database, compiledBackendModuleCatalog.protocolReleases(), () => 220);
+  const projection = new ConfigurationProjection(database, releases, () => 220);
   const current = configuration.get(scope);
   configuration.save(scope, { mutationId: randomUUID(), expectedRevision: current.revision, configuration: {
     ...current.configuration,
@@ -46,6 +47,28 @@ function antigravityConnection({ database, scope }: ReturnType<typeof savedAgent
 }
 
 describe("Antigravity persistence", () => {
+  it("reconciles an existing 1.5.14 backend to the qualified release once while retaining its target", () => {
+    const { database, scope } = savedAgentDatabase();
+    try {
+      const releases = compiledBackendModuleCatalog.protocolReleases();
+      const connection = antigravityConnection({ database, scope }, { ...releases, antigravity: "1.5.14" });
+      const profiles = new BackendConfigurationRepository(database);
+      const backend = profiles.getBackend(scope, connection.backendInstanceId);
+      const target = profiles.getProfileByTemplate(scope, "ag-default");
+      expect(backend.protocolRelease).toBe("1.5.14");
+
+      const saved = new ConfigurationRepository(database).get(scope);
+      const projection = new ConfigurationProjection(database, releases);
+      for (let startup = 0; startup < 2; startup++) {
+        database.transaction(() => projection.project(scope, saved.configuration))();
+        expect(profiles.getBackend(scope, connection.backendInstanceId)).toEqual({
+          ...backend, protocolRelease: "1.5.18", configurationRevision: backend.configurationRevision + 1,
+        });
+        expect(profiles.getProfileByTemplate(scope, "ag-default")).toEqual(target);
+      }
+    } finally { database.close(); }
+  });
+
   function renameGatewayFixture(backingState: "unbound" | "bound" | "creating" | "creation_unknown") {
     const { database, scope } = savedAgentDatabase();
     const connection = antigravityConnection({ database, scope });

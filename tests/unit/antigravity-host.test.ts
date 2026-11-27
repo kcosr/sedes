@@ -42,6 +42,76 @@ async function drain(host: AntigravityHost, handleId: string): Promise<Antigravi
   await host.acknowledge({ handleId, throughSequence: observed.throughSequence }); return [...observed.events];
 }
 describe("Antigravity execution host", () => {
+  function replayInput(cwd: string, behavior: string) {
+    return { sessionId: "4c8ece79-6741-451f-8aa5-e01d576ed055", cwd,
+      executionEnvironment: { AGY_FIXTURE_LOAD_PERMISSION: { kind: "literal" as const, value: behavior } } };
+  }
+  it("attaches to the exact replayed approval while load waits for an answer, then publishes its settings", async () => {
+    const f = await fixture(), input = replayInput(f.cwd, "wait");
+    const [a, concurrent] = await Promise.all([f.host.attach(input), f.host.attach(input),
+      expect(f.host.attach({ sessionId: input.sessionId, cwd: input.cwd })).rejects.toMatchObject({ code: "antigravity_execution_environment_restart_required" })]);
+    expect(concurrent.handleId).toBe(a.handleId);
+    expect(a).toMatchObject({ loading: true, setup: { session: {} }, pendingPermissions: [{ request: { sessionId: input.sessionId } }] });
+    await expect(f.host.request({ handleId: a.handleId, operationId: "too-early", command: { type: "prompt", prompt: [] } }))
+      .rejects.toMatchObject({ code: "antigravity_session_loading", delivery: "not_sent" });
+    // The normal 1s load budget must not cap a human decision.
+    await new Promise(resolve => realSetTimeout(resolve, 1100));
+    const held = await f.host.attachExisting(input);
+    expect(held?.pendingPermissions).toEqual(a.pendingPermissions);
+    const command = { type: "permission" as const, requestId: a.pendingPermissions[0]!.requestId,
+      response: { outcome: { outcome: "selected" as const, optionId: "allow" } } };
+    expect(await f.host.request({ handleId: a.handleId, operationId: "answer", command })).toMatchObject({ status: "completed" });
+    await vi.waitFor(async () => {
+      const loaded = await f.host.attachExisting(input);
+      expect(loaded?.loading).toBeUndefined();
+      expect(loaded?.setup.session.configOptions).not.toHaveLength(0);
+      expect(loaded?.pendingPermissions).toEqual([]);
+    });
+    expect(await drain(f.host, a.handleId)).toContainEqual(expect.objectContaining({ kind: "session_loaded" }));
+  });
+  it.each(["stall", "fail"] as const)("closes a %s following a load decision and retains the answer until delivery", async behavior => {
+    const f = await fixture(), input = replayInput(f.cwd, behavior);
+    const a = await f.host.attach(input);
+    expect(a.loading).toBe(true);
+    const command = { type: "permission" as const, requestId: a.pendingPermissions[0]!.requestId, response: { outcome: { outcome: "cancelled" as const } } };
+    await f.host.request({ handleId: a.handleId, operationId: "answer", command });
+    await vi.waitFor(() => expect(f.host.snapshot().retainedSessions).toContainEqual(expect.objectContaining({ handleId: a.handleId, closed: true })),
+      { timeout: 5000 });
+    expect(await f.host.outcome({ handleId: a.handleId, operationId: "answer" })).toMatchObject({ status: "completed" });
+    expect(await drain(f.host, a.handleId)).toContainEqual(expect.objectContaining({ kind: "failure" }));
+    await f.host.acknowledgeOperation({ handleId: a.handleId, operationId: "answer" });
+    await f.host.release({ handleId: a.handleId });
+    expect(await f.host.attachExisting(input)).toBeNull();
+  });
+  it("rejects another session's early approval and requires verified native history before exposing the bound one", async () => {
+    const f = await fixture();
+    const foreign = await f.host.attach(replayInput(f.cwd, "wrong_session"));
+    expect(foreign.pendingPermissions).toEqual([]);
+    expect(foreign.loading).toBeUndefined();
+    const input = { ...replayInput(f.cwd, "wait"), sessionId: "7f093f32-f035-4796-93d3-cb0f4cfc4928" };
+    f.readHistory.mockRejectedValueOnce(new Error("identity mismatch"));
+    await expect(f.host.attach(input)).rejects.toMatchObject({ code: "antigravity_session_load_unavailable" });
+    expect(await f.host.attachExisting(input)).toBeNull();
+  });
+  it("allows Stop to cancel a replayed approval but keeps its outcome uncertain while load has not finished replay", async () => {
+    const f = await fixture(25), input = replayInput(f.cwd, "stall");
+    const a = await f.host.attach(input);
+    expect(a.pendingPermissions).toHaveLength(1);
+    await f.host.request({ handleId: a.handleId, operationId: "stop", command: { type: "cancel" } });
+    expect(await settled(f.host, a.handleId, "stop")).toMatchObject({ status: "failed", failure: { code: "antigravity_cancel_unproven" } });
+    expect((await f.host.attachExisting(input))?.pendingPermissions).toEqual([]);
+  });
+  it("retains an unanswered permission when load immediately supplies its settings", async () => {
+    const f = await fixture(), input = replayInput(f.cwd, "immediate");
+    const a = await f.host.attach(input);
+    await vi.waitFor(async () => {
+      const retained = await f.host.attachExisting(input);
+      expect(retained).toMatchObject({ handleId: a.handleId, pendingPermissions: [{ request: { sessionId: input.sessionId } }] });
+      expect(retained?.loading).toBeUndefined();
+    });
+    await f.host.close();
+    expect(f.host.snapshot().retainedSessions).toEqual([]);
+  });
   it("retires a proven-closed native session despite passive cache eviction failure", async () => {
     const f = await fixture(), identity = await f.host.create({ cwd: f.cwd, operationId: "create" });
     const { handleId } = await f.host.attach(identity);
@@ -220,9 +290,12 @@ describe("Antigravity execution host", () => {
   it("keeps Stop serviceable during a long running prompt and retains the exact terminal", async () => {
     const { host, cwd } = await fixture(); const identity = await host.create({ cwd, operationId: "creation" }); const { handleId } = await host.attach(identity);
     expect(await host.request({ handleId, operationId: "send", command: { type: "prompt", prompt: [{ type: "text", text: "wait" }] } })).toEqual({ status: "pending" });
+    expect((await host.attachExisting(identity))?.activePromptIds).toEqual(["send"]);
+    expect((await host.observe({ handleId, afterSequence: 0 })).activePromptIds).toEqual(["send"]);
     await expect(host.request({ handleId, operationId: "second", command: { type: "prompt", prompt: [{ type: "text", text: "hello" }] } })).rejects.toMatchObject({ code: "antigravity_session_busy" });
     await host.request({ handleId, operationId: "stop", command: { type: "cancel" } });
     expect(await settled(host, handleId, "send")).toMatchObject({ status: "completed", result: { stopReason: "cancelled" } });
+    expect((await host.observe({ handleId, afterSequence: 0 })).activePromptIds).toEqual([]);
   });
   it("preserves permissions on detach and denies allow decisions through retained-only authority", async () => {
     const { host, cwd } = await fixture(); const identity = await host.create({ cwd, operationId: "creation" }); const { handleId } = await host.attach(identity);

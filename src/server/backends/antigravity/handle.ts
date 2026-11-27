@@ -32,6 +32,7 @@ export class AntigravityHandle implements ConversationHandle {
   readonly #resolvedPermissions = new Set<string>();
   #permissionReadChanges?: Set<string>;
   #permissionSequence: number;
+  readonly #activePromptIds = new Set<string>();
   readonly #receipts = new Map<string, AntigravityOutcome>();
   readonly #acknowledgedOperations = new Set<string>();
   readonly #receiptWaiters = new Set<() => void>();
@@ -53,6 +54,7 @@ export class AntigravityHandle implements ConversationHandle {
   #lastAccountingAttemptAt = -Infinity;
   #deferredHistoryRefresh?: ReturnType<typeof setTimeout>;
   #setup: AntigravitySetup;
+  #loading: boolean;
   #sequence = 0;
   #journalBytes = 0;
   #after: number;
@@ -72,6 +74,7 @@ export class AntigravityHandle implements ConversationHandle {
   constructor(readonly driver: AntigravityDriver, readonly attached: AttachConversationInput,
     readonly detail: AntigravityBinding, readonly attachment: AntigravityAttachment) {
     this.binding = attached.binding; this.#setup = attachment.setup; this.#after = attachment.retainedAfterSequence;
+    this.#loading = attachment.loading === true;
     this.#permissionSequence = attachment.throughSequence;
     this.#configurationSequence = attachment.throughSequence;
     this.#accounting = new AntigravityUsage(driver.input.usage, this.binding, detail.nativeNamespaceKey);
@@ -94,15 +97,18 @@ export class AntigravityHandle implements ConversationHandle {
   get scope() { return { binding: this.detail, key: this.driver.input.correlationKey }; }
   get identity() { return { sessionId: this.detail.sessionId, cwd: this.detail.canonicalWorkspacePath }; }
   async initialize(): Promise<void> {
-    this.driver.input.modeCatalog?.observe(this.#setup);
+    if (!this.#loading) this.driver.input.modeCatalog?.observe(this.#setup);
     // Control is independent of transcript acquisition and revoked on owner loss.
     this.attached.onControlReady?.({ generation: this.attachment.generation, lifetime: this.#control.signal,
       interrupt: input => this.interrupt(input), reconcileInterrupt: input => this.reconcileInterrupt(input) });
     for (const pending of this.attachment.pendingPermissions) this.#permissions.set(pending.requestId, pending);
+    this.#observeActivePrompts(this.attachment.activePromptIds);
     await this.#refresh(false);
-    for (const operationId of this.attachment.retainedOperationIds) this.#receipts.set(operationId,
-      await this.driver.input.port.outcome({ handleId: this.attachment.handleId, operationId }, this.#lifetime.signal)
+    for (const operationId of this.attachment.retainedOperationIds) {
+      if (this.#receipts.has(operationId) || this.#acknowledgedOperations.has(operationId)) continue;
+      this.#receipts.set(operationId, await this.driver.input.port.outcome({ handleId: this.attachment.handleId, operationId }, this.#lifetime.signal)
         .catch(error => { throw antigravityReadError(error, this.#lifetime.signal); }));
+    }
     this.#loop = this.#observe();
   }
   #serialize<T>(operation: () => Promise<T>): Promise<T> {
@@ -121,6 +127,15 @@ export class AntigravityHandle implements ConversationHandle {
     for (const listener of this.#rawListeners) { try { listener(validated); } catch { /* Observers cannot change provider authority. */ } }
     for (const listener of this.#listeners) { try { listener(sequenced); } catch { /* Independent observer boundary. */ } }
     if (event.type === "interaction_opened") for (const wake of this.#receiptWaiters) wake();
+  }
+  #observeActivePrompts(ids: readonly string[]): void {
+    // A page can arrive after a local dispatch or settlement. Merge exact IDs
+    // and let the corresponding operation outcome retire each pending prompt.
+    for (const id of ids) {
+      if (this.#acknowledgedOperations.has(id)) continue;
+      this.#activePromptIds.add(id);
+      if (!this.#receipts.has(id)) this.#receipts.set(id, { status: "pending" });
+    }
   }
   async #refresh(emit: boolean, force = false): Promise<void> {
     const previousUsage = this.#projection?.usage;
@@ -154,12 +169,20 @@ export class AntigravityHandle implements ConversationHandle {
     const projection = { ...this.#nativeProjection, snapshot: { ...this.#nativeProjection.snapshot },
       usage: { ...this.#nativeProjection.usage } };
     if (this.#contextUsage) projection.usage.context = this.#contextUsage;
+    if (this.#loading) projection.snapshot.runState = "reconciling";
     if (projection.snapshot.runState === "reconciling" && this.#streaming) projection.snapshot.runState = "running";
     if (this.#permissions.size && (projection.snapshot.runState === "running" || projection.snapshot.runState === "reconciling"))
       projection.snapshot.runState = "running";
     if (this.#disconnected) projection.snapshot.runState = "disconnected";
     if (this.#pendingSubmit && projection.snapshot.runState === "idle" && !Object.values(projection.snapshot.turnsById).some(
       turn => turn.completionCorrelations?.includes(this.#pendingSubmit!))) projection.snapshot.runState = "starting";
+    // Recent agy releases keep an ACP callback open across non-daemon wakes.
+    // A terminal native turn still completes once, independently of when the
+    // execution host will admit the next ordinary prompt.
+    for (const id of this.#activePromptIds) if (this.#receipts.get(id)?.status !== "pending") this.#activePromptIds.delete(id);
+    const foregroundSettled = projection.snapshot.runState === "idle";
+    if (this.#activePromptIds.size && !this.#loading && (foregroundSettled || projection.snapshot.runState === "reconciling"))
+      projection.snapshot.runState = "running";
     if (this.#disconnected && projection.snapshot.backgroundActivity) {
       // Newer native evidence of background work invalidates the idle proof
       // taken before the disconnect; it never restores one.
@@ -168,7 +191,7 @@ export class AntigravityHandle implements ConversationHandle {
     }
     if (emit && this.#projection) this.#diff(this.#projection.snapshot, projection.snapshot);
     this.#projection = projection;
-    if (projection.snapshot.runState === "idle") this.#streaming = false;
+    if (foregroundSettled) this.#streaming = false;
     if (emit && JSON.stringify(previousUsage) !== JSON.stringify(projection.usage)) this.#emit({ type: "usage_changed", usage: projection.usage });
     if (this.#accountedRevision !== this.#native.native.revision && (changed || performance.now() - this.#lastAccountingAttemptAt >= 250)) {
       this.#lastAccountingAttemptAt = performance.now();
@@ -235,8 +258,16 @@ export class AntigravityHandle implements ConversationHandle {
         if (JSON.stringify(item) === JSON.stringify(before.itemsById[itemId])) continue;
         this.#emit({ type: item.status === "streaming" ? before.itemsById[itemId] ? "item_updated" : "item_started" : "item_completed", item });
       }
-      if (JSON.stringify(turn) !== JSON.stringify(previous)) this.#emit({ type: turn.status === "in_progress" ? "turn_updated" : "turn_completed", turn,
-        ...(!this.#streaming && turn.status !== "in_progress" ? { completionProvenance: "recovered" as const } : {}) });
+      if (JSON.stringify(turn) === JSON.stringify(previous)) continue;
+      // A late diagnostic can enrich a proven failure without settling the
+      // same operation again. A newly correlated submission still needs its
+      // completion even when the native turn was already terminal.
+      if (turn.status === "in_progress" || (previous?.status === turn.status &&
+          isDeepStrictEqual(previous.completionCorrelations, turn.completionCorrelations))) {
+        this.#emit({ type: "turn_updated", turn });
+      } else {
+        this.#emit({ type: "turn_completed", turn, ...(!this.#streaming ? { completionProvenance: "recovered" as const } : {}) });
+      }
     }
     if (before.runState !== after.runState || before.activeBackendTurnId !== after.activeBackendTurnId)
       this.#emit({ type: "run_state_changed", state: after.runState, ...(after.activeBackendTurnId ? { activeBackendTurnId: after.activeBackendTurnId } : {}) });
@@ -251,11 +282,21 @@ export class AntigravityHandle implements ConversationHandle {
           if (this.#closed) return;
           if (observed.retainedAfterSequence > this.#after) {
             this.#recovering = true; this.#streaming = false;
+            if (this.#loading) {
+              // The load response or a human decision may have fallen out of
+              // the bounded replay. Recover the exact handle's current state.
+              const retained = await this.driver.input.port.attachExisting(this.identity, this.#lifetime.signal);
+              if (!retained || retained.handleId !== this.attachment.handleId || retained.generation !== this.attachment.generation)
+                throw unavailable("The Antigravity session load is no longer retained.");
+              this.#applyRetainedSetup(retained);
+              this.#applyRetainedPermissions(retained);
+            }
             this.#emit({ type: "resnapshot_required", reason: "sequence_gap" });
           }
           for (const event of observed.events) if (event.sequence > this.#after) this.#accept(event);
           // ACP events have already entered the retained handle journal. Their
           // acknowledgement is independent of passive SQLite acquisition.
+          this.#observeActivePrompts(observed.activePromptIds);
           this.#after = observed.throughSequence;
           await this.driver.input.port.acknowledge({ handleId: this.attachment.handleId, throughSequence: this.#after }, this.#lifetime.signal);
           this.#disconnected = observed.closed;
@@ -280,15 +321,8 @@ export class AntigravityHandle implements ConversationHandle {
               this.#control.abort(); this.#emit({ type: "resnapshot_required", reason: "provider_handle_closed" }); return;
             }
             this.#applyRetainedSetup(retained);
-            if (retained.throughSequence >= this.#permissionSequence) {
-              const pendingIds = new Set(retained.pendingPermissions.map(pending => pending.requestId));
-              for (const id of this.#permissions.keys()) if (!changed.has(id) && !pendingIds.has(id)) this.#resolvePermission(id);
-              for (const pending of retained.pendingPermissions) if (!changed.has(pending.requestId)) this.#openPermission(pending);
-              // Inventory supersedes older permission events still awaiting
-              // delivery. A local response completed during this read wins.
-              this.#permissionSequence = retained.throughSequence;
-              for (const id of this.#resolvedPermissions) if (!pendingIds.has(id)) this.#resolvedPermissions.delete(id);
-            }
+            this.#observeActivePrompts(retained.activePromptIds);
+            this.#applyRetainedPermissions(retained, changed);
             this.#disconnected = false;
           });
           if (this.#control.signal.aborted) return;
@@ -312,6 +346,16 @@ export class AntigravityHandle implements ConversationHandle {
     this.#permissions.set(pending.requestId, pending);
     this.#emit({ type: "interaction_opened", interaction: permissionInteraction(pending) });
   }
+  #applyRetainedPermissions(retained: AntigravityAttachment, changed?: ReadonlySet<string>): void {
+    if (retained.throughSequence < this.#permissionSequence) return;
+    const pendingIds = new Set(retained.pendingPermissions.map(pending => pending.requestId));
+    for (const id of this.#permissions.keys()) if (!changed?.has(id) && !pendingIds.has(id)) this.#resolvePermission(id);
+    for (const pending of retained.pendingPermissions) if (!changed?.has(pending.requestId)) this.#openPermission(pending);
+    // Inventory supersedes older permission events still awaiting delivery.
+    // A local response completed during this read wins.
+    this.#permissionSequence = retained.throughSequence;
+    for (const id of this.#resolvedPermissions) if (!pendingIds.has(id)) this.#resolvedPermissions.delete(id);
+  }
   #resolvePermission(id: string): void {
     this.#permissionReadChanges?.add(id);
     if (this.#permissions.delete(id)) this.#emit({ type: "interaction_resolved", backendInteractionId: id });
@@ -329,9 +373,14 @@ export class AntigravityHandle implements ConversationHandle {
       if (!this.#acknowledgedOperations.has(event.operationId)) this.#receipts.set(event.operationId, event.outcome);
       for (const wake of this.#receiptWaiters) wake();
       if (event.operationId === this.#pendingSubmit && event.outcome.status !== "pending") this.#pendingSubmit = undefined;
+    } else if (event.kind === "session_loaded") {
+      if (event.sequence > this.#configurationSequence) {
+        this.#configurationSequence = event.sequence; this.#loading = false;
+        this.#applySetup({ initialize: this.#setup.initialize, session: event.session });
+      }
     } else if (event.kind === "update") {
       const update = event.notification.update;
-      if (update.sessionUpdate === "config_option_update" && event.sequence > this.#configurationSequence) {
+      if (!this.#loading && update.sessionUpdate === "config_option_update" && event.sequence > this.#configurationSequence) {
         this.#configurationSequence = event.sequence;
         this.#applyConfigOptions(update.configOptions);
       }
@@ -339,7 +388,7 @@ export class AntigravityHandle implements ConversationHandle {
         Number.isSafeInteger(update.size) && update.size > 0) {
         this.#contextUsage = { usedTokens: update.used, windowTokens: update.size, percent: update.used * 100 / update.size };
       }
-      if (!this.#recovering && event.sequence > this.attachment.throughSequence &&
+      if (!this.#loading && !this.#recovering && event.sequence > this.attachment.throughSequence &&
         (update.sessionUpdate === "agent_message_chunk" || update.sessionUpdate === "agent_thought_chunk")) this.#streaming = true;
     } else { this.#disconnected = true; }
   }
@@ -382,7 +431,9 @@ export class AntigravityHandle implements ConversationHandle {
       const outcome = await this.driver.input.port.request({ handleId: this.attachment.handleId, operationId, command }, this.#lifetime.signal);
       const observed = this.#receipts.get(operationId);
       const retained = observed && observed.status !== "pending" && outcome.status !== "completed" ? observed : outcome;
-      this.#receipts.set(operationId, retained); return retained;
+      this.#receipts.set(operationId, retained);
+      if (retained.status === "pending" && (command.type === "prompt" || command.type === "steer")) this.#activePromptIds.add(operationId);
+      return retained;
     } catch (error) {
       const mapped = antigravityTransportError(error);
       if (mapped instanceof BackendError && !mapped.crossedSubmissionBoundary) {
@@ -520,6 +571,7 @@ export class AntigravityHandle implements ConversationHandle {
   #applyRetainedSetup(retained: AntigravityAttachment): void {
     if (retained.throughSequence < this.#configurationSequence) return;
     this.#configurationSequence = retained.throughSequence;
+    this.#loading = retained.loading === true;
     this.#applySetup(retained.setup);
   }
   #applyConfigOptions(configOptions: SessionConfigOption[]): void {
@@ -528,7 +580,7 @@ export class AntigravityHandle implements ConversationHandle {
   #applySetup(setup: AntigravitySetup): void {
     const before = antigravityCapabilities(this.#setup, this.driver.connection.id);
     this.#setup = setup;
-    this.driver.input.modeCatalog?.observe(this.#setup);
+    if (!this.#loading) this.driver.input.modeCatalog?.observe(this.#setup);
     const capabilities = antigravityCapabilities(this.#setup, this.driver.connection.id);
     if (JSON.stringify(before) !== JSON.stringify(capabilities)) this.#emit({ type: "capabilities_changed", capabilities });
   }

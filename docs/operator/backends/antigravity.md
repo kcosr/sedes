@@ -45,7 +45,7 @@ native runtime. If you need them immediately, stop the existing backend after
 its work settles.
 
 The backend kind is `antigravity`, connection kind `antigravity_acp`, and
-configured protocol release `1.5.14`. Connection configuration accepts:
+configured protocol release `1.5.18`. Connection configuration accepts:
 
 ```json
 {
@@ -94,11 +94,14 @@ resume Antigravity. Archiving in Sedes does not delete native conversations.
 
 Foreground readiness and background activity are separate. Commands, scheduled
 work, and subagents can outlive a prompt and produce new messages or permission
-requests. Pending work and undelivered outcomes block ordinary runtime
-retirement. A disconnected runtime is not evidence that work stopped.
+requests. While the CLI still holds a prompt open for background work, Send
+remains unavailable even after the foreground reply finishes. A standalone
+quota notice after a proven executor failure leaves the turn failed, with the
+quota message visible when you reopen the thread. Pending work and undelivered
+outcomes block ordinary runtime retirement. A disconnected runtime is not evidence that work stopped.
 
 Remote instances require an execution sidecar advertising
-`antigravity_runtime` capability 4. Upgrade main and the sidecar together before
+`antigravity_runtime` capability 5. Upgrade main and the sidecar together before
 enabling this backend. There is no local fallback when a remote host is offline.
 Reconnect restores exact retained session authority; it does not replay an
 uncertain submission or silently create another session.

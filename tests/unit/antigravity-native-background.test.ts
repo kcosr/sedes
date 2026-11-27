@@ -18,6 +18,12 @@ function field(number: number, value: string | number | Buffer): Buffer {
   const bytes = typeof value === "string" ? Buffer.from(value) : value; return Buffer.concat([varint(number * 8 + 2), varint(bytes.length), bytes]);
 }
 const proto = (...values: Buffer[]) => Buffer.concat(values);
+const quota = "Individual quota reached. Resets in 8m18s.";
+const quotaPayload = field(24, field(3, field(1, quota)));
+const systemSource = field(3, 5);
+function notice(metadata = systemSource, payload = quotaPayload, type = 17, status = 3) {
+  return proto(field(1, type), field(4, status), field(5, metadata), payload);
+}
 function response(status = 3, reason = 2) { return proto(field(1, 15), field(4, status), field(20, proto(field(1, "response"), field(12, reason)))); }
 function toolMetadata(name: string, source = 1, executionId?: string) { return proto(field(4, proto(field(1, "tool-call"), field(2, name), field(3, JSON.stringify({ CommandLine: "sleep 1", IsDaemon: false })))), field(38, source), ...(executionId ? [field(12, executionId)] : [])); }
 function generic(name: string, payload: Buffer, typeName: string, status = 3, source = 1, executionId?: string) {
@@ -53,6 +59,55 @@ async function cancelledChildFixture(status = 6) {
   return { ...f, child, executionId };
 }
 describe("Antigravity native background authority", () => {
+  it("marks only completed standalone system error messages, including benign notices with no displayed text", async () => {
+    const f = await fixture();
+    try {
+      const db = f.create(parentId);
+      f.step(db, 0, 17, 3, notice());
+      f.step(db, 1, 17, 3, notice(systemSource, field(24, field(3, proto(field(1, quota), field(4, 1))))));
+      f.step(db, 2, 17, 3, notice(field(3, 2)));
+      f.step(db, 3, 17, 3, notice(proto(systemSource, field(12, "owned"))));
+      f.step(db, 4, 17, 3, notice(proto(systemSource, toolMetadata("read_file"))));
+      f.step(db, 5, 17, 3, notice(systemSource, field(31, field(1, quota))));
+      f.step(db, 6, 17, 7, notice(systemSource, quotaPayload, 17, 7));
+      f.step(db, 7, 18, 3, notice(systemSource, quotaPayload, 18));
+      const { native } = await f.read();
+      expect(native.steps.filter(step => step.standaloneSystemDiagnostic).map(step => step.index)).toEqual([0, 1]);
+      expect(native.steps[0]?.error).toBe(quota);
+      expect(native.steps[1]?.error).toBeUndefined();
+    } finally { f.close(); }
+  });
+  it("keeps linked and embedded child states terminal across a standalone notice only with exact executor proof", async () => {
+    const f = await fixture();
+    try {
+      const parent = f.create(parentId), child = f.create(childId, parentId);
+      const exec = "child-execution";
+      const finalTool = generic("read_file", Buffer.alloc(0), "ReadFile", 3, 1, exec);
+      const receipt = proto(field(1, 1), field(9, exec));
+      f.step(child, 0, 132, 3, finalTool);
+      f.step(parent, 0, 132, 3, generic("invoke_subagent", field(2, proto(field(1, childId), field(3, pathToFileURL(f.root).href))), "InvokeSubagent"));
+      const embedded = (...tail: Buffer[]) => {
+        f.step(parent, 1, 132, 3, proto(generic("run_command", Buffer.alloc(0), "RunCommand"),
+          field(6, proto(field(6, childId), field(2, finalTool), ...tail))));
+        parent.exec("UPDATE steps SET has_subtrajectory = 1 WHERE idx = 1");
+      };
+      const expectChildStates = async (state: "terminal" | "unknown") => {
+        const { native } = await f.read();
+        expect(native.steps[0]?.subagents?.[0]?.state).toBe(state);
+        expect(native.steps[1]?.subtrajectoryState).toBe(state);
+        expect(antigravityNativeActivity(native).unknown).toBe(state === "unknown");
+      };
+      child.prepare("INSERT INTO executor_metadata VALUES (0, ?)").run(receipt);
+      embedded(field(9, receipt));
+      await expectChildStates("terminal");
+      f.step(child, 1, 17, 3, notice());
+      embedded(field(2, notice()), field(9, receipt));
+      await expectChildStates("terminal");
+      child.exec("DELETE FROM executor_metadata");
+      embedded(field(2, notice()));
+      await expectChildStates("unknown");
+    } finally { f.close(); }
+  });
   it.each((["child", "embedded"] as const).flatMap(kind => [1, 3, 6, 11].map(reason => ({ kind, reason }))))("keeps a failed tool tail in a $kind unknown until execution receipt $reason", async ({ kind, reason }) => {
     const f = await fixture();
     try {

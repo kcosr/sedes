@@ -6,7 +6,7 @@ import type { AntigravityNativeHistory, AntigravityNativeStep } from "./native-s
 import { inspectAntigravityInput, type AntigravitySubmissionScope } from "./submission.js";
 import { antigravityNativeActivity } from "./host/native-activity.js";
 import { MAXIMUM_BACKEND_SNAPSHOT_OR_PAGE_BYTES, serializedUtf8Bytes } from "../../../shared/protocol/payload.js";
-import { antigravityTerminatedExecutionHeads, antigravityNativeTerminalOutcome } from "./native-execution.js";
+import { antigravityTerminatedExecutionHeads, antigravityNativeTerminalOutcome, isAntigravityStandaloneDiagnostic } from "./native-execution.js";
 
 export const antigravityTurnId = (index: number): string => `input:${index}`;
 export function antigravitySteerConsumed(native: AntigravityNativeHistory, index: number): boolean {
@@ -36,6 +36,7 @@ export function projectAntigravityHistory(native: AntigravityNativeHistory, scop
   let turn: BackendTurn | undefined;
   let lastResponse: AntigravityNativeStep | undefined;
   let lastStep: AntigravityNativeStep | undefined;
+  let trailingDiagnostic: string | undefined;
   let inputExecutionId: string | undefined;
   let lastExecutionId: string | undefined;
   const terminated = antigravityTerminatedExecutionHeads(native);
@@ -56,9 +57,14 @@ export function projectAntigravityHistory(native: AntigravityNativeHistory, scop
       const terminal = terminated.get(lastStep.executionId);
       if (terminal?.index === lastStep.index) {
         turn.status = terminal.outcome; turn.endedBy = terminal.outcome;
-        if (terminal.outcome === "failed") turn.failure = { message: boundDisplayText(
-          lastStep.error && !lastStep.tool && !lastStep.command && (lastStep.response || lastStep.type === 17)
-            ? lastStep.error : "Antigravity execution stopped before completing.") };
+        if (terminal.outcome === "failed") {
+          const headError = !lastStep.tool && !lastStep.command && (lastStep.response || lastStep.type === 17)
+            ? lastStep.error : undefined;
+          // ERROR receipts may precede the system notice containing the user-facing cause.
+          // Leave failure unspecified until then so a later revision can enrich this turn.
+          const error = headError ?? (terminal.terminationReason === 1 ? trailingDiagnostic : "Antigravity execution stopped before completing.");
+          if (error) turn.failure = { message: boundDisplayText(error) };
+        }
         if (lastStep.completedAt) turn.completedAt = lastStep.completedAt;
       }
     }
@@ -134,7 +140,12 @@ export function projectAntigravityHistory(native: AntigravityNativeHistory, scop
     }
     if (step.error) add(step, "error", { semanticKind: "notice", tone: "error", text: boundText(step.error) } as BackendItem, "failed");
     if (step.executionId) lastExecutionId = step.executionId;
-    lastStep = step;
+    if (isAntigravityStandaloneDiagnostic(step)) {
+      trailingDiagnostic ??= step.error;
+    } else {
+      lastStep = step;
+      trailingDiagnostic = undefined;
+    }
   }
   settle();
   const active = Object.values(snapshot.turnsById).filter(value => value.status === "in_progress");

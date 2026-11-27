@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setTimeout as delay } from "node:timers/promises";
 import { createHash } from "node:crypto";
+import { ConversationProjector } from "../../src/server/conversations/conversation-projector.js";
 import type { BackendConversationEvent } from "../../src/shared/protocol/backend.js";
 import type { AgentBackendInstance, AgentConnectionProfile, AttachConversationInput, SubmitTurnInput } from "../../src/server/backends/contracts.js";
 import type { ValidatedWorkspace } from "../../src/server/execution/contracts.js";
+import { ANTIGRAVITY_PROTOCOL_RELEASE } from "../../src/server/backends/antigravity/release-profile.js";
 import { AntigravityDriver } from "../../src/server/backends/antigravity/driver.js";
 import { AntigravityError, type AntigravityAttachment, type AntigravityEvent, type AntigravityOutcome, type AntigravityPort } from "../../src/server/backends/antigravity/port.js";
 import type { AntigravityNativeHistory } from "../../src/server/backends/antigravity/native-schema.js";
@@ -21,7 +23,7 @@ const submit: SubmitTurnInput = { applicationOperationId: "send", mutationId: "m
   text: "  exact input\n", attachments: [], contextExcerpts: [], taskContexts: [] };
 
 function fixture(policy: BackendModelPolicy = { type: "catalog" }, usage?: UsageSink) {
-  const instance: AgentBackendInstance = { id: "backend", tenantId: scope.tenantId, kind: "antigravity", label: "Antigravity", enabled: true, configurationRevision: 0, protocolRelease: "1.5.14" };
+  const instance: AgentBackendInstance = { id: "backend", tenantId: scope.tenantId, kind: "antigravity", label: "Antigravity", enabled: true, configurationRevision: 0, protocolRelease: ANTIGRAVITY_PROTOCOL_RELEASE };
   const connection: AgentConnectionProfile = { id: "connection", tenantId: scope.tenantId, ownerPrincipalId: scope.principalId, backendInstanceId: instance.id,
     templateId: "template", executionEnvironmentId: "environment", kind: "antigravity_acp", label: "Antigravity", enabled: true, configurationRevision: 0 };
   const workspace: ValidatedWorkspace = { canonicalPath: identity.cwd, authorityRevision: 0, summary: { id: "workspace", environmentId: "environment",
@@ -29,7 +31,7 @@ function fixture(policy: BackendModelPolicy = { type: "catalog" }, usage?: Usage
   const native: AntigravityNativeHistory = { revision: "a".repeat(64), steps: [], executions: [] };
   let nativeContents = JSON.stringify({ steps: native.steps, executions: native.executions });
   const attachment: AntigravityAttachment = { ...identity, handleId: "handle", generation: "generation", retainedAfterSequence: 0, throughSequence: 0,
-    retainedOperationIds: [], pendingPermissions: [], createdByOperationId: "creation", setup: { initialize: { protocolVersion: 1, agentCapabilities: { loadSession: true } },
+    retainedOperationIds: [], activePromptIds: [], pendingPermissions: [], createdByOperationId: "creation", setup: { initialize: { protocolVersion: 1, agentCapabilities: { loadSession: true } },
       session: { configOptions: [
         { type: "select", category: "model", id: "opaque-model", name: "Model", currentValue: "model", options: [{ value: "model", name: "Model" }, { value: "other", name: "Other" }] },
         { type: "select", category: "thought_level", id: "opaque-effort", name: "Effort", currentValue: "low", options: [{ value: "low", name: "Low" }] },
@@ -56,7 +58,7 @@ function fixture(policy: BackendModelPolicy = { type: "catalog" }, usage?: Usage
     }),
     outcome: vi.fn(async ({ operationId }) => receipts.get(operationId) ?? { status: "pending" as const }), acknowledgeOperation: vi.fn(async () => {}),
     observe: vi.fn(async ({ afterSequence }, signal) => { await delay(10, undefined, { signal });
-      return { events: events.filter(event => event.sequence > afterSequence), throughSequence: sequence, retainedAfterSequence: 0, closed: false }; }),
+      return { events: events.filter(event => event.sequence > afterSequence), throughSequence: sequence, retainedAfterSequence: 0, activePromptIds: [], closed: false }; }),
     acknowledge: vi.fn(async () => {}), release: vi.fn(async () => {}), retireSession: vi.fn(async () => "retired" as const),
     inspect: vi.fn(async () => ({ runtimeId: "runtime", state: "idle" as const, revision: "revision", blockers: [], retainedSessions: [] })),
     stop: vi.fn(async () => {}), close: vi.fn(async () => {}),
@@ -74,6 +76,96 @@ function fixture(policy: BackendModelPolicy = { type: "catalog" }, usage?: Usage
 }
 
 describe("Antigravity driver authority and projection", () => {
+  it("finishes the native turn once while its prompt callback holds admission across child work", async () => {
+    const f = fixture(), handle = await f.driver.attach(f.attached);
+    const events: BackendConversationEvent[] = [];
+    handle.subscribe(event => events.push(event));
+    const child = { sessionId: "a174e3ca-a552-40b7-9832-630a5a0c2b20", state: "active" as const };
+    vi.mocked(f.port.request).mockImplementationOnce(async ({ command, operationId }) => {
+      if (command.type !== "prompt" || command.prompt[0]?.type !== "text") throw new Error("Expected prompt");
+      const step = { status: 3, executionId: "foreground", hasSubtrajectory: false };
+      f.native.steps.push(
+        { ...step, index: 0, type: 14, user: { text: command.prompt[0].text } },
+        { ...step, index: 1, type: 132, subagents: [child] },
+        { ...step, index: 2, type: 15, response: { text: "Initial reply", thinking: "", stopReason: 2, toolCalls: [] } });
+      f.receipts.set(operationId, { status: "pending" });
+      return { status: "pending" };
+    });
+    await handle.submit(submit);
+    const projection = () => handle.establishProjection({ signal: new AbortController().signal });
+    expect((await projection()).snapshot).toMatchObject({ runState: "running", backgroundActivity: { agents: 1 },
+      turnsById: { "input:0": { status: "completed" } } });
+    expect((await projection()).snapshot.activeBackendTurnId).toBeUndefined();
+    await expect(handle.captureSubmissionRetryAnchor()).rejects.toMatchObject({ crossedSubmissionBoundary: false });
+    await expect(handle.submit({ ...submit, applicationOperationId: "later" })).rejects.toMatchObject({ crossedSubmissionBoundary: false });
+    expect(f.port.request).toHaveBeenCalledTimes(1);
+
+    vi.mocked(f.port.request).mockImplementationOnce(async ({ command }) => {
+      expect(command.type).toBe("cancel");
+      f.native.steps[1]!.subagents = [{ ...child, state: "cancelled" }];
+      const cancelled = { status: "completed" as const, result: { stopReason: "cancelled" } };
+      f.receipts.set("send", cancelled);
+      f.emit({ kind: "operation", operationId: "send", outcome: cancelled });
+      return { status: "completed", result: {} };
+    });
+    await handle.interrupt({ applicationOperationId: "stop", deadlineAt: Date.now() + 1000 });
+    await vi.waitFor(async () => expect((await projection()).snapshot).toMatchObject({ runState: "idle", backgroundActivity: { agents: 0 } }));
+    expect(events.filter(event => event.type === "turn_completed")).toHaveLength(1);
+    await expect(handle.captureSubmissionRetryAnchor()).resolves.toBe(f.native.revision);
+  });
+  it("restores held prompt admission on a cold attach and releases it after every prompt settles", async () => {
+    const f = fixture();
+    f.native.steps.push({ index: 0, type: 14, status: 3, hasSubtrajectory: false, user: { text: "Existing input" } },
+      { index: 1, type: 15, status: 3, hasSubtrajectory: false, response: { text: "Initial reply", thinking: "", stopReason: 2, toolCalls: [] } });
+    // An unrelated pending operation is retained too. Only ACP prompts hold Send.
+    vi.mocked(f.port.attach).mockResolvedValue({ ...f.attachment, retainedOperationIds: ["first", "steer", "setter"],
+      activePromptIds: ["first", "steer"] });
+    const handle = await f.driver.attach(f.attached);
+    const snapshot = async () => (await handle.establishProjection({ signal: new AbortController().signal })).snapshot;
+    expect(await snapshot()).toMatchObject({ runState: "running", turnsById: { "input:0": { status: "completed" } } });
+    // The child wakes the planner before it streams another chunk. The
+    // callback still owns the session, so Stop and conversation Steer remain
+    // available while the new native turn materializes.
+    f.native.steps.push({ index: 2, type: 101, status: 3, hasSubtrajectory: false,
+      continuation: { id: "wake", sender: "child", recipient: identity.sessionId, kind: "agent_message", content: "Finished" } });
+    expect(await snapshot()).toMatchObject({ runState: "running", turnsById: { "continuation:2": { status: "in_progress" } } });
+    f.native.steps.push({ index: 3, type: 15, status: 3, hasSubtrajectory: false,
+      response: { text: "Child complete", thinking: "", stopReason: 2, toolCalls: [] } });
+    for (const [id, state] of [["first", "running"], ["steer", "idle"]] as const) {
+      const outcome = { status: "completed" as const, result: { stopReason: "end_turn" } };
+      f.receipts.set(id, outcome); f.emit({ kind: "operation", operationId: id, outcome });
+      await vi.waitFor(() => expect(f.port.acknowledge).toHaveBeenCalledWith(
+        { handleId: "handle", throughSequence: id === "first" ? 1 : 2 }, expect.any(AbortSignal)));
+      expect((await snapshot()).runState).toBe(state);
+    }
+    expect(f.port.request).not.toHaveBeenCalled();
+  });
+  it("recovers active prompt inventory after an event gap without reviving a settled callback on replay", async () => {
+    const f = fixture(), handle = await f.driver.attach(f.attached);
+    const projection = async () => (await handle.establishProjection({ signal: new AbortController().signal })).snapshot;
+    vi.mocked(f.port.observe).mockImplementation(async ({ afterSequence }, signal) => {
+      await delay(10, undefined, { signal });
+      return { events: [], retainedAfterSequence: 1, throughSequence: Math.max(afterSequence, 1),
+        activePromptIds: ["other-controller"], closed: false };
+    });
+    f.receipts.set("other-controller", { status: "pending" });
+    await vi.waitFor(async () => expect((await projection()).runState).toBe("running"));
+    // A detached controller's terminal event was lost. Its retained receipt
+    // wins even if an older prompt inventory is in transit.
+    f.receipts.set("other-controller", { status: "completed", result: { stopReason: "end_turn" } });
+    await vi.waitFor(async () => expect((await projection()).runState).toBe("idle"), { timeout: 2500 });
+    expect((await projection()).runState).toBe("idle");
+  });
+  it("keeps a background daemon independent of prompt admission", async () => {
+    const f = fixture();
+    f.native.steps.push({ index: 0, type: 132, status: 2, hasSubtrajectory: false,
+      task: { id: "server", title: "Dev server", description: "", daemon: true },
+      command: { command: "serve", cwd: identity.cwd, output: "", persistent: true, commandId: "server" } });
+    const handle = await f.driver.attach(f.attached);
+    expect((await handle.establishProjection({ signal: new AbortController().signal })).snapshot)
+      .toMatchObject({ runState: "idle", backgroundActivity: { commands: 1 } });
+    await expect(handle.captureSubmissionRetryAnchor()).resolves.toBe(f.native.revision);
+  });
   it.each([false, true])("reads fresh Steer evidence after a permission wakes the throttled wait (consumed: %s)", async consumed => {
     const f = fixture();
     const pending = { requestId: "permission", openedAt: "2026-11-22T00:00:00.000Z", request: { sessionId: identity.sessionId,
@@ -321,7 +413,7 @@ describe("Antigravity driver authority and projection", () => {
       await delay(first ? 20 : 60_000, undefined, { signal }); first = false;
       return { events: afterSequence === 0 ? [{ sequence: 1, kind: "update", notification: { sessionId: identity.sessionId,
         update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Final answer" } } } }] : [],
-        throughSequence: 1, retainedAfterSequence: 0, closed: false };
+        throughSequence: 1, retainedAfterSequence: 0, activePromptIds: [], closed: false };
     });
     const handle = await f.driver.attach(f.attached), events: BackendConversationEvent[] = [];
     handle.subscribe(event => events.push(event));
@@ -351,7 +443,7 @@ describe("Antigravity driver authority and projection", () => {
     const f = fixture(); let first = true;
     vi.mocked(f.port.observe).mockImplementation(async (_, signal) => {
       await delay(first ? 20 : 60_000, undefined, { signal }); first = false;
-      return { events: [], throughSequence: 0, retainedAfterSequence: 0, closed: false };
+      return { events: [], throughSequence: 0, retainedAfterSequence: 0, activePromptIds: [], closed: false };
     });
     const handle = await f.driver.attach(f.attached), events: BackendConversationEvent[] = [];
     handle.subscribe(event => events.push(event));
@@ -483,7 +575,7 @@ describe("Antigravity driver authority and projection", () => {
     vi.mocked(f.port.observe).mockImplementation(async (_, signal) => { await delay(10, undefined, { signal }); return {
       events: [{ sequence: 11, kind: "update", notification: { sessionId: identity.sessionId,
         update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Buffered answer" } } } }],
-      throughSequence: 11, retainedAfterSequence: 10, closed: false,
+      throughSequence: 11, retainedAfterSequence: 10, activePromptIds: [], closed: false,
     }; });
     await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ type: "resnapshot_required", reason: "sequence_gap" })));
     expect(events).toContainEqual(expect.objectContaining({ type: "turn_completed", completionProvenance: "recovered",
@@ -889,6 +981,27 @@ describe("Antigravity driver authority and projection", () => {
     await delay(30);
     expect(f.port.acknowledgeOperation).not.toHaveBeenCalled(); expect(f.port.request).toHaveBeenCalledOnce();
   });
+  it("presents an early load decision, fences Send, then applies the full settings returned after the answer", async () => {
+    const f = fixture(), pending = { requestId: "early", openedAt: "2026-11-22T00:00:00.000Z", request: { sessionId: identity.sessionId,
+      toolCall: { toolCallId: "tool", title: "Review" }, options: [{ optionId: "allow", name: "Allow once", kind: "allow_once" as const }] } };
+    const partial = { ...f.attachment, loading: true as const, setup: { initialize: f.attachment.setup.initialize, session: {} }, pendingPermissions: [pending] };
+    vi.mocked(f.port.attach).mockResolvedValue(partial);
+    const handle = await f.driver.attach(f.attached);
+    const events: BackendConversationEvent[] = [];
+    const projection = await handle.establishProjection({ signal: new AbortController().signal });
+    const stop = projection.subscribeFromNext(value => events.push(value.event));
+    expect(projection.snapshot.runState).toBe("running");
+    expect(events).toContainEqual(expect.objectContaining({ type: "interaction_opened", interaction: expect.objectContaining({ backendInteractionId: "early" }) }));
+    expect((await handle.backendCapabilities()).actions).toEqual([]);
+    await expect(handle.submit(submit)).rejects.toThrow();
+    expect(f.port.request).not.toHaveBeenCalled();
+    f.emit({ kind: "permission_resolved", requestId: "early" });
+    await vi.waitFor(async () => expect((await handle.establishProjection({ signal: new AbortController().signal })).snapshot.runState).toBe("reconciling"));
+    f.emit({ kind: "session_loaded", session: f.attachment.setup.session });
+    await vi.waitFor(async () => expect((await handle.backendCapabilities()).effectiveSettings.model?.id).toBe("model"));
+    expect((await handle.establishProjection({ signal: new AbortController().signal })).snapshot.runState).toBe("idle");
+    stop(); await handle.close();
+  });
   it("restores pending permissions independently of replay and resolves them when Stop cancels the reverse request", async () => {
     const f = fixture();
     const pending = { requestId: "permission", openedAt: "2026-11-22T00:00:00.000Z", request: { sessionId: identity.sessionId, toolCall: { toolCallId: "native-tool", title: "Run command" },
@@ -943,7 +1056,7 @@ describe("Antigravity driver authority and projection", () => {
         toolCall: { toolCallId: "native-tool", title: "Run command" },
         options: [{ optionId: "deny", name: "Deny", kind: "reject_once" }] },
     }] : [] });
-    if (closed) vi.mocked(f.port.observe).mockResolvedValue({ events: [], throughSequence: 0, retainedAfterSequence: 0, closed: true });
+    if (closed) vi.mocked(f.port.observe).mockResolvedValue({ events: [], throughSequence: 0, retainedAfterSequence: 0, activePromptIds: [], closed: true });
     const handle = await f.driver.attach(f.attached);
     await vi.waitFor(async () => {
       const projection = await handle.establishProjection({ signal: new AbortController().signal });
@@ -952,4 +1065,47 @@ describe("Antigravity driver authority and projection", () => {
     });
     expect(f.port.request).not.toHaveBeenCalled();
   });
+});
+
+it.each(["same snapshot", "later snapshot"])("settles a quota failure once when the notice arrives in the %s", async timing => {
+  const f = fixture();
+  const base = { executionId: "execution", status: 3, hasSubtrajectory: false };
+  f.native.steps.push(
+    { ...base, index: 0, type: 14, user: { text: "Review" } },
+    { ...base, index: 1, type: 132, tool: { name: "read_file", id: "call", argumentsJson: "{}" } },
+  );
+  const signal = new AbortController().signal;
+  const handle = await f.driver.attach(f.attached);
+  const binding = f.attached.binding;
+  const projector = new ConversationProjector({ backendInstanceId: binding.backendInstanceId, bindingIdentity: binding.applicationThreadId });
+  const initial = await handle.establishProjection({ signal });
+  const [turnId] = projector.replace(initial.snapshot, initial.handleSequence).orderedTurnIds;
+  const events: BackendConversationEvent[] = [];
+  const updates: string[] = [];
+  const unsubscribe = initial.subscribeFromNext(event => {
+    events.push(event.event);
+    updates.push(projector.apply(event).kind);
+  });
+
+  f.native.executions.push({ executionId: base.executionId, lastStepIndex: 1, terminationReason: 1, proceededWithAutoContinue: false });
+  if (timing === "later snapshot") await handle.establishProjection({ signal });
+  const error = "Individual quota reached.";
+  f.native.steps.push({ index: 2, type: 17, status: 3, hasSubtrajectory: false, standaloneSystemDiagnostic: true, error });
+  await handle.establishProjection({ signal });
+  expect(updates).not.toContain("resnapshot_required");
+  const completions = events.filter(event => event.type === "turn_completed");
+  expect(completions).toHaveLength(1);
+  if (timing === "same snapshot") expect(completions[0]!.turn.failure?.message.text).toBe(error);
+  expect(projector.timeline().turnsById[turnId!]).toMatchObject({ status: "failed", failure: { message: { text: error } } });
+  expect(projector.runState).toBe("idle");
+  unsubscribe();
+
+  await handle.close();
+  const reattached = await f.driver.attach(f.attached);
+  const replay: BackendConversationEvent[] = [];
+  reattached.subscribe(event => replay.push(event));
+  const { snapshot } = await reattached.establishProjection({ signal });
+  expect(snapshot.runState).toBe("idle");
+  expect(snapshot.turnsById["input:0"]).toMatchObject({ status: "failed", failure: { message: { text: error } } });
+  expect(replay.filter(event => event.type === "turn_completed")).toHaveLength(0);
 });

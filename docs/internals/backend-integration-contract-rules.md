@@ -104,8 +104,12 @@ standalone error diagnostic is not a whole-turn outcome. Completion observers
 and agent callbacks must only receive backend-proven terminal turns; preserve
 legitimate empty failures and immutable completion receipts. Antigravity uses
 terminal planner responses or exact fatal/canceled executor receipts, including
-remote child classifications; Pi SDK, native Pi, Codex, Claude, Grok, and OpenCode
-retain their existing provider terminal events and history rules.
+remote child classifications. A later standalone system diagnostic may supply
+the failure message while preserving the execution head used for proof. A
+provider-held prompt can still block new submissions after a foreground turn
+settles. Reflect that admission state without reopening the turn or duplicating
+its completion. Pi SDK, native Pi, Codex, Claude, Grok, and OpenCode retain
+their existing provider terminal events and history rules.
 
 Acknowledging accepted provider events must not depend on a subsequent passive
 history read succeeding. Reconnect inventories must be applied in serialization

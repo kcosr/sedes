@@ -43,11 +43,14 @@ export type AntigravityOutcome =
   | { readonly status: "failed"; readonly failure: AntigravityFailure };
 export type AntigravityEvent = { readonly sequence: number } & (
   | { readonly kind: "update"; readonly notification: SessionNotification }
+  | { readonly kind: "session_loaded"; readonly session: LoadSessionResponse }
   | { readonly kind: "permission"; readonly requestId: string; readonly openedAt: string; readonly request: RequestPermissionRequest }
   | { readonly kind: "permission_resolved"; readonly requestId: string }
   | { readonly kind: "operation"; readonly operationId: string; readonly outcome: AntigravityOutcome }
   | { readonly kind: "failure"; readonly failure: AntigravityFailure });
 export interface AntigravityAttachment extends AntigravityIdentity {
+  /** Exact bound session awaiting its load response after an early permission. */
+  readonly loading?: true;
   readonly toolPeerStamp?: string;
   readonly createdByOperationId?: string;
   readonly handleId: string;
@@ -56,9 +59,12 @@ export interface AntigravityAttachment extends AntigravityIdentity {
   readonly throughSequence: number;
   readonly retainedAfterSequence: number;
   readonly retainedOperationIds: readonly string[];
+  readonly activePromptIds: readonly string[];
   readonly pendingPermissions: readonly { readonly requestId: string; readonly openedAt: string; readonly request: RequestPermissionRequest }[];
 }
 export interface AntigravityObservation {
+  /** Pending ACP prompts at the time this event page was read. */
+  readonly activePromptIds: readonly string[];
   readonly events: readonly AntigravityEvent[];
   readonly throughSequence: number;
   readonly retainedAfterSequence: number;

@@ -1,6 +1,6 @@
 {
   "source": {
-    "agentVersion": "1.5.14",
+    "agentVersion": "1.5.18",
     "descriptorFiles": [
       {
         "name": "third_party/jetski/cortex_pb/custom_extensions.proto",
@@ -41,14 +41,14 @@
       {
         "name": "third_party/jetski/codeium_common_pb/codeium_common.proto",
         "package": "exa.codeium_common_pb",
-        "sha256": "841938a08467f1565c98716e4e1071bcc981f2c7cdfe604fd6f8361ee7e8cbef",
-        "length": 188522
+        "sha256": "347774028d7c9589cf51b562546b4bfeca8e56c2ea1dc1e7fce584f73fa0de81",
+        "length": 188653
       },
       {
         "name": "third_party/jetski/cortex_pb/cortex.proto",
         "package": "exa.cortex_pb",
-        "sha256": "aaff3ef04c9ac0f98b3034cbd5eeaa43fb46c088468640eb6523a8dc75a31d69",
-        "length": 220566
+        "sha256": "c040de5f5a102f366daa4f45560310b845f52aca97b3f4ba0ebdb8283a32275b",
+        "length": 223728
       },
       {
         "name": "google/protobuf/any.proto",

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { allowedEnvironments, backendEditors } from "../../src/client/components/execution-settings/backend-editors.js";
 import { antigravityConnectionConfigurationSchema, antigravityModuleConfigurationSchema } from "../../src/shared/protocol/antigravity-configuration.js";
 import { configurationDocumentSchema, type ConfigurationDocument } from "../../src/shared/protocol/configuration-admin.js";
-import { ANTIGRAVITY_PROTOCOL_RELEASE } from "../../src/server/backends/antigravity/release-profile.js";
+import { admitAntigravityInitialize, ANTIGRAVITY_PROTOCOL_RELEASE } from "../../src/server/backends/antigravity/release-profile.js";
 import { compiledBackendModuleCatalog } from "../../src/server/backends/compiled-module-catalog.js";
 import { validateConfigurationDocument } from "../../src/server/configuration-admin/configuration-validation.js";
 import { planBackendNativeStores } from "../../src/server/runtime/backend-module-startup.js";
@@ -26,6 +26,20 @@ function configuration(kind: "local" | "ssh" | "outbound" = "local"): Configurat
 }
 
 describe("Antigravity administration", () => {
+  it("qualifies 1.5.18 while admitting compatible ACP runtimes starting with 1.5.14", () => {
+    const initialize = (version: string) => ({
+      protocolVersion: 1, agentInfo: { name: "Antigravity ACP Server", version },
+      agentCapabilities: { loadSession: true, sessionCapabilities: { list: {} } },
+    });
+    expect(ANTIGRAVITY_PROTOCOL_RELEASE).toBe("1.5.18");
+    for (const version of ["1.5.14", "1.5.17", "1.5.18", "1.6.0"]) {
+      expect(admitAntigravityInitialize(initialize(version))).toBe(version);
+    }
+    for (const version of ["1.5.13", "1.5.18-beta.1", "2.0.0"]) {
+      expect(() => admitAntigravityInitialize(initialize(version))).toThrow("antigravity_runtime_incompatible");
+    }
+  });
+
   it.each(["local", "ssh", "outbound"] as const)("registers a strict owned target on %s", kind => {
     const document = configuration(kind);
     expect(validateConfigurationDocument(document)).toEqual(document);

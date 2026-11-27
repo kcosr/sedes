@@ -6,6 +6,8 @@ let sessionId;
 let pendingPrompt;
 let permissionPrompt;
 let permissionRequestId;
+let loadWaitingForPermission;
+const loadPermission = process.env.AGY_FIXTURE_LOAD_PERMISSION;
 let queuedSteer;
 let history;
 let currentModel = "fixture-model";
@@ -33,10 +35,10 @@ function finish(prompt, content, stopReason = "end_turn") {
   if (prompt.index !== undefined) history.response(prompt.index, content, stopReason === "cancelled" ? 16 : 2);
   reply(prompt.id, { stopReason });
 }
-function requestPermission() {
+function requestPermission(requestSessionId = sessionId) {
   permissionRequestId = randomUUID();
   process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: permissionRequestId, method: "session/request_permission", params: {
-    sessionId, toolCall: { toolCallId: `tool-${permissionRequestId}`, title: "Read file", status: "pending" },
+    sessionId: requestSessionId, toolCall: { toolCallId: `tool-${permissionRequestId}`, title: "Read file", status: "pending" },
     options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }, { optionId: "reject", name: "Reject", kind: "reject_once" }],
   } })}\n`);
 }
@@ -45,6 +47,14 @@ try {
   for await (const line of readline.createInterface({ input: process.stdin })) {
     const message = JSON.parse(line);
     if (!message.method) {
+      if (message.id === permissionRequestId && loadWaitingForPermission !== undefined) {
+        const load = loadWaitingForPermission;
+        loadWaitingForPermission = undefined;
+        if (loadPermission === "stall") continue;
+        if (loadPermission === "wrong_session" ? message.error : message.result?.outcome?.optionId === "allow") reply(load, setup());
+        else process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: load, error: { code: -32002, message: "Load failed" } })}\n`);
+        continue;
+      }
       if (message.id === permissionRequestId && permissionPrompt) {
         if (queuedSteer && message.result?.outcome?.optionId !== "allow") {
           // Native cancellation can end at the denied tool with no final
@@ -68,7 +78,7 @@ try {
       continue;
     }
     switch (message.method) {
-      case "initialize": reply(message.id, { protocolVersion: 1, agentInfo: { name: "antigravity", version: process.env.AGY_FIXTURE_VERSION ?? "1.5.14" },
+      case "initialize": reply(message.id, { protocolVersion: 1, agentInfo: { name: "antigravity", version: process.env.AGY_FIXTURE_VERSION ?? "1.5.18" },
         agentCapabilities: { loadSession: true, sessionCapabilities: { list: {}, resume: {}, close: {} }, promptCapabilities: { image: true, embeddedContext: true } }, authMethods: [] }); break;
       case "session/new":
         sessionId = randomUUID();
@@ -80,6 +90,10 @@ try {
         sessionId = message.params.sessionId;
         history?.close();
         history = openHistory?.(geminiDirectory, sessionId, message.params.cwd);
+        if (loadPermission) {
+          requestPermission(loadPermission === "wrong_session" ? randomUUID() : sessionId);
+          if (loadPermission !== "immediate") { loadWaitingForPermission = message.id; break; }
+        }
         reply(message.id, setup());
         break;
       case "session/list": reply(message.id, { sessions: [] }); break;

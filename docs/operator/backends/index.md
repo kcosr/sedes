@@ -96,7 +96,7 @@ an unsupported action and the backend rejects it again if called directly.
 | Claude  | `0.3.319` Agent SDK             | Stable Claude Code `>=2.1.287`, excluding reviewed incompatible releases | Claude Code `2.1.319` |
 | Grok    | `1.x` ACP compatibility profile | Stable `>=1.0.4`, excluding reviewed incompatible releases               | `1.0.4`               |
 | OpenCode v2 | `2.2.6` HTTP/SSE profile | Stable stock `>=2.2.6` | `2.2.6` |
-| Antigravity | `1.5.14` CLI, ACP 1 | Stable `>=1.5.14` within major 1, with the required ACP session capabilities | `1.5.14` reference profile |
+| Antigravity | `1.5.18` CLI, ACP 1 | Stable `>=1.5.14` within major 1, with the required ACP session capabilities | `1.5.18` reference profile |
 
 Native Pi, Codex, Claude, Grok, OpenCode, and Antigravity may admit a stable
 runtime newer than the release most
@@ -124,7 +124,7 @@ runtimes are not equivalent to exercised runtimes.
 | Claude | August 2026 | Agent SDK `0.3.319`: Claude Code `2.1.319` passed 33 loopback native and nine first-party subscription cases; retained minimum `2.1.287` passed 33 loopback native cases on Linux x64 on 2026-11-08. See the [profile evidence](../../../protocol/claude-agent-sdk/0.3.319/README.md) for scope and limits | `test:real-claude` (native loopback and authenticated cases) | Local worker; persistent SSH or outbound sidecar on Linux/macOS |
 | Grok | August 2026 | Grok Build `1.0.4` against the compiled `1.x` ACP profile | `test:real-grok` (three files) | Local Linux x64 or macOS only |
 | OpenCode v2 | October 2026 | Stock `opencode2` 2.2.6 loopback history, mutation, sidecar, image and accounting fixtures; one bounded AW Qwen read-only live canary passed on Linux x64 on 2026-11-08. See the [profile evidence](../../../protocol/opencode-http/2.2.6/README.md) for coverage and historical limits | `test:real-opencode` and authorized `test:live-opencode` | Owned or external HTTP/SSE on a Linux execution host; local, SSH and outbound |
-| Antigravity | November 2026 | Fixture ACP peers and native history databases for the `1.5.14` reference profile. See [Antigravity qualification](../../internals/backends/antigravity.md#cross-backend-audit) for live gate scope. | Authorized `test:live-antigravity` | Owned ACP process on Linux/macOS, local or persistent SSH/outbound sidecar |
+| Antigravity | November 2026 | Stock `agy` 1.5.18 passed 15 authenticated local and loopback SSH cases on Linux x64 on 2026-11-27. See [Antigravity qualification](../../internals/backends/antigravity.md#cross-backend-audit) for coverage. | Authorized `test:live-antigravity` | Owned ACP process on Linux/macOS, local or persistent SSH/outbound sidecar |
 
 The deterministic suite exercises every backend through recorded fixtures.
 Version-pinned evidence, where available, lives under `protocol/` beside the

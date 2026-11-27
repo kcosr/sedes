@@ -175,7 +175,8 @@ it.each(["command", "timer", "subagent"] as const)("qualifies native %s Stop evi
     await f.host.request({ handleId: f.attachment.handleId, operationId, command: { type: "prompt", prompt: [{ type: "text", text }] } });
     await untilNative(f.host, f.identity, observe, history => history.native.steps.some(step => kind === "subagent"
       ? step.subagents?.some(child => child.state === "active") : kind === "timer" ? step.schedule && step.status === 2 : step.command && step.status === 2));
-    if (kind === "subagent") await waitOutcome(f.host, f.attachment.handleId, operationId);
+    // Dispatch Stop at the proven active native step. Since 1.5.15 the ACP
+    // prompt can stay open until a non-daemon child finishes.
     const cancelId = randomUUID(); await f.host.request({ handleId: f.attachment.handleId, operationId: cancelId, command: { type: "cancel" } });
     await waitOutcome(f.host, f.attachment.handleId, cancelId);
     const history = await readPortHistory(f.host, f.identity);
