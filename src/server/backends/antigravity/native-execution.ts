@@ -20,7 +20,8 @@ export function antigravityNativeTerminalOutcome(step: AntigravityNativeStep | u
 }
 
 type TerminatedExecution = { index: number; outcome: "failed" | "interrupted"; terminationReason: number };
-export function antigravityTerminatedExecutionHeads(native: Pick<AntigravityNativeHistory, "steps" | "executions">): ReadonlyMap<string, TerminatedExecution> {
+type ExecutionHistory = Pick<AntigravityNativeHistory, "steps" | "executions" | "executorReceiptsOmitted">;
+export function antigravityExecutionEvidence(native: ExecutionHistory) {
   const heads = new Map<string, AntigravityNativeStep>(), unsettled = new Set<string>();
   const unconsumed = antigravityUnstartedInputs(native);
   const steps = new Map(native.steps.map(step => [step.index, step]));
@@ -31,20 +32,28 @@ export function antigravityTerminatedExecutionHeads(native: Pick<AntigravityNati
   const receipts = new Map<string, AntigravityNativeHistory["executions"][number] | null>();
   for (const receipt of native.executions) receipts.set(receipt.executionId, receipts.has(receipt.executionId) ? null : receipt);
   const terminated = new Map<string, TerminatedExecution>();
-  for (const [id, receipt] of receipts) {
-    // Fatal errors, invocation/token limits and user cancellation can finish
-    // an executor without another planner response. A tool diagnostic cannot.
-    const outcome = receipt ? executorOutcome(receipt.terminationReason) : undefined;
-    const head = heads.get(id) ?? (receipt ? steps.get(receipt.lastStepIndex) : undefined);
+  const settledHeads = new Map<string, number>();
+  for (const [id, head] of heads) {
+    const receipt = receipts.get(id);
     // A queued input may be written after the executor has stopped, or may be
     // included in last_step_idx without ever starting. It is not execution
-    // progress. Keep the receipt's exact native index/identity check, then
-    // expose the last executed step to history and activity consumers.
-    if (receipt && outcome && !receipt.proceededWithAutoContinue && head &&
-        steps.get(receipt.lastStepIndex)?.executionId === id && head.index <= receipt.lastStepIndex &&
-        !unsettled.has(id)) terminated.set(id, { index: head.index, outcome, terminationReason: receipt.terminationReason });
+    // progress. Check the receipt's exact native index and execution identity.
+    if (unsettled.has(id) || receipt === null || (receipt && (receipt.proceededWithAutoContinue ||
+        steps.get(receipt.lastStepIndex)?.executionId !== id || head.index > receipt.lastStepIndex))) continue;
+    const outcome = receipt && executorOutcome(receipt.terminationReason);
+    if (receipt && outcome) {
+      terminated.set(id, { index: head.index, outcome, terminationReason: receipt.terminationReason });
+      settledHeads.set(id, head.index);
+    } else if (!native.executorReceiptsOmitted && (!receipt || receipt.terminationReason === 4 /* NO_TOOL_CALL */) &&
+        antigravityNativeTerminalOutcome(head) === "completed") {
+      settledHeads.set(id, head.index);
+    }
   }
-  return terminated;
+  return { terminated, settledHeads, unstarted: unconsumed };
+}
+
+export function antigravityTerminatedExecutionHeads(native: ExecutionHistory): ReadonlyMap<string, TerminatedExecution> {
+  return antigravityExecutionEvidence(native).terminated;
 }
 
 function executorOutcome(reason: number): "failed" | "interrupted" | undefined {

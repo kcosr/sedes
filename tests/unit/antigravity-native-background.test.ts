@@ -24,6 +24,12 @@ const systemSource = field(3, 5);
 function notice(metadata = systemSource, payload = quotaPayload, type = 17, status = 3) {
   return proto(field(1, type), field(4, status), field(5, metadata), payload);
 }
+function failedChildMessage(recipient: string, failedChild: string, executionId: string) {
+  const message = proto(field(1, "8a54e222-1000-4000-8000-000000000004"), field(2, recipient), field(3, "system"),
+    field(4, `The subagent reviewer with id "${failedChild}" encountered an error and has either stopped or failed to start execution: ${quota}`),
+    field(10, field(1, "Error from reviewer")));
+  return proto(field(1, 101), field(4, 3), field(5, proto(systemSource, field(12, executionId))), field(114, field(4, message)));
+}
 function response(status = 3, reason = 2) { return proto(field(1, 15), field(4, status), field(20, proto(field(1, "response"), field(12, reason)))); }
 function toolMetadata(name: string, source = 1, executionId?: string) { return proto(field(4, proto(field(1, "tool-call"), field(2, name), field(3, JSON.stringify({ CommandLine: "sleep 1", IsDaemon: false })))), field(38, source), ...(executionId ? [field(12, executionId)] : [])); }
 function generic(name: string, payload: Buffer, typeName: string, status = 3, source = 1, executionId?: string) {
@@ -91,18 +97,18 @@ describe("Antigravity native background authority", () => {
           field(6, proto(field(6, childId), field(2, finalTool), ...tail))));
         parent.exec("UPDATE steps SET has_subtrajectory = 1 WHERE idx = 1");
       };
-      const expectChildStates = async (state: "terminal" | "unknown") => {
+      const expectChildStates = async (state: "failed" | "unknown") => {
         const { native } = await f.read();
         expect(native.steps[0]?.subagents?.[0]?.state).toBe(state);
-        expect(native.steps[1]?.subtrajectoryState).toBe(state);
+        expect(native.steps[1]?.subtrajectoryState).toBe(state === "failed" ? "terminal" : "unknown");
         expect(antigravityNativeActivity(native).unknown).toBe(state === "unknown");
       };
       child.prepare("INSERT INTO executor_metadata VALUES (0, ?)").run(receipt);
       embedded(field(9, receipt));
-      await expectChildStates("terminal");
+      await expectChildStates("failed");
       f.step(child, 1, 17, 3, notice());
       embedded(field(2, notice()), field(9, receipt));
-      await expectChildStates("terminal");
+      await expectChildStates("failed");
       child.exec("DELETE FROM executor_metadata");
       embedded(field(2, notice()));
       await expectChildStates("unknown");
@@ -135,12 +141,74 @@ describe("Antigravity native background authority", () => {
       write();
       expect(await state()).toBe("unknown");
       write(undefined, proto(field(1, reason), field(9, executionId)));
-      expect(await state()).toBe("terminal");
+      expect(await state()).toBe(kind === "child" && reason === 1 ? "failed" : "terminal");
       if (child) child.exec("DELETE FROM executor_metadata");
+      write(response(3, 13));
+      expect(await state()).toBe("terminal");
       write(response());
       expect(await state()).toBe("terminal");
     } finally { f.close(); }
   });
+  it.each([1, 2])("settles failed descendants after their failure notices and their launcher's receipt %i", async parentReason => {
+    const f = await fixture();
+    try {
+      const grandchildId = "8a54e222-1000-4000-8000-000000000003";
+      const parent = f.create(parentId), child = f.create(childId, parentId), grandchild = f.create(grandchildId, childId);
+      const launch = (id: string, executionId: string) => generic("invoke_subagent",
+        field(2, proto(field(1, id), field(3, pathToFileURL(f.root).href))), "InvokeSubagent", 3, 1, executionId);
+      f.step(parent, 0, 132, 3, launch(childId, "parent"));
+      f.step(parent, 1, 132, 3, generic("read_file", Buffer.alloc(0), "ReadFile", 3, 1, "parent"));
+      f.step(child, 0, 132, 3, launch(grandchildId, "child"));
+      f.step(grandchild, 0, 132, 3, generic("read_file", Buffer.alloc(0), "ReadFile", 3, 1, "grandchild"));
+      f.step(child, 1, 101, 3, failedChildMessage(childId, grandchildId, "child"));
+      f.step(child, 2, 17, 3, notice());
+      f.step(grandchild, 1, 17, 3, notice());
+      grandchild.prepare("INSERT INTO executor_metadata VALUES (0, ?)").run(proto(field(1, 1), field(9, "grandchild")));
+      child.prepare("INSERT INTO executor_metadata VALUES (0, ?)").run(proto(field(1, 1), field(3, 1), field(9, "child")));
+
+      // The system message belongs to a later execution. Its cancellation
+      // can settle the message while the separate launch still lacks proof.
+      f.step(parent, 2, 101, 3, failedChildMessage(parentId, childId, "later"));
+      f.step(parent, 3, 132, 3, generic("read_file", Buffer.alloc(0), "ReadFile", 3, 1, "later"));
+      parent.prepare("INSERT INTO executor_metadata VALUES (1, ?)").run(proto(field(1, 2), field(3, 3), field(9, "later")));
+      const before = (await f.read()).native;
+      expect(before.steps[0]?.subagents).toMatchObject([{ sessionId: childId, state: "failed" }]);
+      expect(before.steps[2]).toMatchObject({ executionId: "later", failedSubagentSessionId: childId });
+      expect(antigravityNativeActivity(before)).toMatchObject({ active: true, pendingContinuations: true, agents: 1 });
+
+      parent.prepare("INSERT INTO executor_metadata VALUES (0, ?)").run(proto(field(1, parentReason), field(3, 1), field(9, "parent")));
+      const after = (await f.read()).native;
+      expect(antigravityNativeActivity(after)).toMatchObject({ active: false, unknown: false, pendingContinuations: false, agents: 0 });
+    } finally { f.close(); }
+  });
+  it.each(["earlier execution without a receipt", "another executor receipt", "send_message tool", "send_message planner call"])(
+    "keeps the ordinary child callback expectation after an ERROR with %s", async evidence => {
+      const f = await fixture();
+      try {
+        const parent = f.create(parentId), child = f.create(childId, parentId);
+        f.step(parent, 0, 132, 3, generic("invoke_subagent", field(2, proto(field(1, childId), field(3, pathToFileURL(f.root).href))),
+          "InvokeSubagent", 3, 1, "parent"));
+        f.step(parent, 1, 101, 3, failedChildMessage(parentId, childId, "parent"));
+        parent.prepare("INSERT INTO executor_metadata VALUES (0, ?)").run(proto(field(1, 2), field(3, 1), field(9, "parent")));
+
+        if (evidence === "send_message planner call") {
+          const call = proto(field(1, "message-call"), field(2, "send_message"), field(3, "{}"));
+          f.step(child, 0, 15, 3, proto(field(1, 15), field(4, 3), field(5, field(12, "child")), field(20, proto(field(12, 2), field(7, call)))));
+        } else if (evidence === "send_message tool") {
+          f.step(child, 0, 132, 3, generic("send_message", Buffer.alloc(0), "SendMessage", 3, 1, "child"));
+        } else {
+          const first = evidence === "earlier execution without a receipt" ? "earlier" : "child";
+          f.step(child, 0, 132, 3, generic("read_file", Buffer.alloc(0), "ReadFile", 3, 1, first));
+        }
+        f.step(child, 1, 132, 3, generic("read_file", Buffer.alloc(0), "ReadFile", 3, 1, "child"));
+        child.prepare("INSERT INTO executor_metadata VALUES (0, ?)").run(proto(field(1, 1), field(3, 1), field(9, "child")));
+        if (evidence === "another executor receipt")
+          child.prepare("INSERT INTO executor_metadata VALUES (1, ?)").run(proto(field(1, 2), field(9, "another")));
+        const { native } = await f.read();
+        expect(native.steps[0]?.subagents).toMatchObject([{ sessionId: childId, state: "terminal" }]);
+        expect(antigravityNativeActivity(native)).toMatchObject({ active: true, pendingContinuations: true, agents: 1 });
+      } finally { f.close(); }
+    });
   it.each([6, 12])("requires exact executor proof for a child ending at canceled tool status %s", async status => {
     const f = await cancelledChildFixture(status);
     try {
@@ -309,7 +377,8 @@ describe("Antigravity native background authority", () => {
       const insert = parent.prepare("INSERT INTO executor_metadata VALUES (?, zeroblob(?))");
       if (kind === "one oversized row") insert.run(1, 8 * 1024 * 1024 + 1);
       else for (let index = 1; index <= 5; index++) insert.run(index, 7 * 1024 * 1024);
-      const history = await f.read(); expect(history.native.steps).toHaveLength(1); expect(history.native.executions).toEqual([]);
+      const history = await f.read(); expect(history.native.steps).toHaveLength(1);
+      expect(history.native).toMatchObject({ executions: [], executorReceiptsOmitted: true });
     } finally { f.close(); }
   });
   it("does not let executor rows consume the root and child step budget", async () => {
@@ -405,5 +474,116 @@ describe("Antigravity native background authority", () => {
   it("settles explicit cancelled children without fabricating a completion callback", () => {
     const step: AntigravityNativeStep = { index: 0, type: 132, status: 3, hasSubtrajectory: false, subagents: [{ sessionId: childId, state: "cancelled" }] };
     expect(antigravityNativeActivity({ revision: "a".repeat(64), executions: [], steps: [step] })).toMatchObject({ active: false, unknown: false, agents: 0 });
+  });
+  describe("failed child callbacks", () => {
+    const launch: AntigravityNativeStep = { index: 0, type: 132, status: 3, hasSubtrajectory: false, executionId: "launch",
+      subagents: [{ sessionId: childId, state: "failed" }] };
+    const receipt = { executionId: "launch", lastStepIndex: 0, terminationReason: 1, proceededWithAutoContinue: false };
+    const message: AntigravityNativeStep = { index: 1, type: 101, status: 3, hasSubtrajectory: false,
+      executionId: "notification", failedSubagentSessionId: childId };
+    const head: AntigravityNativeStep = { index: 2, type: 132, status: 3, hasSubtrajectory: false, executionId: "notification" };
+    const notificationReceipt = { ...receipt, executionId: "notification", lastStepIndex: head.index };
+    const history = { revision: "a".repeat(64), steps: [launch, message, head], executions: [receipt, notificationReceipt] };
+
+    const finalResponse = (executionId: string, index: number): AntigravityNativeStep => ({
+      executionId, index, type: 15, status: 3, hasSubtrajectory: false,
+      response: { text: "done", thinking: "", stopReason: 2, toolCalls: [] },
+    });
+    it.each(["launch", "notice", "both"] as const)("accepts a normal terminal planner response for the %s execution", normal => {
+      const launchFinal = normal === "notice" ? { ...head, executionId: "launch", index: 1 } : finalResponse("launch", 1);
+      const noticeFinal = normal === "launch" ? { ...head, index: 3 } : finalResponse("notification", 3);
+      const steps = [launch, launchFinal, { ...message, index: 2 }, noticeFinal];
+      const receipts = [launchFinal, noticeFinal].map(step => ({
+        executionId: step.executionId!, lastStepIndex: step.index,
+        terminationReason: step.response ? 4 : 2, proceededWithAutoContinue: false,
+      }));
+      const settled = { active: false, unknown: false, pendingContinuations: false, agents: 0 };
+      expect(antigravityNativeActivity({ ...history, steps, executions: receipts })).toMatchObject(settled);
+      // A completed planner response is also proof before its NO_TOOL_CALL receipt is written.
+      expect(antigravityNativeActivity({ ...history, steps, executions: receipts.filter(r => r.terminationReason !== 4) })).toMatchObject(settled);
+    });
+    it("uses the same normal planner head when one execution owns both launch and notice", () => {
+      const steps = [launch, { ...message, executionId: "launch" }, finalResponse("launch", 2)];
+      expect(antigravityNativeActivity({ ...history, steps, executions: [] })).toMatchObject({ active: false, pendingContinuations: false, agents: 0 });
+      expect(antigravityNativeActivity({ ...history, steps, executions: [], executorReceiptsOmitted: true }))
+        .toMatchObject({ active: true, pendingContinuations: true, agents: 1 });
+    });
+    it.each([1, 2])("keeps a completed planner head settled after exact termination receipt %i arrives", terminationReason => {
+      const steps = [launch, { ...message, executionId: "launch" }, finalResponse("launch", 2)];
+      const settled = { active: false, pendingContinuations: false, agents: 0 };
+      expect(antigravityNativeActivity({ ...history, steps, executions: [] })).toMatchObject(settled);
+      expect(antigravityNativeActivity({ ...history, steps, executions: [{ ...receipt, lastStepIndex: 2, terminationReason }] }))
+        .toMatchObject(settled);
+    });
+    it("requires a settled planner head from the exact execution and rejects contradictory receipts", () => {
+      const done = finalResponse("notification", 2);
+      const noToolCall = { ...notificationReceipt, terminationReason: 4 };
+      const activity = (tail: AntigravityNativeStep[], executions: typeof receipt[]) =>
+        antigravityNativeActivity({ ...history, steps: [launch, message, ...tail], executions: [receipt, ...executions] });
+      const outstanding = { active: true, pendingContinuations: true, agents: 1 };
+      expect(activity([finalResponse("unrelated", 2)], [])).toMatchObject(outstanding);
+      const calling = { ...done, response: { ...done.response!, toolCalls: [{ id: "read", name: "read_file", argumentsJson: "{}" }] } };
+      expect(activity([calling], [noToolCall])).toMatchObject(outstanding);
+      expect(activity([done, { ...head, index: 3 }], [])).toMatchObject(outstanding);
+      expect(activity([{ ...head, status: 2 }, { ...done, index: 3 }], [])).toMatchObject(outstanding);
+      expect(activity([done], [{ ...noToolCall, proceededWithAutoContinue: true }])).toMatchObject(outstanding);
+      expect(activity([done], [noToolCall, noToolCall])).toMatchObject(outstanding);
+      expect(activity([done], [{ ...noToolCall, lastStepIndex: message.index }])).toMatchObject(outstanding);
+      expect(activity([done], [{ ...noToolCall, terminationReason: 12 }])).toMatchObject(outstanding);
+    });
+    it.each([
+      { evidence: "missing", executions: [] },
+      { evidence: "stale", executions: [{ ...receipt, lastStepIndex: -1 }] },
+      { evidence: "auto-continue", executions: [{ ...receipt, proceededWithAutoContinue: true }] },
+      { evidence: "duplicate", executions: [receipt, receipt] },
+      { evidence: "nonterminating", executions: [{ ...receipt, terminationReason: 4 }] },
+    ])("keeps waiting with $evidence proof from the launching execution", ({ executions }) => {
+      expect(antigravityNativeActivity({ ...history, executions: [...executions, notificationReceipt] }))
+        .toMatchObject({ active: true, pendingContinuations: true, agents: 1 });
+    });
+    it("requires a matching system failure notice after the launch even when both executors have stopped", () => {
+      const outstanding = { active: true, pendingContinuations: true, agents: 1 };
+      expect(antigravityNativeActivity({ ...history, steps: [launch, head] })).toMatchObject(outstanding);
+      const otherChild = { ...message, failedSubagentSessionId: parentId };
+      expect(antigravityNativeActivity({ ...history, steps: [launch, otherChild, head] })).toMatchObject(outstanding);
+      expect(antigravityNativeActivity({ ...history, steps: [{ ...message, index: 0 }, { ...launch, index: 1 }, head],
+        executions: [{ ...receipt, lastStepIndex: 1 }, notificationReceipt] })).toMatchObject(outstanding);
+      const duplicate = { ...message, index: 3 };
+      expect(antigravityNativeActivity({ ...history, steps: [...history.steps, duplicate],
+        executions: [receipt, { ...notificationReceipt, lastStepIndex: duplicate.index }] })).toMatchObject(outstanding);
+      const relaunch = { ...launch, index: 1 };
+      const afterRelaunch = [{ ...message, index: 2 }, { ...head, index: 3 }];
+      expect(antigravityNativeActivity({ ...history, steps: [launch, relaunch, ...afterRelaunch],
+        executions: [{ ...receipt, lastStepIndex: 1 }, { ...notificationReceipt, lastStepIndex: 3 }] })).toMatchObject(outstanding);
+      expect(antigravityNativeActivity(history)).toMatchObject({ active: false, unknown: false, pendingContinuations: false, agents: 0 });
+    });
+    it("keeps a delivered system failure notice outstanding until its own execution settles", () => {
+      const unrelated = { ...head, index: 3, executionId: "another" };
+      const unrelatedReceipt = { ...receipt, executionId: unrelated.executionId, lastStepIndex: unrelated.index };
+      const outstanding = antigravityNativeActivity({ ...history, steps: [...history.steps, unrelated], executions: [receipt, unrelatedReceipt] });
+      expect(outstanding).toMatchObject({ active: true, pendingContinuations: true, agents: 1 });
+    });
+    it.each([
+      { state: "terminal", active: true, unknown: false, pendingContinuations: true },
+      { state: "active", active: true, unknown: false, pendingContinuations: false },
+      { state: "unknown", active: false, unknown: true, pendingContinuations: false },
+    ] as const)("keeps a $state child counted after its launcher fails", ({ state, ...expected }) => {
+      const step = { ...launch, subagents: [{ sessionId: childId, state }] };
+      expect(antigravityNativeActivity({ ...history, steps: [step, message, head] })).toMatchObject({ ...expected, agents: 1 });
+    });
+    it("tracks subsequent work and every delivered child message until its response settles", () => {
+      const wake: AntigravityNativeStep = { index: 3, type: 101, status: 3, hasSubtrajectory: false,
+        continuation: { id: "first", recipient: parentId, sender: childId, kind: "agent_message", content: "first message" } };
+      const working: AntigravityNativeStep = { index: 4, type: 15, status: 2, hasSubtrajectory: false, executionId: "follow-up",
+        response: { text: "", thinking: "", stopReason: 0, toolCalls: [] } };
+      const done = { ...working, status: 3, response: { ...working.response!, stopReason: 2 } };
+      const activity = (...steps: AntigravityNativeStep[]) => antigravityNativeActivity({ ...history, steps: [...history.steps, ...steps] });
+      expect(activity(working)).toMatchObject({ active: true, foregroundActive: true, pendingContinuations: false, agents: 0 });
+      expect(activity(wake, working)).toMatchObject({ active: true, foregroundActive: true, pendingContinuations: true, agents: 1 });
+      expect(activity(wake, done)).toMatchObject({ active: false, pendingContinuations: false, agents: 0 });
+      const second = { ...wake, index: 5, continuation: { ...wake.continuation!, id: "second", content: "second message" } };
+      expect(activity(wake, done, second)).toMatchObject({ active: true, foregroundActive: true, pendingContinuations: true, agents: 1 });
+      expect(activity(wake, done, second, { ...done, index: 6 })).toMatchObject({ active: false, pendingContinuations: false, agents: 0 });
+    });
   });
 });

@@ -15,13 +15,14 @@ export const antigravityNativeStepSchema = z.strictObject({
   subtrajectoryState: z.enum(["active", "terminal", "unknown"]).optional(),
   task: z.strictObject({ id, title: z.string().max(4096), description: text, daemon: z.boolean() }).optional(),
   continuation: z.strictObject({ id, recipient: id, sender: id, kind: z.enum(["task_notification", "agent_message"]), content: text }).optional(),
-  subagents: z.array(z.strictObject({ sessionId: z.string().uuid(), state: z.enum(["active", "terminal", "cancelled", "unknown"]), revision: z.string().regex(/^[a-f0-9]{64}$/u).optional() })).max(32).optional(),
+  subagents: z.array(z.strictObject({ sessionId: z.string().uuid(), state: z.enum(["active", "terminal", "cancelled", "failed", "unknown"]), revision: z.string().regex(/^[a-f0-9]{64}$/u).optional() })).max(32).optional(),
   schedule: z.strictObject({ mode: z.string().max(512), outcome: z.string().max(512), iterations: count }).optional(),
   createdAt: z.iso.datetime().optional(),
   startedAt: z.iso.datetime().optional(),
   completedAt: z.iso.datetime().optional(),
   executionId: id.optional(),
   standaloneSystemDiagnostic: z.literal(true).optional(),
+  failedSubagentSessionId: z.string().uuid().optional(),
   isInterruptingStep: z.literal(true).optional(),
   user: z.strictObject({ text, clientMessageId: z.string().max(4096).optional(), isQueuedMessage: z.literal(true).optional() }).optional(),
   response: z.strictObject({ text, thinking: text, messageId: z.string().max(512).optional(),
@@ -36,6 +37,7 @@ export const antigravityNativeStepSchema = z.strictObject({
 });
 export const antigravityNativeHistorySchema = z.strictObject({
   steps: z.array(antigravityNativeStepSchema).max(100_000),
+  executorReceiptsOmitted: z.literal(true).optional(),
   executions: z.array(z.strictObject({
     executionId: id,
     lastStepIndex: z.number().int().min(-1).max(Number.MAX_SAFE_INTEGER),

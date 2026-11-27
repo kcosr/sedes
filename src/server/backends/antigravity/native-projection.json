@@ -722,6 +722,22 @@
         "label": 1,
         "type": 9,
         "typeName": null
+      },
+      {
+        "name": "render_details",
+        "number": 10,
+        "label": 1,
+        "type": 11,
+        "typeName": ".exa.cortex_pb.MessageRenderDetails"
+      }
+    ],
+    ".exa.cortex_pb.MessageRenderDetails": [
+      {
+        "name": "message_title",
+        "number": 1,
+        "label": 1,
+        "type": 9,
+        "typeName": null
       }
     ],
     ".gemini_coder.TaskDetails": [

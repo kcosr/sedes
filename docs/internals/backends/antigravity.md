@@ -206,9 +206,10 @@ receipt exists. The final execution governs a multi-execution turn; trailing
 native inputs proven unstarted do not advance the executed head. The same proof
 settles background continuations and retires retained ACP tools only when no
 newer activity invalidates it. A failed or cancelled tool step alone is
-insufficient. Capability 5 of `antigravity_runtime` carries the diagnostic
-classification and the child state derived on the execution host. Remote
-peers must negotiate this capability before opening a runtime.
+insufficient. Capability 6 of `antigravity_runtime` carries the diagnostic
+classification, the `failed` child state and the child ID from a qualified
+system failure notice (`failedSubagentSessionId`). Remote peers negotiate this
+capability before opening a runtime.
 
 Executor termination reasons have explicit dispositions. The same exact
 identity, frontier, terminal-step and no-auto-continue checks apply to every
@@ -234,9 +235,14 @@ and child history skip these notices when locating the executed head. If an exac
 notice with error text supplies the failure message. If neither source supplies
 text, Sedes displays a generic failure.
 
-Exact child-session reads apply the same executor proof before classifying a
-cancelled tool tail as a cancelled child or a failed tail as terminal. Missing,
-conflicting, or omitted proof keeps the child unknown and blocks quiescence. Embedded subtrajectories use
+Sedes qualifies the `failed` child state for a single child execution with
+one exact `ERROR` receipt at its final executed step and no attempted
+`send_message`. Its terminal planner evidence, if any, must agree. Children
+with multiple executions, attempted sends, invocation or token limit receipts,
+or only a terminal planner response retain the ordinary callback expectation.
+A cancelled tool tail likewise requires exact executor proof to establish child
+cancellation. An unproven tool tail keeps the child unknown and blocks
+quiescence. Embedded subtrajectories use
 their own `Trajectory.executor_metadatas` (field 9), verified against the same
 qualified native descriptor. Their bytes are already bounded and hashed inside
 the enclosing step; the decoder's shared byte, field-count, and depth limits
@@ -251,7 +257,23 @@ of retained ACP tool work, so a tool-call response cannot bypass those fences.
 Typed system-message receipts can begin autonomous continuation turns without
 an application submission. They never consume a pending user operation merely
 because text or timing is similar. Native child linkage and terminal receipts
-govern background quiescence; finishing a child-launch tool is insufficient.
+govern background quiescence. When a child fails without sending its own
+completion message, stock CLI 1.5.18 can send the parent a system-authored
+subagent error notice. The reader recognizes the qualified message shape,
+checks the parent recipient, matches the child name in the title and body,
+and extracts the child ID from the body. The wording identifies the notice.
+Sedes requires the child's exact `ERROR` receipt and checks the launch and
+the later notice against their respective parent executions. Each must have a
+qualifying terminal executor receipt or a final planner response with no tool
+calls at the settled head of that execution. Normal completion requires a complete
+executor inventory with either a matching `NO_TOOL_CALL` receipt or no receipt
+for that execution. A missing, unrecognized or
+unprocessed notice keeps the expected child message outstanding. After reading
+the children, the reader rechecks the parent database and retries once if it
+changed. If the parent changes again during the retry, the history remains
+readable and the affected child state is unknown. Each delivered child message
+still requires evidence that the parent processed it. A successfully
+completed child still requires its own completion message.
 
 Conversation-scoped steering uses concurrent ACP prompt requests. A native user
 row can be staged without consumption. Sedes requires native execution/start

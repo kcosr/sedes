@@ -183,9 +183,9 @@ User-facing changes are collected here before release. See the
   Bound threads support Sedes-local titles that survive native rediscovery;
   Antigravity displays its official brand mark and reasoning effort labels such
   as **Extra High**. Codex Saved Agents use the same reasoning labels as threads.
-  Upgrade Antigravity execution sidecars with the server for runtime capability **5**.
+  Upgrade Antigravity execution sidecars with the server for runtime capability **6**.
   See [Antigravity setup](docs/operator/backends/antigravity.md).
-  ([#144](https://github.com/kcosr/sedes/pull/144), [#168](https://github.com/kcosr/sedes/pull/168))
+  ([#144](https://github.com/kcosr/sedes/pull/144), [#168](https://github.com/kcosr/sedes/pull/168), [#172](https://github.com/kcosr/sedes/pull/172))
 
 - Enable **Highlight questions in agent replies** under **Settings > Appearance
   > Chat formatting** to show completed questions in red with an underline.
@@ -543,11 +543,14 @@ User-facing changes are collected here before release. See the
   ([#146](https://github.com/kcosr/sedes/pull/146))
 
 - Antigravity quota failures settle the turn even when the CLI appends a
-  separate error notice. Recoverable tool errors let the agent keep working.
+  separate error notice. Stop and Send recover when a quota-failed subagent
+  sends no completion message of its own and native records confirm that
+  the parent processed Antigravity’s failure notice and the work ended.
+  Recoverable tool errors let the agent keep working.
   Reattaching preserves pending approvals, and Send reflects a prompt still
   waiting for background work. The reference CLI is 1.5.18 and the minimum
   remains 1.5.14.
-  ([#144](https://github.com/kcosr/sedes/pull/144), [#168](https://github.com/kcosr/sedes/pull/168))
+  ([#144](https://github.com/kcosr/sedes/pull/144), [#168](https://github.com/kcosr/sedes/pull/168), [#172](https://github.com/kcosr/sedes/pull/172))
 
 - Accepted Steers remain visible until their matching message arrives. Force
   Reset and queue withdrawal clear stale Steer cards across clients and release

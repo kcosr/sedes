@@ -25,7 +25,7 @@ const coveredOperations: ReadonlyMap<string, readonly string[]> = new Map([
   ["codex_runtime:1", ["runtime.ensure", "runtime.lookup", "runtime.execute"]],
   ["codex_managed_tui:3", ["tui.control", "tui.execute"]],
   ["pi_native_runtime:3", ["runtime.control", "runtime.execute"]],
-  ["antigravity_runtime:5", ["runtime.control", "runtime.execute"]],
+  ["antigravity_runtime:6", ["runtime.control", "runtime.execute"]],
   ["claude_persistent_runtime:6", ["runtime.lookup", "runtime.inspect", "runtime.stop", "runtime.ensure", "runtime.execute"]],
   ["opencode_runtime:5", ["runtime.execute", "runtime.control"]],
 ]);

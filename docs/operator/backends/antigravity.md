@@ -97,11 +97,16 @@ work, and subagents can outlive a prompt and produce new messages or permission
 requests. While the CLI still holds a prompt open for background work, Send
 remains unavailable even after the foreground reply finishes. A standalone
 quota notice after a proven executor failure leaves the turn failed, with the
-quota message visible when you reopen the thread. Pending work and undelivered
+quota message visible when you reopen the thread. If a subagent fails on quota,
+Antigravity 1.5.18 can report the failure to its parent on the child's behalf.
+Once native records confirm the child failed and both the launching and
+report-handling executions ended, the subagent stops counting as active.
+Either parent execution can finish with a final reply that requests no tools.
+Stop and Send can then recover when all other work has settled. Pending work and undelivered
 outcomes block ordinary runtime retirement. A disconnected runtime is not evidence that work stopped.
 
 Remote instances require an execution sidecar advertising
-`antigravity_runtime` capability 5. Upgrade main and the sidecar together before
+`antigravity_runtime` capability 6. Upgrade main and the sidecar together before
 enabling this backend. There is no local fallback when a remote host is offline.
 Reconnect restores exact retained session authority; it does not replay an
 uncertain submission or silently create another session.

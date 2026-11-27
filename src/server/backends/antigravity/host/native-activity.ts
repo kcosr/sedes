@@ -1,5 +1,5 @@
-import type { AntigravityNativeHistory } from "../native-schema.js";
-import { antigravityTerminatedExecutionHeads, antigravityNativeTerminalOutcome, antigravityUnstartedInputs } from "../native-execution.js";
+import type { AntigravityNativeHistory, AntigravityNativeStep } from "../native-schema.js";
+import { antigravityExecutionEvidence, antigravityNativeTerminalOutcome } from "../native-execution.js";
 
 const activeStatuses = new Set([1, 2, 8, 9, 11]);
 const terminalStatuses = new Set([3, 4, 5, 6, 7, 12]);
@@ -8,7 +8,20 @@ export function antigravityNativeActivity(history: AntigravityNativeHistory): { 
   let active = false, unknown = false, foregroundActive = false, pendingContinuations = false;
   const agents = new Set<string>(), commands = new Set<string>(), other = new Set<string>();
   const commandTerminals = new Set(history.steps.flatMap(step => step.commandStatus && terminalStatuses.has(step.commandStatus.status) ? [step.commandStatus.commandId] : []));
-  const terminated = antigravityTerminatedExecutionHeads(history), unstarted = antigravityUnstartedInputs(history);
+  const { terminated, settledHeads, unstarted } = antigravityExecutionEvidence(history);
+  const endedExecutionCovers = (step: AntigravityNativeStep) =>
+    step.executionId !== undefined && (settledHeads.get(step.executionId) ?? -1) >= step.index;
+  const childFailureReported = (sessionId: string, launch: AntigravityNativeStep) => {
+    if (!endedExecutionCovers(launch)) return false;
+    let report: AntigravityNativeStep | undefined;
+    for (const step of history.steps) {
+      if (step !== launch && step.subagents?.some(child => child.sessionId === sessionId)) return false;
+      if (step.failedSubagentSessionId !== sessionId) continue;
+      if (report || step.index <= launch.index) return false;
+      report = step;
+    }
+    return report !== undefined && endedExecutionCovers(report);
+  };
   const executionSettledAfter = (index: number) => {
     let executionId: string | undefined, receiptEligible = true;
     for (const step of history.steps) {
@@ -27,7 +40,14 @@ export function antigravityNativeActivity(history: AntigravityNativeHistory): { 
     }
     return false;
   };
-  const receiptConsumed = (sender: string, afterIndex: number) => history.steps.some(step => step.index > afterIndex && step.continuation?.sender === sender && executionSettledAfter(step.index));
+  const wakes = history.steps.flatMap(step => step.continuation
+    ? [{ sender: step.continuation.sender, index: step.index, settled: executionSettledAfter(step.index) }]
+    : []);
+  if (wakes.some(wake => !wake.settled)) { pendingContinuations = true; foregroundActive = true; }
+  const awaitingContinuation = (sender: string, afterIndex: number, expectDelivery = true) => {
+    const delivered = wakes.filter(wake => wake.sender === sender && wake.index > afterIndex);
+    return delivered.length ? delivered.some(wake => !wake.settled) : expectDelivery;
+  };
   for (const step of history.steps) {
     if (activeStatuses.has(step.status)) active = true;
     else if (!terminalStatuses.has(step.status)) unknown = true;
@@ -38,16 +58,20 @@ export function antigravityNativeActivity(history: AntigravityNativeHistory): { 
     for (const child of step.subagents ?? []) {
       if (child.state === "active") { active = true; agents.add(child.sessionId); }
       else if (child.state === "unknown") { unknown = true; agents.add(child.sessionId); }
-      else if (child.state === "terminal" && !receiptConsumed(child.sessionId, step.index)) { pendingContinuations = true; agents.add(child.sessionId); }
+      else if (child.state === "terminal" || child.state === "failed") {
+        // agy reports executor errors as the system. Wait for its notice to
+        // arrive and settle, even if the launching execution stopped earlier.
+        const reportedFailure = child.state === "failed" && childFailureReported(child.sessionId, step);
+        if (awaitingContinuation(child.sessionId, step.index, !reportedFailure)) { pendingContinuations = true; agents.add(child.sessionId); }
+      }
     }
     let pendingTask = false;
     if (step.task) {
       if (step.task.daemon && activeStatuses.has(step.status) && !commandTerminals.has(step.task.id)) { active = true; pendingTask = true; }
-      if (step.status === 3 && step.schedule?.outcome !== "cancelled" && !receiptConsumed(step.task.id, step.index)) { pendingContinuations = true; pendingTask = true; }
+      if (step.status === 3 && step.schedule?.outcome !== "cancelled" && awaitingContinuation(step.task.id, step.index)) { pendingContinuations = true; pendingTask = true; }
       if (activeStatuses.has(step.status)) pendingTask = true;
       if (pendingTask) (step.command ? commands : other).add(step.task.id);
     }
-    if (step.continuation && !executionSettledAfter(step.index)) { pendingContinuations = true; foregroundActive = true; }
     if (step.command?.commandId && !commandTerminals.has(step.command.commandId) &&
         activeStatuses.has(step.status)) { active = true; commands.add(step.command.commandId); }
     if (activeStatuses.has(step.status) && !step.response && !step.task && !step.subagents?.length) {

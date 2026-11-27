@@ -798,6 +798,42 @@ describe("Antigravity execution host", () => {
     await f.host.acknowledgeOperation({ handleId, operationId: "cleanup" });
     expect(await f.host.request(input(0))).toMatchObject({ status: "completed" }); expect(configure).toHaveBeenCalledTimes(4096);
   });
+  it.each([1, 2])("recovers Stop and accepts Send after reattachment once the child's failure notice settles (parent termination reason %i)", async terminationReason => {
+    const f = await fixture(25);
+    const identity = { cwd: f.cwd, sessionId: "4c8ece79-6741-451f-8aa5-e01d576ed055" };
+    const executionId = "parent-execution";
+    const childId = "8a54e222-1000-4000-8000-000000000002";
+    const steps: AntigravityHistory["native"]["steps"] = [
+      { index: 0, type: 14, status: 3, hasSubtrajectory: false, executionId, user: { text: "Run a subagent" } },
+      { index: 1, type: 132, status: 3, hasSubtrajectory: false, executionId,
+        tool: { id: "spawn", name: "invoke_subagent", argumentsJson: "{}" },
+        subagents: [{ sessionId: childId, state: "failed" }] },
+    ];
+    const parentReceipt = { executionId, lastStepIndex: 1, terminationReason, proceededWithAutoContinue: false };
+    f.readHistory.mockResolvedValue({ ...identity, native: { revision: "a".repeat(64), steps, executions: [parentReceipt] } });
+    const { handleId } = await f.host.attach(identity);
+    await f.host.request({ handleId, operationId: "stop", command: { type: "cancel" } });
+    expect(await settled(f.host, handleId, "stop")).toMatchObject({ status: "failed", failure: { code: "antigravity_cancel_unproven" } });
+    await f.host.release({ handleId });
+
+    const noticeExecutionId = "failure-notice-execution";
+    const notifiedSteps = [...steps, { index: 2, type: 101, status: 3, hasSubtrajectory: false,
+      executionId: noticeExecutionId, failedSubagentSessionId: childId }];
+    f.readHistory.mockResolvedValue({ ...identity, native: { revision: "b".repeat(64), steps: notifiedSteps, executions: [parentReceipt] } });
+    const reattached = await f.host.attach(identity);
+    await f.host.readHistory(identity);
+    await expect(f.host.request({ handleId: reattached.handleId, operationId: "before-proof", command: { type: "prompt", prompt: [{ type: "text", text: "Continue" }] } }))
+      .rejects.toMatchObject({ code: "antigravity_cancel_in_progress" });
+
+    const revision = "c".repeat(64);
+    f.readHistory.mockResolvedValue({ ...identity, native: { revision, steps: notifiedSteps, executions: [parentReceipt,
+      { executionId: noticeExecutionId, lastStepIndex: 2, terminationReason: 2, proceededWithAutoContinue: false }] } });
+    await f.host.readHistory(identity);
+    expect(await f.host.outcome({ handleId: reattached.handleId, operationId: "stop" })).toMatchObject({ status: "completed", result: { nativeRevision: revision } });
+    expect(f.host.snapshot().blockers).not.toContain("active_work");
+    await f.host.request({ handleId: reattached.handleId, operationId: "next", command: { type: "prompt", prompt: [{ type: "text", text: "Continue" }] } });
+    expect(await settled(f.host, reattached.handleId, "next")).toMatchObject({ status: "completed", result: { stopReason: "end_turn" } });
+  });
   it("recovers an uncertain Stop from later native quiescence and retains the exact refreshed receipts", async () => {
     const f = await fixture(20), identity = await f.host.create({ cwd: f.cwd, operationId: "creation" }); const { handleId } = await f.host.attach(identity);
     await f.host.request({ handleId, operationId: "primary", command: { type: "prompt", prompt: [{ type: "text", text: "wait" }] } });

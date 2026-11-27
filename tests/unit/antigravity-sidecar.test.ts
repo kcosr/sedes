@@ -201,8 +201,13 @@ describe("Antigravity persistent sidecar", () => {
     await expect(port.readHistory({ ...identity, knownRevision: "a".repeat(64) })).resolves.toBeNull();
     expect(f.readHistory).toHaveBeenCalledOnce();
     expect(encoded).toHaveBeenLastCalledWith({ status: "ok", runtimeVersion: null, value: null });
-    const updated: AntigravityHistory = { ...identity, native: { executions: [], revision: "b".repeat(64),
-      steps: [{ index: 0, type: 17, status: 3, hasSubtrajectory: false, standaloneSystemDiagnostic: true, error: "Individual quota reached." }] } };
+    const childId = "ec2e00ac-87cb-48ab-9240-26e19de7e980";
+    const updated: AntigravityHistory = { ...identity, native: { executions: [], executorReceiptsOmitted: true, revision: "b".repeat(64),
+      steps: [
+        { index: 0, type: 132, status: 3, hasSubtrajectory: false, executionId: "launch", subagents: [{ sessionId: childId, state: "failed" }] },
+        { index: 1, type: 17, status: 3, hasSubtrajectory: false, standaloneSystemDiagnostic: true, error: "Individual quota reached." },
+        { index: 2, type: 101, status: 3, hasSubtrajectory: false, executionId: "report", failedSubagentSessionId: childId },
+      ] } };
     f.readHistory.mockResolvedValue(updated);
     await expect(port.readHistory({ ...identity, knownRevision: "a".repeat(64) })).resolves.toEqual(updated);
     await expect(port.readHistory(identity)).resolves.toEqual(updated);
@@ -217,7 +222,7 @@ describe("Antigravity persistent sidecar", () => {
       .rejects.toMatchObject({ code: "antigravity_history_revision_unproven" });
   });
   it("requires executor evidence inventory in its versioned private history contract", () => {
-    expect(antigravityRuntimeCapability.majorVersion).toBe(5);
+    expect(antigravityRuntimeCapability.majorVersion).toBe(6);
     const history = { sessionId: "session", cwd: "/workspace", native: { steps: [], revision: "a".repeat(64) } };
     expect(antigravityHistorySchema.safeParse(history).success).toBe(false);
     expect(antigravityHistorySchema.safeParse({ ...history, native: { ...history.native, executions: [] } }).success).toBe(true);
@@ -309,8 +314,8 @@ describe("Antigravity persistent sidecar", () => {
     await expect(f.hosts.lookup(changed, connected.epoch)).resolves.toBe(host);
     expect(f.createHost).toHaveBeenCalledOnce();
   });
-  it("denies wrong scope and incompatible capability 4 before execution", async () => {
-    const f = await fixture(), connected = await attachment(f, "normal", 4);
+  it("denies wrong scope and incompatible capability 5 before execution", async () => {
+    const f = await fixture(), connected = await attachment(f, "normal", 5);
     await expect(f.hosts.ensure({ ...f.configuration, principalId: "wrong" }, connected.epoch)).rejects.toMatchObject({ code: "antigravity_configuration_scope_denied" });
     const { port } = proxy(f, () => connected.lease);
     await expect(port.create({ cwd: f.cwd, operationId: "create" })).rejects.toMatchObject({ code: "antigravity_remote_unsupported" });
