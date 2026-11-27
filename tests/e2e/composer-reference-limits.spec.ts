@@ -136,6 +136,29 @@ async function expectAlignedMention(container: Locator) {
   expect(difference, "The mention title follows the adjacent text baseline").toBeLessThanOrEqual(2);
 }
 
+/** Measure the visible word beside the sent mention in its actual font and line box. */
+async function expectMentionInkCenter(mention: Locator) {
+  const offset = await mention.evaluate(chip => {
+    const word = chip.previousSibling?.textContent?.trim();
+    const context = document.createElement("canvas").getContext("2d");
+    if (!word || !context) throw new Error("Missing neighboring text or canvas font metrics");
+    const style = getComputedStyle(chip.parentElement!);
+    context.font = `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+    const ink = context.measureText(word);
+
+    // A zero-height inline-block marks the alphabetic baseline of this line.
+    const probe = document.createElement("span");
+    probe.style.cssText = "display:inline-block;width:0;height:0;vertical-align:baseline";
+    chip.before(probe);
+    const baseline = probe.getBoundingClientRect().bottom;
+    probe.remove();
+    const rect = chip.getBoundingClientRect();
+    const inkCenter = baseline + (ink.actualBoundingBoxDescent - ink.actualBoundingBoxAscent) / 2;
+    return Math.abs((rect.top + rect.bottom) / 2 - inkCenter);
+  });
+  expect(offset, "The mention background centers on the neighboring word's ink").toBeLessThanOrEqual(1);
+}
+
 async function expectWrappedMentionGap(container: Locator) {
   const gap = await container.locator(".inline-thread-reference").evaluateAll(([earlier, later]) =>
     later!.getBoundingClientRect().top - earlier!.getBoundingClientRect().bottom);
@@ -245,6 +268,7 @@ test("picker and sidebar insert references in sentence order through delivery", 
   await page.setViewportSize({ width: 390, height: 844 });
   await expectNoPageOverflow(page);
   await expect(secondChip).toBeInViewport();
+  await expectAlignedMention(editor);
   await expectWrappedMentionGap(editor);
   await capture(page, testInfo, "inline-thread-mentions-composer-phone.png");
   await captureDetail("inline-thread-mentions-composer-phone-detail.png", composer);
@@ -259,6 +283,7 @@ test("picker and sidebar insert references in sentence order through delivery", 
   await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
   await expectAlignedMention(sent);
   await expectWrappedMentionGap(sent);
+  await expectMentionInkCenter(links.first());
   await capture(page, testInfo, "inline-thread-mentions-sent.png");
   await captureDetail("inline-thread-mentions-sent-detail.png", sent.getByTestId("message-row"));
   await expect(page.locator('[data-item-kind="assistant_message"][data-item-status="completed"]')).toBeVisible({ timeout: 30_000 });

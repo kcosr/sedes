@@ -8,14 +8,17 @@ import { formatInlineThreadReferenceText, formatThreadReferenceText, THREAD_REFE
 
 const references = [{ threadId: "616946aa-4574-41f7-bd70-d3a9edd56dbd", title: "Related thread" }];
 
+const inline = formatInlineThreadReferenceText(["See ", references[0]!, " here."]);
+
 describe("first-input recovery previews", () => {
   it.each([
-    { initialInputText: formatThreadReferenceText("Summarize this work", references), expected: "Summarize this work" },
-    { initialInputText: formatThreadReferenceText("", references), expected: "Referenced thread: Related thread" },
-    { initialInputText: formatInlineThreadReferenceText(["See ", references[0]!, " here."]), expected: "See Related thread here." },
-  ])("previews reference input as $expected without changing its delivery text", async ({ initialInputText, expected }) => {
+    { initialInputText: formatThreadReferenceText("Summarize this work", references), hasThreadReferenceBody: 0, expected: "Summarize this work" },
+    { initialInputText: formatThreadReferenceText("", references), hasThreadReferenceBody: 0, expected: "Referenced thread: Related thread" },
+    { initialInputText: inline, hasThreadReferenceBody: 1, expected: "See Related thread here." },
+    { initialInputText: inline, hasThreadReferenceBody: 0, expected: inline },
+  ])("previews reference input as $expected without changing its delivery text", async ({ initialInputText, hasThreadReferenceBody, expected }) => {
     const attempt = {
-      creationKind: "first_input", sourceKind: "composer", phase: "first_submission_started", initialInputText,
+      creationKind: "first_input", sourceKind: "composer", phase: "first_submission_started", initialInputText, hasThreadReferenceBody,
       provisionalBackendConversationId: "native-session", diagnostic: null,
       retryAnchor: null, backendCorrelation: null, acceptedAt: null,
     };
