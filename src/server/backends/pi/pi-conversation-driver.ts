@@ -149,6 +149,7 @@ import {
   PiSessionStore,
   type PiSessionStoreOptions,
 } from "./pi-session-store.js";
+import { piSessionWriterStopped } from "./pi-session-writer-lock.js";
 import { PiDiscoverySnapshotStore } from "./pi-discovery-snapshot-store.js";
 import { PiToolIdentityCatalog } from "./pi-tool-identities.js";
 import {
@@ -1654,6 +1655,21 @@ export class PiConversationBackendDriver implements ConversationBackendDriver {
       binding: input.binding,
       authentication: this.#toolIdentityAuthentication(input.binding.backendConversationId),
       outputArtifacts: this.#outputArtifacts,
+      confirmOwnerStopped: async (canonicalFile, signal) => {
+        signal.throwIfAborted();
+        const active = this.#openHandles.get(input.binding.backendConversationId);
+        if (active) {
+          return active.binding.applicationThreadId === input.binding.applicationThreadId &&
+            active.binding.tenantId === input.scope.tenantId && active.binding.ownerPrincipalId === input.scope.principalId &&
+            !active.control.lifetime.aborted && active.authoritativelySettled;
+        }
+        if (this.#pendingAttachments.has(input.binding.backendConversationId)) return false;
+        // The SDK loop lives in the lock-owning process, including when its
+        // filesystem and shell tools run in an isolated or remote worker.
+        const stopped = await piSessionWriterStopped(canonicalFile);
+        signal.throwIfAborted();
+        return stopped;
+      },
       load: (signal) => this.#store.readHistory(
         workspace,
         input.binding.backendConversationId,
@@ -2244,6 +2260,7 @@ class PiConversationHistoryReader implements ConversationHistoryReader {
     readonly authentication: PiToolIdentityAuthentication;
     readonly outputArtifacts: OutputArtifactPublisher;
     readonly load: (signal: AbortSignal) => Promise<SessionManager>;
+    readonly confirmOwnerStopped: (canonicalFile: string, signal: AbortSignal) => Promise<boolean>;
   }) {}
 
   async #manager(signal?: AbortSignal): Promise<SessionManager> {
@@ -2291,6 +2308,21 @@ class PiConversationHistoryReader implements ConversationHistoryReader {
         },
       );
     });
+  }
+
+  async confirmTurnOwnerStopped(input: { readonly backendTurnId: string; readonly signal: AbortSignal }): Promise<boolean> {
+    const signal = AbortSignal.any([input.signal, this.#lifetime.signal]);
+    const manager = await this.#manager(signal);
+    signal.throwIfAborted();
+    const branch = manager.getBranch();
+    // External Pi clients need not honor Sedes' writer lock. An authenticated
+    // Sedes Submit, naming its exact root user entry, identifies our SDK loop.
+    const submission = findAuthenticatedPiSubmissionAttestation(branch, input.backendTurnId, this.input.authentication);
+    if (!submission) return false;
+    const root = correlatePiSubmissions(branch).get(submission.applicationOperationId);
+    const file = manager.getSessionFile();
+    return !!file && root?.marker.mode === "submit" && root.providerTurnId === input.backendTurnId &&
+      this.input.confirmOwnerStopped(file, signal);
   }
 
   async #projection(signal?: AbortSignal): Promise<PiHistoryProjection> {

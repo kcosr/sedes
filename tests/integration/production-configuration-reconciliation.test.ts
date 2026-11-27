@@ -44,6 +44,14 @@ import { assessPiRuntimeVersion } from "../../src/server/backends/pi/native/runt
 import { piManagedConfigurationDigest } from "../../src/server/backends/pi/native/rpc/pi-managed-protocol.js";
 import { serializePiNativeBindingDetail } from "../../src/server/backends/pi/native/driver/driver.js";
 import { PiNativeThreadRepository } from "../../src/server/backends/pi/native/pi-native-thread-repository.js";
+import { PiConversationRepository } from "../../src/server/backends/pi/pi-conversation-repository.js";
+import { serializePiBindingDetail } from "../../src/server/backends/pi/pi-session-store.js";
+import { createPiSubmissionMarker, piSubmissionMarkerType } from "../../src/server/backends/pi/pi-submission-marker.js";
+import { createPiSubmissionAttestation, piSubmissionAttestationType } from "../../src/server/backends/pi/pi-submission-attestation.js";
+import { PiConversationBackendDriver } from "../../src/server/backends/pi/pi-conversation-driver.js";
+import { loadOrCreateToolProvenanceKey } from "../../src/server/security/installation-secret.js";
+import { applicationTurnIdForBackendTurn } from "../../src/server/conversations/conversation-projector.js";
+import * as parkedTurnRecovery from "../../src/server/conversations/parked-turn-recovery.js";
 import { RemoteExecutionEnvironment } from "../../src/server/execution/remote-execution-environment.js";
 import { acquirePiSessionWriterLock } from "../../src/server/backends/pi/pi-session-writer-lock.js";
 import { lockIdentity } from "../../src/server/security/locks.js";
@@ -61,11 +69,12 @@ afterEach(async () => {
   directory = undefined;
 });
 
-async function openApplication() {
+async function openApplication(piSessionDirectory?: string) {
   const get = vi.spyOn(ConfigurationAdminService.prototype, "get");
   application = await startProductionApplication({
     ...process.env, APP_STATE_DIR: directory!, SEDES_CONFIG_FILE: path.join(directory!, "server.json"), PORT: "0",
     PI_CODING_AGENT_DIR: path.join(directory!, "pi"), XDG_RUNTIME_DIR: path.join(directory!, "runtime"),
+    ...(piSessionDirectory ? { PI_CODING_AGENT_SESSION_DIR: piSessionDirectory } : {}),
   });
   const address = application.server.address();
   if (!address || typeof address === "string") throw new Error("test_server_not_listening");
@@ -863,6 +872,89 @@ describe("production configuration reconciliation", () => {
     expect((await service.get(scope)).runtimes.find(item => item.resourceId === environmentId)?.effects).toContainEqual(
       expect.objectContaining({ component: "host_policy", subjectLabel: "/additional-root", state: "awaiting_host" }));
   });
+
+  it("recovers ended and Sedes-owned parked Pi SDK turns after restarting main without an accepted submission record", async () => {
+    const { service, scope, environmentId } = await fixture();
+    const database = service.repository.database;
+    const now = Date.now();
+    const cwd = await realpath(directory!);
+    const sessions = path.join(cwd, "external-pi-sessions");
+    await mkdir(sessions);
+    const backendInstanceId = "idle-pi";
+    const backendTurnId = "parked-user";
+    const inventory = new InventoryRepository(database, (_scope, threadId) =>
+      applicationTurnIdForBackendTurn({ backendInstanceId, sourceApplicationThreadId: threadId, backendTurnId }));
+    const root = new ConfigurationProjection(database, {}).hostPolicy(scope, environmentId)!.snapshot.roots[0]!;
+    const workspace = inventory.upsertWorkspace(scope, { environmentId, canonicalPath: cwd, authorityRootId: root.id,
+      displayName: "External Pi sessions", project: { kind: "new", name: "External Pi" }, available: true,
+      trustState: "trusted", environmentConfigurationRevision: root.generation, now });
+    const profile = database.prepare("SELECT id FROM agent_connection_profiles WHERE tenant_id = ? AND owner_principal_id = ? AND template_id = ?")
+      .get(scope.tenantId, scope.principalId, "idle-pi-target") as { id: string };
+    const bindings = new ConversationBindingRepository(database);
+    const pi = new PiConversationRepository(database);
+    const installationKey = await loadOrCreateToolProvenanceKey(cwd);
+    const seed = async (evidence: "answered" | "failed" | "interrupted" | "user only" | "other turn" | "signed root" | "wrong session", selfPark = false) => {
+      const sessionId = randomUUID(), sessionFile = path.join(sessions, `${sessionId}.jsonl`);
+      const userId = evidence === "other turn" ? "other-user" : backendTurnId;
+      const timestamp = new Date(now).toISOString();
+      const text = "Review the result";
+      const marker = evidence === "signed root" || evidence === "wrong session" ? createPiSubmissionMarker({
+        applicationOperationId: randomUUID(), reconciliationToken: randomUUID(), mutationId: randomUUID(), mode: "submit",
+        text, contextExcerpts: [], taskContexts: [], attachments: [],
+      }) : undefined;
+      const entries = [
+        { type: "session", version: 3, id: sessionId, cwd, timestamp },
+        ...(marker ? [{ type: "custom", id: "intent", parentId: null, timestamp, customType: piSubmissionMarkerType, data: marker }] : []),
+        { type: "message", id: userId, parentId: marker ? "intent" : null, timestamp, message: { role: "user", content: text, timestamp: now } },
+        ...(marker ? [{
+          type: "custom", id: "attestation", parentId: userId, timestamp, customType: piSubmissionAttestationType,
+          data: createPiSubmissionAttestation({
+            applicationOperationId: marker.applicationOperationId, requestFingerprint: marker.requestFingerprint, userEntryId: userId,
+          }, { conversationId: evidence === "wrong session" ? randomUUID() : sessionId, installationKey }),
+        }] : []),
+        ...(evidence === "answered" || evidence === "other turn" || evidence === "failed" || evidence === "interrupted" ? [
+          { type: "message", id: "answer", parentId: userId, timestamp, message: {
+            role: "assistant", content: [{ type: "text", text: "Review finished." }], stopReason: evidence === "failed" ? "error" : evidence === "interrupted" ? "aborted" : "stop", timestamp: now,
+          } },
+        ] : []),
+        // Move the answered turn outside the SDK's ten-turn snapshot. Recovery
+        // must locate the original turn by its application identity.
+        ...(evidence === "answered" ? Array.from({ length: 12 }, (_, index) => ({
+          type: "message", id: `later-${index}`, parentId: index ? `later-${index - 1}` : "answer", timestamp,
+          message: { role: "user", content: "Later work", timestamp: now },
+        })) : []),
+      ];
+      await writeFile(sessionFile, entries.map(entry => JSON.stringify(entry)).join("\n") + "\n");
+      const { id } = bindings.createUnboundThread(scope, { workspaceId: workspace.id, connectionProfileId: profile.id, title: evidence, now });
+      bindings.bindDiscoveredConversation(scope, id, { backendConversationId: sessionId, now });
+      pi.saveBindingDetails(scope, id, { backendConversationId: sessionId, opaqueBindingDetail: serializePiBindingDetail(sessionId, sessionFile), nativeSessionPath: sessionFile });
+      inventory.parkThread(scope, id, {
+        ...(selfPark ? { selfParkTurnId: applicationTurnIdForBackendTurn({ backendInstanceId, sourceApplicationThreadId: id, backendTurnId }) } : {}),
+        mutationId: randomUUID(), expectedRevision: inventory.getInventory(scope, id).inventoryRevision, now,
+      });
+      return id;
+    };
+    const answered = await seed("answered"), pending = await seed("user only"), other = await seed("other turn");
+    const signed = await seed("signed root", true), wrongSession = await seed("wrong session");
+    const selfSuccess = await seed("answered", true), selfFailure = await seed("failed", true), selfInterrupted = await seed("interrupted", true);
+    expect(database.prepare("SELECT count(*) AS count FROM submission_completion_observations").get()).toEqual({ count: 0 });
+    await application!.close();
+    application = undefined;
+
+    const recover = vi.spyOn(parkedTurnRecovery, "recoverParkedTurns");
+    const attach = vi.spyOn(PiConversationBackendDriver.prototype, "attach");
+    const restarted = await openApplication(sessions);
+    await vi.waitFor(() => expect(recover.mock.calls.some(([pass]) => pass.backendInstanceId === backendInstanceId)).toBe(true));
+    const pass = recover.mock.calls.findIndex(([input]) => input.backendInstanceId === backendInstanceId);
+    expect(await recover.mock.results[pass]!.value).toBe(true);
+    const recovered = new InventoryRepository(restarted.service.repository.database);
+    for (const id of [answered, signed, selfFailure, selfInterrupted]) expect(recovered.getInventory(scope, id).inventoryState).toBe("active");
+    for (const id of [pending, other, wrongSession, selfSuccess]) expect(recovered.getInventory(scope, id).inventoryState).toBe("parked");
+    expect(restarted.service.repository.database.prepare(
+      "SELECT parked_until_turn_id AS target, park_keep_on_success AS keep FROM thread_principal_state WHERE thread_id = ?",
+    ).get(selfSuccess)).toEqual({ target: null, keep: 0 });
+    expect(attach).not.toHaveBeenCalled();
+  }, 15_000);
 
   it("opens unresolved recent submissions in the background once main serves requests", async () => {
     const { service, scope, environmentId } = await fixture();

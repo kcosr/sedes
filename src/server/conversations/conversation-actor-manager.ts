@@ -17,7 +17,7 @@ import type {
 import { callRuntime } from "../runtime/runtime-errors.js";
 import type { ComposerAttachmentDeliveryService } from "../composer-attachments/composer-attachment-delivery-service.js";
 import { ConversationActor } from "./conversation-actor.js";
-import { ConversationProjector } from "./conversation-projector.js";
+import { ConversationProjector, confirmedTurnOutcome } from "./conversation-projector.js";
 import { historyConversationHandle } from "./history-conversation-handle.js";
 import { assertConversationRetentionMilliseconds } from "./conversation-retention-policy.js";
 import { assertConversationRuntimeBudget } from "./conversation-runtime-budget-policy.js";
@@ -334,12 +334,19 @@ type NonblockingQuestionObserver = (
   payload: NonblockingQuestionsPayload,
 ) => void;
 
+type TurnSettlementObserver = (
+  scope: ExecutionScope,
+  threadId: string,
+  outcomeForTurn: (turnId: string) => ReturnType<typeof confirmedTurnOutcome>,
+) => void;
+
 type LiveProgressSkippedObserver = (scope: ExecutionScope, threadId: string, turnId: string, itemId: string) => void;
 
 type CaptureEarlyReplyObserver = (scope: ExecutionScope, threadId: string, source: EarlyReplySource) => EarlyReplyObservation | null | undefined;
 
 export class ConversationActorManager {
   readonly #captureEarlyReply?: CaptureEarlyReplyObserver;
+  readonly #readProgressParkRevision?: (scope: ExecutionScope, threadId: string) => number | undefined;
   readonly #onNonblockingQuestions?: NonblockingQuestionObserver;
   readonly #onHistoricalQuestion?: HistoricalQuestionObserver;
   readonly #environments: ExecutionEnvironmentProvider;
@@ -350,12 +357,16 @@ export class ConversationActorManager {
   readonly #runtimeBudget: number;
   readonly #onAuthoritativeCompletion?: AuthoritativeCompletionObserver;
   readonly #captureResponseVoiceContext?: (scope: ExecutionScope, threadId: string, backendCorrelations: readonly string[]) => CapturedResponseVoiceContext;
+  readonly #observeTurnSettlement?: TurnSettlementObserver;
+  readonly #onControlChanged?: (backendInstanceId: string, threadId: string) => void;
   readonly #onAuthoritativeSubmission?: AuthoritativeSubmissionObserver;
   readonly #onLiveProgress?: LiveProgressObserver;
   readonly #onLiveProgressSkipped?: LiveProgressSkippedObserver;
   readonly #onModelFeedback?: ModelFeedbackObserver;
   readonly #entries = new Map<string, ActorEntry>();
   readonly #inputActivityListeners = new Set<InputActivityListener>();
+  readonly #onParkAvailabilityChanged?: InputActivityListener;
+  readonly #parkableThreads = new Set<string>();
   readonly #maintenance = new Map<string, ActorMaintenance>();
   #pressureReclaimer?: ConversationRuntimePressureReclaimer;
   #closing = false;
@@ -370,8 +381,12 @@ export class ConversationActorManager {
     readonly runtimeBudget: number;
     readonly onAuthoritativeCompletion?: AuthoritativeCompletionObserver;
     readonly captureResponseVoiceContext?: (scope: ExecutionScope, threadId: string, backendCorrelations: readonly string[]) => CapturedResponseVoiceContext;
+    readonly observeTurnSettlement?: TurnSettlementObserver;
+    readonly onParkAvailabilityChanged?: InputActivityListener;
+    readonly onControlChanged?: (backendInstanceId: string, threadId: string) => void;
     readonly onAuthoritativeSubmission?: AuthoritativeSubmissionObserver;
     readonly captureEarlyReply?: CaptureEarlyReplyObserver;
+    readonly readProgressParkRevision?: (scope: ExecutionScope, threadId: string) => number | undefined;
     readonly onLiveProgress?: LiveProgressObserver;
     readonly onLiveProgressSkipped?: LiveProgressSkippedObserver;
     readonly onModelFeedback?: ModelFeedbackObserver;
@@ -384,14 +399,18 @@ export class ConversationActorManager {
     this.#applicationPublications = input.applicationPublications;
     this.#onAuthoritativeCompletion = input.onAuthoritativeCompletion;
     this.#captureResponseVoiceContext = input.captureResponseVoiceContext;
+    this.#observeTurnSettlement = input.observeTurnSettlement;
+    this.#onControlChanged = input.onControlChanged;
     this.#onAuthoritativeSubmission = input.onAuthoritativeSubmission;
     this.#captureEarlyReply = input.captureEarlyReply;
+    this.#readProgressParkRevision = input.readProgressParkRevision;
     this.#onLiveProgress = input.onLiveProgress;
     this.#onLiveProgressSkipped = input.onLiveProgressSkipped;
     this.#onModelFeedback = input.onModelFeedback;
     this.#onNonblockingQuestions = input.onNonblockingQuestions;
     this.#onHistoricalQuestion = input.onHistoricalQuestion;
     assertConversationRetentionMilliseconds(input.retentionMilliseconds);
+    this.#onParkAvailabilityChanged = input.onParkAvailabilityChanged;
     this.#retentionMilliseconds = input.retentionMilliseconds;
     assertConversationRuntimeBudget(input.runtimeBudget);
     this.#runtimeBudget = input.runtimeBudget;
@@ -448,18 +467,29 @@ export class ConversationActorManager {
     await entry.actor.refreshApplicationPublications();
   }
 
+  /** The normalized turn ID survives projection replacement and process restart. */
+  currentTurnForParking(scope: Pick<ExecutionScope, "tenantId" | "principalId">, threadId: string): string | undefined {
+    return this.#observableExecutionEntry(scope, threadId)?.actor?.currentTurnForParking();
+  }
+
+  #observableExecutionEntry(scope: Pick<ExecutionScope, "tenantId" | "principalId">, applicationThreadId: string): ActorEntry | undefined {
+    const key = scopedActorKey(scope, applicationThreadId);
+    const entry = this.#entries.get(key);
+    if (this.#closing || this.#maintenance.has(key) || !entry || entry.access !== "execution" ||
+        entry.eviction || entry.poisoned || entry.controlEnded || entry.control?.lifetime.aborted ||
+        entry.creationAbort.signal.aborted) return undefined;
+    return entry;
+  }
+
   /** Observe the exclusive owner even when no browser/coordinator lease exists. Never attaches. */
   observeInputRuntime(
     scope: Pick<ExecutionScope, "tenantId" | "principalId">,
     applicationThreadId: string,
     sourceTurnId?: string,
   ): ConversationInputRuntimeObservation | undefined {
-    const key = scopedActorKey(scope, applicationThreadId);
-    const entry = this.#entries.get(key);
-    if (this.#closing || this.#maintenance.has(key) || !entry || entry.access !== "execution" ||
-        entry.eviction || entry.poisoned || entry.controlEnded || entry.creationAbort.signal.aborted) return undefined;
-    const observed = entry.actor?.peekInputState();
-    if (!observed) return undefined;
+    const entry = this.#observableExecutionEntry(scope, applicationThreadId);
+    const observed = entry?.actor?.peekInputState();
+    if (!entry || !observed) return undefined;
     const timeline = observed.state.timeline;
     const turnId = sourceTurnId ?? timeline.activeTurnId ?? timeline.orderedTurnIds.at(-1);
     const turn = turnId ? timeline.turnsById[turnId] : undefined;
@@ -499,6 +529,18 @@ export class ConversationActorManager {
   }
 
   #publishThreadInputActivity(scope: Pick<ExecutionScope, "tenantId" | "principalId">, applicationThreadId: string): void {
+    if (this.#onParkAvailabilityChanged) {
+      // The sidebar only consumes availability. Streaming updates and switching
+      // between two parkable turn identities need no additional publication.
+      const key = scopedActorKey(scope, applicationThreadId);
+      const parkable = this.currentTurnForParking(scope, applicationThreadId) !== undefined;
+      if (this.#parkableThreads.has(key) !== parkable) {
+        if (parkable) this.#parkableThreads.add(key);
+        else this.#parkableThreads.delete(key);
+        try { this.#onParkAvailabilityChanged(scope, applicationThreadId); }
+        catch { /* Sidebar publication cannot affect the conversation owner. */ }
+      }
+    }
     for (const listener of [...this.#inputActivityListeners]) {
       try { listener(scope, applicationThreadId); }
       catch { /* Input observation cannot affect actor ownership. */ }
@@ -1513,6 +1555,8 @@ export class ConversationActorManager {
         opaqueBindingDetail: input.opaqueBindingDetail,
         onControlReady: control => {
           if (signal.aborted || control.lifetime.aborted || !control.generation) return;
+          const restoresParkTarget = (entry.controlEnded || entry.control?.lifetime.aborted) &&
+            actor?.currentTurnForParking() !== undefined;
           if (entry.control !== control && !entry.controlEnded) {
             // An earlier abort listener can install the new control synchronously.
             if (entry.control?.lifetime.aborted) actor?.noteEarlyReplyObservationGap();
@@ -1520,12 +1564,16 @@ export class ConversationActorManager {
           }
           entry.control = control;
           entry.controlEnded = false;
+          this.#onControlChanged?.(input.binding.backendInstanceId, input.binding.applicationThreadId);
+          if (restoresParkTarget) actor?.publishOperationAvailabilityChanged();
           this.#publishInputActivity(entry);
           control.lifetime.addEventListener("abort", () => {
             if (entry.control === control) {
               entry.control = undefined;
               entry.controlEnded = true;
+              this.#onControlChanged?.(input.binding.backendInstanceId, input.binding.applicationThreadId);
               actor?.noteEarlyReplyObservationGap();
+              if (actor?.currentTurnForParking() !== undefined) actor.publishOperationAvailabilityChanged();
               this.#publishInputActivity(entry);
             }
           }, { once: true });
@@ -1543,6 +1591,8 @@ export class ConversationActorManager {
         handle,
         nativeEffects: entry.nativeEffects,
         environmentLease: lease,
+        ...(this.#readProgressParkRevision ? {readProgressParkRevision: () =>
+          this.#readProgressParkRevision!(input.scope, input.binding.applicationThreadId)} : {}),
         ...(this.#captureEarlyReply ? { captureEarlyReply: (source: EarlyReplySource) => {
           const generation = actor?.peekSnapshotState()?.timeline.generation;
           const control = entry.control;
@@ -1559,6 +1609,10 @@ export class ConversationActorManager {
           const sink = this.#captureEarlyReply!(input.scope, input.binding.applicationThreadId, source);
           return sink && afterSubmissionAdmission(sink, observationChain, isCurrent);
         } } : {}),
+        onTerminalTurn: (applicationTurnId, outcome) => {
+          if (!signal.aborted) this.#observeTurnSettlement?.(input.scope, input.binding.applicationThreadId, id =>
+            id === applicationTurnId ? outcome : undefined);
+        },
         onEarlyProgressSkipped: source => this.#onLiveProgressSkipped?.(input.scope, input.binding.applicationThreadId,
           source.applicationTurnId, source.applicationItemId),
         onInputStateChanged: () => this.#publishInputActivity(entry),
@@ -1595,6 +1649,12 @@ export class ConversationActorManager {
             }
           }
           const timeline = actor?.peekSnapshotState()?.timeline;
+          const receivedHistory = event.type === "projection_replaced" ||
+            (event.type === "projection_events" && event.events.some(update => update.type === "history_prepend"));
+          if (receivedHistory && timeline && !signal.aborted) {
+            this.#observeTurnSettlement?.(input.scope, input.binding.applicationThreadId, id =>
+              confirmedTurnOutcome(timeline.turnsById[id]));
+          }
           if (this.#onModelFeedback && !signal.aborted && timeline?.runState === "running") {
             if (event.type === "live_progress" && timeline.activeTurnId === event.applicationTurnId) {
               observeModelFeedback(event.applicationTurnId, event.applicationItemId);
@@ -1656,6 +1716,7 @@ export class ConversationActorManager {
               this.#onLiveProgress(input.scope, input.binding.applicationThreadId, {
                 ...event, ...(progressVoice ? { responseVoice: {
                   userInputRevision: progressVoice.userInputRevision, superseded: progressVoice.superseded,
+                  ...(event.progressParkRevision !== undefined ? {progressParkRevision: event.progressParkRevision} : {}),
                 } } : {}),
               });
             }).catch(() => { try { skip(); } catch { /* Notification settlement is passive. */ } });

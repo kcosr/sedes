@@ -57,13 +57,15 @@ describe("ApplicationSnapshotService", () => {
     const id = "older-fork";
     const durable = thread(id, "workspace-local", "2026-08-04T00:00:00.000Z");
     const listByIds = vi.fn((requestedScope: RequestScope, ids: readonly string[]) => requestedScope === scope && ids[0] === id ? [durable] : []);
-    const loaded = vi.fn(async () => ({ runState: "running" as const }));
+    const loaded = vi.fn(async () => ({ runState: "reconciling" as const }));
+    const currentParkTurn = vi.fn(() => "turn-1");
     const capture = vi.fn();
-    const service = new ApplicationSnapshotService({} as InventoryRepository,
+    const service = new ApplicationSnapshotService({ currentParkTurn } as unknown as InventoryRepository,
       { list: capture, listByIds, forkSelectionSaturated: () => false, structure: () => undefined },
       { captureLoadedState: loaded }, {} as never, {} as never, {} as never, {} as never, () => "available",
       { summariesByThread: () => new Map([[id, { runningCount: 1, retainedCount: 0 }]]) });
-    expect(await service.readThreadSummary(scope, id)).toMatchObject({ id, runState: "running", terminalSummary: { runningCount: 1 } });
+    expect(await service.readThreadSummary(scope, id)).toMatchObject({ id, runState: "reconciling", parkUntilTurnEnd: true, terminalSummary: { runningCount: 1 } });
+    expect(currentParkTurn).toHaveBeenCalledWith(scope, id);
     expect(listByIds).toHaveBeenCalledWith(scope, [id]);
     expect(capture).not.toHaveBeenCalled();
     expect(await service.readThreadSummary({ ...scope, principalId: "different" }, id)).toBeUndefined();
@@ -91,6 +93,7 @@ describe("ApplicationSnapshotService", () => {
           ],
     );
     const inventory = {
+      currentParkTurn: (requestedScope: RequestScope, id: string) => requestedScope === scope && id === "thread-local" ? "turn-1" : undefined,
       listEnvironments: () => [
         {
           id: "environment-local",
@@ -130,7 +133,7 @@ describe("ApplicationSnapshotService", () => {
     const service = new ApplicationSnapshotService(
       inventory,
       { list, listByIds: () => [], forkSelectionSaturated: () => false, structure: () => undefined },
-      { captureLoadedState: async () => undefined },
+      { captureLoadedState: async () => ({ runState: "running" }) },
       {
         read: async () => ({
           executionTargets: [
@@ -225,6 +228,8 @@ describe("ApplicationSnapshotService", () => {
       "thread-remote",
       "thread-local",
     ]);
+    expect(snapshot.threads[0]).not.toHaveProperty("parkUntilTurnEnd");
+    expect(snapshot.threads[1]).toMatchObject({ runState: "running", parkUntilTurnEnd: true });
     expect(snapshot.threads[0]?.terminalSummary).toEqual({
       runningCount: 1,
       retainedCount: 2,

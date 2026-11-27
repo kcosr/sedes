@@ -331,6 +331,7 @@ function fixture(
   onModelFeedback?: ModelFeedbackObserver,
   captureEarlyReply?: ConstructorParameters<typeof ConversationActorManager>[0]["captureEarlyReply"],
   onLiveProgressSkipped?: ConstructorParameters<typeof ConversationActorManager>[0]["onLiveProgressSkipped"],
+  readProgressParkRevision?: ConstructorParameters<typeof ConversationActorManager>[0]["readProgressParkRevision"],
 ) {
   const closeOrder: string[] = [];
   const handle = new FakeHandle(closeOrder);
@@ -376,7 +377,7 @@ function fixture(
       opaqueReference: "selected-checkpoint",
     })),
   } as unknown as ConversationBackendDriver;
-  const actorManager = new ConversationActorManager({
+  const managerOptions = {
     environments,
     attachmentDelivery: {
       materialize: vi.fn(async () => ({
@@ -396,11 +397,13 @@ function fixture(
     ...(onAuthoritativeSubmission ? { onAuthoritativeSubmission } : {}),
     ...(onLiveProgress ? { onLiveProgress } : {}),
     ...(onLiveProgressSkipped ? { onLiveProgressSkipped } : {}),
+    ...(readProgressParkRevision ? { readProgressParkRevision } : {}),
     ...(captureEarlyReply ? { captureEarlyReply } : {}),
     ...(onModelFeedback ? { onModelFeedback } : {}),
     ...(captureResponseVoiceContext ? { captureResponseVoiceContext } : {}),
     ...(applicationPublications ? { applicationPublications } : {}),
-  });
+  };
+  const actorManager = new ConversationActorManager(managerOptions);
   const manager = {
     acquire: (
       input: AcquireConversationActorInput,
@@ -415,6 +418,7 @@ function fixture(
   };
   return {
     actorManager,
+    managerOptions,
     closeOrder,
     driver,
     environments,
@@ -423,6 +427,69 @@ function fixture(
     manager,
   };
 }
+
+it("publishes sidebar park availability on owner transitions and skips streaming updates", async () => {
+  const { driver, handle, managerOptions } = fixture();
+  const updates = vi.fn();
+  const manager = new ConversationActorManager({ ...managerOptions, onParkAvailabilityChanged: updates });
+  handle.establishmentSnapshots[0] = snapshot("running");
+  const owner = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver }, { idleRelease: "retain" });
+  try {
+    expect(updates.mock.calls).toEqual([[scope, binding.applicationThreadId]]);
+    expect(manager.currentTurnForParking(scope, binding.applicationThreadId)).toBe(projectedTurnId);
+    for (let sequence = 0; sequence < 3; sequence++) {
+      handle.emit(0, { type: "item_updated", item: {
+        backendItemId: "item-1", backendTurnId: "turn-1", sourceOrder: 0, semanticKind: "assistant_message",
+        markdown: { text: "hello" + ".".repeat(sequence + 1) }, status: "streaming",
+      } }, sequence);
+      await owner.actor.captureSnapshotState();
+    }
+    expect(updates).toHaveBeenCalledTimes(1);
+    handle.emit(0, { type: "run_state_changed", state: "running" }, 3);
+    await owner.actor.captureSnapshotState();
+    expect(owner.actor.timeline.runState).toBe("running");
+    expect(manager.currentTurnForParking(scope, binding.applicationThreadId)).toBeUndefined();
+    expect(updates.mock.calls).toEqual([[scope, binding.applicationThreadId], [scope, binding.applicationThreadId]]);
+  } finally {
+    owner.release();
+    await manager.close();
+  }
+});
+
+describe("parked turn settlement", () => {
+  it.each([
+    ["turn_updated", "completed"], ["turn_completed", "completed"],
+    ["turn_completed", "failed"], ["turn_updated", "interrupted"],
+  ] as const)("accepts a status-only native %s reporting %s and ignores projected turn upserts", async (type, status) => {
+    const { driver, handle, managerOptions } = fixture();
+    const observed = vi.fn();
+    const manager = new ConversationActorManager({
+      ...managerOptions,
+      observeTurnSettlement(_scope, _threadId, outcomeForTurn) {
+        observed(outcomeForTurn(projectedTurnId));
+      },
+    });
+    // A passive tail can have a terminal display status with no observed end.
+    const initial = snapshot();
+    const turn = { backendTurnId: "turn-1", status, orderedBackendItemIds: ["item-1"] };
+    handle.establishmentSnapshots[0] = { ...initial, turnsById: { "turn-1": turn } };
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver }, { idleRelease: "retain" });
+    try {
+      expect(observed.mock.calls).toEqual([[undefined]]);
+      observed.mockClear();
+      handle.emit(0, { type: "item_started", item: { backendItemId: "notice", backendTurnId: "turn-1",
+        semanticKind: "notice", sourceOrder: 1, status: "completed", tone: "info", text: { text: "Updated metadata" } } }, 0);
+      const updatedTurn = { ...turn, orderedBackendItemIds: ["item-1", "notice"] };
+      handle.emit(0, { type: "turn_updated", turn: { backendTurnId: "other", status: "in_progress", orderedBackendItemIds: [] } }, 1);
+      await acquired.actor.captureSnapshotState();
+      expect(acquired.actor.timeline.orderedTurnIds).toHaveLength(2);
+      expect(observed).not.toHaveBeenCalled();
+      handle.emit(0, { type, turn: updatedTurn }, 2);
+      await acquired.actor.captureSnapshotState();
+      expect(observed.mock.calls).toEqual([[status]]);
+    } finally { acquired.release(); await manager.close(); }
+  });
+});
 
 describe("page publication turn authority", () => {
   it("forks the native source revision independently of visible page revisions", async () => {
@@ -6444,6 +6511,49 @@ describe("ConversationActorManager", () => {
     } finally { acquired.release(); await manager.close(); }
   });
 
+  it("freezes each progress item's park revision at opening, even without early speech or an initial phase", async () => {
+    const progress = vi.fn<LiveProgressObserver>();
+    let parkRevision: number | undefined = 0;
+    const { driver, handle, manager } = fixture(undefined, undefined, 10, undefined, 8, progress,
+      () => ({userInputRevision: 1, subscriberWatermark: 1, superseded: false}), undefined, undefined, undefined, undefined,
+      () => parkRevision);
+    const base = snapshot("running", "");
+    handle.establishmentSnapshots[0] = {...base, turnsById: {"turn-1": {
+      ...base.turnsById["turn-1"]!, completionCorrelations: ["accepted-input"],
+    }}};
+    const acquired = await manager.acquire({scope, binding, workspace, opaqueBindingDetail: "opaque", driver});
+    try {
+      let sequence = 0;
+      const open = (id: string) => {
+        const item = {backendItemId: id, backendTurnId: "turn-1", semanticKind: "assistant_message" as const,
+          sourceOrder: sequence + 1, status: "streaming" as const, markdown: {text: id}};
+        handle.emit(0, {type: "item_started", item}, sequence++);
+        return item;
+      };
+      const before = open("before");
+      parkRevision = undefined;
+      const during = open("during");
+      parkRevision = 1;
+      const after = open("after");
+      for (const item of [before, during, after]) handle.emit(0, {type: "item_completed", liveProgress: true,
+        item: {...item, status: "completed", responsePhase: "provisional"}}, sequence++);
+      // OpenCode and Claude can first introduce a complete item in a projection
+      // burst, then confirm its progress after the associated tools settle.
+      const burst = {...after, backendItemId: "burst", sourceOrder: sequence, status: "completed" as const, markdown: {text: "burst"}};
+      handle.emit(0, {type: "item_completed", item: burst}, sequence++);
+      handle.emit(0, {type: "item_updated", item: {...burst, responsePhase: "provisional"}, liveProgress: true}, sequence++);
+      // An item hydrated at attach has no observed opening. An earlier park
+      // makes its later classification insufficient evidence for automatic speech.
+      handle.emit(0, {type: "item_updated", item: {...base.itemsById["item-1"]!, semanticKind: "assistant_message",
+        markdown: {text: "hydrated"}, responsePhase: "provisional", status: "completed"}, liveProgress: true}, sequence++);
+      handle.emit(0, {type: "item_updated", item: {...burst, backendItemId: "late", sourceOrder: sequence,
+        markdown: {text: "late"}, responsePhase: "provisional"}, liveProgress: true}, sequence++);
+      await vi.waitFor(() => expect(progress).toHaveBeenCalledTimes(6));
+      expect(progress.mock.calls.map(([, , item]) => [item.text.text, item.responseVoice?.progressParkRevision]))
+        .toEqual([["before", 0], ["during", undefined], ["after", 1], ["burst", 1], ["hydrated", undefined], ["late", undefined]]);
+    } finally { acquired.release(); await manager.close(); }
+  });
+
   it("captures progress freshness before a preceding submission observer can delay publication", async () => {
     let release!: () => void, entered!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });
@@ -8190,6 +8300,7 @@ describe("actor-owned input observation", () => {
 
   it("invalidates an ended native control immediately while ignoring an obsolete control's abort", async () => {
     const { actorManager, manager, handle, driver } = fixture();
+    handle.establishmentSnapshots[0] = snapshot("running");
     const firstLifetime = new AbortController();
     const nextLifetime = new AbortController();
     let publishControl: Parameters<ConversationBackendDriver["attach"]>[0]["onControlReady"];
@@ -8201,6 +8312,11 @@ describe("actor-owned input observation", () => {
     });
     const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
     const observed: Array<boolean | undefined> = [];
+    const parkChanges: Array<string | undefined> = [];
+    const parkTarget = () => actorManager.currentTurnForParking(scope, binding.applicationThreadId);
+    const unsubscribePark = acquired.actor.subscribe(event => {
+      if (event.type === "backend_event" && event.event.type === "capabilities_changed") parkChanges.push(parkTarget());
+    });
     const unsubscribe = actorManager.subscribeInputActivity((observedScope, threadId) => {
       observed.push(actorManager.observeInputRuntime(observedScope, threadId)?.authoritative);
     });
@@ -8209,10 +8325,13 @@ describe("actor-owned input observation", () => {
         interrupt: handle.interrupt, reconcileInterrupt: handle.reconcileInterrupt });
       firstLifetime.abort();
       expect(actorManager.observeInputRuntime(scope, binding.applicationThreadId)?.authoritative).toBe(true);
+      expect(parkTarget()).toBe(projectedTurnId);
       nextLifetime.abort();
       expect(actorManager.observeInputRuntime(scope, binding.applicationThreadId)).toBeUndefined();
       expect(observed.at(-1)).toBeUndefined();
+      expect(parkTarget()).toBeUndefined();
+      expect(parkChanges).toEqual([undefined]);
       expect(handle.establishCount).toBe(1);
-    } finally { unsubscribe(); acquired.release(); await manager.close(); }
+    } finally { unsubscribePark(); unsubscribe(); acquired.release(); await manager.close(); }
   });
 });

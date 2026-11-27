@@ -1764,8 +1764,13 @@ describe("ThreadContextMenu actions", () => {
     );
   });
 
-  it("offers a compact park action for an active sidebar row", async () => {
-    const thread = makeThread();
+  it.each([
+    ["idle", false, "Park"],
+    ["running", false, "Park"],
+    ["running", true, "Park until done"],
+    ["reconciling", true, "Park until done"],
+  ] as const)("offers the %s sidebar row with until-done %s its compact %s action", async (runState, untilDone, label) => {
+    const thread = makeThread({ runState, ...(untilDone ? { parkUntilTurnEnd: true } : {}) });
     const { state, store } = sidebarFixture(thread);
     render(
       <InventorySidebar
@@ -1777,13 +1782,30 @@ describe("ThreadContextMenu actions", () => {
     );
 
     const park = screen.getByRole("button", {
-      name: "Park Review backend contract",
+      name: `${label} Review backend contract`,
     });
     expect(park.querySelector("svg")).not.toBeNull();
     await userEvent.click(park);
     expect(store.mutateInventory).toHaveBeenCalledWith(thread, "park", {
       expectedStashedPromptCount: 0,
     });
+  });
+
+  it("explains parking a reconciling turn in the sidebar menu and stash confirmation", async () => {
+    const store = makeStore();
+    const thread = makeThread({ runState: "reconciling", parkUntilTurnEnd: true });
+    store.getThreadArchiveImpact.mockResolvedValueOnce({
+      stashedPrompts: { root: 1, descendants: 0 },
+    });
+    const menu = await openMenu(renderMenu(thread, store));
+    const park = within(menu).getByRole("menuitem", { name: "Park until done" });
+    expect(park).toHaveAccessibleDescription("Mutes progress speech. Returns to Active when this turn ends.");
+    await userEvent.click(park);
+    const dialog = await screen.findByRole("dialog", { name: "Park this thread until done" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Park until done" }));
+    await waitFor(() => expect(store.mutateInventory).toHaveBeenCalledWith(thread, "park", {
+      expectedStashedPromptCount: 1,
+    }));
   });
 
   it("delivers lifecycle actions through mutateInventory", async () => {

@@ -1,8 +1,8 @@
-import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { acquirePiSessionWriterLock, PiSessionWriterCleanupRequiredError } from "../../src/server/backends/pi/pi-session-writer-lock.js";
+import { acquirePiSessionWriterLock, PiSessionWriterCleanupRequiredError, piSessionWriterStopped } from "../../src/server/backends/pi/pi-session-writer-lock.js";
 import * as processTable from "../../src/server/runtime/process-table.js";
 import { PiSessionStore } from "../../src/server/backends/pi/pi-session-store.js";
 import type { ValidatedWorkspace } from "../../src/server/execution/contracts.js";
@@ -32,6 +32,46 @@ describe("shared Pi session writer ownership", () => {
     const record = JSON.parse(await readFile(markerFile, "utf8")) as Record<string, unknown>;
     return { boot, file, markerFile, record, writer };
   }
+
+  it("inspects SDK owners without acquiring or clearing their records", async () => {
+    const file = path.join(await realpath(await fixture()), "session.jsonl");
+    await writeFile(file, "history");
+    await expect(piSessionWriterStopped(file)).resolves.toBe(true);
+    const lock = await acquirePiSessionWriterLock(file);
+    const directory = `${file}.sedes-writer.lock`;
+    const owner = path.join(directory, (await readdir(directory))[0]!);
+    const original = await readFile(owner, "utf8");
+    try {
+      await expect(piSessionWriterStopped(file)).resolves.toBe(false);
+      const metadata = JSON.parse(original);
+      for (const [changes, stopped] of [
+        [{ pid: 2_147_483_647 }, true],
+        [{ pid: 2_147_483_647, identityHash: "unrelated" }, false],
+        [{ pid: 2_147_483_648 }, false],
+        [{ pid: "malformed" }, false],
+      ] as const) {
+        const text = JSON.stringify({ ...metadata, ...changes });
+        await writeFile(owner, text);
+        await expect(piSessionWriterStopped(file)).resolves.toBe(stopped);
+        expect(await readFile(owner, "utf8")).toBe(text);
+      }
+    } finally { await writeFile(owner, original); await lock.release(); }
+  });
+
+  it("requires affirmative proof that a detached native child stopped and leaves its marker untouched", async () => {
+    const f = await orphanedNative();
+    await writeFile(f.file, "history");
+    const canonical = await realpath(f.file);
+    await expect(piSessionWriterStopped(canonical)).resolves.toBe(false);
+    f.boot.mockResolvedValue(undefined);
+    await expect(piSessionWriterStopped(canonical)).resolves.toBe(false);
+    f.boot.mockResolvedValue(bootB);
+    await expect(piSessionWriterStopped(canonical)).resolves.toBe(true);
+    expect(JSON.parse(await readFile(f.markerFile, "utf8"))).toEqual(f.record);
+    await writeFile(f.markerFile, "unreadable record");
+    await expect(piSessionWriterStopped(canonical)).resolves.toBe(false);
+    expect(await readFile(f.markerFile, "utf8")).toBe("unreadable record");
+  });
 
   it.each([false, true])("recovers only an exact old-boot marker before acquiring a new writer (native=%s)", async (detachedWriter) => {
     const f = await orphanedNative();

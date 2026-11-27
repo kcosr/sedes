@@ -78,6 +78,7 @@ export async function runDesktopTiming(endpoint: string, mode: "responsive" | "o
         async request(path) {
           if (!path.endsWith("/input-context")) throw new Error("Unexpected desktop timing request.");
           return Response.json({ threadId, threadTitle: "Timing", authority: "current", userInputRevision: 1,
+            progressMuted: false, progressParkRevision: 0,
             activityToken: "live", sourceTurnId: "turn", runState: null, automaticListenEligible: false,
             manualListenEligible: true, steer: { availability: "unavailable" } });
         },

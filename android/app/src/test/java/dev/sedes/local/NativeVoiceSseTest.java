@@ -29,6 +29,10 @@ public class NativeVoiceSseTest {
             assertEquals(java.util.Arrays.asList("notification_policy:{\"generation\":3}", "application-live:{}"), parse(stream, chunk));
         assertEquals("application-live", NativeVoiceSse.LIVE);
     }
+    @Test public void forwardsParkFramesInOrderOnTheVoiceLane() {
+        String frames = "event: progress_parked\ndata: {}\n\nevent: voice_early_reply\ndata: {}\n\n";
+        assertEquals(java.util.Arrays.asList("progress_parked:{}", "voice_early_reply:{}"), parse(frames, 2));
+    }
     @Test public void combinesDataLinesAndDoesNotDispatchIncompleteFrame() {
         List<String> frames = new ArrayList<>(); NativeVoiceSse parser = new NativeVoiceSse((event, data) -> frames.add(data));
         char[] input = "event: notification\ndata: one\ndata: two\n\nevent: notification\ndata: unfinished".toCharArray();

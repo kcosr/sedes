@@ -32,8 +32,15 @@ export class NotificationLifecycleObserver<Publication = void> {
 
   progress(scope: RequestScope, threadId: string, input: Parameters<LiveProgressObserver>[2]): Publication | undefined {
     try {
-      if (!input.text.text.trim() || !new SubmissionCompletionRepository(this.inventory.database)
-        .hasActiveAcceptedCorrelation(scope, threadId, input.backendCorrelations)) return;
+      const submissions = new SubmissionCompletionRepository(this.inventory.database);
+      if (!input.text.text.trim() || !submissions.hasActiveAcceptedCorrelation(scope, threadId, input.backendCorrelations)) return;
+      let responseVoice = input.responseVoice;
+      if (input.phase === "provisional" && responseVoice && responseVoice.progressParkRevision === undefined) {
+        try {
+          const revision = submissions.rootSubmitParkRevision(scope, threadId, input.backendCorrelations);
+          if (revision !== undefined) responseVoice = {...responseVoice, progressParkRevision: revision};
+        } catch { /* Missing voice evidence cannot suppress the independent progress script. */ }
+      }
       const context = this.#context(scope, threadId);
       return this.emit(scope, {
         event: input.phase === "partial" ? "turn.partial" : "turn.progress",
@@ -41,7 +48,7 @@ export class NotificationLifecycleObserver<Publication = void> {
         message: context.thread.title, ...context, turn: { id: input.applicationTurnId },
         progress: { phase: input.phase, itemId: input.applicationItemId, ...input.text },
       }, progressNotificationKey(threadId, input.applicationTurnId, input.applicationItemId), "live",
-      undefined, undefined, undefined, input.responseVoice);
+      undefined, undefined, undefined, responseVoice);
     } catch { /* Passive progress cannot affect provider work. */ }
   }
 

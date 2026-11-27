@@ -12,6 +12,7 @@ import {
   expectNoPageOverflow,
   fillAndPersistDraft,
   openWorkspaceDirectory,
+  overlaySettled,
   selectCustomNewThreadTarget,
   sendCurrentDraft,
 } from "./helpers";
@@ -340,6 +341,33 @@ test("notification settings persist and passive server scripts follow selected l
   await sendCurrentDraft(page);
   const codexTurn = page.locator(".conversation-turn").last();
   await expect(codexTurn.getByTestId("activity-group")).toBeVisible();
+  const row = page.getByTestId("desktop-sidebar").locator(`[data-thread-id="${codexThreadId}"]`);
+  await row.getByTestId("thread-row-link").click({ button: "right" });
+  const parkInSidebar = page.getByTestId("thread-context-menu").getByRole("menuitem", { name: "Park until done", exact: true });
+  await expect(parkInSidebar).toBeEnabled();
+  await expect(parkInSidebar).toHaveAccessibleDescription("Mutes progress speech. Returns to Active when this turn ends.");
+  await capture(page, testInfo, "park-until-done-sidebar-desktop.png");
+  await page.keyboard.press("Escape");
+  await expect(parkInSidebar).toBeHidden();
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  const threadActions = page.getByRole("button", { name: "Thread actions", exact: true });
+  await threadActions.click();
+  const sheet = page.getByTestId("thread-settings-sheet");
+  const parkInHeader = sheet.getByRole("menuitem", { name: "Park until done", exact: true });
+  await expect(parkInHeader).toBeEnabled();
+  await overlaySettled(sheet);
+  await parkInHeader.scrollIntoViewIfNeeded();
+  await expectNoPageOverflow(page);
+  await capture(page, testInfo, "park-until-done-header-mobile.png");
+  await parkInHeader.click();
+  await expect(sheet).toBeHidden();
+  await threadActions.click();
+  await expect(sheet.getByRole("menuitem", { name: "Unpark", exact: true })).toBeEnabled();
+  await page.keyboard.press("Escape");
+  await expect(sheet).toBeHidden();
+  await page.setViewportSize({ width: 1440, height: 1000 });
+
   expect((await page.request.post(`/__e2e/codex/partial-answer/${codexThreadId}`)).status()).toBe(204);
   await expect.poll(async () => (await payloads()).filter(payload => payload.event === "turn.partial").length).toBe(1);
   const partial = (await payloads()).find(payload => payload.event === "turn.partial")!;
@@ -357,4 +385,6 @@ test("notification settings persist and passive server scripts follow selected l
   await expect.poll(async () => (await payloads()).filter(payload => payload.event === "turn.completed" && payload.thread?.id === codexThreadId).length).toBe(1);
   expect((await payloads()).find(payload => payload.event === "turn.completed" && payload.thread?.id === codexThreadId)?.assistantResult?.partial)
     .toEqual({ text: partial.progress!.text });
+  await threadActions.click();
+  await expect(page.getByRole("menu", { name: "Thread actions" }).getByRole("menuitem", { name: "Park", exact: true })).toBeEnabled();
 });

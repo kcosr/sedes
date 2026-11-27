@@ -1,3 +1,4 @@
+import { readProgressParkState } from "../../src/server/db/repositories/progress-park-state.js";
 import { UserInputRevisionRepository } from "../../src/server/db/repositories/user-input-revision-repository.js";
 import type Database from "better-sqlite3";
 import { DeliveryInputSnapshotRepository } from "../../src/server/db/repositories/delivery-input-snapshot-repository.js";
@@ -217,6 +218,7 @@ const presentationProvider: ThreadBackendPresentationProvider = {
  */
 export async function createInMemoryThreadRuntimeHarness(options: {
   readonly retentionMilliseconds?: number;
+  readonly onParked?: (scope: RequestScope, threadId: string) => void;
   readonly persistDeliveryInputSnapshots?: boolean;
   readonly onCompletion?: (scope: RequestScope, threadId: string, turnId: string) => void;
   readonly isAutomaticModelRetryPending?: (scope: RequestScope, threadId: string) => boolean;
@@ -344,7 +346,8 @@ export async function createInMemoryThreadRuntimeHarness(options: {
     },
   };
 
-  const inventoryRepository = new InventoryRepository(database);
+  const inventoryRepository: InventoryRepository = new InventoryRepository(database,
+    (eventScope, threadId) => actors.currentTurnForParking(eventScope, threadId));
   const bindings = new ConversationBindingRepository(database);
   const creation = new ConversationCreationRepository(database);
   const drafts = new ConversationDraftRepository(database);
@@ -376,7 +379,14 @@ export async function createInMemoryThreadRuntimeHarness(options: {
       ) => void)
     | undefined;
   let observeCompletion: AuthoritativeCompletionObserver | undefined;
+  const completionFollowUps: Promise<void>[] = [];
   const actors = new ConversationActorManager({
+    observeTurnSettlement(eventScope, threadId, outcomeForTurn) {
+      const now = Date.now();
+      const state = inventoryRepository.unparkIfTurnEnded(eventScope, threadId, outcomeForTurn, now);
+      if (state) completionFollowUps.push(new Promise<void>(resolve => setImmediate(resolve))
+        .then(() => inventory.publishCommitted(eventScope, [state], now)));
+    },
     environments,
     ...(options.persistDeliveryInputSnapshots ? { deliveryInputSnapshots: new DeliveryInputSnapshotRepository(database) } : {}),
     attachmentDelivery: {} as never,
@@ -384,6 +394,10 @@ export async function createInMemoryThreadRuntimeHarness(options: {
     runtimeBudget: 8,
     onAuthoritativeSubmission: (eventScope, applicationThreadId, input) =>
       observeSubmission?.(eventScope, applicationThreadId, input),
+    readProgressParkRevision: (eventScope, threadId) => {
+      const state = readProgressParkState(database, eventScope, threadId);
+      return state.progressMuted ? undefined : state.progressParkRevision;
+    },
     captureEarlyReply: options.captureEarlyReply,
     onLiveProgress: options.onLiveProgress,
     onLiveProgressSkipped: options.onLiveProgressSkipped,
@@ -504,6 +518,7 @@ export async function createInMemoryThreadRuntimeHarness(options: {
   });
   threadSnapshots = new ThreadSnapshotPublisher(bindings, threads, runtimes);
   const inventory = new InventoryService(inventoryRepository, {
+    onParked: options.onParked,
     publishMany: async (eventScope, states) => {
       await threadSnapshots.publishMany(
         eventScope,
@@ -533,7 +548,6 @@ export async function createInMemoryThreadRuntimeHarness(options: {
   });
   threads.bindMutations(mutations);
 
-  const completionFollowUps: Promise<void>[] = [];
   observeCompletion = async (eventScope, applicationThreadId, input) => {
     const observation = await queueDispatcher.onAuthoritativeCompletion(
       eventScope,

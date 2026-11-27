@@ -33,7 +33,7 @@ const controlSequence = z.number().int().min(1).max(MAX_EARLY_REPLY_FRAMES);
 export const earlyReplyFrameSchema = z.discriminatedUnion("kind", [
   z.strictObject({ ...common, kind: z.literal("begin"), seq: z.literal(0),
     event: z.enum(["turn.completed", "turn.progress"]), threadTitle: unicode.max(512), userInputRevision: revision, origin: clientOriginSchema.optional(),
-    ...segmentFields, rawStart: z.literal(0) }),
+    progressParkRevision: revision.optional(), ...segmentFields, rawStart: z.literal(0) }),
   z.strictObject({ ...common, kind: z.literal("append"), seq: z.number().int().min(1).max(MAX_EARLY_REPLY_FRAMES - 1),
     ...segmentFields }),
   z.strictObject({ ...common, kind: z.literal("yield"), seq: controlSequence,
@@ -42,6 +42,9 @@ export const earlyReplyFrameSchema = z.discriminatedUnion("kind", [
     reason: z.enum(["source_changed", "authority_lost", "superseded", "policy_changed", "publication_suppressed", "expired"]) }),
 ]).superRefine((frame, context) => {
   requireSerializedByteLimit(frame, context, 65_536, "Early reply frame exceeds 64 KiB.");
+  if (frame.kind === "begin" && (frame.event === "turn.progress") !== (frame.progressParkRevision !== undefined)) {
+    context.addIssue({ code: "custom", path: ["progressParkRevision"], message: "Park revision is required exactly for provisional progress." });
+  }
   if (frame.kind !== "begin" && frame.kind !== "append") return;
   if (frame.rawEnd - frame.rawStart !== frame.text.length ||
     encoder.encode(frame.text).byteLength > MAX_EARLY_REPLY_BYTES ||

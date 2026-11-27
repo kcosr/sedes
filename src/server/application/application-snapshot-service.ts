@@ -36,7 +36,7 @@ import {
 
 export type ApplicationThreadDurableSummary = Omit<
   NormalizedApplicationThreadSummary,
-  "runState" | "terminalSummary" | "backgroundWork"
+  "runState" | "terminalSummary" | "backgroundWork" | "parkUntilTurnEnd"
 >;
 
 export interface ApplicationTerminalSummaryReader {
@@ -125,6 +125,22 @@ function runState(
   return loaded ?? "idle";
 }
 
+function presentApplicationThread(
+  thread: ApplicationThreadDurableSummary,
+  terminalSummary: NormalizedApplicationThreadSummary["terminalSummary"],
+  loaded: Awaited<ReturnType<ThreadRuntimeCoordinator["captureLoadedState"]>>,
+  parkTurn: string | undefined,
+): NormalizedApplicationThreadSummary {
+  return {
+    ...thread,
+    ...(thread.available && thread.backingState === "bound" && loaded?.backgroundWork
+      ? { backgroundWork: loaded.backgroundWork } : {}),
+    ...(parkTurn !== undefined ? { parkUntilTurnEnd: true } : {}),
+    terminalSummary,
+    runState: runState(thread.backingState, thread.available, loaded?.runState),
+  };
+}
+
 function presentEnvironment(
   environment: ReturnType<InventoryRepository["getEnvironment"]>,
   directoryBrowsing: "available" | "unavailable",
@@ -175,13 +191,9 @@ export class ApplicationSnapshotService {
     const terminalSummary = this.terminalSummaries.summariesByThread(scope, [id]).get(id)
       ?? { runningCount: 0, retainedCount: 0 };
     const loaded = await this.runtimes.captureLoadedState(scope, id, { presentation: true });
-    return normalizedApplicationThreadSummarySchema.parse({
-      ...durable,
-      ...(durable.available && durable.backingState === "bound" && loaded?.backgroundWork
-        ? { backgroundWork: loaded.backgroundWork } : {}),
-      terminalSummary,
-      runState: runState(durable.backingState, durable.available, loaded?.runState),
-    });
+    return normalizedApplicationThreadSummarySchema.parse(presentApplicationThread(
+      durable, terminalSummary, loaded, this.inventory.currentParkTurn?.(scope, id),
+    ));
   }
 
   async capture(scope: RequestScope): Promise<NormalizedApplicationSnapshot> {
@@ -258,23 +270,10 @@ export class ApplicationSnapshotService {
     const threads = await Promise.all(
       durableThreads.map(async (thread) => {
         const loaded = await this.runtimes.captureLoadedState(scope, thread.id, { presentation: true });
-        return {
-          ...thread,
-          ...(thread.available &&
-          thread.backingState === "bound" &&
-          loaded?.backgroundWork
-            ? { backgroundWork: loaded.backgroundWork }
-            : {}),
-          terminalSummary: terminalSummaries.get(thread.id) ?? {
-            runningCount: 0,
-            retainedCount: 0,
-          },
-          runState: runState(
-            thread.backingState,
-            thread.available,
-            loaded?.runState,
-          ),
-        };
+        return presentApplicationThread(
+          thread, terminalSummaries.get(thread.id) ?? { runningCount: 0, retainedCount: 0 },
+          loaded, this.inventory.currentParkTurn?.(scope, thread.id),
+        );
       }),
     );
     threads.sort(
@@ -623,20 +622,7 @@ export class ApplicationSnapshotPublicationBoundary {
         { presentation: true },
       );
       if (!this.#readyToPublish(scope, hub)) return "retry";
-      thread = {
-        ...durable,
-        ...(durable.available &&
-        durable.backingState === "bound" &&
-        loaded?.backgroundWork
-          ? { backgroundWork: loaded.backgroundWork }
-          : {}),
-        terminalSummary: terminals,
-        runState: runState(
-          durable.backingState,
-          durable.available,
-          loaded?.runState,
-        ),
-      };
+      thread = presentApplicationThread(durable, terminals, loaded, this.snapshots.inventory.currentParkTurn?.(scope, id));
     }
     if (this.#structuralChange(scope, hub, id, thread)) {
       hub.requestedEpoch++;

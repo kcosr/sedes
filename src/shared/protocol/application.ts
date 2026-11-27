@@ -171,6 +171,8 @@ export type NormalizedSidebarAttention = z.infer<
 >;
 
 export const normalizedApplicationThreadSummarySchema = z.strictObject({
+  /** The current foreground turn can be captured by Park until done. */
+  parkUntilTurnEnd: z.literal(true).optional(),
   ...normalizedThreadSummarySchema.shape,
   /** Opaque copy-only ID from the durable binding; absent before binding. */
   backendSessionId: z.string().min(1).max(128).optional(),
@@ -811,7 +813,7 @@ export type ApplicationEventEnvelope = z.infer<
   typeof applicationEventEnvelopeSchema
 >;
 
-export const SEDES_CLIENT_PROTOCOL_VERSION = 184 as const;
+export const SEDES_CLIENT_PROTOCOL_VERSION = 185 as const;
 
 export const normalizedApplicationSessionSchema = z.strictObject({
   clientProtocolVersion: z.literal(SEDES_CLIENT_PROTOCOL_VERSION),

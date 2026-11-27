@@ -17,6 +17,7 @@ public class NativeVoiceQueueTest {
                 "thread", NativeVoiceJson.object("id", "thread-a", "title", "Thread A"),
                 "assistantResult", NativeVoiceJson.object("final", NativeVoiceJson.object("text", text))));
         if (subject != null) NativeVoiceJson.put(result, "subjectId", subject);
+        if (event.equals("turn.progress")) NativeVoiceJson.put(result, "progressParkRevision", 0);
         if (event.startsWith("turn.")) NativeVoiceJson.put(result, "userInputRevision", 0);
         if (event.equals("turn.progress") || event.equals("turn.partial") || event.endsWith(".requested")) NativeVoiceJson.put(result, "voice", "speak");
         if (event.equals("turn.progress") || event.equals("turn.partial")) NativeVoiceJson.put(result.optJSONObject("payload"), "progress",
@@ -72,6 +73,38 @@ public class NativeVoiceQueueTest {
         NativeVoiceJson.put(context, "userInputRevision", 99);
         assertFalse(new NativeVoiceQueue.Item(envelope("attention", "thread.woke", "Wake", null), settings("speak")).supersededByInput(context));
         assertFalse(replay("historical", "Read again", settings("speak")).supersededByInput(context));
+    }
+    @Test public void parkedProgressDiscardsOnlyOlderUpdatesOnThatThreadAndRequiresExactPreplayAuthority() {
+        NativeVoiceSettings speak = settings("speak");
+        NativeVoiceQueue queue = new NativeVoiceQueue();
+        NativeVoiceQueue.Item old = new NativeVoiceQueue.Item(envelope("old", "turn.progress", "Old.", null), speak);
+        JSONObject fresh = envelope("fresh", "turn.progress", "New.", null);
+        NativeVoiceJson.put(fresh, "progressParkRevision", 1);
+        NativeVoiceQueue.Item current = new NativeVoiceQueue.Item(fresh, speak);
+        JSONObject different = envelope("other", "turn.progress", "Other thread.", null);
+        different.remove("recognitionTarget");
+        NativeVoiceJson.put(different.optJSONObject("payload").optJSONObject("thread"), "id", "thread-b");
+        NativeVoiceQueue.Item other = new NativeVoiceQueue.Item(different, speak);
+        NativeVoiceQueue.Item partial = new NativeVoiceQueue.Item(envelope("partial", "turn.partial", "Answer.", null), speak);
+        NativeVoiceQueue.Item completed = new NativeVoiceQueue.Item(envelope("done", "turn.completed", "Final.", null), speak);
+        NativeVoiceQueue.Item replay = replay("done", "Replay.", speak);
+        for (NativeVoiceQueue.Item item : new NativeVoiceQueue.Item[]{old, current, other, partial, completed})
+            assertTrue(queue.add(item));
+        assertTrue(queue.addReplay(replay));
+        queue.skipParkedProgress("thread-a", 1); queue.skipParkedProgress("thread-a", 1);
+        assertEquals(5, queue.size());
+        for (NativeVoiceQueue.Item item : new NativeVoiceQueue.Item[]{current, other, partial, completed, replay}) assertSame(item, queue.take());
+        assertEquals(0, queue.bytes());
+        JSONObject context = NativeVoiceJson.object("progressMuted", true, "progressParkRevision", 1);
+        assertFalse(old.progressPermitted(context)); assertFalse(current.progressPermitted(context));
+        assertTrue(completed.progressPermitted(context)); assertTrue(partial.progressPermitted(context));
+        NativeVoiceJson.put(context, "progressMuted", false);
+        assertFalse(old.progressPermitted(context)); assertTrue(current.rebuild(speak).progressPermitted(context));
+        fresh.remove("progressParkRevision");
+        assertThrows(IllegalArgumentException.class, () -> new NativeVoiceQueue.Item(fresh, speak));
+        JSONObject invalidCompletion = envelope("done", "turn.completed", "Final.", null);
+        NativeVoiceJson.put(invalidCompletion, "progressParkRevision", 1);
+        assertThrows(IllegalArgumentException.class, () -> new NativeVoiceQueue.Item(invalidCompletion, speak));
     }
     @Test public void automaticRecognitionRequiresOriginalAuthorityAndUnsupersededInput() {
         NativeVoiceQueue.Item notice = new NativeVoiceQueue.Item(envelope("completion", "turn.completed", "Reply", null), settings("speak"));

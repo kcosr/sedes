@@ -318,6 +318,8 @@ export class ThreadArchiveService {
     scope: RequestScope,
     threadId: string,
     input: {
+      /** Trusted application turn ID when the invoking agent parks its own thread. */
+      readonly selfParkTurnId?: string;
       readonly expectedRevision: number;
       readonly mutationId: string;
       readonly expectedStashedPromptCount?: number;

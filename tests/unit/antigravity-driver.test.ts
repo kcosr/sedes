@@ -122,13 +122,16 @@ describe("Antigravity driver authority and projection", () => {
       activePromptIds: ["first", "steer"] });
     const handle = await f.driver.attach(f.attached);
     const snapshot = async () => (await handle.establishProjection({ signal: new AbortController().signal })).snapshot;
-    expect(await snapshot()).toMatchObject({ runState: "running", turnsById: { "input:0": { status: "completed" } } });
+    const held = await snapshot();
+    expect(held).toMatchObject({ runState: "running", turnsById: { "input:0": { status: "completed" } } });
+    expect(held.activeBackendTurnId).toBeUndefined();
     // The child wakes the planner before it streams another chunk. The
     // callback still owns the session, so Stop and conversation Steer remain
     // available while the new native turn materializes.
     f.native.steps.push({ index: 2, type: 101, status: 3, hasSubtrajectory: false,
       continuation: { id: "wake", sender: "child", recipient: identity.sessionId, kind: "agent_message", content: "Finished" } });
-    expect(await snapshot()).toMatchObject({ runState: "running", turnsById: { "continuation:2": { status: "in_progress" } } });
+    expect(await snapshot()).toMatchObject({ runState: "running", activeBackendTurnId: "continuation:2",
+      turnsById: { "continuation:2": { status: "in_progress" } } });
     f.native.steps.push({ index: 3, type: 15, status: 3, hasSubtrajectory: false,
       response: { text: "Child complete", thinking: "", stopReason: 2, toolCalls: [] } });
     for (const [id, state] of [["first", "running"], ["steer", "idle"]] as const) {

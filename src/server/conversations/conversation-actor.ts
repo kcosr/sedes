@@ -9,7 +9,7 @@ import type {
   BackendEffectiveSettings,
   BackendTurn,
 } from "../../shared/protocol/backend.js";
-import { conversationTurnSourceRevision, type NormalizedThreadEvent } from "../../shared/protocol/conversation.js";
+import { conversationTurnSourceRevision, MAXIMUM_NORMALIZED_TIMELINE_ITEMS, type NormalizedThreadEvent } from "../../shared/protocol/conversation.js";
 import type {
   BackendActionResult,
   BackendMutationReconciliation,
@@ -124,6 +124,7 @@ type AncillaryBackendEvent = Extract<
 export type ConversationActorEvent =
   | {
       readonly type: "live_progress";
+      readonly progressParkRevision?: number;
       readonly applicationTurnId: string;
       readonly applicationItemId: string;
       readonly phase: "provisional" | "partial";
@@ -259,6 +260,10 @@ export type ActorBranchCheckpointSelection =
  */
 export class ConversationActor {
   readonly #earlyReply?: LiveSpeechTracker;
+  readonly #readProgressParkRevision?: () => number | undefined;
+  // Freeze the park revision on first live sight of an assistant item, before
+  // it has necessarily been classified as commentary or gained a voice audience.
+  readonly #progressOpenings = new Map<string, {turnId: string; revision?: number}>();
   #earlyReplyGapRevision = 0;
   #earlyReplyBaselineRevision = 0;
   readonly #handle: ConversationHandle;
@@ -266,6 +271,7 @@ export class ConversationActor {
   readonly #attachmentDelivery: ComposerAttachmentDeliveryService;
   readonly #drainAuthoritativeObservers?: () => Promise<void>;
   readonly #onInputStateChanged?: () => void;
+  readonly #onTerminalTurn?: (applicationTurnId: string, outcome: Exclude<BackendTurn["status"], "in_progress">) => void;
   readonly #persistDeliveryInputSnapshot?: (
     input: PrepareDeliveryInputSnapshot,
   ) => void;
@@ -321,8 +327,10 @@ export class ConversationActor {
     /** Installed before establishment so durable observers cannot miss startup events. */
     readonly initialObserver?: ConversationActorListener;
     readonly captureEarlyReply?: CaptureEarlyReply;
+    readonly readProgressParkRevision?: () => number | undefined;
     readonly onEarlyProgressSkipped?: (source: EarlyReplySource) => void;
     readonly onInputStateChanged?: () => void;
+    readonly onTerminalTurn?: (applicationTurnId: string, outcome: Exclude<BackendTurn["status"], "in_progress">) => void;
     /** Absent only for a passive history projection with no execution authority. */
     readonly environmentLease?: ExecutionEnvironmentLease;
     readonly attachmentDelivery: ComposerAttachmentDeliveryService;
@@ -342,6 +350,7 @@ export class ConversationActor {
     readonly maximumPendingProjectionBytes?: number;
   }) {
     this.#handle = input.handle;
+    this.#readProgressParkRevision = input.readProgressParkRevision;
     this.#nativeEffects = input.nativeEffects ?? new ConversationNativeEffectFence();
     if (input.initialObserver) this.#listeners.add(input.initialObserver);
     this.#environmentLease = input.environmentLease;
@@ -349,6 +358,7 @@ export class ConversationActor {
     this.#attachmentDelivery = input.attachmentDelivery;
     this.#drainAuthoritativeObservers = input.drainAuthoritativeObservers;
     this.#onInputStateChanged = input.onInputStateChanged;
+    this.#onTerminalTurn = input.onTerminalTurn;
     this.#persistDeliveryInputSnapshot = input.persistDeliveryInputSnapshot;
     this.#removeDeliveryInputSnapshot = input.removeDeliveryInputSnapshot;
     this.#projector = input.projector;
@@ -1063,17 +1073,41 @@ export class ConversationActor {
     return this.#snapshotState;
   }
 
+  #projectionAuthority(state: ConversationActorSnapshotState): "current" | "reestablishing" | undefined {
+    if (!this.#started || this.#closing || this.#closed || this.readOnly || this.#handleReplacementRequired ||
+        this.#projectionRecoveryRequired || state.timeline.runState === "disconnected") return undefined;
+    if (!this.#establishing && this.#unsubscribeProjection !== undefined &&
+        state.timeline.generation === this.#projector.generation) return "current";
+    // In-place projection replacement retains the original owner's foreground
+    // facts. A failed replacement or a reconciling cut has no such authority.
+    if (this.#replacingProjection && state.timeline.runState !== "reconciling") return "reestablishing";
+    return undefined;
+  }
+
+  currentTurnForParking(): string | undefined {
+    const state = this.#snapshotState;
+    const id = state?.timeline.activeTurnId;
+    if (!state || !id || state.timeline.turnsById[id]?.status !== "in_progress") return undefined;
+    // A confirmed foreground can be parked even when reconciliation blocks input.
+    return this.#projectionAuthority(state) ? id : undefined;
+  }
+
+  publishOperationAvailabilityChanged(): void {
+    const state = this.#snapshotState;
+    if (!this.#started || !state || this.#closing || this.#closed) return;
+    this.#publish({
+      type: "backend_event", generation: state.timeline.generation,
+      event: { type: "capabilities_changed", capabilities: state.backendCapabilities },
+    });
+  }
+
   /** Current local input facts; never queues work, repairs projection, or reads the provider. */
   peekInputState(): ConversationActorInputState | undefined {
     const state = this.#snapshotState;
     if (!this.#started || this.#closing || this.#closed || !state) return undefined;
-    const retained = !this.readOnly && !this.#handleReplacementRequired && !this.#projectionRecoveryRequired &&
-      state.timeline.runState !== "disconnected" && state.timeline.runState !== "reconciling";
-    const authoritative = retained && !this.#establishing && this.#unsubscribeProjection !== undefined &&
-      state.timeline.generation === this.#projector.generation;
-    // Recovery from a rejected event, coalescer overflow, or a backend window
-    // trim replaces the projection under the same owner. Failure clears it.
-    const reestablishing = retained && !authoritative && this.#replacingProjection;
+    const authority = state.timeline.runState === "reconciling" ? undefined : this.#projectionAuthority(state);
+    const authoritative = authority === "current";
+    const reestablishing = authority === "reestablishing";
     return {
       state,
       authoritative,
@@ -1536,6 +1570,11 @@ export class ConversationActor {
       established.snapshot,
       established.handleSequence,
     );
+    // A snapshot can establish that a turn ended during a gap without replaying
+    // its terminal event. Retain opening evidence only for still-running turns.
+    for (const [id, opening] of this.#progressOpenings) {
+      if (established.snapshot.turnsById[opening.turnId]?.status !== "in_progress") this.#progressOpenings.delete(id);
+    }
     this.#earlyReply?.settleInactiveProgress(this.#projector);
     this.#projectionRecoveryRequired = false;
     this.#coalescer.reset(timeline);
@@ -1606,6 +1645,28 @@ export class ConversationActor {
     });
   }
 
+  #progressOpening(event: BackendConversationEvent): number | undefined {
+    if (!this.#readProgressParkRevision) return;
+    if (event.type !== "item_started" && event.type !== "item_completed" && event.type !== "item_updated") return;
+    const item = event.item;
+    if (item.semanticKind !== "assistant_message") return;
+    const opening = this.#progressOpenings.get(item.backendItemId);
+    if (opening?.turnId === item.backendTurnId) return opening.revision;
+    // Bound a pathological unfinished turn. An unknown opening cannot authorize speech.
+    if (this.#progressOpenings.size >= MAXIMUM_NORMALIZED_TIMELINE_ITEMS) return;
+    let revision: number | undefined;
+    try {
+      const current = this.#readProgressParkRevision();
+      // A new live start, or a complete item introduced atomically by its backend,
+      // establishes the opening. A lone delayed update or hydrated item needs
+      // independent proof from a root submission prepared after the last park.
+      const newItem = event.type !== "item_updated" && !this.#projector.itemForBackendId(item.backendItemId);
+      if (current === 0 || newItem) revision = current;
+    } catch { /* A voice read must never affect the provider conversation. */ }
+    this.#progressOpenings.set(item.backendItemId, {turnId: item.backendTurnId, revision});
+    return revision;
+  }
+
   #subscribeEstablished(
     established: EstablishedBackendProjection,
     epoch: number,
@@ -1615,6 +1676,7 @@ export class ConversationActor {
       if (this.#closing || this.#closed) return;
       // Only the contiguous rail can settle a reply before a subsequently reported gap.
       nextEarlyReplySequence = event.handleSequence === nextEarlyReplySequence ? event.handleSequence + 1 : undefined;
+      const progressParkRevision = epoch === this.#establishmentEpoch ? this.#progressOpening(event.event) : undefined;
       const earlyReplyGapRevision = this.#earlyReplyGapRevision;
       if (nextEarlyReplySequence !== undefined && epoch === this.#establishmentEpoch &&
           earlyReplyGapRevision === this.#earlyReplyBaselineRevision) {
@@ -1668,6 +1730,16 @@ export class ConversationActor {
             // actually survived recovery.
             return;
           }
+          if ((nativeEvent.type === "turn_updated" || nativeEvent.type === "turn_completed") && nativeEvent.turn.status !== "in_progress") {
+            // A sequenced native terminal record establishes the end even if
+            // endedBy is absent. An item or publication can also upsert a
+            // projected turn, so those updates cannot stand in for this record.
+            try { this.#onTerminalTurn?.(this.#projector.durableTurnId(nativeEvent.turn.backendTurnId), nativeEvent.turn.status); }
+            catch { /* A passive inventory observer cannot affect provider work. */ }
+            for (const [id, opening] of this.#progressOpenings) {
+              if (opening.turnId === nativeEvent.turn.backendTurnId) this.#progressOpenings.delete(id);
+            }
+          }
           let progress: Extract<ConversationActorEvent, { type: "live_progress" }> | undefined;
           if ((nativeEvent.type === "item_completed" || nativeEvent.type === "item_updated") && nativeEvent.liveProgress &&
               nativeEvent.item.semanticKind === "assistant_message" && nativeEvent.item.status === "completed" &&
@@ -1678,13 +1750,14 @@ export class ConversationActor {
             if (item && backendTurn?.status === "in_progress" && backendTurn.completionCorrelations?.length &&
                 timeline.activeTurnId === item.turnId && timeline.runState === "running") {
               progress = { type: "live_progress", applicationTurnId: item.turnId, applicationItemId: this.#projector.durableItemId(nativeEvent.item),
+                ...(nativeEvent.item.responsePhase === "provisional" && progressParkRevision !== undefined ? {progressParkRevision} : {}),
                 backendCorrelations: backendTurn.completionCorrelations, phase: nativeEvent.item.responsePhase, text: boundText(nativeEvent.item.markdown.text, MAX_LIVE_PROGRESS_BYTES) };
             }
           }
           this.#earlyReply?.accept(nativeEvent, this.#projector, this.#snapshotState?.timeline.activeTurnId,
             this.#snapshotState?.backendCapabilities.liveSpeechStarts,
             !this.#closing && !this.#handleReplacementRequired && this.#earlyReplyBaselineRevision === this.#earlyReplyGapRevision,
-            !this.#closing && earlyReplyGapRevision === this.#earlyReplyBaselineRevision, newSpeechStart, progress?.phase === "provisional");
+            !this.#closing && earlyReplyGapRevision === this.#earlyReplyBaselineRevision, newSpeechStart, progress?.phase === "provisional", progressParkRevision);
           if (progress) this.#publish(progress);
           if (
             event.event.type === "turn_started" ||
@@ -1870,12 +1943,14 @@ export class ConversationActor {
       const runStateChanged = application.events.some(
         (event) => event.type === "run_state",
       );
+      const hadParkTarget = this.currentTurnForParking() !== undefined;
       if (this.#snapshotState) {
         this.#snapshotState = {
           ...this.#snapshotState,
           timeline: this.#projector.timeline(),
         };
       }
+      const parkTargetChanged = hadParkTarget !== (this.currentTurnForParking() !== undefined);
       const outputs: ProjectionCoalescerOutput[] = [];
       this.#synchronousCoalescerOutputs = outputs;
       try {
@@ -1919,20 +1994,8 @@ export class ConversationActor {
       } else {
         for (const output of outputs) await this.#applyCoalescerOutput(output);
       }
-      if (runStateChanged && this.#snapshotState) {
-        // Application operation availability is composed from run state and
-        // backend capabilities. Follow the incremental run-state event with a
-        // capability refresh; the bridge composes the application capability
-        // document from this exact actor generation.
-        this.#publish({
-          type: "backend_event",
-          generation,
-          event: {
-            type: "capabilities_changed",
-            capabilities: this.#snapshotState.backendCapabilities,
-          },
-        });
-      }
+      // A held prompt can keep the run state running when its foreground settles.
+      if (runStateChanged || parkTargetChanged) this.publishOperationAvailabilityChanged();
       return;
     }
     if (application.event.type === "interaction_opened") {
@@ -2135,6 +2198,7 @@ export class ConversationActor {
         throw new Error("canonical_attachment_evidence_unavailable");
       }
       this.#persistDeliveryInputSnapshot({
+        ...("source" in input ? {rootSubmit: true as const} : {}),
         applicationOperationId: input.applicationOperationId,
         text: input.text,
         selectedSkillId: input.selectedSkillId ?? null,

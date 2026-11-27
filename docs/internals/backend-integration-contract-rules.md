@@ -117,6 +117,27 @@ order and fenced against newer events and responses completed during the read.
 Application abandonment can release an exact scoped terminal provider receipt,
 but cannot establish native non-consumption or discard a pending callback.
 
+Park during a run belongs to the principal's thread inventory. On Pi SDK,
+native Pi, Codex, Claude, Grok, OpenCode, and Antigravity, only confirmed
+terminal evidence for the turn captured at Park can unpark it, including
+evidence recovered from history. Use the same in-progress turn evidence for
+the sidebar and header. Antigravity can keep its prompt open for background
+work after the foreground turn has already ended. A successful outcome keeps
+the thread parked when Sedes verified that an agent parked its own thread from
+that exact turn.
+Failure or interruption returns it to Active. On startup or after losing control, Sedes
+checks the saved turn in backend history, including provider-originated turns
+with no accepted Sedes submission. An unfinished transcript can carry a display
+status without proving that the turn ended. For a Pi SDK turn submitted by
+Sedes, an authenticated root input plus an idle exclusive writer or confirmed
+absence of a live writer can establish that the model loop stopped. Recovery backs off per parked
+thread and rechecks when the connection or session owner changes.
+
+Shared speech policy uses normalized item identity and live-progress
+provenance. It applies to Codex early and ordinary
+progress and to ordinary Pi SDK, Claude, and OpenCode progress. Native Pi,
+Grok, and Antigravity do not publish provisional progress speech.
+
 Client protocol 181 uses `parked` in normalized thread inventory and `park` and
 `unpark` for inventory actions. All compiled backends use the same
 principal-scoped inventory projection and mutations.

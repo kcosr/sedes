@@ -275,7 +275,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         traceItem(event, item, reason);
         if (event != NativeVoiceDiagnostics.Event.DROPPED || !item.automatic || "duplicate".equals(reason)) return;
         if (item.opening()) {
-            if ("stopped".equals(reason)) item.early.skipped = true;
+            if ("stopped".equals(reason) || "skipped".equals(reason)) item.early.skipped = true;
             item.early.detach(); handler.post(this::drain); return;
         }
         if (!("ineligible".equals(reason) || "overflow".equals(reason) || "progress_evicted".equals(reason) ||
@@ -1237,6 +1237,13 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
                 if (established) recoverOutstanding();
                 return;
             }
+            if (event.equals(NativeVoiceSse.PROGRESS_PARKED)) {
+                NativeVoiceJson.keys(value, "threadId", "progressParkRevision");
+                String threadId = NativeVoiceProtocol.uuid(value, "threadId");
+                long revision = NativeVoiceJson.integer(value, "progressParkRevision", 1, NativeVoiceJson.MAX_SAFE_INTEGER);
+                skipParkedProgress(threadId, revision);
+                return;
+            }
             if (event.equals(NativeVoiceSse.EARLY_SESSION)) {
                 NativeVoiceEarlyFrames.session(value, voiceStreamId);
                 if (value.optLong("revision") != openedInterestRevision) throw new IllegalArgumentException("invalid_early_session");
@@ -1269,6 +1276,13 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             // A rejected reply can never drain. Retire this stream's barriers and reconnect instead of waiting forever.
             if (!invalidPolicy) streamFailed("invalid_notification_frame");
         }
+    }
+    private void skipParkedProgress(String threadId, long revision) {
+        queue.skipParkedProgress(threadId, revision);
+        earlyReplies.values().removeIf(reply -> reply.event.equals("turn.progress") &&
+            reply.thread.equals(threadId) && reply.progressParkRevision < revision);
+        if (active != null && active.notification != null && active.notification.predatesPark(threadId, revision)) skip();
+        else publish();
     }
     private boolean eligible(NativeVoiceQueue.Item item) {
         if (!sessionStarted || !settings.active() || !policyKnown || policy == null || !policy.optBoolean("enabled") ||
@@ -1310,7 +1324,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         }
         phase = "idle"; publish();
     }
-    /** Speech is advisory: a temporary Sedes outage may not erase an otherwise valid answer. */
+    /** Provisional items need current park authority. Answers retain advisory input freshness. */
     private void validatePlayback(Active item) {
         phase = "synthesizing"; publish();
         final long generation = connectionGeneration;
@@ -1326,9 +1340,11 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
                     if (value == null || !item.noticeThread.equals(value.optString("threadId"))) { failActive("invalid_input_context"); return; }
                     try {
                         NativeVoiceProtocol.inputContext(value);
+                        if (!validating.progressPermitted(value)) { skip(); return; }
                         if (item.notification.supersededByInput(value)) { skipAutomaticItem(item, "superseded_by_input"); return; }
                     } catch (IllegalArgumentException invalid) { failActive("invalid_input_context"); return; }
                 }
+                else if (validating.progress()) { skip(); return; }
                 else if (status != 0 && status < 500 && status != 408 && status != 425 && status != 429) { failActive("target_unavailable"); return; }
                 speakChunk(item);
             }));

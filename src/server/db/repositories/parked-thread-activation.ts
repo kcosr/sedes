@@ -3,12 +3,10 @@ import { DomainError } from "../../domain/errors.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
 
 /**
- * Returns a parked thread to Active. This is the application-owned
- * inventory consequence of a durable fact that needs the
- * user's attention: accepted input, or an automation run anchored on the
- * thread ending failed or uncertain. Callers must invoke this inside the same
- * SQLite transaction that first records that fact. The conditional update
- * makes replay a no-op and lets a later manual Park remain authoritative.
+ * Returns a parked thread to Active when input is accepted, its captured
+ * turn ends, or an anchored automation fails or becomes uncertain.
+ * Callers verify the triggering fact inside the same transaction so replay
+ * cannot undo a later manual Park.
  */
 export function activateParkedThread(
   database: Database.Database,

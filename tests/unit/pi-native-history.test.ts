@@ -80,13 +80,17 @@ describe("native Pi history", () => {
   });
   it("keeps running and incomplete imported turns distinct from completed turns", () => {
     const input = history([user("u", null, "work")]);
-    expect(projectNativeHistory(input).snapshot.turnsById.u?.status).toBe("interrupted");
+    const unfinished = projectNativeHistory(input).snapshot.turnsById.u;
+    expect(unfinished?.status).toBe("interrupted");
+    expect(unfinished).not.toHaveProperty("endedBy");
+    const interrupted = projectNativeHistory(history([...input.entries, assistant("a", "u", "", "aborted")]));
+    expect(interrupted.snapshot.turnsById.u).toMatchObject({ status: "interrupted", endedBy: "interrupted" });
     const live = projectNativeHistory(input, { running: true });
     expect(live.snapshot.turnsById.u?.status).toBe("in_progress");
     expect(live.snapshot.activeBackendTurnId).toBe("u");
     const failed = projectNativeHistory(history([user("u", null, "work"), assistant("a", "u", "", "error")]));
     expect(failed.snapshot.runState).toBe("failed");
-    expect(failed.snapshot.turnsById.u?.status).toBe("failed");
+    expect(failed.snapshot.turnsById.u).toMatchObject({ status: "failed", endedBy: "failed" });
   });
   it("uses immutable snapshot-bound cursors and bounded targeted lookup", () => {
     const input = history([user("u1", null, "one"), assistant("a1", "u1", "first"), user("u2", "a1", "two"), assistant("a2", "u2", "second")]);

@@ -36,6 +36,7 @@ import type { executeNotificationScript } from "../../src/server/runtime/notific
 
 const scope = { tenantId: "tenant", principalId: "owner" };
 const other = { tenantId: "other", principalId: "owner" };
+const earlyThreadId = randomUUID();
 const script = {
   scriptPath: "/usr/local/bin/notify",
   arguments: ["literal argument"],
@@ -72,6 +73,12 @@ function fixture(
   database.exec(`CREATE TABLE principals(tenant_id TEXT, id TEXT, PRIMARY KEY (tenant_id, id));
     INSERT INTO principals VALUES ('tenant','owner'), ('other','owner');`);
   database.exec(notificationSettingsMigration.sql);
+  database.exec(`CREATE TABLE thread_principal_state(
+    tenant_id TEXT, principal_id TEXT, thread_id TEXT, inventory_state TEXT, progress_park_revision INTEGER
+  )`);
+  for (const id of ["thread", earlyThreadId]) {
+    database.prepare("INSERT INTO thread_principal_state VALUES (?, ?, ?, 'active', 0)").run(scope.tenantId, scope.principalId, id);
+  }
   const repository = new NotificationRepository(database);
   let now = 1000;
   const service = new NotificationService({
@@ -123,7 +130,7 @@ function enable(service: NotificationService) {
 /** These synthetic turn events are observed at user-input revision zero. */
 function emitFresh(service: NotificationService, ...args: Parameters<NotificationService["emit"]>) {
   if (args[1].event.startsWith("turn.") && args[7] === undefined) {
-    args[7] = { userInputRevision: 0, superseded: false };
+    args[7] = { userInputRevision: 0, superseded: false, ...(args[1].event === "turn.progress" ? {progressParkRevision: 0} : {}) };
   }
   return service.emit(...args);
 }
@@ -573,7 +580,7 @@ describe("notification settings and passive hooks", () => {
     expect(payload).toEqual({ ...progress(), schemaVersion: 5, notificationId: expect.any(String) });
     expect(notificationPayloadSchema.parse(payload)).toEqual(payload);
     expect(voiceFrames(frames)).toEqual([{
-      payload, voice: "speak", generation: expect.any(Number), origin: { clientId: "phone" }, userInputRevision: 0,
+      payload, voice: "speak", generation: expect.any(Number), origin: { clientId: "phone" }, userInputRevision: 0, progressParkRevision: 0,
       sourceEventId: createHash("sha256").update("progress-key").digest("hex"),
     }]);
     expect(context).toHaveBeenCalledOnce();
@@ -641,7 +648,8 @@ describe("notification settings and passive hooks", () => {
     expect(notificationPayloadSchema.safeParse({ ...payload, progress: { ...payload.progress, phase: phase === "partial" ? "provisional" : "partial" } }).success).toBe(false);
     expect(notificationPayloadSchema.safeParse({ ...payload, progress: undefined }).success).toBe(false);
     expect(notificationPayloadSchema.safeParse({ ...payload, event: "turn.completed" }).success).toBe(false);
-    const voice = { payload, voice: "speak", sourceEventId: "event", generation: 1, userInputRevision: 0 };
+    const voice = { payload, voice: "speak", sourceEventId: "event", generation: 1, userInputRevision: 0,
+      ...(event === "turn.progress" ? {progressParkRevision: 0} : {}) };
     expect(voiceNotificationSchema.safeParse(voice).success).toBe(true);
     expect(voiceNotificationSchema.safeParse({ ...voice, voice: "speakThenListen" }).success).toBe(false);
   });
@@ -1382,8 +1390,8 @@ describe("notification settings and passive hooks", () => {
 });
 
 describe("early reply publication", () => {
-  const threadId = randomUUID();
-  const source = {event: "turn.completed" as const, applicationTurnId: "turn", applicationItemId: "item", backendCorrelations: ["operation"]};
+  const threadId = earlyThreadId;
+  const source = {event: "turn.completed" as const, progressParkRevision: 0, applicationTurnId: "turn", applicationItemId: "item", backendCorrelations: ["operation"]};
   const eventKey = turnNotificationKey(threadId, source.applicationTurnId);
   const authority = {threadTitle: "Example", userInputRevision: 2, fresh: () => true, admitted: () => true};
   const opening = "First sentence. Another word";
@@ -1471,6 +1479,90 @@ describe("early reply publication", () => {
     expect(service.captureEarlyReply(scope, threadId, {...commentary, applicationItemId: "other"}, capture)).toBeUndefined();
     expect(service.captureEarlyReply(scope, threadId, source, capture)).toBeDefined();
   });
+
+  it("discards earlier progress on all scoped native streams and preserves the final and newer openings", async () => {
+    const {service, database, executor} = fixture();
+    service.update(scope, {...config, assistantResultPhases: ["final"], delivery: scriptDelivery(["turn.progress"])});
+    const first = native(service), second = native(service), ordinary = native(service, false), foreign = native(service, true, other);
+    const progressSource = {...source, event: "turn.progress" as const};
+    const early = service.captureEarlyReply(scope, threadId, progressSource, () => authority)!;
+    const final = service.captureEarlyReply(scope, threadId, source, () => authority)!;
+    early.observe(opening, []);
+    final.observe(opening, []);
+    let release!: () => void;
+    const settlement = new Promise<undefined>(resolve => { release = () => resolve(undefined); });
+    const payload = {...progress(), thread: {id: threadId, title: "Example"}};
+    const beforePark = emitFresh(service, scope, payload, "pending-progress", "live", undefined, () => ({settlement}));
+    database.prepare("UPDATE thread_principal_state SET inventory_state = 'parked', progress_park_revision = 1 WHERE thread_id = ?").run(threadId);
+    service.progressParked(scope, threadId);
+    for (const device of [first, second, ordinary]) {
+      expect(outgoing(device.frames, "progress_parked")).toEqual([{threadId, progressParkRevision: 1}]);
+    }
+    expect(outgoing(foreign.frames, "progress_parked")).toEqual([]);
+    early.observe(opening + " ends. Another word", []);
+    expect(first.replies()).toMatchObject([
+      {kind: "begin", event: "turn.progress", progressParkRevision: 0},
+      {kind: "begin", event: "turn.completed"},
+      {kind: "cancel", reason: "publication_suppressed", itemId: source.applicationItemId},
+    ]);
+    const capture = vi.fn(() => authority);
+    expect(service.captureEarlyReply(scope, threadId, {...progressSource, applicationItemId: "muted"}, capture)).toBeUndefined();
+    expect(capture).not.toHaveBeenCalled();
+
+    database.prepare("UPDATE thread_principal_state SET inventory_state = 'active' WHERE thread_id = ?").run(threadId);
+    release();
+    expect(await beforePark).toBeUndefined();
+    const current = service.captureEarlyReply(scope, threadId, {...progressSource, applicationItemId: "new", progressParkRevision: 1}, capture)!;
+    current.observe(opening, []);
+    service.progressParked(scope, threadId); // A replayed Park must not cancel the new item.
+    current.observe(opening + " ends. Another sentence", []);
+    final.observe(opening + " continues. Another sentence", []);
+    expect(first.replies().slice(-3)).toMatchObject([
+      {kind: "begin", event: "turn.progress", itemId: "new", progressParkRevision: 1},
+      {kind: "append", itemId: "new"}, {kind: "append", itemId: source.applicationItemId},
+    ]);
+    const muted = {userInputRevision: 0, superseded: false}; // No opening revision for an item begun while parked.
+    expect(await service.emit(scope, payload, "muted-progress", "live", undefined, undefined, undefined, muted)).toBeUndefined();
+    expect(await emitFresh(service, scope, payload, "stale-progress", "live")).toBeUndefined();
+    expect(voiceFrames(first.frames)).toEqual([]);
+    await flush();
+    expect(executor).toHaveBeenCalledTimes(3);
+  });
+
+  it.each(["parked", "manually unparked"] as const)(
+    "rechecks progress before a short item opens or flushes its final words while %s, even before the Park push",
+    state => {
+      const {service, database} = fixture();
+      enableEarly(service);
+      const device = native(service);
+      const capture = (itemId: string) => service.captureEarlyReply(scope, threadId, {
+        ...source, event: "turn.progress", applicationItemId: itemId,
+      }, () => authority)!;
+      const waiting = capture("short");
+      waiting.observe("Checking", []);
+      const speaking = capture("open");
+      speaking.observe(opening, []);
+      expect(device.replies()).toMatchObject([{kind: "begin", itemId: "open", text: "First sentence."}]);
+
+      // Delay the post-commit push so that both authorized callbacks race it.
+      database.prepare("UPDATE thread_principal_state SET inventory_state = 'parked', progress_park_revision = 1 WHERE thread_id = ?").run(threadId);
+      if (state === "manually unparked") {
+        database.prepare("UPDATE thread_principal_state SET inventory_state = 'active' WHERE thread_id = ?").run(threadId);
+      }
+      waiting.finish("item_done", "Checking", []);
+      speaking.finish("item_done", opening, []);
+      expect(device.replies()).toMatchObject([
+        {kind: "begin", itemId: "open"}, {kind: "cancel", itemId: "open", reason: "policy_changed"},
+      ]);
+
+      const final = service.captureEarlyReply(scope, threadId, source, () => authority)!;
+      final.observe("Ready", []);
+      final.finish("item_done", "Ready", []);
+      expect(device.replies().slice(2)).toMatchObject([
+        {kind: "begin", event: "turn.completed", text: "Ready"}, {kind: "yield", reason: "item_done"},
+      ]);
+    },
+  );
 
   it("never speaks past the authoritative progress prefix when a later delta requires truncation", () => {
     const {service} = fixture();

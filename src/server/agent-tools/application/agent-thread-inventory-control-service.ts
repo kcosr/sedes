@@ -194,7 +194,7 @@ export class AgentThreadInventoryControlService {
 
   async setState(
     scope: RequestScope,
-    input: ThreadSetStateToolInput & ThreadMutationContext,
+    input: ThreadSetStateToolInput & ThreadMutationContext & { readonly selfParkTurnId?: string },
   ): Promise<AgentThreadSetStateResult> {
     const { lifecycle } = input;
     const threadId = this.#requireAdmittedThread(scope, input.threadId, input.environmentAuthority);
@@ -217,7 +217,7 @@ export class AgentThreadInventoryControlService {
       mutationId: input.mutationId,
     };
     if (lifecycle === "parked") {
-      await this.input.archives.park(scope, threadId, mutation);
+      await this.input.archives.park(scope, threadId, { ...mutation, selfParkTurnId: input.selfParkTurnId });
       return { threadId, lifecycle };
     }
     const state = await this.input.transitions.transition(

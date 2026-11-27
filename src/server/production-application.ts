@@ -1,3 +1,4 @@
+import { recoverParkedTurns, type ParkedTurnRetry } from "./conversations/parked-turn-recovery.js";
 import { storedFileRootBinding } from "./db/repositories/workspace-file-root-authority.js";
 import { canonicalLocalWorkspaceRoots } from "./execution/local-workspace-roots.js";
 import { ThreadAppliedToolPolicySetRepository } from "./db/repositories/thread-applied-tool-policy-set-repository.js";
@@ -643,7 +644,8 @@ export async function startProductionApplication(
         .map(connectionProfile);
     };
     let profiles = configuredProfiles();
-    const inventoryRepository = new InventoryRepository(database);
+    const currentParkTurn = (eventScope: RequestScope, threadId: string) => actors?.currentTurnForParking(eventScope, threadId);
+    const inventoryRepository = new InventoryRepository(database, currentParkTurn);
     const userInputs = new UserInputRevisionRepository(database);
     const clientControls = new ClientControlService();
     resources.defer("client controls", () => clientControls.close());
@@ -1241,7 +1243,21 @@ export async function startProductionApplication(
     let observeAuthoritativeCompletion:
       AuthoritativeCompletionObserver | undefined;
     const pageRepository = new PageRepository(database);
+    const pendingParkChecks = new Set<string>();
+    let checkParkedAfterControlChange: ((backendId: string, threadId: string) => void) | undefined;
+    let publishApplicationThread: ApplicationThreadChangePublisher | undefined;
     actors = new ConversationActorManager({
+      onParkAvailabilityChanged: (eventScope, id) => {
+        void publishApplicationThread?.publish(eventScope, id).catch(() => undefined);
+      },
+      onControlChanged: (backendId, threadId) => checkParkedAfterControlChange?.(backendId, threadId),
+      observeTurnSettlement(eventScope, threadId, outcomeForTurn) {
+        // Commit before completion speech captures its input activity token.
+        // Publication can re-enter the actor, so dispatch it outside this observer.
+        const now = Date.now();
+        const state = inventoryRepository.unparkIfTurnEnded(eventScope, threadId, outcomeForTurn, now);
+        if (state) threadRuntimeFollowUp.defer(() => inventory.publishCommitted(eventScope, [state], now));
+      },
       onModelFeedback: (eventScope, threadId, input) => automaticModelRetries?.onModelFeedback(eventScope, threadId, input.identity, input.automaticRetry),
       applicationPublications: (eventScope, threadId, turnIds) => [
         ...pageRepository.publications(eventScope, threadId, turnIds), ...imageShowRepository.publications(eventScope, threadId, turnIds)],
@@ -1252,6 +1268,7 @@ export async function startProductionApplication(
       },
       onLiveProgressSkipped: (eventScope, threadId, turnId, itemId) =>
         notifications.finishEarlyProgress(eventScope, threadId, turnId, itemId),
+      readProgressParkRevision: (eventScope, threadId) => notifications.readProgressParkRevision(eventScope, threadId),
       captureEarlyReply: (eventScope, threadId, source) => captureTurnEarlyReply(
         notifications, inventoryRepository, completion, userInputs, mutations?.activity, eventScope, threadId, source),
       environments: execution,
@@ -1438,7 +1455,6 @@ export async function startProductionApplication(
       agentToolSources,
     );
 
-    let publishApplicationThread: ApplicationThreadChangePublisher | undefined;
     runtimes = new ThreadRuntimeCoordinator({
       isAutomaticModelRetryPending: (eventScope, threadId) => automaticModelRetries?.isPending(eventScope, threadId) === true,
       actors,
@@ -1836,6 +1852,11 @@ export async function startProductionApplication(
     inventory = new InventoryService(
       inventoryRepository,
       {
+        onParked(eventScope, threadId) {
+          notifications.progressParked(eventScope, threadId);
+          const binding = bindings.getBinding(eventScope, threadId);
+          if (binding) pendingParkChecks.add(binding.backendInstanceId);
+        },
         publishMany(eventScope, states) {
           requestAutomationReadmission?.();
           scheduler?.rearm();
@@ -2219,7 +2240,7 @@ export async function startProductionApplication(
       agentToolPolicies,
       agentToolEnvironmentAuthority,
       agentToolSources,
-      runtimes, clientControlTools,
+      runtimes, clientControlTools, currentParkTurn,
     );
     const principalClientAgentTools = new PrincipalAgentToolClientService(
       toolProvenanceKey,
@@ -2741,6 +2762,37 @@ export async function startProductionApplication(
           unresolvedSubmissionRetryTimers.add(timer);
         });
     };
+    // A park can belong to a provider-originated turn or Pi SDK. Neither an
+    // accepted submission nor permission to start an execution owner is needed
+    // to inspect its canonical history. A pending read never launches a turn.
+    const parkedTurnPasses = new WeakSet<BackendModuleRuntime>();
+    const parkedTurnRetries = new WeakMap<BackendModuleRuntime, Map<string, ParkedTurnRetry>>();
+    const checkParkedTurns = (backendId: string): void => {
+      const module = moduleRuntimes.get(backendId);
+      pendingParkChecks.delete(backendId);
+      if (!unresolvedSubmissionRecoveryReady || !module || drain.isDraining) return;
+      if (parkedTurnPasses.has(module)) { pendingParkChecks.add(backendId); return; }
+      const isAdmitted = backendAttachmentAdmission(backendId, module);
+      const retries = parkedTurnRetries.get(module) ?? new Map<string, ParkedTurnRetry>();
+      parkedTurnRetries.set(module, retries);
+      const admitted = discoveryOperations.admit(async signal => {
+        const remaining = await recoverParkedTurns({
+          scope, backendInstanceId: backendId, inventory: inventoryRepository, targets: actorTargets, signal, retries,
+          isAdmitted: () => !drain.isDraining && isAdmitted(),
+          hasLiveTurn: (threadId, turnId) => actors?.currentTurnForParking(scope, threadId) === turnId,
+          publish: state => inventory.publishCommitted(scope, [state], Date.now()),
+          onError: (threadId, error) => reportBackgroundError(`Backend ${backendId}: parked turn recovery for ${threadId}`)(error),
+        });
+        if (remaining && !signal.aborted && isAdmitted()) pendingParkChecks.add(backendId);
+      });
+      if (admitted) {
+        parkedTurnPasses.add(module);
+        void admitted.catch(error => {
+          if (!drain.isDraining && moduleRuntimes.get(backendId) === module) pendingParkChecks.add(backendId);
+          reportBackgroundError(`Backend ${backendId}: parked turn recovery`)(error);
+        }).finally(() => parkedTurnPasses.delete(module));
+      }
+    };
     const attachProviderRetainedWork = (backendId: string): void => {
       const threadIds = observedBackends.get(backendId)?.retainedThreadIds ?? [];
       const module = moduleRuntimes.get(backendId);
@@ -2758,6 +2810,9 @@ export async function startProductionApplication(
       retainedAttachments.set(module, settled);
     };
     const attachRetainedWork = (backendId: string): void => {
+      // An existing module can be readmitted without applying a new module.
+      // The timer already owns a pass for each backend with a pending park.
+      if (!pendingParkChecks.has(backendId)) checkParkedTurns(backendId);
       attachProviderRetainedWork(backendId);
       recoverUnresolvedSubmissions(backendId);
     };
@@ -3778,6 +3833,9 @@ export async function startProductionApplication(
         await reconcileHost(id);
         for (const backend of environmentBackendIds(id)) {
           // A re-established connection may make previously failed threads openable.
+          const module = moduleRuntimes.get(backend);
+          if (module) parkedTurnRetries.delete(module);
+          checkParkedTurns(backend);
           recoverUnresolvedSubmissions(backend, { retryFailed: true });
           attachRetainedWork(backend);
         }
@@ -4017,8 +4075,25 @@ export async function startProductionApplication(
     // Recovery opens threads after startup recovery has made completion
     // observation available, and never delays serving requests.
     unresolvedSubmissionRecoveryReady = true;
-    onBackendApplied = id => recoverUnresolvedSubmissions(id, { inspectFirst: true });
-    for (const backendId of moduleRuntimes.keys()) recoverUnresolvedSubmissions(backendId, { inspectFirst: true });
+    checkParkedAfterControlChange = (id, threadId) => {
+      const module = moduleRuntimes.get(id);
+      if (module) parkedTurnRetries.get(module)?.delete(threadId);
+      if (module && (pendingParkChecks.has(id) || parkedTurnPasses.has(module))) {
+        threadRuntimeFollowUp.defer(() => checkParkedTurns(id));
+      }
+    };
+    onBackendApplied = id => {
+      checkParkedTurns(id);
+      recoverUnresolvedSubmissions(id, { inspectFirst: true });
+    };
+    for (const backendId of moduleRuntimes.keys()) onBackendApplied(backendId);
+    // History can still be incomplete on the first read, or the live owner
+    // can lose authority after parking. Recheck without requiring a UI visit.
+    const parkedTurnTimer = setInterval(() => {
+      for (const backendId of [...pendingParkChecks]) checkParkedTurns(backendId);
+    }, 30_000);
+    parkedTurnTimer.unref();
+    resources.defer("parked turn recovery timer", () => clearInterval(parkedTurnTimer));
     // Fork recovery can launch providers; it never delays serving requests.
     void forks
       .recoverInterruptedForks(scope)

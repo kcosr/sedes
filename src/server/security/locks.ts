@@ -191,6 +191,16 @@ export class ExclusiveProcessLock {
     private readonly ownerToken: string,
   ) {}
 
+  /** Inspect the published owner without acquiring, recovering, or releasing a lock. */
+  static async hasNoLiveOwner(lockPath: string, identityHash: string): Promise<boolean> {
+    try {
+      const existing = await inspectLock(lockPath, () => new Error("lock_owner_uncertain"));
+      if (!existing) return true;
+      if (existing.metadata.identityHash !== identityHash || existing.metadata.pid > 2_147_483_647) return false;
+      return !await isLockOwnerRunning(existing.metadata);
+    } catch { return false; }
+  }
+
   static async acquire(
     lockPath: string,
     identityHash: string,

@@ -30,7 +30,7 @@ final class NativeVoiceQueue {
         final JSONObject request;
         final long policyGeneration;
         /** User admission watermark for automatic turn notices; other notices and replays have none. */
-        final long userInputRevision;
+        final long userInputRevision, progressParkRevision;
         boolean followUp, followUpCancelled;
         int bytes;
         NativeEarlyReply early;
@@ -38,7 +38,7 @@ final class NativeVoiceQueue {
         Item(NativeEarlyReply early) {
             this.early = early; id = early.id; event = early.event; speech = "";
             threadId = early.thread; threadTitle = early.title; origin = early.origin;
-            policyGeneration = early.generation; userInputRevision = early.inputRevision;
+            policyGeneration = early.generation; userInputRevision = early.inputRevision; progressParkRevision = early.progressParkRevision;
             automatic = true; envelope = null; request = null; subject = null; target = null;
             bytes = early.pendingBytes();
         }
@@ -46,7 +46,7 @@ final class NativeVoiceQueue {
         final boolean automatic;
         Item(JSONObject envelope, NativeVoiceSettings settings) {
             this.envelope = NativeVoiceJson.copy(envelope); request = null; automatic = true;
-            NativeVoiceJson.keys(envelope, "payload", "sourceEventId", "voice", "generation", "origin", "recognitionTarget", "subjectId", "userInputRevision");
+            NativeVoiceJson.keys(envelope, "payload", "sourceEventId", "voice", "generation", "origin", "recognitionTarget", "subjectId", "userInputRevision", "progressParkRevision");
             id = NativeVoiceJson.string(envelope, "sourceEventId", 512);
             policyGeneration = NativeVoiceJson.integer(envelope, "generation", 0, Long.MAX_VALUE);
             JSONObject payload = NativeVoiceJson.requiredObject(envelope, "payload");
@@ -59,6 +59,7 @@ final class NativeVoiceQueue {
             NativeVoiceProtocol.text(payload, "title", 65536); NativeVoiceProtocol.text(payload, "message", 65536);
             NativeVoiceProtocol.notificationDetails(payload);
             event = NativeVoiceJson.string(payload, "event", 80);
+            progressParkRevision = NativeVoiceProtocol.progressParkRevision(envelope, event);
             if (!EVENTS.contains(event)) throw new IllegalArgumentException("voice_event_invalid");
             JSONObject thread = NativeVoiceProtocol.optionalObject(payload, "thread");
             if (thread != null) { NativeVoiceJson.keys(thread, "id", "title"); NativeVoiceProtocol.text(thread, "title", 65536); }
@@ -107,7 +108,7 @@ final class NativeVoiceQueue {
         private Item(String id, JSONObject request, String threadTitle, NativeVoiceSettings settings) {
             this.id = id; this.request = request; this.threadTitle = threadTitle;
             envelope = null; event = REPLAY; threadId = request.optString("threadId");
-            subject = null; origin = null; target = null; policyGeneration = -1; userInputRevision = -1; automatic = false;
+            subject = null; origin = null; target = null; policyGeneration = -1; userInputRevision = -1; progressParkRevision = -1; automatic = false;
             // Notification follow-up authority does not apply to a replay. The runtime evaluates
             // current Auto-listen and fresh manual-input readiness after replay playback ends.
             followUp = false;
@@ -140,6 +141,13 @@ final class NativeVoiceQueue {
         }
         /** Only provisional updates yield under pressure; partial answers retain ordinary answer priority. */
         boolean progress() { return event.equals("turn.progress"); }
+        boolean predatesPark(String parkedThread, long revision) {
+            return progress() && threadId.equals(parkedThread) && progressParkRevision < revision;
+        }
+        boolean progressPermitted(JSONObject context) {
+            return !progress() || !context.optBoolean("progressMuted", true) &&
+                progressParkRevision == context.optLong("progressParkRevision", -1);
+        }
     }
     interface Observer { void event(NativeVoiceDiagnostics.Event event, Item item, String reason); }
     private final Observer observer;
@@ -270,6 +278,14 @@ final class NativeVoiceQueue {
         while (iterator.hasNext()) {
             Item item = iterator.next();
             if (item.automatic) { bytes -= item.bytes; iterator.remove(); drop(item, reason); }
+        }
+    }
+    void skipParkedProgress(String threadId, long revision) {
+        for (Iterator<Item> iterator = pending.iterator(); iterator.hasNext();) {
+            Item item = iterator.next();
+            if (!item.predatesPark(threadId, revision)) continue;
+            bytes -= item.bytes; iterator.remove();
+            trace(NativeVoiceDiagnostics.Event.DROPPED, item, "skipped");
         }
     }
     /** A stopped voice service ends pending replays. Automatic items stay for drain to judge; replays never count as drops. */

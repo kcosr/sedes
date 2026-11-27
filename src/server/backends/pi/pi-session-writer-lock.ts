@@ -67,6 +67,20 @@ async function removeExactMarker(filename: string, expected: BigIntStats): Promi
   await unlink(filename);
 }
 
+/** Only affirmative absence of a writer for this validated session cut counts.
+ * Ordinary inspection never competes with an attachment or cleans up a stale owner. */
+export async function piSessionWriterStopped(canonicalFile: string): Promise<boolean> {
+  try {
+    if (await realpath(canonicalFile) !== canonicalFile) return false;
+    const identity = lockIdentity(canonicalFile);
+    if (!await ExclusiveProcessLock.hasNoLiveOwner(`${canonicalFile}.sedes-writer.lock`, identity)) return false;
+    const marker = await readMarker(`${canonicalFile}.sedes-native-writer`, identity);
+    if (!marker) return true;
+    const bootId = await currentBootId();
+    return !!bootId && !!marker.record.bootId && bootId !== marker.record.bootId.toLowerCase();
+  } catch { return false; }
+}
+
 /**
  * SDK sessions and native Pi processes share this exact writer boundary.
  * Keep the lock beside the session so different Sedes runtime directories

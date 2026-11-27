@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { ArrowDownToDot } from "lucide-react";
+import { threadParkAction } from "../../../shared/thread-parking.js";
 import type { ThreadArchiveImpact } from "../../../shared/index.js";
 import { Button } from "@client/components/ui/button";
 import {
@@ -21,12 +22,14 @@ export function parkNeedsConfirmation(impact: ThreadArchiveImpact): boolean {
 export function ParkImpactDialog({
   open,
   onOpenChange,
+  parkUntilTurnEnd,
   impact,
   loadImpact,
   onPark,
   returnFocusRef,
 }: {
   readonly open: boolean;
+  readonly parkUntilTurnEnd: boolean;
   readonly onOpenChange: (open: boolean) => void;
   readonly impact: ThreadArchiveImpact | undefined;
   readonly loadImpact: () => Promise<ThreadArchiveImpact>;
@@ -47,6 +50,7 @@ export function ParkImpactDialog({
     setError("");
   }, [impact, open]);
 
+  const parkAction = threadParkAction(parkUntilTurnEnd);
   const stashedPromptCount = currentImpact?.stashedPrompts.root ?? 0;
 
   const park = () => {
@@ -82,9 +86,9 @@ export function ParkImpactDialog({
         returnFocusRef={returnFocusRef}
       >
         <DialogHeader>
-          <DialogTitle>Park this thread</DialogTitle>
+          <DialogTitle>{parkAction.untilDone ? "Park this thread until done" : "Park this thread"}</DialogTitle>
           <DialogDescription>
-            Review stashed prompts before parking this thread.
+            {parkAction.description && `${parkAction.description} `}Review stashed prompts before parking this thread.
           </DialogDescription>
         </DialogHeader>
         <DialogBody>
@@ -116,7 +120,7 @@ export function ParkImpactDialog({
             disabled={pending || !currentImpact}
           >
             <ArrowDownToDot />
-            {pending ? "Parking…" : "Park"}
+            {pending ? "Parking…" : parkAction.label}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -375,9 +375,13 @@ begun dispatching.
 
 ## Park quiet work
 
-Use **Park** when a thread can leave the working set until it has new input,
-but should remain readily accessible. Archive is for finished work. **Unpark**
-returns a parked thread to Active.
+Use **Park** to set a thread aside until its next input. When a turn is in
+progress, choose **Park until done** from the thread header or its sidebar menu.
+If only background work remains after a turn finishes, the sidebar offers **Park**.
+The turn keeps running. Its progress speech stops immediately, and the thread
+returns to Active when that turn completes, fails, or is interrupted. A confirmed
+outcome recovered after a disconnect also brings it back. **Unpark** brings it
+back early. New progress can speak again, and skipped updates stay silent.
 
 - Timeline and Flat list place unpinned parked threads in a bottom **Parked**
   section.
@@ -394,8 +398,11 @@ remain unchanged and attached to their threads, without a task-handling prompt.
 Stashes also remain attached, with a warning before parking.
 
 Agents with the `thread.set_state` grant can park, unpark, snooze, or wake
-their own thread or another thread within their tool scope. See
-[Sedes tools](provider-features.md#let-an-agent-use-sedes-tools).
+their own thread or another thread within their tool scope. When an agent
+parks its own thread from the turn that is running, success keeps it Parked.
+Failure or interruption brings it back to Active. Parking another running
+thread, or parking one from an external Tool client, uses **Park until done**.
+See [Sedes tools](provider-features.md#let-an-agent-use-sedes-tools).
 
 ## Archive finished work
 

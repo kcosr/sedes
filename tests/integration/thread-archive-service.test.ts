@@ -139,8 +139,9 @@ function fixture(nativeArchive?: {
     branchMethod: "provider_native",
     now: 440,
   });
-  const inventory = new InventoryRepository(database);
   const runtimeStates = new Map<string, ThreadRunState>();
+  const inventory = new InventoryRepository(database, (_scope, threadId) =>
+    runtimeStates.get(threadId) === "running" ? "running-turn" : undefined);
   const archiveSafe = new Set<string>();
   const publishCommitted = vi.fn(async () => undefined);
   const questions = new QuestionRequestRepository(database, inventory);
@@ -574,6 +575,7 @@ describe("thread family archive service", () => {
       const setState = (input: ThreadSetStateToolInput) => service.setState(scope, {
         ...input,
         ...mutation("thread.set_state", input),
+        ...(input.lifecycle === "parked" ? { selfParkTurnId: "running-turn" } : {}),
       });
       const inventory = () => current.inventory.getInventory(scope, threadId);
       const task = current.tasks.create(scope, {
@@ -589,6 +591,8 @@ describe("thread family archive service", () => {
         .resolves.toEqual({ threadId, lifecycle: "parked" });
       await expect(setState({ lifecycle: "parked" }))
         .resolves.toEqual({ threadId, lifecycle: "parked" });
+      expect(current.inventory.unparkIfTurnEnded(scope, threadId, id => id === "running-turn" ? "completed" : undefined, Date.now()))
+        .toBeUndefined();
       expect(inventory()).toMatchObject({ inventoryState: "parked", inventoryRevision: 1 });
       expect(current.tasks.get(scope, task.id)).toMatchObject({
         scopeKind: "thread", threadId, revision: task.revision,

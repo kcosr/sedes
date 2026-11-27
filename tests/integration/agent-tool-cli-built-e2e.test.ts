@@ -17,11 +17,14 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { Request } from "express";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApplicationSnapshotPublicationBoundary } from "../../src/server/application/application-snapshot-service.js";
 import { WorkspaceApplicationService } from "../../src/server/application/workspace-application-service.js";
 import { DatabaseApplicationThreadSummaryReader } from "../../src/server/application/database-application-summary-reader.js";
 import { AgentManagementService } from "../../src/server/agent-tools/application/agent-management-service.js";
+import { ThreadGroupRepository } from "../../src/server/db/repositories/thread-group-repository.js";
+import { ThreadGroupService } from "../../src/server/domain/thread-group-service.js";
+import { AgentThreadInventoryControlService } from "../../src/server/agent-tools/application/agent-thread-inventory-control-service.js";
 import { DatabaseAgentToolApplicationReader } from "../../src/server/agent-tools/application/database-agent-tool-application-reader.js";
 import { DatabaseAgentToolSourceAuthority } from "../../src/server/agent-tools/application/database-agent-tool-source-authority.js";
 import { PrincipalAgentToolClientService } from "../../src/server/agent-tools/application/principal-agent-tool-client-service.js";
@@ -51,7 +54,10 @@ import { PrincipalAgentToolClientRepository } from "../../src/server/db/reposito
 import { SubmissionCompletionRepository } from "../../src/server/db/repositories/submission-completion-repository.js";
 import { TaskRepository } from "../../src/server/db/repositories/task-repository.js";
 import { ThreadAgentToolPolicyRepository } from "../../src/server/db/repositories/thread-agent-tool-policy-repository.js";
+import { ThreadLineageRepository } from "../../src/server/db/repositories/thread-lineage-repository.js";
 import { AutomationService } from "../../src/server/domain/automation-service.js";
+import { InventoryService } from "../../src/server/domain/inventory-service.js";
+import { ThreadArchiveService } from "../../src/server/domain/thread-archive-service.js";
 import { TaskService } from "../../src/server/domain/task-service.js";
 import { ScopedApplicationEventHubs } from "../../src/server/events/application-event-hub.js";
 import { LocalExecutionEnvironment } from "../../src/server/execution/local-execution-environment.js";
@@ -73,6 +79,7 @@ const fullToolCatalog = [
   "thread.status",
   "thread.list",
   "thread.create",
+  "thread.set_state",
   "saved_agent.list",
   "saved_agent.get",
   "saved_agent.options",
@@ -274,7 +281,9 @@ describe("built Sedes agent-tool CLI", () => {
         enabledToolIds: [...fullToolCatalog],
         now: 300,
       });
-      const inventory = new InventoryRepository(database);
+      const runningTurns = new Map<string, string>();
+      const currentTurn = (_scope: typeof scope, threadId: string) => runningTurns.get(threadId);
+      const inventory = new InventoryRepository(database, currentTurn);
       const openedProjectPath = path.join(root, "opened-project");
       await mkdir(openedProjectPath);
       const environmentConfigurationRevision = inventory.getEnvironment(
@@ -302,6 +311,25 @@ describe("built Sedes agent-tool CLI", () => {
         completion: new SubmissionCompletionRepository(database),
       });
       const taskRepository = new TaskRepository(database);
+      const transitions = new InventoryService(inventory, {
+        publishMany: vi.fn(),
+        publishApplicationThread: vi.fn(),
+      });
+      const lineage = new ThreadLineageRepository(database);
+      const archives = new ThreadArchiveService({
+        inventory,
+        lineage,
+        summaries: threadSummaries,
+        publications: transitions,
+        tasks: taskRepository,
+        runtimes: {
+          captureLoadedState: vi.fn(),
+          runWithRuntimeRetired: async (_scope, _id, operation) => operation(),
+          releaseProviderResidency: vi.fn(),
+        },
+        executionWorkspaces: { status: vi.fn(), delete: vi.fn() },
+        taskPublications: { publishTaskChange: vi.fn() },
+      });
       const tasks = new TaskService(taskRepository, {
         publishTaskChange: async () => undefined,
       });
@@ -334,10 +362,20 @@ describe("built Sedes agent-tool CLI", () => {
         threads: {} as never,
         inventory,
       });
+      const groupAssignments = new ThreadGroupRepository(database);
       const canonical = new CanonicalInlineAgentToolService({
         application,
         management,
         automations,
+        threadControl: {
+          inventory: new AgentThreadInventoryControlService({
+            inventory, threads: inventory, lineage, archives, transitions, groupAssignments,
+            groups: new ThreadGroupService(groupAssignments, { publishAuthoritativeReplacement: vi.fn() }),
+          }),
+          messages: { list: vi.fn() },
+          send: { sendDirect: vi.fn() },
+          forks: { forkAgent: vi.fn(), forkPrincipalClient: vi.fn() },
+        },
         threadCreation: {} as never,
         savedAgents: {} as never,
         invocationId: () => "cli-e2e-invocation",
@@ -358,20 +396,31 @@ describe("built Sedes agent-tool CLI", () => {
       const principalClient = principalClients.create(scope, {
         requestId: "10000000-0000-4000-8000-000000000099",
         name: "Built external CLI",
-        toolIds: ["workspace.list", "thread.status"],
+        toolIds: ["workspace.list", "thread.status", "thread.set_state"],
         defaultEnvironmentId: environment.id,
         allowedEnvironmentIds: [environment.id],
         defaultWorkspaceId: workspace.id,
         defaultThreadId: source.thread.id,
       });
+      let onAcquire: (() => void) | undefined;
       const agentTools = {
         sources: application,
         clients: principalClients,
         tools: new PolicyCheckedAgentToolHttpService(
-          new SourceScopedAgentToolService(canonical,
-policies,
-new AgentToolEnvironmentAuthorityResolver(sourceAuthority),
-sourceAuthority, testAgentToolExecutionAuthority),
+          new SourceScopedAgentToolService(
+            canonical,
+            policies,
+            new AgentToolEnvironmentAuthorityResolver(sourceAuthority),
+            sourceAuthority,
+            {
+              acquireAgentToolExecutionAuthority: (...args) => {
+                onAcquire?.();
+                return testAgentToolExecutionAuthority.acquireAgentToolExecutionAuthority(...args);
+              },
+            },
+            undefined,
+            currentTurn,
+          ),
         ),
       };
       const trustedSource = sourceAuthority.resolveInScope(
@@ -523,7 +572,7 @@ sourceAuthority, testAgentToolExecutionAuthority),
         JSON.parse(principalListed.stdout).tools.map(
           ({ id }: { id: string }) => id,
         ),
-      ).toEqual(["workspace.list", "thread.status"]);
+      ).toEqual(["workspace.list", "thread.status", "thread.set_state"]);
       expect(principalListed.stdout).not.toContain(principalClient.credential);
       expect(principalListed.stderr).not.toContain(principalClient.credential);
       const principalStatus = JSON.parse(
@@ -535,6 +584,46 @@ sourceAuthority, testAgentToolExecutionAuthority),
         ).stdout,
       );
       expect(principalStatus.threadId).toBe(source.thread.id);
+
+      const park = async (target: string | undefined, caller: NodeJS.ProcessEnv) => {
+        const { stdout } = await run([
+          "tool", "invoke", "thread.set_state", "--input-json",
+          JSON.stringify({ lifecycle: "parked", threadId: target }), "--json",
+        ], caller);
+        expect(JSON.parse(stdout)).toEqual({ threadId: target ?? source.thread.id, lifecycle: "parked" });
+      };
+      const ended = (threadId: string, outcome: "completed" | "failed" | "interrupted") => {
+        const expectedTurn = runningTurns.get(threadId);
+        inventory.unparkIfTurnEnded(scope, threadId, turnId => turnId === expectedTurn ? outcome : undefined, Date.now());
+        return inventory.getInventory(scope, threadId).inventoryState;
+      };
+      runningTurns.set(source.thread.id, "cli-caller-turn");
+      runningTurns.set(otherSource.thread.id, "cli-target-turn");
+      await expect(run([
+        "tool", "invoke", "thread.set_state", "--input-json",
+        JSON.stringify({ lifecycle: "parked", selfParkTurnId: "cli-caller-turn" }), "--json",
+      ], principalEnvironment)).rejects.toMatchObject({ code: 2, stderr: expect.stringContaining("canonical schema") });
+      await park(undefined, principalEnvironment);
+      expect(ended(source.thread.id, "completed")).toBe("active");
+      await park(otherSource.thread.id, baseEnvironment);
+      expect(ended(otherSource.thread.id, "completed")).toBe("active");
+      await park(undefined, baseEnvironment);
+      expect(ended(source.thread.id, "completed")).toBe("parked");
+      await run(["tool", "invoke", "thread.set_state", "--input-json", '{"lifecycle":"active"}', "--json"], baseEnvironment);
+      runningTurns.set(source.thread.id, "next-cli-caller-turn");
+      await park(source.thread.id, baseEnvironment);
+      expect(ended(source.thread.id, "failed")).toBe("active");
+      runningTurns.set(source.thread.id, "interrupted-cli-caller-turn");
+      await park(undefined, baseEnvironment);
+      expect(ended(source.thread.id, "interrupted")).toBe("active");
+
+      // An invocation waiting for execution authority belongs to its original turn.
+      runningTurns.set(source.thread.id, "turn-at-admission");
+      onAcquire = () => runningTurns.set(source.thread.id, "replacement-turn");
+      await park(undefined, baseEnvironment);
+      onAcquire = undefined;
+      expect(ended(source.thread.id, "completed")).toBe("active");
+      runningTurns.clear();
 
       const described = JSON.parse(
         (

@@ -5450,6 +5450,7 @@ describe("normalized HTTP application contract", () => {
       expect(context.headers["cache-control"]).toBe("no-store");
       expect(context.body).toEqual({
         threadId, threadTitle: "Direct input", activityToken: expect.any(String), userInputRevision: 3, authority: "unavailable", runState: null,
+        progressMuted: false, progressParkRevision: 0,
         automaticListenEligible: false, manualListenEligible: true, steer: { availability: "unavailable" },
       });
       expect((await current

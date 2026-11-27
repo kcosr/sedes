@@ -59,6 +59,7 @@ import type { AgentThreadControlToolServices } from "../tools/thread-control-too
 import type { AgentThreadWorktreeService } from "../tools/thread-worktree-tools.js";
 
 export interface CanonicalAgentToolInvocationContext {
+  readonly selfParkTurnId?: string;
   readonly clientTurn?: TrustedClientTurn;
   readonly scope: RequestScope;
   readonly subject: TrustedToolInvocationSubject;
@@ -500,6 +501,7 @@ export class CanonicalInlineAgentToolService {
     const context: TrustedToolInvocationContext = Object.freeze({
       invocationId,
       mutationId,
+      ...(source.selfParkTurnId ? { selfParkTurnId: source.selfParkTurnId } : {}),
       ...(source.clientTurn ? { clientTurn: source.clientTurn } : {}),
       tenantId: source.scope.tenantId,
       principalId: source.scope.principalId,

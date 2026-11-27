@@ -35,7 +35,11 @@ public class NativeVoiceEarlyFramesTest {
     @Test public void validatesTypedRangesIdentitiesAndMetadata() {
         JSONObject begin = begin();
         NativeVoiceEarlyFrames.reply(begin);
+        rejects(begin, "progressParkRevision", 0);
         NativeVoiceJson.put(begin, "event", "turn.progress");
+        assertThrows(IllegalArgumentException.class, () -> NativeVoiceEarlyFrames.reply(begin));
+        NativeVoiceJson.put(begin, "progressParkRevision", 0);
+        rejects(begin, "progressParkRevision", -1);
         NativeVoiceEarlyFrames.reply(begin);
         rejects(begin, "event", "turn.partial");
         JSONObject missingEvent = NativeVoiceJson.copy(begin); missingEvent.remove("event");

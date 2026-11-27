@@ -243,6 +243,15 @@ function opaqueId(namespace: string, ...parts: readonly string[]): string {
   return `${namespace}_${hash.digest("base64url").slice(0, 32)}`;
 }
 
+/** Some passive histories assign display statuses even when the terminal record is absent. */
+export function confirmedTurnOutcome(turn: Pick<BackendTurn, "status" | "endedBy"> | undefined): Exclude<BackendTurn["status"], "in_progress"> | undefined {
+  if (turn?.status === "completed") {
+    return turn.endedBy === "agent_settled" || turn.endedBy === "steer" ? turn.status : undefined;
+  }
+  if (turn && (turn.status === "failed" || turn.status === "interrupted") && turn.endedBy === turn.status) return turn.status;
+  return undefined;
+}
+
 export function applicationTurnIdForBackendTurn(input: {
   readonly backendInstanceId: string;
   readonly sourceApplicationThreadId: string;
@@ -350,7 +359,7 @@ export class ConversationProjector {
       if (turnIds.has(backendTurnId)) {
         throw new Error("backend_snapshot_turn_reference_duplicate");
       }
-      const turnId = this.#durableTurnId(backendTurnId);
+      const turnId = this.durableTurnId(backendTurnId);
       turnIds.set(backendTurnId, turnId);
       orderedTurnIds.push(turnId);
       for (const backendItemId of backendTurn.orderedBackendItemIds) {
@@ -616,7 +625,7 @@ export class ConversationProjector {
     backendTurnId: string,
     applicationTurnId: string,
   ): boolean {
-    return this.#durableTurnId(backendTurnId) === applicationTurnId;
+    return this.durableTurnId(backendTurnId) === applicationTurnId;
   }
 
   resolveCurrentTurn(
@@ -629,7 +638,7 @@ export class ConversationProjector {
     if (!backendTurn || !turn) return undefined;
     return {
       backendTurnId,
-      canonicalTurnId: this.#durableTurnId(backendTurnId),
+      canonicalTurnId: this.durableTurnId(backendTurnId),
       backendTurn,
       turn,
     };
@@ -641,7 +650,7 @@ export class ConversationProjector {
   ): ResolvedApplicationTurnLocator | undefined {
     const boundedPage = backendHistoryPageSchema.parse(page);
     for (const backendTurnId of boundedPage.orderedBackendTurnIds) {
-      if (this.#durableTurnId(backendTurnId) !== turnId) continue;
+      if (this.durableTurnId(backendTurnId) !== turnId) continue;
       const backendTurn = boundedPage.turnsById[backendTurnId];
       if (!backendTurn) {
         throw new Error("backend_history_turn_reference_missing");
@@ -712,7 +721,7 @@ export class ConversationProjector {
       if (turnIds.has(backendTurnId)) {
         throw new Error("backend_history_turn_reference_duplicate");
       }
-      const turnId = this.#durableTurnId(backendTurnId);
+      const turnId = this.durableTurnId(backendTurnId);
       turnIds.set(backendTurnId, turnId);
       orderedTurnIds.push(turnId);
       for (const backendItemId of backendTurn.orderedBackendItemIds) {
@@ -852,7 +861,7 @@ export class ConversationProjector {
       // Backend turn identity is authoritative at the normalized boundary.
       // Derive the same opaque locator used by snapshots and history so a
       // completed live turn remains selectable after actor reconstruction.
-      turnId = this.#durableTurnId(backendTurn.backendTurnId);
+      turnId = this.durableTurnId(backendTurn.backendTurnId);
       this.#turnIds.set(backendTurn.backendTurnId, turnId);
       this.#orderedTurnIds.push(turnId);
     }
@@ -1163,7 +1172,7 @@ export class ConversationProjector {
     return projected;
   }
 
-  #durableTurnId(backendTurnId: string): string {
+  durableTurnId(backendTurnId: string): string {
     return applicationTurnIdForBackendTurn({
       backendInstanceId: this.#backendInstanceId,
       sourceApplicationThreadId: this.#bindingIdentity,
