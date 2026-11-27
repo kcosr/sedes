@@ -38,7 +38,8 @@ import type {
 import type { EarlyReplySource } from "../../src/server/conversations/early-reply-observation.js";
 import type { ConversationActor, ConversationActorEvent } from "../../src/server/conversations/conversation-actor.js";
 import { applicationTurnIdForBackendTurn, ConversationProjector } from "../../src/server/conversations/conversation-projector.js";
-import { BlockingRequestInventory } from "../../src/server/conversations/blocking-request-inventory.js";
+import { InventoryService } from "../../src/server/domain/inventory-service.js";
+import { BlockingRequestInventory, pendingBlockingRequests } from "../../src/server/conversations/blocking-request-inventory.js";
 import { InteractionBroker } from "../../src/server/conversations/interaction-broker.js";
 import type { ConversationEventBridge } from "../../src/server/events/conversation-event-bridge.js";
 import {
@@ -8123,7 +8124,7 @@ describe("authoritative pending interaction subscription replay", () => {
     expect(settledEvents.some(event => event.type === "backend_event" && event.event.type === "interaction_opened")).toBe(false);
     unsubscribe(); unsubscribeSettled(); acquired.release(); await manager.close();
   });
-  it("wakes for an unbound actor request, preserves a second Park on broker replay, and wakes for the next request", async () => {
+  async function runningThreadWithInventory() {
     const { database, scope, inventory, ids } = applicationSummaryFixture(1);
     const threadId = ids[0]!;
     const publish = vi.fn();
@@ -8147,6 +8148,17 @@ describe("authoritative pending interaction subscription replay", () => {
     const park = () => inventory.parkThread(scope, threadId, {
       mutationId: randomUUID(), expectedRevision: inventory.getInventory(scope, threadId).inventoryRevision, now: Date.now(),
     }).state;
+    async function close() {
+      await broker.close();
+      acquired.release();
+      await manager.close();
+      database.close();
+    }
+    return { acquired, manager, broker, handle, scope, threadId, inventory, observeRequest, publish, park, close };
+  }
+
+  it("wakes for an unbound actor request, preserves a second Park on broker replay, and wakes for the next request", async () => {
+    const { acquired, broker, handle, scope, threadId, inventory, observeRequest, publish, park, close } = await runningThreadWithInventory();
     try {
       const firstPark = park();
       handle.emit(0, opened);
@@ -8175,12 +8187,50 @@ describe("authoritative pending interaction subscription replay", () => {
       expect(observeRequest).toHaveBeenCalledTimes(3);
       expect(publish).toHaveBeenCalledTimes(2);
     } finally {
-      await broker.close();
-      acquired.release();
-      await manager.close();
-      database.close();
+      await close();
     }
   });
+  it("wakes during broker release and guards Snooze until the unbound actor resolves the request", async () => {
+    const { acquired, manager, broker, handle, scope, threadId, inventory, park, close } = await runningThreadWithInventory();
+    const service = new InventoryService(inventory, { publishMany() {}, publishApplicationThread() {} },
+      undefined, undefined, pendingBlockingRequests(broker, manager));
+    let finishCleanup!: () => void;
+    const cleanup = new Promise<void>(resolve => { finishCleanup = resolve; });
+    const subscription = broker.bind(scope, threadId, {
+      subscribe: listener => acquired.actor.subscribe(listener),
+      respond: () => cleanup,
+    }, { opened() {}, resolved() {} });
+    try {
+      handle.emit(0, opened);
+      await acquired.actor.captureSnapshotState();
+      expect(broker.listPending(scope, threadId)).toHaveLength(1);
+      const parked = park();
+      const releasing = subscription.release();
+      handle.emit(0, { type: "interaction_resolved", backendInteractionId: opened.interaction.backendInteractionId }, 1);
+      handle.emit(0, { ...opened, interaction: { ...opened.interaction, backendInteractionId: "during-release" } }, 2);
+      await acquired.actor.captureSnapshotState();
+      expect(inventory.getInventory(scope, threadId)).toMatchObject({
+        inventoryState: "active", inventoryRevision: parked.inventoryRevision + 1,
+      });
+      finishCleanup();
+      await releasing;
+      expect(broker.hasPendingForThread(scope, threadId)).toBe(false);
+
+      const snooze = {
+        mutationId: randomUUID(), expectedRevision: parked.inventoryRevision + 1,
+        change: { action: "snooze" as const, snoozedUntil: Date.now() + 60_000 },
+      };
+      await expect(service.transition(scope, threadId, snooze)).rejects.toMatchObject({ code: "invalid_transition" });
+      handle.emit(0, { type: "interaction_resolved", backendInteractionId: "during-release" }, 3);
+      await acquired.actor.captureSnapshotState();
+      await expect(service.transition(scope, threadId, snooze)).resolves.toMatchObject({ inventoryState: "snoozed" });
+    } finally {
+      finishCleanup();
+      await subscription.release();
+      await close();
+    }
+  });
+
   it("discards pending interactions from an obsolete projection when the authoritative replacement does not replay them", async () => {
     const { manager, handle, driver } = fixture();
     const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });

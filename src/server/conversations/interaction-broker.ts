@@ -475,8 +475,8 @@ export class InteractionBroker {
       .map(({ interaction }) => structuredClone(interaction));
   }
 
-  hasBindingForThread(scope: RequestScope, applicationThreadId: string): boolean {
-    return this.#bindings.has(ownerKey(scope, applicationThreadId));
+  hasActiveBindingForThread(scope: RequestScope, applicationThreadId: string): boolean {
+    return this.#bindings.get(ownerKey(scope, applicationThreadId))?.state === "active";
   }
 
   hasPendingForThread(scope: RequestScope, applicationThreadId: string): boolean {

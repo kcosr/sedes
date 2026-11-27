@@ -1,7 +1,18 @@
 import type { DriverInteraction } from "../../shared/protocol/backend.js";
 import type { InventoryPrincipalStateRecord, InventoryRepository } from "../db/repositories/inventory-repository.js";
 import type { RequestScope } from "../identity/identity-provider.js";
+import type { ConversationActorManager } from "./conversation-actor-manager.js";
 import { blockingRequestWakeIdentity, type InteractionBroker } from "./interaction-broker.js";
+
+/** Snooze checks the live actor even when no viewer owns a broker subscription. */
+export function pendingBlockingRequests(broker: InteractionBroker, actors: ConversationActorManager) {
+  return {
+    hasPendingForThread(scope: RequestScope, threadId: string): boolean {
+      return broker.hasPendingForThread(scope, threadId) ||
+        (actors.observeInputRuntime(scope, threadId)?.blockingInteractionIds.length ?? 0) > 0;
+    },
+  };
+}
 
 export class BlockingRequestInventory {
   constructor(
@@ -13,8 +24,8 @@ export class BlockingRequestInventory {
     broker: InteractionBroker | undefined, scope: RequestScope, threadId: string, interaction: DriverInteraction,
   ): void {
     // An attached broker reports requests after capacity and cancellation checks.
-    // Actors without a viewer can receive a request before a broker binds.
-    if (!broker?.hasBindingForThread(scope, threadId)) {
+    // The actor observes requests before subscription and while a released binding drains.
+    if (!broker?.hasActiveBindingForThread(scope, threadId)) {
       this.observe(scope, threadId, blockingRequestWakeIdentity(interaction));
     }
   }

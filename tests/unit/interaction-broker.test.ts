@@ -366,9 +366,10 @@ describe("InteractionBroker", () => {
       publisher: { opened: vi.fn(), resolved: vi.fn() },
       onOpened,
     });
-    expect(broker.hasBindingForThread(scope, "thread-1")).toBe(false);
+    expect(broker.hasActiveBindingForThread(scope, "thread-1")).toBe(false);
     broker.bind(scope, "thread-1", conversation);
-    expect(broker.hasBindingForThread({ ...scope, principalId: "other" }, "thread-1")).toBe(false);
+    expect(broker.hasActiveBindingForThread(scope, "thread-1")).toBe(true);
+    expect(broker.hasActiveBindingForThread({ ...scope, principalId: "other" }, "thread-1")).toBe(false);
     for (let index = 0; index < 32; index += 1) {
       conversation.emit(opened(`provider-${index}`));
     }
@@ -391,11 +392,11 @@ describe("InteractionBroker", () => {
     });
     await Promise.resolve();
     expect(closed).toBe(false);
-    expect(broker.hasBindingForThread(scope, "thread-1")).toBe(true);
+    expect(broker.hasActiveBindingForThread(scope, "thread-1")).toBe(false);
     capacityResponse.resolve();
     await close;
     expect(closed).toBe(true);
-    expect(broker.hasBindingForThread(scope, "thread-1")).toBe(false);
+    expect(broker.hasActiveBindingForThread(scope, "thread-1")).toBe(false);
   });
 
   it("reports failed exact capacity cancellation without interrupting or abandoning unrelated waiters", async () => {

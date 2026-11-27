@@ -136,7 +136,7 @@ import {
   directThreadExecutionWorkspaceReader,
   type ThreadBackendPresentationProvider,
 } from "../../src/server/conversations/database-thread-application-readers.js";
-import { BlockingRequestInventory } from "../../src/server/conversations/blocking-request-inventory.js";
+import { BlockingRequestInventory, pendingBlockingRequests } from "../../src/server/conversations/blocking-request-inventory.js";
 import { InteractionBroker } from "../../src/server/conversations/interaction-broker.js";
 import { RuntimeBackedQueuedInputConversationGateway } from "../../src/server/conversations/queued-input-conversation-gateway.js";
 import { QueuedInputDispatcher } from "../../src/server/conversations/queued-input-dispatcher.js";
@@ -5164,7 +5164,7 @@ async function main(): Promise<void> {
       run: (eventScope, threadId, operation) =>
         runtimes.runWithRuntimeRetired(eventScope, threadId, operation),
     },
-    interactions,
+    pendingBlockingRequests(interactions, actors),
   );
   const tasks = new TaskService(taskRepository, applicationSnapshots);
   const workpads = new WorkpadService(new WorkpadRepository(database), applicationSnapshots);

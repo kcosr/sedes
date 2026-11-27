@@ -101,7 +101,7 @@ import {
   DatabaseThreadApplicationInventoryReader,
   DatabaseThreadApplicationPresentationReader,
 } from "./conversations/database-thread-application-readers.js";
-import { BlockingRequestInventory } from "./conversations/blocking-request-inventory.js";
+import { BlockingRequestInventory, pendingBlockingRequests } from "./conversations/blocking-request-inventory.js";
 import { InteractionBroker } from "./conversations/interaction-broker.js";
 import { RuntimeBackedQueuedInputConversationGateway } from "./conversations/queued-input-conversation-gateway.js";
 import { QueuedInputDispatcher } from "./conversations/queued-input-dispatcher.js";
@@ -1890,7 +1890,7 @@ export async function startProductionApplication(
             return committed;
           }),
       },
-      interactions,
+      pendingBlockingRequests(interactions, actors),
     );
     const turnBookmarks = new ConversationTurnBookmarkService(
       turnBookmarkRepository,
