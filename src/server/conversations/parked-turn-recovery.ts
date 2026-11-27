@@ -6,6 +6,13 @@ import type { AcquireConversationActorInput } from "./conversation-actor-manager
 import { applicationTurnIdForBackendTurn, hasConfirmedTurnEnd } from "./conversation-projector.js";
 import type { DatabaseActorTargetResolver } from "./database-conversation-adapters.js";
 
+export interface ParkedTurnRetry {
+  readonly parkRevision: number;
+  readonly delay: number;
+  readonly nextReadAt: number;
+  readonly lastError?: string;
+}
+
 async function historyConfirmsEnd(
   target: AcquireConversationActorInput,
   turnId: string,
@@ -22,18 +29,21 @@ async function historyConfirmsEnd(
     // Establish the reader's immutable cut before locating an older target.
     const { snapshot, history } = await reader.readSnapshot({ signal });
     if (!readAllowed()) return false;
-    const id = snapshot.orderedBackendTurnIds.find(matchesBackendTurnId);
-    if (id !== undefined) {
-      const turn = snapshot.turnsById[id];
-      return turn?.backendTurnId === id && hasConfirmedTurnEnd(backendTurnSchema.parse(turn));
+    let id = snapshot.orderedBackendTurnIds.find(matchesBackendTurnId);
+    let turns = snapshot.turnsById;
+    if (id === undefined) {
+      if (!history.operational || history.previousCursor === undefined) return false;
+      const found = await reader.locateTurn({ matchesBackendTurnId, maximumTurnCandidates: MAXIMUM_TARGETED_TURN_LOOKUP_CANDIDATES, signal });
+      if (found.status !== "found" || !readAllowed()) return false;
+      const page = backendHistoryPageSchema.parse(found.page);
+      id = page.orderedBackendTurnIds[0];
+      if (page.orderedBackendTurnIds.length !== 1 || page.previousCursor !== undefined || !id || !matchesBackendTurnId(id)) return false;
+      turns = page.turnsById;
     }
-    if (!history.operational || history.previousCursor === undefined) return false;
-    const found = await reader.locateTurn({ matchesBackendTurnId, maximumTurnCandidates: MAXIMUM_TARGETED_TURN_LOOKUP_CANDIDATES, signal });
-    if (found.status !== "found") return false;
-    const page = backendHistoryPageSchema.parse(found.page);
-    const [locatedId] = page.orderedBackendTurnIds;
-    return page.orderedBackendTurnIds.length === 1 && page.previousCursor === undefined && locatedId !== undefined &&
-      matchesBackendTurnId(locatedId) && hasConfirmedTurnEnd(page.turnsById[locatedId]);
+    const turn = turns[id];
+    if (turn?.backendTurnId !== id) return false;
+    return hasConfirmedTurnEnd(backendTurnSchema.parse(turn)) ||
+      (await reader.confirmTurnOwnerStopped?.({ backendTurnId: id, signal }) === true);
   } finally { await reader.close(); }
 }
 
@@ -41,7 +51,9 @@ async function historyConfirmsEnd(
 export async function recoverParkedTurns(input: {
   readonly scope: RequestScope;
   readonly backendInstanceId: string;
-  readonly inventory: InventoryRepository;
+  /** Scoped to this principal and backend runtime. A new park bypasses the prior delay. */
+  readonly retries: Map<string, ParkedTurnRetry>;
+  readonly inventory: Pick<InventoryRepository, "listParkedTurnTargets" | "unparkIfTurnEnded">;
   readonly targets: Pick<DatabaseActorTargetResolver, "resolve">;
   readonly signal: AbortSignal;
   readonly isAdmitted: () => boolean;
@@ -49,7 +61,8 @@ export async function recoverParkedTurns(input: {
   readonly publish: (state: InventoryPrincipalStateRecord) => void | Promise<void>;
   readonly onError: (threadId: string, error: unknown) => void;
 }): Promise<boolean> {
-  const { scope, backendInstanceId, inventory, signal } = input;
+  const { scope, backendInstanceId, inventory, retries, signal } = input;
+  const obsolete = new Set(retries.keys());
   const pageSize = 16;
   const admitted = () => !signal.aborted && input.isAdmitted();
   let remaining = false;
@@ -59,8 +72,13 @@ export async function recoverParkedTurns(input: {
     for (const { threadId, turnId, progressParkRevision, readable } of candidates) {
       if (!admitted()) return remaining;
       after = threadId;
+      obsolete.delete(threadId);
       const readAllowed = () => admitted() && !input.hasLiveTurn(threadId, turnId);
       if (!readable || !readAllowed()) { remaining = true; continue; }
+      const previous = retries.get(threadId);
+      const retry = previous?.parkRevision === progressParkRevision ? previous : undefined;
+      if (retry && Date.now() < retry.nextReadAt) { remaining = true; continue; }
+      let lastError: string | undefined;
       try {
         const target = await input.targets.resolve(scope, threadId);
         const { binding } = target;
@@ -71,15 +89,22 @@ export async function recoverParkedTurns(input: {
           continue;
         }
         const confirmed = await historyConfirmsEnd(target, turnId, signal, readAllowed);
-        if (!confirmed || !readAllowed()) { remaining = true; continue; }
-        const changed = inventory.unparkIfTurnEnded(scope, threadId, id => id === turnId, Date.now(), progressParkRevision);
-        if (changed) await input.publish(changed);
+        if (confirmed && readAllowed()) {
+          const changed = inventory.unparkIfTurnEnded(scope, threadId, id => id === turnId, Date.now(), progressParkRevision);
+          retries.delete(threadId);
+          if (changed) await input.publish(changed);
+          continue;
+        }
       } catch (error) {
-        remaining = true;
-        if (admitted()) input.onError(threadId, error);
+        lastError = error instanceof Error ? error.message.slice(0, 2048) : "unknown error";
+        if (admitted() && retry?.lastError !== lastError) input.onError(threadId, error);
       }
+      remaining = true;
+      const delay = retry ? Math.min(retry.delay * 2, 30 * 60_000) : 30_000;
+      retries.set(threadId, { parkRevision: progressParkRevision, nextReadAt: Date.now() + delay, delay, lastError });
     }
     if (candidates.length < pageSize) break;
   }
+  if (admitted()) for (const threadId of obsolete) retries.delete(threadId);
   return remaining;
 }

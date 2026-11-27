@@ -358,7 +358,7 @@ export class ConversationActorManager {
   readonly #onAuthoritativeCompletion?: AuthoritativeCompletionObserver;
   readonly #captureResponseVoiceContext?: (scope: ExecutionScope, threadId: string, backendCorrelations: readonly string[]) => CapturedResponseVoiceContext;
   readonly #observeTurnSettlement?: TurnSettlementObserver;
-  readonly #onControlLost?: (backendInstanceId: string) => void;
+  readonly #onControlChanged?: (backendInstanceId: string, threadId: string) => void;
   readonly #onAuthoritativeSubmission?: AuthoritativeSubmissionObserver;
   readonly #onLiveProgress?: LiveProgressObserver;
   readonly #onLiveProgressSkipped?: LiveProgressSkippedObserver;
@@ -380,7 +380,7 @@ export class ConversationActorManager {
     readonly onAuthoritativeCompletion?: AuthoritativeCompletionObserver;
     readonly captureResponseVoiceContext?: (scope: ExecutionScope, threadId: string, backendCorrelations: readonly string[]) => CapturedResponseVoiceContext;
     readonly observeTurnSettlement?: TurnSettlementObserver;
-    readonly onControlLost?: (backendInstanceId: string) => void;
+    readonly onControlChanged?: (backendInstanceId: string, threadId: string) => void;
     readonly onAuthoritativeSubmission?: AuthoritativeSubmissionObserver;
     readonly captureEarlyReply?: CaptureEarlyReplyObserver;
     readonly readProgressParkRevision?: (scope: ExecutionScope, threadId: string) => number | undefined;
@@ -397,7 +397,7 @@ export class ConversationActorManager {
     this.#onAuthoritativeCompletion = input.onAuthoritativeCompletion;
     this.#captureResponseVoiceContext = input.captureResponseVoiceContext;
     this.#observeTurnSettlement = input.observeTurnSettlement;
-    this.#onControlLost = input.onControlLost;
+    this.#onControlChanged = input.onControlChanged;
     this.#onAuthoritativeSubmission = input.onAuthoritativeSubmission;
     this.#captureEarlyReply = input.captureEarlyReply;
     this.#readProgressParkRevision = input.readProgressParkRevision;
@@ -1542,12 +1542,13 @@ export class ConversationActorManager {
           }
           entry.control = control;
           entry.controlEnded = false;
+          this.#onControlChanged?.(input.binding.backendInstanceId, input.binding.applicationThreadId);
           this.#publishInputActivity(entry);
           control.lifetime.addEventListener("abort", () => {
             if (entry.control === control) {
               entry.control = undefined;
               entry.controlEnded = true;
-              this.#onControlLost?.(input.binding.backendInstanceId);
+              this.#onControlChanged?.(input.binding.backendInstanceId, input.binding.applicationThreadId);
               actor?.noteEarlyReplyObservationGap();
               this.#publishInputActivity(entry);
             }

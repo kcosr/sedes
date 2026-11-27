@@ -391,6 +391,9 @@ export interface ConversationHistoryReader {
   }>;
   history(input: HistoryPageInput): Promise<BackendHistoryPage>;
   locateTurn(input: LocateTurnInput): Promise<LocateTurnResult>;
+  /** Optional positive proof that the prior owner of this exact historical turn has stopped.
+   * This conveys no completion outcome and must never start or interrupt provider work. */
+  confirmTurnOwnerStopped?(input: { readonly backendTurnId: string; readonly signal: AbortSignal }): Promise<boolean>;
   backendCapabilities(): Promise<BackendCapabilityDocument>;
   usage(): Promise<UsageSnapshot>;
   close(): Promise<void>;

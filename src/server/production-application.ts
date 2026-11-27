@@ -1,4 +1,4 @@
-import { recoverParkedTurns } from "./conversations/parked-turn-recovery.js";
+import { recoverParkedTurns, type ParkedTurnRetry } from "./conversations/parked-turn-recovery.js";
 import { storedFileRootBinding } from "./db/repositories/workspace-file-root-authority.js";
 import { canonicalLocalWorkspaceRoots } from "./execution/local-workspace-roots.js";
 import { ThreadAppliedToolPolicySetRepository } from "./db/repositories/thread-applied-tool-policy-set-repository.js";
@@ -1244,9 +1244,9 @@ export async function startProductionApplication(
       AuthoritativeCompletionObserver | undefined;
     const pageRepository = new PageRepository(database);
     const pendingParkChecks = new Set<string>();
-    let checkParkedAfterControlLoss: ((backendId: string) => void) | undefined;
+    let checkParkedAfterControlChange: ((backendId: string, threadId: string) => void) | undefined;
     actors = new ConversationActorManager({
-      onControlLost: backendId => checkParkedAfterControlLoss?.(backendId),
+      onControlChanged: (backendId, threadId) => checkParkedAfterControlChange?.(backendId, threadId),
       observeTurnSettlement(eventScope, threadId, hasEnded) {
         // Commit before completion speech captures its input activity token.
         // Publication can re-enter the actor, so dispatch it outside this observer.
@@ -2763,15 +2763,18 @@ export async function startProductionApplication(
     // accepted submission nor permission to start an execution owner is needed
     // to inspect its canonical history. A pending read never launches a turn.
     const parkedTurnPasses = new WeakSet<BackendModuleRuntime>();
+    const parkedTurnRetries = new WeakMap<BackendModuleRuntime, Map<string, ParkedTurnRetry>>();
     const checkParkedTurns = (backendId: string): void => {
       const module = moduleRuntimes.get(backendId);
       pendingParkChecks.delete(backendId);
       if (!unresolvedSubmissionRecoveryReady || !module || drain.isDraining) return;
       if (parkedTurnPasses.has(module)) { pendingParkChecks.add(backendId); return; }
       const isAdmitted = backendAttachmentAdmission(backendId, module);
+      const retries = parkedTurnRetries.get(module) ?? new Map<string, ParkedTurnRetry>();
+      parkedTurnRetries.set(module, retries);
       const admitted = discoveryOperations.admit(async signal => {
         const remaining = await recoverParkedTurns({
-          scope, backendInstanceId: backendId, inventory: inventoryRepository, targets: actorTargets, signal,
+          scope, backendInstanceId: backendId, inventory: inventoryRepository, targets: actorTargets, signal, retries,
           isAdmitted: () => !drain.isDraining && isAdmitted(),
           hasLiveTurn: (threadId, turnId) => actors?.currentTurnForParking(scope, threadId) === turnId,
           publish: state => inventory.publishCommitted(scope, [state], Date.now()),
@@ -3827,6 +3830,8 @@ export async function startProductionApplication(
         await reconcileHost(id);
         for (const backend of environmentBackendIds(id)) {
           // A re-established connection may make previously failed threads openable.
+          const module = moduleRuntimes.get(backend);
+          if (module) parkedTurnRetries.delete(module);
           checkParkedTurns(backend);
           recoverUnresolvedSubmissions(backend, { retryFailed: true });
           attachRetainedWork(backend);
@@ -4067,8 +4072,12 @@ export async function startProductionApplication(
     // Recovery opens threads after startup recovery has made completion
     // observation available, and never delays serving requests.
     unresolvedSubmissionRecoveryReady = true;
-    checkParkedAfterControlLoss = id => {
-      if (pendingParkChecks.has(id)) threadRuntimeFollowUp.defer(() => checkParkedTurns(id));
+    checkParkedAfterControlChange = (id, threadId) => {
+      const module = moduleRuntimes.get(id);
+      if (module) parkedTurnRetries.get(module)?.delete(threadId);
+      if (module && (pendingParkChecks.has(id) || parkedTurnPasses.has(module))) {
+        threadRuntimeFollowUp.defer(() => checkParkedTurns(id));
+      }
     };
     onBackendApplied = id => {
       checkParkedTurns(id);

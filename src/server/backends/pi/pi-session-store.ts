@@ -1013,6 +1013,9 @@ export class PiSessionStore {
     }
     signal.throwIfAborted();
     const manager = SessionManager.inMemory(workspace.canonicalPath, undefined, entries);
+    // Preserve the validated writer-lock identity on the immutable manager.
+    // As with readOnlySessionManager, SDK persistence remains disabled.
+    manager.getSessionFile = () => canonicalFile;
     const seen = new Set<string>();
     // Parent links point backwards in Pi's append-only tree. Validate them
     // before getBranch(), which assumes native tree integrity.

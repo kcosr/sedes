@@ -77,7 +77,7 @@ import {
   piSubmissionMarker,
   piSubmissionMarkerType,
 } from "../../src/server/backends/pi/pi-submission-marker.js";
-import { piSubmissionAttestationType } from "../../src/server/backends/pi/pi-submission-attestation.js";
+import { createPiSubmissionAttestation, piSubmissionAttestationType } from "../../src/server/backends/pi/pi-submission-attestation.js";
 import { formatPiContextExcerptPrompt } from "../../src/server/backends/pi/pi-context-excerpt-message.js";
 import { formatPiTaskContextPrompt } from "../../src/server/backends/pi/pi-task-context-message.js";
 import {
@@ -2213,6 +2213,53 @@ describe("Pi conversation backend driver", () => {
       expect(forbidden).not.toHaveBeenCalled();
     },
   );
+
+  it("requires an authenticated SDK root and a stopped writer to confirm an unfinished turn", async () => {
+    const fixture = await workspace();
+    const store = new PiSessionStore({ sessionDirectory: fixture.sessions });
+    const nativeId = "stopped-sdk-session";
+    const reserved = await store.reserve(fixture.workspace, nativeId);
+    const foreign = reserved.manager.appendMessage({ role: "user", content: "External turn", timestamp: Date.now() });
+    const marker = createPiSubmissionMarker({
+      applicationOperationId: "our-submit", mutationId: "our-submit", reconciliationToken: "our-submit",
+      mode: "submit", text: "SDK turn", contextExcerpts: [], attachments: [], taskContexts: [],
+    });
+    reserved.manager.appendCustomEntry(piSubmissionMarkerType, marker);
+    const root = reserved.manager.appendMessage({ role: "user", content: "SDK turn", timestamp: Date.now() });
+    reserved.manager.appendCustomEntry(piSubmissionAttestationType, createPiSubmissionAttestation({
+      applicationOperationId: marker.applicationOperationId, requestFingerprint: marker.requestFingerprint, userEntryId: root,
+    }, { conversationId: nativeId, installationKey: toolProvenanceKey }));
+    const file = reserved.manager.getSessionFile()!;
+    const transcript = await readFile(file);
+    const sessionFactory = fakeSessionFactory();
+    const create = vi.spyOn(sessionFactory, "create");
+    const driver = new PiConversationBackendDriver({ instance, connection, usage: NO_USAGE_SINK,
+      nativeDiscoveryNamespaceKey: "pi-test-native-namespace", toolProvenanceKey,
+      agentTools: noAgentTools, toolAccessPolicy: fullToolAccessPolicy, store, sessionFactory });
+    const target = { scope, workspace: fixture.workspace, binding: binding(nativeId), opaqueBindingDetail: reserved.opaqueBindingDetail };
+    const reader = await driver.openHistory(target);
+    const signal = new AbortController().signal;
+    const confirm = (backendTurnId: string) => reader.confirmTurnOwnerStopped!({ backendTurnId, signal });
+    try {
+      const snapshot = await reader.readSnapshot({ signal });
+      expect(snapshot.snapshot.turnsById[root]?.endedBy).toBeUndefined();
+      const writer = await acquirePiSessionWriterLock(file);
+      try {
+        await expect(confirm(root)).resolves.toBe(false);
+      } finally { await writer.release(); }
+      await expect(confirm(foreign)).resolves.toBe(false);
+      await expect(confirm("missing")).resolves.toBe(false);
+      await expect(confirm(root)).resolves.toBe(true);
+      expect(create).not.toHaveBeenCalled();
+      expect(await readFile(file)).toEqual(transcript);
+      const reopened = await driver.attach(target);
+      try {
+        await expect(confirm(root)).resolves.toBe(true);
+        await expect(confirm(foreign)).resolves.toBe(false);
+      } finally { await reopened.close(); }
+      expect(create).toHaveBeenCalledOnce();
+    } finally { await reader.close(); await driver.close(); }
+  });
 
   it("rejects wrong-scope history and cancels before native acquisition", async () => {
     const fixture = await workspace();

@@ -46,7 +46,10 @@ import { serializePiNativeBindingDetail } from "../../src/server/backends/pi/nat
 import { PiNativeThreadRepository } from "../../src/server/backends/pi/native/pi-native-thread-repository.js";
 import { PiConversationRepository } from "../../src/server/backends/pi/pi-conversation-repository.js";
 import { serializePiBindingDetail } from "../../src/server/backends/pi/pi-session-store.js";
+import { createPiSubmissionMarker, piSubmissionMarkerType } from "../../src/server/backends/pi/pi-submission-marker.js";
+import { createPiSubmissionAttestation, piSubmissionAttestationType } from "../../src/server/backends/pi/pi-submission-attestation.js";
 import { PiConversationBackendDriver } from "../../src/server/backends/pi/pi-conversation-driver.js";
+import { loadOrCreateToolProvenanceKey } from "../../src/server/security/installation-secret.js";
 import { applicationTurnIdForBackendTurn } from "../../src/server/conversations/conversation-projector.js";
 import * as parkedTurnRecovery from "../../src/server/conversations/parked-turn-recovery.js";
 import { RemoteExecutionEnvironment } from "../../src/server/execution/remote-execution-environment.js";
@@ -870,7 +873,7 @@ describe("production configuration reconciliation", () => {
       expect.objectContaining({ component: "host_policy", subjectLabel: "/additional-root", state: "awaiting_host" }));
   });
 
-  it("recovers only a confirmed parked external Pi SDK turn after restarting main without an accepted submission", async () => {
+  it("recovers ended and Sedes-owned parked Pi SDK turns after restarting main without an accepted submission record", async () => {
     const { service, scope, environmentId } = await fixture();
     const database = service.repository.database;
     const now = Date.now();
@@ -889,18 +892,31 @@ describe("production configuration reconciliation", () => {
       .get(scope.tenantId, scope.principalId, "idle-pi-target") as { id: string };
     const bindings = new ConversationBindingRepository(database);
     const pi = new PiConversationRepository(database);
-    const seed = async (evidence: "answered" | "user only" | "other turn") => {
+    const installationKey = await loadOrCreateToolProvenanceKey(cwd);
+    const seed = async (evidence: "answered" | "user only" | "other turn" | "signed root" | "wrong session") => {
       const sessionId = randomUUID(), sessionFile = path.join(sessions, `${sessionId}.jsonl`);
       const userId = evidence === "other turn" ? "other-user" : backendTurnId;
       const timestamp = new Date(now).toISOString();
+      const text = "Review the result";
+      const marker = evidence === "signed root" || evidence === "wrong session" ? createPiSubmissionMarker({
+        applicationOperationId: randomUUID(), reconciliationToken: randomUUID(), mutationId: randomUUID(), mode: "submit",
+        text, contextExcerpts: [], taskContexts: [], attachments: [],
+      }) : undefined;
       const entries = [
         { type: "session", version: 3, id: sessionId, cwd, timestamp },
-        { type: "message", id: userId, parentId: null, timestamp, message: { role: "user", content: "Review the result", timestamp: now } },
-        ...(evidence === "user only" ? [] : [
+        ...(marker ? [{ type: "custom", id: "intent", parentId: null, timestamp, customType: piSubmissionMarkerType, data: marker }] : []),
+        { type: "message", id: userId, parentId: marker ? "intent" : null, timestamp, message: { role: "user", content: text, timestamp: now } },
+        ...(marker ? [{
+          type: "custom", id: "attestation", parentId: userId, timestamp, customType: piSubmissionAttestationType,
+          data: createPiSubmissionAttestation({
+            applicationOperationId: marker.applicationOperationId, requestFingerprint: marker.requestFingerprint, userEntryId: userId,
+          }, { conversationId: evidence === "wrong session" ? randomUUID() : sessionId, installationKey }),
+        }] : []),
+        ...(evidence === "answered" || evidence === "other turn" ? [
           { type: "message", id: "answer", parentId: userId, timestamp, message: {
             role: "assistant", content: [{ type: "text", text: "Review finished." }], stopReason: "stop", timestamp: now,
           } },
-        ]),
+        ] : []),
         // Move the answered turn outside the SDK's ten-turn snapshot. Recovery
         // must locate the original turn by its application identity.
         ...(evidence === "answered" ? Array.from({ length: 12 }, (_, index) => ({
@@ -916,6 +932,7 @@ describe("production configuration reconciliation", () => {
       return id;
     };
     const answered = await seed("answered"), pending = await seed("user only"), other = await seed("other turn");
+    const signed = await seed("signed root"), wrongSession = await seed("wrong session");
     expect(database.prepare("SELECT count(*) AS count FROM submission_completion_observations").get()).toEqual({ count: 0 });
     await application!.close();
     application = undefined;
@@ -925,10 +942,10 @@ describe("production configuration reconciliation", () => {
     const restarted = await openApplication(sessions);
     await vi.waitFor(() => expect(recover.mock.calls.some(([pass]) => pass.backendInstanceId === backendInstanceId)).toBe(true));
     const pass = recover.mock.calls.findIndex(([input]) => input.backendInstanceId === backendInstanceId);
-    expect(await recover.mock.results[pass]!.value).toBe(true); // Two parks are still waiting for evidence.
+    expect(await recover.mock.results[pass]!.value).toBe(true);
     const recovered = new InventoryRepository(restarted.service.repository.database);
-    expect(recovered.getInventory(scope, answered).inventoryState).toBe("active");
-    for (const id of [pending, other]) expect(recovered.getInventory(scope, id).inventoryState).toBe("parked");
+    for (const id of [answered, signed]) expect(recovered.getInventory(scope, id).inventoryState).toBe("active");
+    for (const id of [pending, other, wrongSession]) expect(recovered.getInventory(scope, id).inventoryState).toBe("parked");
     expect(attach).not.toHaveBeenCalled();
   }, 15_000);
 
