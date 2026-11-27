@@ -24,6 +24,21 @@ describe("desktop voice preferences", () => {
     expect(electronVoiceDefaults().audioMode).toBe("off");
   });
 
+  it("upgrades saved voice preferences with an independent Off default and revision-checked phrasing", () => {
+    const { storage, entries } = storageFixture();
+    const preferences = new ElectronVoicePreferences(storage);
+    preferences.save(binding, { ...preferences.get(binding), voiceThreadId: "thread-a", ttsVoice: "saved-voice" });
+    const upgraded = new ElectronVoicePreferences(storage);
+    expect(upgraded.early).toEqual({ earlyReplyPlayback: "off", earlyReplyRevision: 0 });
+    const previous = [...entries.values()][0];
+    upgraded.setEarly("natural", 0);
+    expect(() => upgraded.setEarly("balanced", 0)).toThrow("changed");
+    const loaded = new ElectronVoicePreferences(storage);
+    expect(loaded.early).toEqual({ earlyReplyPlayback: "natural", earlyReplyRevision: 1 });
+    expect(loaded.get(binding)).toMatchObject({ voiceThreadId: "thread-a", ttsVoice: "saved-voice" });
+    expect([...entries.values()][0]).toBe(previous);
+  });
+
   it("persists device preferences while isolating default threads by profile, server and authenticated identity", () => {
     const { storage, entries } = storageFixture();
     const preferences = new ElectronVoicePreferences(storage);

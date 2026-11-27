@@ -243,7 +243,7 @@ describe("desktop playback queue", () => {
       expect(queue.add(item(`item-${index}`, "x".repeat(60_000), index === 1 ? "turn.progress" : "turn.completed"), announcements)).toBe(true);
     }
     const expanded = settings({ speechContent: "both", cleanSpeechText: false });
-    expect(queue.reconfigure(expanded)).toEqual(["item-1", "item-5"]);
+    expect(queue.reconfigure(expanded).map(item => item.id)).toEqual(["item-1", "item-5"]);
     expect(queue.items.map(entry => entry.id)).toEqual(["item-0", "item-2", "item-3", "item-4"]);
     expect(queue.bytes(expanded)).toBeLessThanOrEqual(256 * 1024);
     expect(queue.dropped).toEqual({ progress_evicted: 1, overflow: 1 });

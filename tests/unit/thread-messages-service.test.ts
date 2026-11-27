@@ -154,7 +154,7 @@ function state(
           }
         : { availability: "unavailable", reason: { text: "No branching" } },
       interactionKinds: [],
-      usageAccounting: "supported" as const, turnThroughput: "unsupported" as const, usageSections: [],
+      usageAccounting: "supported" as const, turnThroughput: "unsupported" as const, liveSpeechStarts: { final: false, provisional: false }, usageSections: [],
       effectiveSettings: {},
     },
     usage: {},

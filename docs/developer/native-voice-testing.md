@@ -174,6 +174,30 @@ With no explicit Android serial, device cases are skipped. The host cases
 verify streamed speech bytes, Realtime session/commit/result ordering,
 normalization, and Sedes direct-input admission with unchanged drafts,
 same-identity receipts, live completion delivery, and no notification replay.
+The early-reply case attaches a paced Codex RPC fixture to the production
+Sedes server. It runs the Electron voice client over application SSE and sends
+its synthesis requests through the desktop transport to the loopback speech
+server. The fixture withholds turn completion until PCM reaches the playback
+sink. A Both-mode case exercises the three phrasing settings. Another host
+case holds the next synthesis slot while sentences arrive, then checks that
+the device sends the accumulated sentences together. Use physical-device
+listening and output timestamps to evaluate
+first audible word and inter-sentence gaps.
+
+To measure desktop scheduling, add `SEDES_VOICE_DESKTOP_TIMING=1` to the host
+pipeline environment and run `npm run test:voice -- tests/native-voice/desktop-playback-timing.test.ts`.
+This lane runs the desktop voice runtime and speech transport against the same
+worker in Chromium. It compares Responsive with Off using the first and last
+non-silent samples in a 24 kHz Web Audio measurement graph. For Responsive, at
+least 30 boundaries must have the next request's complete PCM available at
+least 500 ms before the preceding audio ends. The p95 gap for those boundaries
+must be at most 250 ms.
+
+On Android, `NativeVoiceAudioTest.prefetchedPcmStartsWithinThePhysicalGapBudget`
+checks the corresponding interval with AudioTrack presentation timestamps.
+Run the instrumentation on the target device to qualify its output and listen
+to representative replies to assess phrasing.
+
 The application HTTP suite also covers CSRF, scope, body limits, parser bounds,
 first-send readiness, queue/steer decisions, and read-only receipt recovery.
 
@@ -187,14 +211,36 @@ env -u NODE_ENV SEDES_RUN_REAL_OPENCODE=1 \
   SEDES_VOICE_ANDROID_SERIAL=emulator-5580 npm run test:voice
 ```
 
+Use `-t 'plays a held live Codex reply in the packaged Android background service'`
+to select both device cases. Each pairs through the Sedes HTTP API, saves the
+credentials in the native keystores, enables early playback, and backgrounds
+the Activity. The host waits for the registered client's input to be accepted
+before it streams an answer. Each synthesis request supplies 24,000 PCM frames
+at 24 kHz with zero startup pre-roll.
+
+- Both cases select **Both**. The host supplies a short opening sentence and
+  withholds further text until the notification type and thread title drain
+  in the background. It checks that the preamble was the only synthesis request.
+  It then supplies enough words for the selected mode and checks that the
+  opening sentences reach the speech server together.
+- The final-answer case uses Responsive. The grouped opening drains while the
+  turn is still running. The host releases the remaining text, completes the turn,
+  and checks all three requests and physical drains in `android-early-reply.log`.
+- The progress case uses Balanced. Closing the commentary item releases its
+  short remainder while the turn is still running. Android selects Next on a
+  second commentary item. The host sends its remaining text and a distinct final answer.
+  It checks the synthesis inputs, six physical drains, and zero microphone
+  captures in `android-early-progress.log`.
+
 An explicit serial is required. The harness verifies that it is an emulator,
 clears `dev.sedes.local` application data between scenarios, installs the
-current APKs, pairs through the bundled UI, and reverses only its owned Sedes
+current APKs, and reverses only its owned Sedes
 and speech-server ports. `SEDES_ADB_EXECUTABLE` selects adb when needed. Each
 concurrent invocation must own its own disposable emulator. Do not disable
 audio when checking AudioRecord or AudioTrack initialization.
 
-The packaged setup chooses **Own speech server**, saves the endpoint, and enters
+The packaged conversation-cycle cases pair through the bundled UI. Their setup
+chooses **Own speech server**, saves the endpoint, and enters
 the fixture bearer token through the native credential dialog. Once authenticated
 discovery is ready, it chooses models and a voice through the Settings pickers.
 Capture receives deterministic 24 kHz PCM; speech uses real AudioTrack. The

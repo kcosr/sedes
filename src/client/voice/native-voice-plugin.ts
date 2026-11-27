@@ -37,6 +37,8 @@ export const nativeVoiceSettingsSchema = z.strictObject({
 export type NativeVoiceSettings = z.infer<typeof nativeVoiceSettingsSchema>;
 export const nativeVoiceAudioQualitySchema = z.enum(["original", "opus_high", "opus_low"]);
 export type NativeVoiceAudioQuality = z.infer<typeof nativeVoiceAudioQualitySchema>;
+export const nativeEarlyReplyPlaybackModeSchema = z.enum(["off", "responsive", "balanced", "natural"]);
+export type NativeEarlyReplyPlaybackMode = z.infer<typeof nativeEarlyReplyPlaybackModeSchema>;
 export const nativeSpeechCatalogSchema = z.strictObject({
   source: z.enum(["openai", "server"]), sttModels: z.array(z.string()), ttsModels: z.array(z.string()),
   voices: z.array(z.string()), speed: z.strictObject({ min: z.number().positive(), max: z.number().positive() }).nullable(),
@@ -59,12 +61,13 @@ export const nativeRecordingTextSchema = z.strictObject({
 });
 export type NativeRecordingText = z.infer<typeof nativeRecordingTextSchema>;
 export const nativeVoiceStateSchema = z.strictObject({
-  version: z.literal(16), stateRevision: z.number().int().nonnegative(), connectionGeneration: z.number().int().nonnegative(),
+  version: z.literal(17), stateRevision: z.number().int().nonnegative(), connectionGeneration: z.number().int().nonnegative(),
   profileId: z.string().nullable(), serverOrigin: z.string().nullable(), identity: z.string().nullable(), originClientId: z.uuid().nullable(), clientConnectionToken: z.string().nullable(),
   settingsRevision: z.number().int().nonnegative(), settings: nativeVoiceSettingsSchema,
-  speech: z.strictObject({ audioQuality: nativeVoiceAudioQualitySchema, audioQualityRevision: z.number().int().nonnegative(), credentialConfigured: z.boolean(), catalogStatus: z.enum(["idle", "loading", "ready", "error"]),
+  speech: z.strictObject({ earlyReplyPlayback: nativeEarlyReplyPlaybackModeSchema, earlyReplyRevision: z.number().int().nonnegative(),
+    audioQuality: nativeVoiceAudioQualitySchema, audioQualityRevision: z.number().int().nonnegative(), credentialConfigured: z.boolean(), catalogStatus: z.enum(["idle", "loading", "ready", "error"]),
     catalog: nativeSpeechCatalogSchema.nullable(), error: z.string().nullable() }),
-  phase: z.enum(["off", "starting", "idle", "synthesizing", "speaking", "validating", "announcing", "arming", "listening", "recognizing", "submitting", "cancelling", "recovering", "recordingRecovery", "error"]),
+  phase: z.enum(["off", "starting", "idle", "synthesizing", "speaking", "waiting_for_reply_text", "validating", "announcing", "arming", "listening", "recognizing", "submitting", "cancelling", "recovering", "recordingRecovery", "error"]),
   ready: z.boolean(), readiness: z.string(),
   foreground: z.strictObject({ visible: z.boolean(), threadId: z.string().nullable(), threadTitle: z.string().nullable(), composerAvailable: z.boolean() }),
   nextRecordingTarget: z.strictObject({ threadId: z.string().min(1), threadTitle: z.string().nullable() }).nullable(),
@@ -143,6 +146,7 @@ export interface NativeVoicePlugin {
   discardRecording(input: NativeRecordingRecoveryCommandContext): Promise<NativeVoiceState>;
   resumeInput(input: NativeVoiceCommandContext & { mutationId: string }): Promise<NativeVoiceState>;
   discardInput(input: NativeVoiceCommandContext & { mutationId: string }): Promise<NativeVoiceState>;
+  setEarlyReplyPlayback(input: NativeVoiceCommandContext & { expectedEarlyReplyRevision: number; earlyReplyPlayback: NativeEarlyReplyPlaybackMode }): Promise<NativeVoiceState>;
   setSpeechAudioQuality(input: NativeVoiceCommandContext & { expectedAudioQualityRevision: number; audioQuality: NativeVoiceAudioQuality }): Promise<NativeVoiceState>;
   refreshSpeechCatalog(input: NativeVoiceCommandContext & { force: boolean }): Promise<NativeVoiceState>;
   /** Opens native masked credential entry. Secrets are never bridge arguments or results. */

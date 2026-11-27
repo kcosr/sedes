@@ -1,3 +1,4 @@
+import type { ElectronEarlyReply } from "./electron-early-reply.js";
 import { unified } from "unified";
 import remarkParse from "remark-parse";
 import remarkGfm from "remark-gfm";
@@ -77,38 +78,43 @@ const resultParts = (result?: SelectedAssistantResult): string[] => {
   }
   return parts;
 };
-const assemble = (parts: string[], settings: NativeVoiceSettings) => parts.map(text => electronSpeechText(text, settings.cleanSpeechText))
+export const prepareSpeechParts = (parts: string[], settings: NativeVoiceSettings) => parts.map(text => electronSpeechText(text, settings.cleanSpeechText))
   .filter(Boolean).join(settings.cleanSpeechText ? "\n\n" : "\n");
+
+export function notificationMessageParts(payload: VoiceNotification["payload"]): string[] {
+  if (payload.progress) {
+    return payload.progress.truncation ? [payload.progress.text, "The remaining response was truncated."] : [payload.progress.text];
+  }
+  return payload.event === "turn.completed" ? resultParts(payload.assistantResult) : [];
+}
 
 export interface ElectronVoiceQueueItem {
   readonly id: string;
   readonly threadId: string | null;
   readonly threadTitle: string | null;
   readonly event: string;
-  readonly notification?: VoiceNotification;
+  readonly early?: ElectronEarlyReply;
+  notification?: VoiceNotification;
   readonly replay?: NativeReplySpeech;
 }
 function renderVoiceItem(item: ElectronVoiceQueueItem, settings: NativeVoiceSettings): string {
-  if (item.replay) return assemble(resultParts(item.replay.assistantResult), settings);
+  if (item.replay) return prepareSpeechParts(resultParts(item.replay.assistantResult), settings);
   const notice = item.notification;
   if (!notice || settings.audioMode !== "speak" || notice.voice === "none") return "";
   const payload = notice.payload;
   const parts = settings.speechContent === "messages" ? [] : [payload.title, payload.message];
-  if (settings.speechContent !== "announcements") {
-    if (payload.progress) {
-      parts.push(payload.progress.text);
-      if (payload.progress.truncation) parts.push("The remaining response was truncated.");
-    } else if (payload.event === "turn.completed") parts.push(...resultParts(payload.assistantResult));
-  }
-  return assemble(parts, settings);
+  if (settings.speechContent !== "announcements") parts.push(...notificationMessageParts(payload));
+  return prepareSpeechParts(parts, settings);
 }
 interface PreparedVoiceItem { presentation: string; text: string; bytes: number }
 const preparedItems = new WeakMap<ElectronVoiceQueueItem, PreparedVoiceItem>();
 const encoder = new TextEncoder();
 /** Item sources are immutable for their lifetime. Cache only their current presentation, including after dequeue. */
 function preparedVoiceItem(item: ElectronVoiceQueueItem, settings: NativeVoiceSettings): PreparedVoiceItem {
+  if (item.early && item.notification) settings = item.early.presentationSettings(settings);
   const presentation = item.replay ? `replay:${settings.cleanSpeechText}`
     : `${settings.audioMode}:${settings.speechContent}:${settings.cleanSpeechText}`;
+  if (item.early && !item.notification) return { presentation, text: item.early.raw, bytes: item.early.rawBytes + encoder.encode(item.threadTitle ?? "").length };
   const cached = preparedItems.get(item);
   if (cached?.presentation === presentation) return cached;
   const text = renderVoiceItem(item, settings);
@@ -120,8 +126,7 @@ export function voiceItemText(item: ElectronVoiceQueueItem, settings: NativeVoic
   return preparedVoiceItem(item, settings).text;
 }
 
-export function voiceChunks(text: string, limit: number): string[] {
-  const chunks: string[] = [];
+export function* voiceChunkRanges(text: string, limit: number): Generator<{ text: string; end: number }, void> {
   let start = 0;
   while (start < text.length) {
     let end = Math.min(text.length, start + limit);
@@ -136,10 +141,12 @@ export function voiceChunks(text: string, limit: number): string[] {
     }
     if (end <= start) throw new Error("Invalid speech text limit.");
     const chunk = text.slice(start, end);
-    if (chunk.trim()) chunks.push(chunk);
+    if (chunk.trim()) yield { text: chunk, end };
     start = end;
   }
-  return chunks;
+}
+export function voiceChunks(text: string, limit: number): string[] {
+  return Array.from(voiceChunkRanges(text, limit), chunk => chunk.text);
 }
 export function notificationEligible(notice: VoiceNotification, policy: NotificationPolicy | null,
   settings: NativeVoiceSettings, clientId: string | null): boolean {
@@ -173,11 +180,34 @@ export class ElectronVoiceQueue {
   // accounting accurate without reparsing Markdown or re-encoding speech on audio callbacks.
   bytes(settings: NativeVoiceSettings): number { return this.items.reduce((sum, item) => sum + preparedVoiceItem(item, settings).bytes, 0); }
   drop(reason: string): void { this.dropped[reason] = (this.dropped[reason] ?? 0) + 1; }
+  remember(id: string): void {
+    this.seen.add(id);
+    if (this.seen.size > 4096) this.seen.delete(this.seen.values().next().value!);
+  }
+  #evictProgress(event: string, fits: () => boolean): ElectronVoiceQueueItem[] {
+    const evicted: ElectronVoiceQueueItem[] = [];
+    if (event !== "turn.progress") {
+      for (let index = 0; !fits() && index < this.items.length;) {
+        if (this.items[index]!.event === "turn.progress") {
+          evicted.push(...this.items.splice(index, 1)); this.drop("progress_evicted");
+        } else index++;
+      }
+    }
+    return evicted;
+  }
+  /** An ordinary notice has adopted its opening's position and may have more text than the opening. */
+  fitSealed(item: ElectronVoiceQueueItem, settings: NativeVoiceSettings): ElectronVoiceQueueItem[] {
+    const fits = () => this.bytes(settings) <= 256 * 1024;
+    const dropped = this.#evictProgress(item.event, fits);
+    if (!fits()) {
+      dropped.push(...this.items.splice(this.items.indexOf(item), 1)); this.drop("overflow");
+    }
+    return dropped;
+  }
   add(item: ElectronVoiceQueueItem, settings: NativeVoiceSettings): boolean {
     if (item.notification) {
       if (this.seen.has(item.id) || this.items.some(pending => pending.id === item.id)) return false;
-      this.seen.add(item.id);
-      if (this.seen.size > 4096) this.seen.delete(this.seen.values().next().value!);
+      this.remember(item.id);
       const notice = item.notification;
       if (notice.subjectId && (item.event === "thread.woke" || item.event.endsWith(".requested"))) {
         for (let index = this.items.length - 1; index >= 0; index--) {
@@ -193,22 +223,17 @@ export class ElectronVoiceQueue {
       if (remaining.length >= 64 || remainingBytes + bytes > 256 * 1024) throw new Error("Voice playback queue is full.");
     }
     const fits = () => this.items.length < 64 && this.bytes(settings) + bytes <= 256 * 1024;
-    if (item.event !== "turn.progress") {
-      for (let index = 0; !fits() && index < this.items.length;) {
-        if (this.items[index]!.event === "turn.progress") { this.items.splice(index, 1); this.drop("progress_evicted"); }
-        else index++;
-      }
-    }
+    this.#evictProgress(item.event, fits);
     if (!fits()) { if (item.replay) throw new Error("Voice playback queue is full."); this.drop("overflow"); return false; }
     this.items.push(item); return true;
   }
   clearAutomatic(reason: string): void {
     for (let index = this.items.length - 1; index >= 0; index--) {
-      if (this.items[index]!.notification) { this.items.splice(index, 1); this.drop(reason); }
+      if (this.items[index]!.notification || this.items[index]!.early) { this.items.splice(index, 1); this.drop(reason); }
     }
   }
   /** Settings change presentation only. Rebuild queued text from original sources and reapply the same byte/item bounds. */
-  reconfigure(settings: NativeVoiceSettings): string[] {
+  reconfigure(settings: NativeVoiceSettings): ElectronVoiceQueueItem[] {
     const previous = this.items.splice(0);
     for (const item of previous) {
       if (!voiceItemText(item, settings) && (!item.notification || !notificationListens(item.notification, settings))) {
@@ -220,7 +245,7 @@ export class ElectronVoiceQueue {
       try { this.add(item, settings); }
       catch { /* A queued explicit replay may no longer fit after presentation settings change. */ }
     }
-    return previous.filter(item => !this.items.some(current => current.id === item.id)).map(item => item.id);
+    return previous.filter(item => !this.items.includes(item));
   }
   reset(): void { this.items.length = 0; this.seen.clear(); for (const reason of Object.keys(this.dropped)) delete this.dropped[reason]; }
 }

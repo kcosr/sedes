@@ -465,6 +465,11 @@ the normal thread Queue/Steer rules, including the selected composer mode when
 configured. Eligible deferred thread switches and listening actions wait for
 the source turn and its queued reply playback to finish.
 
+In **Settings → Voice**, **Early reply playback** lets the desktop read a
+qualified final answer as it streams. Its sentences share the reply's queue
+position and controls. The desktop may prepare one more request while the
+current audio drains. See [voice settings and phrasing](voice.md#early-reply-playback).
+
 Voice runs only while the application is open, including while minimized.
 Closing or quitting the application stops voice. Computer sleep stops the
 current interaction; waking does not automatically reopen the microphone.

@@ -391,6 +391,7 @@ function capabilities(
       interactionKinds: [],
       usageAccounting: "supported",
       turnThroughput: "supported",
+      liveSpeechStarts: { final: false, provisional: false },
       usageSections: ["context", "counters"],
       effectiveSettings: {},
     };
@@ -426,6 +427,7 @@ function capabilities(
     interactionKinds: [],
     usageAccounting: "supported",
     turnThroughput: "supported",
+    liveSpeechStarts: { final: false, provisional: false },
       usageSections: ["context", "counters"],
     effectiveSettings: {},
   };

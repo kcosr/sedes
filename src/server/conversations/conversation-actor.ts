@@ -1,3 +1,4 @@
+import { LiveSpeechTracker, type CaptureEarlyReply, type EarlyReplySource } from "./early-reply-observation.js";
 import { ConversationNativeEffectFence } from "./conversation-native-effect-fence.js";
 import type { ClassifiedAssistantResult } from "../../shared/protocol/completion-result.js";
 import type { NonblockingQuestionsPayload } from "../../shared/protocol/questions.js";
@@ -60,7 +61,7 @@ import {
   projectClassifiedAssistantResult,
 } from "./completion-result-projection.js";
 import type { BoundedText } from "../../shared/protocol/payload.js";
-import { boundText } from "./payload-policy.js";
+import { boundText, MAX_LIVE_PROGRESS_BYTES } from "./payload-policy.js";
 import type { ApplicationPublicationAnchor } from "../../shared/protocol/application-publications.js";
 
 export const DEFAULT_PROJECTION_UPDATE_INTERVAL_MILLISECONDS = 50;
@@ -257,6 +258,9 @@ export type ActorBranchCheckpointSelection =
  * never race a submit, steer, interrupt, response, or registered action.
  */
 export class ConversationActor {
+  readonly #earlyReply?: LiveSpeechTracker;
+  #earlyReplyGapRevision = 0;
+  #earlyReplyBaselineRevision = 0;
   readonly #handle: ConversationHandle;
   readonly #environmentLease: ExecutionEnvironmentLease | undefined;
   readonly #attachmentDelivery: ComposerAttachmentDeliveryService;
@@ -316,6 +320,8 @@ export class ConversationActor {
     readonly handle: ConversationHandle;
     /** Installed before establishment so durable observers cannot miss startup events. */
     readonly initialObserver?: ConversationActorListener;
+    readonly captureEarlyReply?: CaptureEarlyReply;
+    readonly onEarlyProgressSkipped?: (source: EarlyReplySource) => void;
     readonly onInputStateChanged?: () => void;
     /** Absent only for a passive history projection with no execution authority. */
     readonly environmentLease?: ExecutionEnvironmentLease;
@@ -339,6 +345,7 @@ export class ConversationActor {
     this.#nativeEffects = input.nativeEffects ?? new ConversationNativeEffectFence();
     if (input.initialObserver) this.#listeners.add(input.initialObserver);
     this.#environmentLease = input.environmentLease;
+    if (input.captureEarlyReply && input.environmentLease) this.#earlyReply = new LiveSpeechTracker(input.captureEarlyReply, input.onEarlyProgressSkipped);
     this.#attachmentDelivery = input.attachmentDelivery;
     this.#drainAuthoritativeObservers = input.drainAuthoritativeObservers;
     this.#onInputStateChanged = input.onInputStateChanged;
@@ -378,6 +385,9 @@ export class ConversationActor {
     }
     this.#started = true;
     this.#unsubscribeHandleEvents = this.#handle.subscribe((event) => {
+      if (event.type === "resnapshot_required") {
+        this.noteEarlyReplyObservationGap();
+      }
       if (event.type === "resnapshot_required" && interruptsCompletionObservation(event.reason)) {
         // Raw evidence remains observable while a replacement snapshot has
         // detached the sequenced subscription.
@@ -432,6 +442,26 @@ export class ConversationActor {
 
   get automaticEviction(): ConversationHandle["automaticEviction"] {
     return this.#handle.automaticEviction;
+  }
+
+  /** A provider-control lifetime can expire before its sequenced projection-gap notification arrives. */
+  noteEarlyReplyObservationGap(): void {
+    this.#earlyReplyGapRevision += 1;
+    this.#earlyReply?.projectionGap();
+  }
+
+  /** A replacement control withdraws its predecessor's early offers while ordinary progress is still possible. */
+  withdrawEarlyReplyAuthority(): void {
+    this.#earlyReply?.withdrawAuthority();
+  }
+
+  resolveEarlyProgress(itemId: string, disposition: "settled" | "deferred"): void {
+    this.#earlyReply?.resolveProgress(itemId, disposition);
+  }
+
+  /** The actor owner has withdrawn. No more progress can be published through this actor. */
+  retireEarlyReplyAuthority(): void {
+    this.#earlyReply?.finish("authority_lost");
   }
 
   get readOnly(): boolean {
@@ -1313,6 +1343,7 @@ export class ConversationActor {
     }
     if (this.#closePromise) return this.#closePromise;
     this.#closing = true;
+    this.#earlyReply?.finish("authority_lost");
     this.#notifyInputStateChanged();
     this.#explicitStopPending = beforeCleanup !== undefined;
     this.#establishmentAbort?.abort();
@@ -1457,6 +1488,7 @@ export class ConversationActor {
     if (this.#handleReplacementRequired) {
       throw new Error("conversation_actor_handle_replacement_required");
     }
+    const earlyReplyGapRevision = this.#earlyReplyGapRevision;
     this.#establishmentEpoch += 1;
     const epoch = this.#establishmentEpoch;
     const completionGapRevision = this.#completionObservationGapRevision;
@@ -1504,6 +1536,7 @@ export class ConversationActor {
       established.snapshot,
       established.handleSequence,
     );
+    this.#earlyReply?.settleInactiveProgress(this.#projector);
     this.#projectionRecoveryRequired = false;
     this.#coalescer.reset(timeline);
     this.#unsubscribeProjection = this.#subscribeEstablished(
@@ -1541,6 +1574,7 @@ export class ConversationActor {
     }
     // A successful baseline covers only gaps known when capture began. A raw
     // gap arriving during any awaited establishment work remains fenced.
+    this.#earlyReplyBaselineRevision = earlyReplyGapRevision;
     this.#completionBaselineGapRevision = completionGapRevision;
     this.#snapshotState = state;
     this.#publish({ type: "projection_replaced", state });
@@ -1576,8 +1610,19 @@ export class ConversationActor {
     established: EstablishedBackendProjection,
     epoch: number,
   ): Unsubscribe {
+    let nextEarlyReplySequence: number | undefined = established.handleSequence + 1;
     return established.subscribeFromNext((event) => {
       if (this.#closing || this.#closed) return;
+      // Only the contiguous rail can settle a reply before a subsequently reported gap.
+      nextEarlyReplySequence = event.handleSequence === nextEarlyReplySequence ? event.handleSequence + 1 : undefined;
+      const earlyReplyGapRevision = this.#earlyReplyGapRevision;
+      if (nextEarlyReplySequence !== undefined && epoch === this.#establishmentEpoch &&
+          earlyReplyGapRevision === this.#earlyReplyBaselineRevision) {
+        this.#earlyReply?.noteOrderedSettlement(event.event);
+      }
+      if (epoch === this.#establishmentEpoch && event.event.type === "resnapshot_required") {
+        this.noteEarlyReplyObservationGap();
+      }
       if (epoch === this.#establishmentEpoch && event.event.type === "resnapshot_required" &&
           interruptsCompletionObservation(event.event.reason)) {
         // Latch before enqueueing so an awaited establishment cannot miss a
@@ -1613,6 +1658,8 @@ export class ConversationActor {
           const priorCompletionStatus = nativeEvent.type === "turn_completed"
             ? this.#projector.backendTurns().find((turn) => turn.backendTurnId === nativeEvent.turn.backendTurnId)?.status
             : undefined;
+          const newSpeechStart = nativeEvent.type === "item_started" && !!nativeEvent.liveSpeechStart &&
+            !this.#projector.itemForBackendId(nativeEvent.item.backendItemId);
           const application = this.#projector.apply(event);
           await this.#applyProjection(application);
           if (application.kind === "resnapshot_required" || this.#projector.generation !== projectionGeneration) {
@@ -1621,6 +1668,7 @@ export class ConversationActor {
             // actually survived recovery.
             return;
           }
+          let progress: Extract<ConversationActorEvent, { type: "live_progress" }> | undefined;
           if ((nativeEvent.type === "item_completed" || nativeEvent.type === "item_updated") && nativeEvent.liveProgress &&
               nativeEvent.item.semanticKind === "assistant_message" && nativeEvent.item.status === "completed" &&
               (nativeEvent.item.responsePhase === "provisional" || nativeEvent.item.responsePhase === "partial") && nativeEvent.item.markdown.text.trim()) {
@@ -1629,10 +1677,15 @@ export class ConversationActor {
             const backendTurn = this.#projector.backendTurns().find(turn => turn.backendTurnId === nativeEvent.item.backendTurnId);
             if (item && backendTurn?.status === "in_progress" && backendTurn.completionCorrelations?.length &&
                 timeline.activeTurnId === item.turnId && timeline.runState === "running") {
-              this.#publish({ type: "live_progress", applicationTurnId: item.turnId, applicationItemId: item.id,
-                backendCorrelations: backendTurn.completionCorrelations, phase: nativeEvent.item.responsePhase, text: boundText(nativeEvent.item.markdown.text, 8_192) });
+              progress = { type: "live_progress", applicationTurnId: item.turnId, applicationItemId: this.#projector.durableItemId(nativeEvent.item),
+                backendCorrelations: backendTurn.completionCorrelations, phase: nativeEvent.item.responsePhase, text: boundText(nativeEvent.item.markdown.text, MAX_LIVE_PROGRESS_BYTES) };
             }
           }
+          this.#earlyReply?.accept(nativeEvent, this.#projector, this.#snapshotState?.timeline.activeTurnId,
+            this.#snapshotState?.backendCapabilities.liveSpeechStarts,
+            !this.#closing && !this.#handleReplacementRequired && this.#earlyReplyBaselineRevision === this.#earlyReplyGapRevision,
+            !this.#closing && earlyReplyGapRevision === this.#earlyReplyBaselineRevision, newSpeechStart, progress?.phase === "provisional");
+          if (progress) this.#publish(progress);
           if (
             event.event.type === "turn_started" ||
             event.event.type === "turn_updated" ||
@@ -1663,7 +1716,7 @@ export class ConversationActor {
             const provenance = this.#completionProvenance(completionIdentity);
             if (!submittedCorrelations?.length && provenance === "live" &&
                 !this.#claimUnsubmittedCompletion(completionIdentity)) return;
-            const correlations = submittedCorrelations?.length ? submittedCorrelations : [event.event.turn.backendTurnId];
+            const correlations = Object.freeze(submittedCorrelations?.length ? [...submittedCorrelations] : [event.event.turn.backendTurnId]);
             for (const backendCorrelation of correlations) {
               this.#publish({
                 type: "authoritative_completion",
@@ -1742,8 +1795,8 @@ export class ConversationActor {
       // for autonomous work, without turning imported history into new work.
       if (!backendTurn.completionCorrelations?.length &&
           (provenance !== "live" || !this.#claimUnsubmittedCompletion(completionIdentity))) continue;
-      const correlations = backendTurn.completionCorrelations?.length
-        ? backendTurn.completionCorrelations : [backendTurn.backendTurnId];
+      const correlations = Object.freeze(backendTurn.completionCorrelations?.length
+        ? [...backendTurn.completionCorrelations] : [backendTurn.backendTurnId]);
       const completion = this.#completionResult(backendTurn.backendTurnId);
       for (const backendCorrelation of correlations) {
         const event: ConversationActorEvent = {
@@ -1979,6 +2032,8 @@ export class ConversationActor {
   }
 
   async #recoverProjection(): Promise<void> {
+    // End early offers. A qualifying progress event can still arrive on the replacement projection.
+    this.#earlyReply?.withdrawAuthority();
     if (this.#handleReplacementRequired) {
       this.#failProjectionRecovery(
         new Error("conversation_actor_handle_replacement_required"),
@@ -2145,6 +2200,7 @@ export class ConversationActor {
   }
 
   async #closeResources(failures: unknown[], evicted = false): Promise<void> {
+    this.#earlyReply?.finish("authority_lost");
     if (!this.#executionCloseBegun) {
       this.#executionCloseBegun = true;
     }

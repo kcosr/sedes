@@ -226,7 +226,7 @@ export class CodexHistoryReader implements ConversationHistoryReader {
       providerOutputArtifacts: { nativeImage: true },
       supportsHistory: true,
       branching: { availability: "unavailable", reason: { text: "Branching is unavailable in a history reader." } },
-      interactionKinds: [], usageAccounting: "supported", turnThroughput: "unsupported",
+      interactionKinds: [], usageAccounting: "supported", turnThroughput: "unsupported", liveSpeechStarts: { final: false, provisional: false },
       usageSections: [], effectiveSettings: {},
     };
   }

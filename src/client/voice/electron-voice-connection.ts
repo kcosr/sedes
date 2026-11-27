@@ -4,6 +4,7 @@ import {
   clientActionResultSchema, clientPollResultSchema, registeredClientSchema,
   type ClientActionResult, type ClientCommand, type ClientState, type RegisteredClient,
 } from "../../shared/protocol/client-controls.js";
+import { earlyReplySessionSchema, type EarlyReplySession } from "../../shared/protocol/early-reply.js";
 import { notificationPolicySchema, voiceNotificationSchema } from "../../shared/protocol/notification.js";
 import { configuredSedesServer, type SedesServerEndpoint } from "../app/server-endpoint.js";
 import { authenticatedFetch, getEndpointCredential, getEndpointProfile } from "../authentication/auth-transport.js";
@@ -13,7 +14,7 @@ export interface ElectronVoiceConnectionCallbacks {
   state(): ClientState;
   command(command: ClientCommand): Promise<ClientActionResult>;
   registered(registration: RegisteredClient | null): void;
-  frame(event: "notification_policy" | "notification", value: unknown, voiceStreamId: string): void;
+  frame(event: "notification_policy" | "notification" | "voice_early_reply", value: unknown, voiceStreamId: string): void;
   notificationsChanged(connected: boolean): void;
   failed(code: string): void;
 }
@@ -22,6 +23,7 @@ export interface ElectronVoiceConnectionLike {
   readonly voiceStreamId: string | null;
   connect(): Promise<void>;
   request(path: string, init?: RequestInit): Promise<Response>;
+  earlyReplyInterest(enabled: boolean): void;
   notifications(enabled: boolean): void;
   close(): void;
 }
@@ -41,6 +43,12 @@ export class ElectronVoiceConnection implements ElectronVoiceConnectionLike {
   #csrf: string | undefined;
   #connecting: Promise<void> | undefined;
   #notificationsEnabled = false;
+  #interest = false;
+  #interestRevision = 0;
+  #disableRevision = 0;
+  #updatingSession?: EarlyReplySession;
+  #session?: EarlyReplySession;
+  #interestRetry?: ReturnType<typeof setTimeout>;
   #stream: AbortController | undefined;
   #notificationsConnected = false;
 
@@ -161,6 +169,48 @@ export class ElectronVoiceConnection implements ElectronVoiceConnectionLike {
     } finally { await reader.cancel().catch(() => undefined); reader.releaseLock(); }
   }
 
+  earlyReplyInterest(enabled: boolean): void {
+    if (this.#interest === enabled) return;
+    this.#interest = enabled;
+    this.#interestRevision++;
+    if (!enabled) this.#disableRevision = this.#interestRevision;
+    void this.#sendInterest();
+  }
+
+  async #sendInterest(): Promise<void> {
+    clearTimeout(this.#interestRetry);
+    const session = this.#session, stream = this.#stream;
+    if (!session || !stream || this.#updatingSession === session || session.revision >= this.#interestRevision) return;
+    // An intervening Off removes the reservation from existing replies. Preserve
+    // that edge even when the user enables it again before the handshake or PUT.
+    const disabling = session.revision < this.#disableRevision;
+    const revision = disabling ? this.#disableRevision : this.#interestRevision;
+    const enabled = !disabling && this.#interest;
+    const current = () => this.#session === session && !stream.signal.aborted;
+    this.#updatingSession = session;
+    let retry = false;
+    try {
+      const response = await this.#fetch(`/api/application/voice-streams/${session.voiceStreamId}/early-reply`, {
+        method: "PUT", signal: stream.signal, headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: session.token, revision, enabled }),
+      }, true);
+      await response.body?.cancel();
+      if (!current()) return;
+      if (response.status === 204) session.revision = revision;
+      else if (response.status >= 500 || response.status === 429 || response.status === 408) retry = true;
+      else {
+        // A rejected token/revision cannot converge on this reservation. A fresh
+        // stream declares the current interest in its opening GET and gets a new token.
+        this.#closeNotifications();
+        if (this.#notificationsEnabled && this.registration) this.#startNotifications();
+      }
+    } catch { retry = true; }
+    finally { if (this.#updatingSession === session) this.#updatingSession = undefined; }
+    if (!current()) return;
+    if (retry) this.#interestRetry = setTimeout(() => { void this.#sendInterest(); }, 1000);
+    else if (session.revision === revision && revision < this.#interestRevision) void this.#sendInterest();
+  }
+
   notifications(enabled: boolean): void {
     if (this.#abort.signal.aborted || enabled === this.#notificationsEnabled) return;
     this.#notificationsEnabled = enabled;
@@ -200,13 +250,27 @@ export class ElectronVoiceConnection implements ElectronVoiceConnectionLike {
         clearTimeout(policyTimer);
         failure = "notification_stream_unavailable";
         this.#setNotificationsConnected(true);
+      } else if (event === "voice_early_session" && policyKnown) {
+        let raw: unknown;
+        try { raw = JSON.parse(data); } catch { return; }
+        const session = earlyReplySessionSchema.safeParse(raw);
+        if (session.success && session.data.voiceStreamId === voiceStreamId && !this.#session) {
+          this.#session = session.data;
+          void this.#sendInterest();
+        }
+      } else if (event === "voice_early_reply" && this.#session && policyKnown) {
+        let raw: unknown;
+        try { raw = JSON.parse(data); } catch { return; }
+        // The server can settle an already-opened receipt while interest is Off.
+        const cancellation = raw && typeof raw === "object" && "kind" in raw && raw.kind === "cancel";
+        if (cancellation || this.#interest && this.#session.revision >= this.#disableRevision) this.callbacks.frame(event, raw, voiceStreamId);
       } else if (event === "notification") {
         this.callbacks.frame(event, voiceNotificationSchema.parse(JSON.parse(data)), voiceStreamId);
       }
     };
     armReadTimeout();
     try {
-      const response = await this.#fetch(`/api/application/events?voiceStreamId=${voiceStreamId}`, {
+      const response = await this.#fetch(`/api/application/events?voiceStreamId=${voiceStreamId}&earlyReply=${this.#interest ? "on" : "off"}&earlyRevision=${this.#interestRevision}`, {
         signal: stream.signal, headers: { Accept: "text/event-stream" },
       }, false);
       if (!current()) { await response.body?.cancel(); return; }
@@ -252,6 +316,7 @@ export class ElectronVoiceConnection implements ElectronVoiceConnectionLike {
 
   #closeNotifications(): void {
     const stream = this.#stream;
+    clearTimeout(this.#interestRetry); this.#session = undefined; this.#updatingSession = undefined;
     this.#stream = undefined;
     this.voiceStreamId = null;
     stream?.abort();
@@ -318,7 +383,7 @@ class VoiceEventParser {
     const empty = this.#lineLength === 0;
     this.#lineLength = 0;
     if (empty) {
-      const relevant = ["notification", "notification_policy", "application-live"].includes(this.#event);
+      const relevant = ["notification", "notification_policy", "application-live", "voice_early_session", "voice_early_reply"].includes(this.#event);
       if (relevant && this.#oversized) throw new Error("stream_too_large");
       if (relevant && this.#data.length) this.receive(this.#event, this.#data.join("\n"));
       this.#event = "message"; this.#data = []; this.#characters = 0; this.#oversized = false;

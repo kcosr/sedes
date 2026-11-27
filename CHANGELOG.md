@@ -52,8 +52,12 @@ User-facing changes are collected here before release. See the
   search. See [Web search provider](docs/operator/configuration.md#web-search-provider).
   ([#121](https://github.com/kcosr/sedes/pull/121))
 
-- Upgrade server and browser/packaged clients together for client protocol
-  **181**. Thread inventory uses `parked` with `park` and `unpark` actions.
+- Upgrade the server and browser/packaged clients together for client protocol
+  **183**. Rebuild Android and Electron clients for native voice snapshot **17**
+  and the early reply subscription for progress updates and final answers. See
+  [early reply playback](docs/operator/clients/voice.md#early-reply-playback).
+  ([#165](https://github.com/kcosr/sedes/pull/165))
+  Thread inventory uses `parked` with `park` and `unpark` actions.
   Existing parked threads and saved sidebar visibility preferences carry over.
   Turn bookmarks may omit the user prompt for replies that continue
   without one. Clients can verify exact abandoned inputs after Force Reset.
@@ -118,6 +122,15 @@ User-facing changes are collected here before release. See the
   ([#81](https://github.com/kcosr/sedes/pull/81), [#83](https://github.com/kcosr/sedes/pull/83), [#87](https://github.com/kcosr/sedes/pull/87), [#88](https://github.com/kcosr/sedes/pull/88), [#92](https://github.com/kcosr/sedes/pull/92), [#95](https://github.com/kcosr/sedes/pull/95), [#111](https://github.com/kcosr/sedes/pull/111))
 
 ### Added
+
+- Android and Electron can read Codex final answers and enabled progress updates
+  while the agent writes. Responsive groups ready sentences starting at six
+  words, Balanced at fifteen, and Natural prefers paragraph breaks. With
+  **Both**, the device can announce the notification type and thread title
+  while it waits for the message text. Early playback defaults to Off.
+  Skipping a progress update leaves later updates and the final answer eligible.
+  [Voice settings](docs/operator/clients/voice.md#early-reply-playback).
+  ([#165](https://github.com/kcosr/sedes/pull/165))
 
 - Grant `thread.set_state` to let agents park, unpark, snooze, and wake threads
   within their tool scope. Thread status and list show the snooze deadline and
@@ -463,6 +476,13 @@ User-facing changes are collected here before release. See the
   ([#81](https://github.com/kcosr/sedes/pull/81))
 
 ### Fixed
+
+- Codex can finish a continuously observed reply without rereading older
+  turns. A slow history check no longer cuts off the opening sentence and
+  starts the same reply again. A steered turn with several accepted inputs
+  shares one completion publication. Deferred voice actions wait for the
+  correct reply to drain, including when early playback is Off.
+  ([#165](https://github.com/kcosr/sedes/pull/165))
 
 - Codex can refresh saved threads with MCP tool results and display live tool
   activity and elicitation on 0.172.0. The sidecar rejects unsupported

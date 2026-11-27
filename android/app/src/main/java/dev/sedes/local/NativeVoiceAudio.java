@@ -16,6 +16,7 @@ import android.media.AudioRecord;
 import android.media.AudioRecordingConfiguration;
 import android.media.AudioRouting;
 import android.media.AudioTrack;
+import android.media.AudioTimestamp;
 import android.media.MediaRecorder;
 import android.os.Build;
 import android.os.Handler;
@@ -24,7 +25,7 @@ import android.os.SystemClock;
 import androidx.annotation.RequiresApi;
 import androidx.core.content.ContextCompat;
 import java.io.File;
-import java.io.RandomAccessFile;
+import java.io.IOException;
 import java.util.Arrays;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -41,6 +42,8 @@ import org.json.JSONObject;
 final class NativeVoiceAudio {
     interface Listener {
         default void inputDevicesChanged() {}
+        /** First real PCM submitted to AudioTrack, excluding startup silence and staged PCM. */
+        default void playbackSubmitted(String requestId) {}
         /** Observed AudioTrack head advancement, not receipt of synthesized PCM. */
         default void playbackStarted(String requestId) {}
         void drained(String requestId);
@@ -62,10 +65,9 @@ final class NativeVoiceAudio {
         if (!BuildConfig.DEBUG) throw new IllegalStateException("test_audio_unavailable");
         testCuePlayer = player;
     }
-    static final long MAX_STREAM_DURATION_MS = 10 * 60 * 1000L;
+    static final long MAX_STREAM_DURATION_MS = NativeVoicePcmSpool.MAX_DURATION_MS;
     // Consecutive chunks, cues and capture keep focus and a warm output path across this gap, as the reference app does.
     private static final long FOCUS_HOLD_MS = 1400, ROUTE_TIMEOUT_MS = 5000;
-    private static final long MAX_SPOOL_BYTES = 256 * 1024 * 1024L;
     private static final AtomicLong FOCUS_IDS = new AtomicLong();
     static final int SAMPLE_RATE = NativeVoiceCapturePolicy.SAMPLE_RATE;
     private static final int PUMP_BYTES = 64 * 1024;
@@ -88,15 +90,12 @@ final class NativeVoiceAudio {
     private AudioRecord recorder;
     private Focus focus;
     private long generation, focusRelease, warmUntil;
-    private String request;
+    private String request, submittedRequest, drainedRequest;
     private int rate, previousMode;
-    private long frames;
+    private long frames, trackBase;
+    private boolean drainPadded;
     private boolean capture, captureFinishing, communication;
-    private File spool;
-    private RandomAccessFile spoolWriter, spoolReader;
-    private long spoolWritten, spoolRead;
-    private boolean streamEnded;
-    private int carry = -1;
+    private NativeVoicePcmSpool activeSpool, stagedSpool;
     private float gain = 1f;
     private int preRoll = 512;
     /** One system focus entry. A replacement makes the earlier entry's callbacks stale. */
@@ -189,76 +188,129 @@ final class NativeVoiceAudio {
         return result;
     }
     void begin(String id) {
-        stop(); final long current;
-        synchronized (lock) { request = id; capture = false; current = generation; focusRelease++; lastPlaybackDrainForTest = null; }
-        playback.execute(() -> pump(current, id));
+        synchronized (lock) {
+            stop();
+            activateSpool(new NativeVoicePcmSpool(id, context.getCacheDir()));
+        }
     }
+
+    /** The next request may receive PCM while the current track drains. It never takes audio focus here. */
+    boolean stage(String id) {
+        synchronized (lock) {
+            if (capture || stagedSpool != null || id.equals(request)) return false;
+            stagedSpool = new NativeVoicePcmSpool(id, context.getCacheDir());
+            return true;
+        }
+    }
+
+    /** Called after the preceding physical drain, even if the staged HTTP response has not arrived yet. */
+    boolean promote(String id) {
+        synchronized (lock) {
+            if (request != null || capture || stagedSpool == null || !id.equals(stagedSpool.requestId)) return false;
+            NativeVoicePcmSpool next = stagedSpool;
+            stagedSpool = null;
+            generation++;
+            activateSpool(next);
+            return true;
+        }
+    }
+
+    void discardStaged(String id) {
+        synchronized (lock) {
+            if (stagedSpool != null && stagedSpool.requestId.equals(id)) {
+                stagedSpool.close();
+                stagedSpool = null;
+                if (request == null) releaseTrack();
+            }
+        }
+    }
+
+    private void activateSpool(NativeVoicePcmSpool spool) {
+        if (track != null) {
+            // The preceding request drained at its exact PCM frontier on this same-rate track.
+            trackBase += frames;
+            frames = 0;
+        }
+        drainPadded = false;
+        activeSpool = spool;
+        submittedRequest = null;
+        drainedRequest = null;
+        request = spool.requestId;
+        // requestFocus renews the grace period when PCM arrives. A stalled next synthesis does not hold focus.
+        lastPlaybackDrainForTest = null;
+        long current = generation;
+        playback.execute(() -> pump(current, spool));
+    }
+
     void pcm(String id, int sampleRate, byte[] pcm) {
         pcm(id, sampleRate, pcm, null);
     }
+
+    private NativeVoicePcmSpool spoolFor(String id) {
+        if (activeSpool != null && activeSpool.requestId.equals(id)) return activeSpool;
+        if (stagedSpool != null && stagedSpool.requestId.equals(id)) return stagedSpool;
+        return null;
+    }
+
     private void pcm(String id, int sampleRate, byte[] pcm, Float overrideGain) {
-        final long current;
-        String failure = null;
+        String failure;
         synchronized (lock) {
-            if (!id.equals(request) || capture) return;
-            current = generation;
-            // A chunk may end inside a sample; its first byte is carried into the next chunk.
-            int carried = carry < 0 ? 0 : 1, length = carried + pcm.length, even = length & ~1;
-            if (sampleRate < 8000 || sampleRate > 192000 || streamEnded || rate != 0 && rate != sampleRate) {
-                failure = "invalid_pcm";
-            } else if (spoolWritten + even > sampleRate * 2L * MAX_STREAM_DURATION_MS / 1000) {
-                failure = "speech_duration_limit";
-            } else if (spoolWritten + even > MAX_SPOOL_BYTES) {
-                failure = "speech_storage_limit";
-            } else {
-                byte[] samples = carried == 0 && even == pcm.length ? pcm : new byte[even];
-                if (samples != pcm && even > 0) { if (carried == 1) samples[0] = (byte) carry; System.arraycopy(pcm, 0, samples, carried, even - carried); }
-                carry = length == even ? -1 : pcm.length > 0 ? pcm[pcm.length - 1] & 255 : carry;
-                if (even > 0) try {
-                    if (spool == null) {
-                        spool = File.createTempFile("sedes-voice-pcm-", ".pcm", context.getCacheDir());
-                        spoolWriter = new RandomAccessFile(spool, "rw"); spoolReader = new RandomAccessFile(spool, "r");
-                        rate = sampleRate;
-                    }
-                    spoolWriter.write(scaled(samples, overrideGain == null ? gain : overrideGain));
-                    spoolWritten += even;
-                    lock.notifyAll();
-                } catch (Exception error) { failure = "speech_storage_unavailable"; }
+            NativeVoicePcmSpool spool = spoolFor(id);
+            if (spool == null) return;
+            try {
+                spool.append(sampleRate, pcm, overrideGain == null ? gain : overrideGain);
+                if (spool == activeSpool) lock.notifyAll();
+                return;
+            } catch (IllegalArgumentException error) {
+                failure = error.getMessage();
+            } catch (IOException | SecurityException error) {
+                failure = "speech_storage_unavailable";
+            }
+            if (spool == stagedSpool) discardStaged(id);
+            else stop();
+        }
+        listener.failed(id, failure);
+    }
+
+    // A byte still carried at the end belongs to this request and is not played.
+    void end(String id) {
+        synchronized (lock) {
+            NativeVoicePcmSpool spool = spoolFor(id);
+            if (spool != null) {
+                spool.end();
+                if (spool == activeSpool) lock.notifyAll();
             }
         }
-        if (failure != null) failCurrent(current, id, failure);
     }
-    // A byte still carried at the end is half a sample and is not played.
-    void end(String id) {
-        synchronized (lock) { if (!id.equals(request) || capture) return; streamEnded = true; lock.notifyAll(); }
-    }
-    private void pump(long current, String id) {
+
+    private void pump(long current, NativeVoicePcmSpool spool) {
+        String id = spool.requestId;
         byte[] buffer = new byte[PUMP_BYTES];
         long deadline = SystemClock.elapsedRealtime() + MAX_STREAM_DURATION_MS + 60000;
-        boolean started = false;
+        boolean started = false, submitted = false;
         try {
             while (true) {
                 int count, warmup = 0;
                 synchronized (lock) {
-                    while (current == generation && spoolRead == spoolWritten && !streamEnded) {
+                    while (current == generation && spool.available() == 0 && !spool.ended()) {
                         if (SystemClock.elapsedRealtime() >= deadline) throw new IllegalStateException("speech_timeout");
                         lock.wait(100);
                     }
                     if (current != generation) return;
-                    if (spoolRead == spoolWritten && streamEnded) break;
+                    if (spool.available() == 0 && spool.ended()) break;
                     if (track == null) {
                         // Hardware warmup only after a cold start; a consecutive track follows recent playback.
                         boolean warm = SystemClock.elapsedRealtime() < warmUntil;
-                        openTrack(rate); if (!warm) warmup = preRoll * rate / 1000 * 2;
-                    }
-                    count = (int) Math.min(buffer.length, spoolWritten - spoolRead);
-                    spoolReader.readFully(buffer, 0, count); spoolRead += count;
+                        openTrack(spool.sampleRate()); if (!warm) warmup = preRoll * spool.sampleRate() / 1000 * 2;
+                    } else if (!submitted && !requestFocus(false)) throw new IllegalStateException("audio_focus_unavailable");
+                    count = spool.read(buffer);
                 }
                 if (warmup > 0) {
                     byte[] silence = new byte[Math.min(PUMP_BYTES, warmup)];
-                    while (warmup > 0 && current(current)) { int size = Math.min(silence.length, warmup); write(current, silence, size); warmup -= size; }
+                    while (warmup > 0 && current(current)) { int size = Math.min(silence.length, warmup); write(current, silence, size, null); warmup -= size; }
                 }
-                write(current, buffer, count);
+                write(current, buffer, count, submitted ? null : id);
+                submitted = true;
                 if (!started) started = notifyPlaybackStarted(current, id);
                 if (SystemClock.elapsedRealtime() >= deadline) throw new IllegalStateException("speech_timeout");
             }
@@ -279,11 +331,16 @@ final class NativeVoiceAudio {
                 if (current != generation) return;
                 // Preserve hardware evidence before release resets the playback head; no PCM is retained.
                 if (BuildConfig.DEBUG) {
-                    lastPlaybackDrainForTest = new PlaybackDrain(id, rate, frames, track.getPlaybackHeadPosition() & 0xffffffffL);
+                    AudioTimestamp timestamp = new AudioTimestamp();
+                    boolean timestamped = track.getTimestamp(timestamp) && timestamp.framePosition > 0;
+                    lastPlaybackDrainForTest = new PlaybackDrain(id, rate, frames, (track.getPlaybackHeadPosition() & 0xffffffffL) - trackBase,
+                        timestamped ? timestamp.nanoTime - (timestamp.framePosition - trackBase) * 1_000_000_000L / rate : 0);
                     if (playbackDrainsForTest.size() == 32) playbackDrainsForTest.removeFirst();
                     playbackDrainsForTest.addLast(lastPlaybackDrainForTest);
                 }
-                releaseTrack(); releaseSpool(); request = null; releaseFocusLater();
+                drainedRequest = id;
+                if (drainPadded || !stagedOutputReady()) releaseTrack();
+                spool.close(); activeSpool = null; request = null; releaseFocusLater();
             }
             listener.drained(id);
         } catch (Exception error) {
@@ -293,21 +350,28 @@ final class NativeVoiceAudio {
     private boolean notifyPlaybackStarted(long current, String id) {
         try {
             synchronized (lock) {
-                if (current != generation || track == null || (track.getPlaybackHeadPosition() & 0xffffffffL) == 0) return false;
+                if (current != generation || track == null || (track.getPlaybackHeadPosition() & 0xffffffffL) <= trackBase) return false;
             }
             listener.playbackStarted(id);
             return true;
         } catch (RuntimeException ignored) { return false; }
     }
-    long pendingPcmBytes() { synchronized (lock) { return spoolWritten - spoolRead; } }
-    File spoolForTest() { if (!BuildConfig.DEBUG) throw new IllegalStateException("test_audio_unavailable"); synchronized (lock) { return spool; } }
+    /** Includes PCM accepted by the device before the runtime handler processes its callback. */
+    boolean submitted(String id) { synchronized (lock) { return id != null && id.equals(submittedRequest); } }
+    /** A retirement on the runtime handler can overtake the posted drain callback. */
+    boolean physicallyDrained(String id) { synchronized (lock) { return id != null && id.equals(drainedRequest); } }
+    long pendingPcmBytes() { synchronized (lock) { return activeSpool == null ? 0 : activeSpool.available(); } }
+    File spoolForTest() { if (!BuildConfig.DEBUG) throw new IllegalStateException("test_audio_unavailable"); synchronized (lock) { return activeSpool == null ? null : activeSpool.file(); } }
     AudioTrack trackForTest() { if (!BuildConfig.DEBUG) throw new IllegalStateException("test_audio_unavailable"); synchronized (lock) { return track; } }
     static final class PlaybackDrain {
         final String requestId;
         final int sampleRate;
         final long writtenFrames, playedFrames;
-        PlaybackDrain(String requestId, int sampleRate, long writtenFrames, long playedFrames) {
+        // Frame zero on AudioTimestamp’s monotonic output clock. Used only for continuous, prebuffered fixtures.
+        final long frameZeroNanos;
+        PlaybackDrain(String requestId, int sampleRate, long writtenFrames, long playedFrames, long frameZeroNanos) {
             this.requestId = requestId; this.sampleRate = sampleRate; this.writtenFrames = writtenFrames; this.playedFrames = playedFrames;
+            this.frameZeroNanos = frameZeroNanos;
         }
     }
     PlaybackDrain playbackDrainForTest() { if (!BuildConfig.DEBUG) throw new IllegalStateException("test_audio_unavailable"); synchronized (lock) { return lastPlaybackDrainForTest; } }
@@ -323,14 +387,34 @@ final class NativeVoiceAudio {
         if (!BuildConfig.DEBUG) throw new IllegalStateException("test_audio_unavailable");
         synchronized (lock) { nextPlaybackHoldForTest = new CountDownLatch(1); return nextPlaybackHoldForTest; }
     }
+    private boolean stagedOutputReady() {
+        // A retained AudioTrack has a 32-bit frame head. Leave room for the entire following request.
+        return stagedSpool != null && stagedSpool.sampleRate() == rate && stagedSpool.available() > 0 &&
+            trackBase + frames + rate * MAX_STREAM_DURATION_MS / 1000 < 0xffff_ffffL;
+    }
     private long primeDrain(long current, long deadline) throws InterruptedException {
-        AudioTrack output; long target;
+        AudioTrack output; long target, head;
+        boolean continuous;
         synchronized (lock) {
             if (current != generation) return -1;
             if (track == null) throw new IllegalStateException("empty_pcm_stream");
-            output = track; target = frames;
-            if ((output.getPlaybackHeadPosition() & 0xffffffffL) >= target) return target;
+            output = track; target = trackBase + frames;
+            head = output.getPlaybackHeadPosition() & 0xffffffffL;
+            continuous = stagedOutputReady() && head > trackBase;
         }
+        // For a moving track and ready successor, let the real audio drain without queuing any silence.
+        // An underrun or a held/short track falls back to the regular priming path.
+        long lastProgress = SystemClock.elapsedRealtime();
+        while (head < target && continuous && SystemClock.elapsedRealtime() - lastProgress < 120) {
+            Thread.sleep(5);
+            synchronized (lock) {
+                if (current != generation || track != output) return -1;
+                long nextHead = output.getPlaybackHeadPosition() & 0xffffffffL;
+                if (nextHead > head) lastProgress = SystemClock.elapsedRealtime();
+                head = nextHead;
+            }
+        }
+        if (head >= target) return target;
         // A short stream or final tail after underrun may not reach Android's start threshold.
         // Prime one full buffer, but finish at the real PCM target and discard leftover silence.
         long remaining = output.getBufferSizeInFrames() * 2L;
@@ -350,7 +434,10 @@ final class NativeVoiceAudio {
                 }
                 Thread.sleep(10);
             }
-            else remaining -= count;
+            else {
+                synchronized (lock) { if (current == generation && track == output) drainPadded = true; }
+                remaining -= count;
+            }
         }
         return target;
     }
@@ -613,31 +700,43 @@ final class NativeVoiceAudio {
             .setBufferSizeInBytes(Math.max(minimum, sampleRate / 5 * 2)).setTransferMode(AudioTrack.MODE_STREAM).build();
         if (track.getState() != AudioTrack.STATE_INITIALIZED) throw new IllegalStateException("playback_unavailable");
         if (focus.ducked) track.setVolume(0.35f);
-        rate = sampleRate; frames = 0;
+        rate = sampleRate; frames = 0; trackBase = 0;
         playbackHoldForTest = BuildConfig.DEBUG ? nextPlaybackHoldForTest : null;
         nextPlaybackHoldForTest = null;
         if (playbackHoldForTest == null) track.play();
     }
-    private void write(long current, byte[] bytes, int length) {
+    private void write(long current, byte[] bytes, int length, String firstSubmission) throws InterruptedException {
         int offset = 0;
+        // Publish commitment atomically with the first accepted sample. A blocking write of a large chunk
+        // can return well after playback has started, and Stop must be able to observe the correct frontier.
+        while (firstSubmission != null) {
+            synchronized (lock) {
+                if (current != generation || track == null) return;
+                int count = track.write(bytes, 0, 2, AudioTrack.WRITE_NON_BLOCKING);
+                if (count < 0) throw new IllegalStateException("pcm_write_failed");
+                if (count > 0) {
+                    submittedRequest = firstSubmission;
+                    frames += count / 2;
+                    offset = count;
+                }
+            }
+            if (offset > 0) {
+                listener.playbackSubmitted(firstSubmission);
+                break;
+            }
+            Thread.sleep(5);
+        }
         while (offset < length) {
             AudioTrack output;
             synchronized (lock) { if (current != generation || track == null) return; output = track; }
             int count = output.write(bytes, offset, length - offset, AudioTrack.WRITE_BLOCKING);
             if (count <= 0) throw new IllegalStateException("pcm_write_failed");
             offset += count;
-            synchronized (lock) { if (current == generation) frames += count / 2; }
+            synchronized (lock) {
+                if (current != generation) return;
+                frames += count / 2;
+            }
         }
-    }
-    private static byte[] scaled(byte[] bytes, float gain) {
-        if (gain == 1f) return bytes;
-        byte[] result = new byte[bytes.length];
-        for (int i = 0; i + 1 < bytes.length; i += 2) {
-            short sample = (short) ((bytes[i] & 255) | (bytes[i + 1] << 8));
-            int value = Math.max(Short.MIN_VALUE, Math.min(Short.MAX_VALUE, Math.round(sample * gain)));
-            result[i] = (byte) value; result[i + 1] = (byte) (value >> 8);
-        }
-        return result;
     }
     // Focus methods run under lock. A held entry of the same kind is reused across consecutive requests.
     private boolean requestFocus(boolean recording) {
@@ -666,7 +765,12 @@ final class NativeVoiceAudio {
     private void releaseFocusLater() {
         if (focus == null) return;
         long token = ++focusRelease;
-        main.postDelayed(() -> { synchronized (lock) { if (token == focusRelease) abandonFocus(); } }, FOCUS_HOLD_MS);
+        main.postDelayed(() -> { synchronized (lock) {
+            if (token == focusRelease) {
+                if (request == null) releaseTrack();
+                abandonFocus();
+            }
+        } }, FOCUS_HOLD_MS);
     }
     private void releaseCommunication() {
         if (!communication) return;
@@ -677,15 +781,11 @@ final class NativeVoiceAudio {
         synchronized (lock) {
             generation++; request = null; capture = false; captureFinishing = false;
             if (recorder != null) { try { recorder.stop(); } catch (Exception ignored) {} }
-            releaseTrack(); releaseSpool(); releaseCommunication(); releaseFocusLater(); lock.notifyAll();
+            releaseTrack();
+            if (activeSpool != null) { activeSpool.close(); activeSpool = null; }
+            if (stagedSpool != null) { stagedSpool.close(); stagedSpool = null; }
+            releaseCommunication(); releaseFocusLater(); lock.notifyAll();
         }
-    }
-    private void releaseSpool() {
-        try { if (spoolWriter != null) spoolWriter.close(); } catch (Exception ignored) {}
-        try { if (spoolReader != null) spoolReader.close(); } catch (Exception ignored) {}
-        spoolWriter = null; spoolReader = null;
-        if (spool != null) { spool.delete(); spool = null; }
-        spoolRead = 0; spoolWritten = 0; streamEnded = false; carry = -1;
     }
     private void releaseTrack() {
         if (track != null) {
@@ -698,7 +798,7 @@ final class NativeVoiceAudio {
             old.release();
         }
         playbackHoldForTest = null;
-        frames = 0; rate = 0;
+        frames = 0; trackBase = 0; rate = 0;
     }
     private void failCurrent(long current, String id, String code) {
         synchronized (lock) { if (current != generation) return; stop(); }

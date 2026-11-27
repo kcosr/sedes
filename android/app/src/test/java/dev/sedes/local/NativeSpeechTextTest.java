@@ -1,6 +1,10 @@
 package dev.sedes.local;
 
 import static org.junit.Assert.*;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import org.json.JSONArray;
+import org.json.JSONObject;
 import org.junit.Test;
 
 public class NativeSpeechTextTest {
@@ -34,6 +38,27 @@ public class NativeSpeechTextTest {
     @Test public void preservesFootnoteBodiesAndMatchesRepeatedReferences() {
         assertEquals("Per the docs (footnote 1). More (footnote 2). Again (footnote 1).\n\nFootnote 1: Wikipedia\n\nFootnote 2: A longer note with a link.",
             clean("Per the docs[^wiki]. More[^2]. Again[^WIKI].\n\n[^wiki]: Wikipedia\n[^2]: A **longer** note with [a link](https://example.test)."));
+    }
+    @Test public void releasedServerSegmentsRemainPrefixesOfTheAuthoritativeRendering() throws Exception {
+        try (InputStream input = getClass().getResourceAsStream("/early-reply-prefixes.json")) {
+            assertNotNull(input);
+            JSONArray cases = new JSONArray(new String(input.readAllBytes(), StandardCharsets.UTF_8));
+            for (int i = 0; i < cases.length(); i++) {
+                JSONObject fixture = cases.getJSONObject(i);
+                JSONArray segments = fixture.getJSONArray("segments");
+                for (boolean clean : new boolean[] { true, false }) {
+                    String terminal = NativeSpeechText.prepare(fixture.getString("source"), clean);
+                    StringBuilder raw = new StringBuilder();
+                    String previous = "";
+                    for (int j = 0; j < segments.length(); j++) {
+                        raw.append(segments.getString(j));
+                        String prepared = NativeSpeechText.prepare(raw.toString(), clean);
+                        assertTrue(fixture.getString("name"), prepared.startsWith(previous) && terminal.startsWith(prepared));
+                        previous = prepared;
+                    }
+                }
+            }
+        }
     }
     @Test public void emptyFormattingDoesNotBecomeAnUtterance() {
         for (String source : new String[] { "", " \n\t", "---", "#", "```\n```", "[ref]: https://example.test" })

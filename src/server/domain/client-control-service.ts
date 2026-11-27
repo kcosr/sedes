@@ -202,6 +202,10 @@ export class ClientControlService {
     return { client: this.describe(client), ...result };
   }
 
+  hasPendingNotification(scope: RequestScope, threadId: string, turnId: string): boolean {
+    return this.#notifications.has(scopeKey(scope) + turnKey(threadId, turnId));
+  }
+
   observeNotification(scope: RequestScope, threadId: string, turnId: string, publication: Promise<VoiceNotificationPublication | undefined>) {
     const key = scopeKey(scope) + turnKey(threadId, turnId);
     this.#notifications.set(key, publication);
@@ -209,8 +213,8 @@ export class ClientControlService {
     void publication.finally(() => { if (this.#notifications.get(key) === publication) this.#notifications.delete(key); });
   }
 
-  async complete(scope: RequestScope, threadId: string, turnId: string, outcome = "completed", superseded = false) {
-    const cancelled = outcome !== "completed" || superseded;
+  async complete(scope: RequestScope, threadId: string, turnId: string, outcome = "completed", cancelFollowUp = false) {
+    const cancelled = outcome !== "completed" || cancelFollowUp;
     const publication = cancelled ? undefined : await this.#notifications.get(scopeKey(scope) + turnKey(threadId, turnId));
     for (const client of this.#clients.values()) {
       if (!sameScope(scope, client.scope)) continue;

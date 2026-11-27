@@ -1,3 +1,5 @@
+import { earlyReplyAnnouncement } from "../../shared/protocol/early-reply.js";
+import { progressNotificationKey, turnNotificationKey } from "./notification-identity.js";
 import type { ClassifiedAssistantResult } from "../../shared/protocol/completion-result.js";
 import type { NotificationEventPayload } from "../../shared/protocol/notification.js";
 import type { BackendInteraction } from "../../shared/protocol/conversation.js";
@@ -13,7 +15,7 @@ import type { RequestScope } from "../identity/identity-provider.js";
 import type { AutomationRunLifecycleObserver } from "./automation-service.js";
 
 /** Passive, post-commit consumers of Sedes-owned lifecycle state. */
-export class NotificationLifecycleObserver {
+export class NotificationLifecycleObserver<Publication = void> {
   constructor(
     readonly inventory: InventoryRepository,
     readonly emit: (
@@ -25,20 +27,20 @@ export class NotificationLifecycleObserver {
       recognitionThreadId?: string | null,
       subscriberWatermark?: number,
       responseVoice?: ResponseVoiceFreshness,
-    ) => void,
+    ) => Publication,
   ) {}
 
-  progress(scope: RequestScope, threadId: string, input: Parameters<LiveProgressObserver>[2]): void {
+  progress(scope: RequestScope, threadId: string, input: Parameters<LiveProgressObserver>[2]): Publication | undefined {
     try {
       if (!input.text.text.trim() || !new SubmissionCompletionRepository(this.inventory.database)
         .hasActiveAcceptedCorrelation(scope, threadId, input.backendCorrelations)) return;
       const context = this.#context(scope, threadId);
-      this.emit(scope, {
+      return this.emit(scope, {
         event: input.phase === "partial" ? "turn.partial" : "turn.progress",
-        occurredAt: new Date().toISOString(), title: input.phase === "partial" ? "Partial answer" : "Agent progress",
+        occurredAt: new Date().toISOString(), title: input.phase === "partial" ? "Partial answer" : earlyReplyAnnouncement("turn.progress"),
         message: context.thread.title, ...context, turn: { id: input.applicationTurnId },
         progress: { phase: input.phase, itemId: input.applicationItemId, ...input.text },
-      }, JSON.stringify(["progress", threadId, input.applicationTurnId, input.applicationItemId]), "live",
+      }, progressNotificationKey(threadId, input.applicationTurnId, input.applicationItemId), "live",
       undefined, undefined, undefined, input.responseVoice);
     } catch { /* Passive progress cannot affect provider work. */ }
   }
@@ -104,7 +106,7 @@ export class NotificationLifecycleObserver {
     provenance: "live" | "recovered",
     subscriberWatermark?: number,
     responseVoice?: ResponseVoiceFreshness,
-  ): void {
+  ): Publication | undefined {
     if (
       observation.tenantId !== scope.tenantId ||
       observation.ownerPrincipalId !== scope.principalId ||
@@ -117,14 +119,14 @@ export class NotificationLifecycleObserver {
     try {
       const context = this.#context(scope, observation.applicationThreadId);
       const outcome = observation.completionOutcome;
-      this.emit(
+      return this.emit(
         scope,
         {
           event: `turn.${outcome}`,
           occurredAt: new Date(observation.completionObservedAt).toISOString(),
           title:
             outcome === "completed"
-              ? "Agent finished"
+              ? earlyReplyAnnouncement("turn.completed")
               : outcome === "failed"
                 ? "Agent turn failed"
                 : "Agent turn interrupted",
@@ -132,11 +134,7 @@ export class NotificationLifecycleObserver {
           ...context,
           turn: { id: observation.applicationTurnId, outcome },
         },
-        JSON.stringify([
-          "turn",
-          observation.applicationThreadId,
-          observation.applicationTurnId,
-        ]),
+        turnNotificationKey(observation.applicationThreadId, observation.applicationTurnId),
         provenance,
         observation.classifiedResult ?? undefined,
         undefined,

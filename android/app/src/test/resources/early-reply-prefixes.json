@@ -1,0 +1,89 @@
+[
+  {
+    "name": "Mixed scripts",
+    "source": "最初です。次です！最後は本文。",
+    "segments": [
+      "最初です。",
+      "次です！"
+    ]
+  },
+  {
+    "name": "Decomposed accent and emoji",
+    "source": "Café opens today. Then we saw a 🦦.",
+    "segments": [
+      "Café opens today."
+    ]
+  },
+  {
+    "name": "Version and initials",
+    "source": "Dr. Fox uses 1.25 today. More text follows.",
+    "segments": [
+      "Dr. Fox uses 1.25 today."
+    ]
+  },
+  {
+    "name": "Quotes and hard line break",
+    "source": "It sounded “clear!”  \nWe agreed. Next time.",
+    "segments": [
+      "It sounded “clear!”",
+      "  \nWe agreed."
+    ]
+  },
+  {
+    "name": "Repeated phrase",
+    "source": "Again. Again. Again with feeling.",
+    "segments": [
+      "Again.",
+      " Again."
+    ]
+  },
+  {
+    "name": "Reference definition",
+    "source": "Opening. Next see [topic][id].\n\n[id]: /topic",
+    "segments": [
+      "Opening."
+    ]
+  },
+  {
+    "name": "Code fence",
+    "source": "A paragraph\n\n```ts\nconst a = 1\n```",
+    "segments": [
+      "A paragraph\n\n"
+    ]
+  },
+  {
+    "name": "Footnote",
+    "source": "Intro. More detail[^1].\n\n[^1]: An aside.",
+    "segments": [
+      "Intro."
+    ]
+  },
+  {
+    "name": "Table",
+    "source": "Intro.\n\n| Name | Value |\n| --- | --- |\n| a | b |",
+    "segments": [
+      "Intro.\n\n"
+    ]
+  },
+  {
+    "name": "Ordered list follows",
+    "source": "Plain words.\n1. First item\n2. Second",
+    "segments": [
+      "Plain words."
+    ]
+  },
+  {
+    "name": "Setext heading",
+    "source": "A plain start. Another clause\n==========\n\nEnd.",
+    "segments": [
+      "A plain start."
+    ]
+  },
+  {
+    "name": "CJK-adjacent URL",
+    "source": "Safe. Visit example.net。次の文",
+    "segments": [
+      "Safe."
+    ]
+  }
+]

@@ -329,6 +329,150 @@ public class NativeVoiceAudioTest {
             }
         } finally { audio.stop(); InstrumentationRegistry.getInstrumentation().runOnMainSync(activity::finish); }
     }
+    @Test public void stagedRequestsCommitOnlyAfterPromotionAndStopDropsBothRequests() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        MainActivity activity = (MainActivity) InstrumentationRegistry.getInstrumentation().startActivitySync(
+            new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        BlockingQueue<String> submitted = new LinkedBlockingQueue<>();
+        PlaybackProbe probe = new PlaybackProbe() {
+            @Override public void playbackSubmitted(String id) { submitted.add(id); }
+        };
+        NativeVoiceAudio audio = new NativeVoiceAudio(context, probe);
+        try {
+            audio.configure(NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object("startupPreRollMs", 0)));
+            CountDownLatch held = audio.holdNextPlaybackForTest();
+            audio.begin("first"); audio.pcm("first", 24000, new byte[4800]); audio.end("first");
+            assertTrue(held.await(5, TimeUnit.SECONDS));
+            assertTrue(audio.stage("discarded")); audio.pcm("discarded", 16000, new byte[3200]); audio.end("discarded");
+            assertFalse(audio.stage("second-slot"));
+            assertFalse(audio.promote("discarded")); assertFalse(audio.submitted("discarded"));
+            assertEquals("first", submitted.poll(5, TimeUnit.SECONDS)); assertTrue(audio.submitted("first"));
+            audio.discardStaged("discarded"); audio.pcm("discarded", 24000, new byte[4800]);
+            assertTrue(audio.stage("still-downloading"));
+            audio.trackForTest().play(); probe.await("first");
+            assertTrue(audio.promote("still-downloading")); assertFalse(audio.submitted("still-downloading"));
+            audio.pcm("still-downloading", 16000, new byte[3200]); audio.end("still-downloading");
+            assertEquals("still-downloading", submitted.poll(5, TimeUnit.SECONDS)); probe.await("still-downloading");
+            assertEquals(16000, audio.playbackDrainForTest().sampleRate);
+
+            audio.begin("cancel-active"); assertTrue(audio.stage("cancel-staged"));
+            audio.pcm("cancel-staged", 24000, new byte[4800]); audio.stop();
+            audio.pcm("cancel-active", 24000, new byte[4800]); audio.end("cancel-active");
+            audio.pcm("cancel-staged", 24000, new byte[4800]); audio.end("cancel-staged");
+            assertFalse(audio.promote("cancel-staged")); assertFalse(audio.submitted("cancel-staged"));
+            assertNull(submitted.poll(100, TimeUnit.MILLISECONDS)); assertTrue(probe.completed.isEmpty());
+        } finally { audio.stop(); InstrumentationRegistry.getInstrumentation().runOnMainSync(activity::finish); }
+    }
+
+    @Test public void physicalDrainRemainsObservableWhenStopOvertakesItsRuntimeCallback() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        MainActivity activity = (MainActivity) InstrumentationRegistry.getInstrumentation().startActivitySync(
+            new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        CountDownLatch entered = new CountDownLatch(1), allowDelivery = new CountDownLatch(1), delivered = new CountDownLatch(1);
+        NativeVoiceAudio audio = new NativeVoiceAudio(context, new Listener() {
+            @Override public void drained(String id) {
+                entered.countDown();
+                try { allowDelivery.await(10, TimeUnit.SECONDS); }
+                catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
+                delivered.countDown();
+            }
+        });
+        try {
+            audio.configure(NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object("startupPreRollMs", 0)));
+            audio.begin("drained-before-stop"); assertFalse(audio.physicallyDrained("drained-before-stop"));
+            audio.pcm("drained-before-stop", 24000, new byte[4800]); audio.end("drained-before-stop");
+            assertTrue(entered.await(5, TimeUnit.SECONDS));
+            audio.stop();
+            assertTrue(audio.physicallyDrained("drained-before-stop"));
+            assertFalse(audio.physicallyDrained("other-request")); assertEquals(1, delivered.getCount());
+            allowDelivery.countDown(); assertTrue(delivered.await(5, TimeUnit.SECONDS));
+            audio.begin("replacement"); assertFalse(audio.physicallyDrained("drained-before-stop"));
+        } finally {
+            allowDelivery.countDown(); audio.stop();
+            InstrumentationRegistry.getInstrumentation().runOnMainSync(activity::finish);
+        }
+    }
+
+    @Test public void cancellingAReadySuccessorAfterPhysicalDrainNeverCommitsItsPcm() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        MainActivity activity = (MainActivity) InstrumentationRegistry.getInstrumentation().startActivitySync(
+            new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        PlaybackProbe probe = new PlaybackProbe();
+        NativeVoiceAudio audio = new NativeVoiceAudio(context, probe);
+        try {
+            audio.configure(NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object("startupPreRollMs", 0)));
+            for (int nextRate : new int[] {24000, 16000}) {
+                String playing = "playing-" + nextRate, next = "staged-" + nextRate;
+                audio.begin(playing); assertTrue(audio.stage(next));
+                audio.pcm(next, nextRate, new byte[nextRate * 2]); audio.end(next);
+                audio.pcm(playing, 24000, new byte[48000]); audio.end(playing);
+                AudioTrack playingTrack = awaitTrack(audio);
+                probe.await(playing); assertPlaybackDrained(audio, playing, 24000);
+                if (nextRate == 24000) assertSame("Ready same-rate successor should retain the drained output", playingTrack, audio.trackForTest());
+                else assertNull("A different format requires a fresh output", audio.trackForTest());
+                assertFalse(audio.submitted(next));
+                if (nextRate == 24000) audio.discardStaged(next);
+                else audio.stop();
+                assertNull(audio.trackForTest()); assertFalse(audio.promote(next));
+                audio.pcm(next, nextRate, new byte[100]); audio.end(next);
+                assertFalse(audio.submitted(next)); assertTrue(probe.completed.isEmpty());
+            }
+        } finally { audio.stop(); InstrumentationRegistry.getInstrumentation().runOnMainSync(activity::finish); }
+    }
+
+    @Test public void prefetchedPcmStartsWithinThePhysicalGapBudget() throws Exception {
+        measureOutputGaps(true);
+    }
+
+    @Test public void onDemandPcmReportsTheSameOutputClockBaseline() throws Exception {
+        measureOutputGaps(false);
+    }
+
+    private void measureOutputGaps(boolean prefetched) throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        MainActivity activity = (MainActivity) InstrumentationRegistry.getInstrumentation().startActivitySync(
+            new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        PlaybackProbe probe = new PlaybackProbe(); NativeVoiceAudio audio = new NativeVoiceAudio(context, probe);
+        byte[] pcm = new byte[24000 * 2]; // Quiet synthetic tone, one second at 24 kHz, fully ready up front.
+        for (int frame = 0; frame < 24000; frame++) {
+            short sample = (short) (256 * Math.sin(2 * Math.PI * 440 * frame / 24000));
+            pcm[frame * 2] = (byte) sample; pcm[frame * 2 + 1] = (byte) (sample >> 8);
+        }
+        long[] gaps = new long[30];
+        try {
+            audio.configure(NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object("startupPreRollMs", 0)));
+            audio.begin("span-0"); audio.pcm("span-0", 24000, pcm); audio.end("span-0");
+            long previousEnd = 0;
+            for (int span = 0; span <= gaps.length; span++) {
+                String current = "span-" + span, next = "span-" + (span + 1);
+                if (prefetched && span < gaps.length) {
+                    assertTrue(audio.stage(next)); audio.pcm(next, 24000, pcm); audio.end(next);
+                }
+                long readyNanos = System.nanoTime();
+                probe.await(current);
+                NativeVoiceAudio.PlaybackDrain drain = audio.playbackDrainForTest();
+                assertEquals(24000L, drain.writtenFrames);
+                assertTrue("Device did not provide an AudioTrack presentation timestamp", drain.frameZeroNanos > 0);
+                if (span > 0) gaps[span - 1] = drain.frameZeroNanos - previousEnd;
+                previousEnd = drain.frameZeroNanos + drain.writtenFrames * 1_000_000_000L / drain.sampleRate;
+                if (span < gaps.length) {
+                    if (prefetched) {
+                        assertTrue("Fixture delivered next PCM too late to measure scheduling", previousEnd - readyNanos >= 500_000_000L);
+                        assertTrue(audio.promote(next));
+                    } else {
+                        // Identical PCM supplied only at drain, as when Off starts its next physical request.
+                        audio.begin(next); audio.pcm(next, 24000, pcm); audio.end(next);
+                    }
+                }
+            }
+            java.util.Arrays.sort(gaps);
+            long p95 = gaps[(int) Math.ceil(gaps.length * .95) - 1];
+            String mode = prefetched ? "prefetched" : "on-demand";
+            android.util.Log.i("SedesVoiceTiming", "Android " + mode + " output boundaries=" + gaps.length + " p95GapMs=" + p95 / 1_000_000.0);
+            if (prefetched) assertTrue("Prefetched output gap p95 exceeded 250 ms: " + p95 / 1_000_000.0, p95 <= 250_000_000L);
+        } finally { audio.stop(); InstrumentationRegistry.getInstrumentation().runOnMainSync(activity::finish); }
+    }
+
     @Test public void fastLongSpeechUsesBoundedDiskAndStopRemovesOnlyItsSpool() throws Exception {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         MainActivity activity = (MainActivity) InstrumentationRegistry.getInstrumentation().startActivitySync(
@@ -382,7 +526,7 @@ public class NativeVoiceAudioTest {
         while ((track.getPlaybackHeadPosition() & 0xffffffffL) < frames && SystemClock.elapsedRealtime() < deadline) SystemClock.sleep(10);
         assertTrue("Fixture PCM did not finish playing", (track.getPlaybackHeadPosition() & 0xffffffffL) >= frames);
     }
-    private static final class PlaybackProbe extends Listener {
+    private static class PlaybackProbe extends Listener {
         final BlockingQueue<String> completed = new LinkedBlockingQueue<>();
         final AtomicReference<String> failure = new AtomicReference<>();
         @Override public void drained(String id) { completed.add(id); }

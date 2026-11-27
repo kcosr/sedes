@@ -77,6 +77,7 @@ import {
   CodexThreadExecutionSettingsRepository,
   type CodexExecutionSettingsTuple,
 } from "../../src/server/backends/codex/codex-thread-execution-settings-repository.js";
+import { CodexPaginatedHistoryAdapter } from "../../src/server/backends/codex/codex-paginated-history-adapter.js";
 import { CodexHistoryReader } from "../../src/server/backends/codex/codex-history-reader.js";
 import { ProviderFeatureMutationRepository } from "../../src/server/db/repositories/provider-feature-mutation-repository.js";
 import { CodexManagedTuiController } from "../../src/server/backends/codex/codex-managed-tui-controller.js";
@@ -7788,6 +7789,286 @@ describe("CodexConversationHandle", () => {
     await handle.close();
   });
 
+  it.each([
+    ["matching", undefined],
+    ["advanced", "history_changed"],
+    ["missing_predecessor", "history_changed"],
+    ["refined_timestamp", "history_changed"],
+    ["inProgress", "history_changed"],
+    ["interrupted", "contradictory_state"],
+    ["failed", "contradictory_state"],
+    ["missing_cursor", "history_changed"],
+    ["rpc_rejected", "history_changed"],
+    ["rpc_wrong_generation", "contradictory_state"],
+    ["connection_lost", "contradictory_state"],
+    ["install_failed", "history_changed"],
+    ["deadline", "history_changed"],
+  ] as const)(
+    "settles an observed paginated turn independently of a %s head check",
+    async (proof, replacementReason) => {
+      let restoreBoundary: (() => void) | undefined;
+      vi.useFakeTimers();
+      try {
+        const harness = new RpcHarness();
+        const handle = await attachIdle(harness);
+        harness.enqueue("thread/read", { thread: paginatedThread() });
+        harness.enqueue("thread/resume", paginatedResumeResult({ shells: [notLoadedTurn(0)] }));
+        harness.enqueue("thread/items/list", paginatedItems(0));
+        const established = await handle.establishProjection({ signal: new AbortController().signal });
+        const events: SequencedBackendEvent[] = [];
+        const unsubscribe = established.subscribeFromNext(event => events.push(event));
+        const turn = nativeTurn(1);
+        const backendTurnId = codexBackendTurnId("thread-1", turn.id);
+        harness.notify("turn/started", { threadId: "thread-1", turn: {
+          ...turn, status: "inProgress", completedAt: null, durationMs: null, items: [],
+        } });
+        const agent = { id: "agent-1", type: "agentMessage", moderation: null, text: "Early text.",
+          phase: "final_answer", memoryCitation: null, delivery: null, questions: null };
+        harness.notify("item/started", { threadId: "thread-1", turnId: turn.id, item: agent, startedAtMs: 1_700_000_001_000 });
+        harness.notify("item/completed", { threadId: "thread-1", turnId: turn.id, item: agent, completedAtMs: 1_700_000_002_000 });
+        let release!: (value: unknown) => void;
+        let rejectHead!: (error: Error) => void;
+        harness.enqueue("thread/turns/list", () => new Promise((resolve, reject) => { release = resolve; rejectHead = reject; }));
+        harness.notify("turn/completed", { threadId: "thread-1", turn: {
+          ...turn, items: [{ ...agent, text: "Exact terminal correction." }],
+        } });
+        await vi.advanceTimersByTimeAsync(0);
+        const pending = (await handle.readCurrent()).snapshot;
+        expect(pending.runState).toBe("running");
+        expect(pending.activeBackendTurnId).toBeUndefined();
+        expect(pending.turnsById[backendTurnId]?.status).toBe("completed");
+        expect(Object.values(pending.itemsById)).toContainEqual(expect.objectContaining({
+          semanticKind: "assistant_message", markdown: expect.objectContaining({ text: "Exact terminal correction." }),
+        }));
+        expect(events.filter(({ event }) => event.type === "turn_completed")).toHaveLength(1);
+        expect(events.some(({ event }) => event.type === "resnapshot_required")).toBe(false);
+        if (proof === "deadline") await vi.advanceTimersByTimeAsync(1_001);
+        const conflictingTerminal = proof === "interrupted" || proof === "failed";
+        const shell = {
+          ...notLoadedTurn(1),
+          ...(proof === "refined_timestamp" ? { completedAt: 1_700_000_005 } : {}),
+          ...(proof === "inProgress" ? { status: proof, completedAt: null, durationMs: null } : {}),
+          ...(conflictingTerminal ? { status: proof } : {}),
+        };
+        if (proof === "install_failed") {
+          const adapter = CodexPaginatedHistoryAdapter.prototype;
+          const install = adapter.installCompletedHeadBoundary;
+          const spy = vi.spyOn(adapter, "installCompletedHeadBoundary").mockImplementationOnce(function (
+            this: CodexPaginatedHistoryAdapter, ...args: Parameters<typeof install>
+          ) {
+            install.apply(this, args);
+            throw new Error("injected boundary install failure");
+          });
+          restoreBoundary = () => spy.mockRestore();
+        }
+        if (proof === "rpc_rejected" || proof === "rpc_wrong_generation") {
+          rejectHead(new CodexRpcRemoteError({ generation: proof === "rpc_wrong_generation" ? 2 : 1,
+            method: "thread/turns/list", message: "store unavailable", code: -32603 }));
+        } else if (proof === "connection_lost") {
+          rejectHead(new CodexRpcDeliveryError({ generation: 1, method: "thread/turns/list",
+            code: "codex_rpc_connection_lost", delivery: "sent_outcome_unknown" }));
+        } else {
+          release({
+            data: proof === "advanced"
+              ? [{ ...notLoadedTurn(2), status: "inProgress", completedAt: null }, notLoadedTurn(1)]
+              : [shell, notLoadedTurn(proof === "missing_predecessor" ? -1 : 0)],
+            nextCursor: null, backwardsCursor: proof === "missing_cursor" ? null : "head-1",
+          });
+        }
+        await vi.advanceTimersByTimeAsync(0);
+        if (replacementReason === undefined) {
+          expect((await handle.readCurrent()).snapshot.runState).toBe("idle");
+          expect(events.some(({ event }) => event.type === "resnapshot_required")).toBe(false);
+        } else {
+          expect(events.at(-1)?.event).toMatchObject({
+            type: "resnapshot_required", reason: replacementReason,
+          });
+          expect(events.some(({ event }) => event.type === "run_state_changed" && event.state === "idle")).toBe(false);
+          await expect(handle.history({ limit: 1 })).rejects.toMatchObject({ backendCode: "codex_history_reconciliation_required" });
+        }
+        expect(harness.calls.filter(({ method }) => method === "thread/items/list")).toHaveLength(1);
+        expect(harness.calls.filter(({ method }) => method === "thread/turns/list")).toEqual([
+          { method: "thread/turns/list", params: { threadId: "thread-1", limit: 2, sortDirection: "desc", itemsView: "notLoaded" } },
+        ]);
+        const application = new ConversationProjector({ backendInstanceId: instance.id, bindingIdentity: binding().applicationThreadId });
+        application.replace(established.snapshot, established.handleSequence);
+        for (const event of events.filter(({ event }) => event.type !== "resnapshot_required")) {
+          expect(application.apply(event).kind).not.toBe("resnapshot_required");
+        }
+        unsubscribe();
+        harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+        await handle.close();
+      } finally {
+        restoreBoundary?.();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each(["active_status", "active_turn", "completed_successor", "idle_then_active", "active_then_idle"] as const)(
+    "preserves newer raw %s evidence when a stale matching paginated head arrives", async updates => {
+      const harness = new RpcHarness();
+      const handle = await attachIdle(harness);
+      harness.enqueue("thread/read", { thread: paginatedThread() });
+      harness.enqueue("thread/resume", paginatedResumeResult({ shells: [] }));
+      const established = await handle.establishProjection({ signal: new AbortController().signal });
+      const events: BackendConversationEvent[] = [];
+      established.subscribeFromNext(({ event }) => events.push(event));
+      const idleEvents = () => events.filter(event => event.type === "run_state_changed" && event.state === "idle");
+      const status = (type: "active" | "idle") => harness.notify("thread/status/changed", {
+        threadId: "thread-1", status: type === "active" ? { type, activeFlags: [] } : { type },
+      });
+      const start = (index: number) => harness.notify("turn/started", { threadId: "thread-1", turn: {
+        ...nativeTurn(index), status: "inProgress", completedAt: null, durationMs: null,
+      } });
+      const complete = (index: number) => harness.notify("turn/completed", { threadId: "thread-1", turn: notLoadedTurn(index) });
+      let releaseFirst!: (value: unknown) => void;
+      let releaseSecond!: (value: unknown) => void;
+      harness.enqueue("thread/turns/list", () => new Promise(resolve => { releaseFirst = resolve; }),
+        () => new Promise(resolve => { releaseSecond = resolve; }));
+      start(1);
+      complete(1);
+      await vi.waitFor(() => expect(releaseFirst).toBeDefined());
+      if (updates === "idle_then_active") status("idle");
+      const hasSuccessor = updates === "active_turn" || updates === "completed_successor";
+      if (hasSuccessor) start(2);
+      else status("active");
+      if (updates === "completed_successor") complete(2);
+      if (updates === "active_then_idle") status("idle");
+      const eventsBeforeRelease = events.length;
+      releaseFirst({ data: [notLoadedTurn(1)], backwardsCursor: "head-1", nextCursor: null });
+      await vi.waitFor(() => expect(events.length).toBeGreaterThan(eventsBeforeRelease));
+      if (updates === "active_then_idle") {
+        await vi.waitFor(() => expect(idleEvents()).toHaveLength(1));
+        expect(events.slice(eventsBeforeRelease).map(event => event.type === "run_state_changed" && event.state))
+          .toEqual(["running", "idle"]);
+      } else {
+        expect(idleEvents()).toHaveLength(0);
+        expect((await handle.readCurrent()).snapshot.runState).toBe("running");
+        if (hasSuccessor) {
+          if (updates === "active_turn") complete(2);
+          await vi.waitFor(() => expect(releaseSecond).toBeDefined());
+          expect(idleEvents()).toHaveLength(0);
+          releaseSecond({ data: [notLoadedTurn(2), notLoadedTurn(1)], backwardsCursor: "head-2", nextCursor: null });
+        } else {
+          status("idle");
+        }
+        await vi.waitFor(() => expect(idleEvents()).toHaveLength(1));
+      }
+      expect(events.some(event => event.type === "resnapshot_required")).toBe(false);
+      expect((await handle.readCurrent()).snapshot.runState).toBe("idle");
+      harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+      await handle.close();
+    },
+  );
+
+  it("adds the first observed visible turn above a hidden-only head without offering an empty older page", async () => {
+    const harness = new RpcHarness();
+    const handle = await attachIdle(harness);
+    harness.enqueue("thread/read", { thread: paginatedThread() });
+    harness.enqueue("thread/resume", paginatedResumeResult({ shells: [hiddenBoundaryTurn(0)] }));
+    harness.enqueue("thread/items/list", hiddenBoundaryItems(0));
+    await handle.establishProjection({ signal: new AbortController().signal });
+    const turn = nativeTurn(1);
+    harness.notify("turn/started", { threadId: "thread-1", turn: {
+      ...turn, status: "inProgress", completedAt: null, durationMs: null,
+    } });
+    harness.enqueue("thread/turns/list", {
+      data: [notLoadedTurn(1), hiddenBoundaryTurn(0)], backwardsCursor: "visible-head", nextCursor: null,
+    });
+    harness.notify("turn/completed", { threadId: "thread-1", turn: notLoadedTurn(1) });
+    await vi.waitFor(async () => {
+      const current = (await handle.readCurrent()).snapshot;
+      expect(current.runState).toBe("idle");
+      expect(current.turnsById[codexBackendTurnId("thread-1", turn.id)]?.status).toBe("completed");
+    });
+    const page = await handle.history({ limit: 1 });
+    expect(page.orderedBackendTurnIds).toEqual([codexBackendTurnId("thread-1", turn.id)]);
+    expect(page.previousCursor).toBeUndefined();
+    expect(harness.calls.filter(({ method }) => method === "thread/items/list")).toHaveLength(1);
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
+  it("pages to an older turn evicted by terminal bytes using the exact predecessor cursor", async () => {
+    const harness = new RpcHarness();
+    const handle = await attachIdle(harness);
+    // Each message fits individually. JSON escapes make their combined size
+    // exceed the 16 MiB snapshot limit while staying below the turn count limit.
+    const text = "\u0000".repeat(1_500_000);
+    const largeMessage = (index: number) => ({
+      type: "agentMessage" as const, moderation: null, id: `large-${index}`, text, phase: "final_answer" as const,
+      memoryCitation: null, delivery: null, questions: null,
+    });
+    const olderItemPage = {
+      ...paginatedItems(0),
+      data: [{ turnId: "turn-0", startedAtMs: null, completedAtMs: null, item: largeMessage(0) }],
+    };
+    harness.enqueue("thread/read", { thread: paginatedThread() });
+    harness.enqueue("thread/resume", paginatedResumeResult({ shells: [notLoadedTurn(0)] }));
+    harness.enqueue("thread/items/list", olderItemPage);
+    const established = await handle.establishProjection({ signal: new AbortController().signal });
+    let idle = false;
+    established.subscribeFromNext(({ event }) => { if (event.type === "run_state_changed" && event.state === "idle") idle = true; });
+    harness.notify("turn/started", { threadId: "thread-1", turn: {
+      ...nativeTurn(1), items: [], status: "inProgress", completedAt: null, durationMs: null,
+    } });
+    harness.enqueue("thread/turns/list", {
+      data: [notLoadedTurn(1), notLoadedTurn(0)], backwardsCursor: "head-1", nextCursor: null,
+    });
+    harness.notify("turn/completed", { threadId: "thread-1", turn: { ...nativeTurn(1), items: [largeMessage(1)] } });
+    await vi.waitFor(() => expect(idle).toBe(true));
+    const newest = await handle.history({ limit: 10 });
+    expect(newest.orderedBackendTurnIds).toEqual([codexBackendTurnId("thread-1", "turn-1")]);
+    expect(newest.previousCursor).toBeDefined();
+    expect(harness.calls.filter(({ method }) => method === "thread/items/list")).toHaveLength(1);
+    harness.enqueue("thread/turns/list", { data: [notLoadedTurn(0)], backwardsCursor: "turns-head", nextCursor: null });
+    harness.enqueue("thread/items/list", olderItemPage);
+    const older = await handle.history({ limit: 10, cursor: newest.previousCursor });
+    expect(harness.calls.filter(({ method }) => method === "thread/turns/list").at(-1)?.params).toMatchObject({ cursor: "turns-head" });
+    expect(older.orderedBackendTurnIds).toEqual([codexBackendTurnId("thread-1", "turn-0")]);
+    expect(older.previousCursor).toBeUndefined();
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
+  it("extends verified paging cursors across more than one window of live completions without rereading items", async () => {
+    const harness = new RpcHarness();
+    const handle = await attachIdle(harness);
+    harness.enqueue("thread/read", { thread: paginatedThread() });
+    harness.enqueue("thread/resume", paginatedResumeResult({ shells: [] }));
+    await handle.establishProjection({ signal: new AbortController().signal });
+    for (let index = 0; index < 12; index++) {
+      const turn = nativeTurn(index);
+      harness.notify("turn/started", { threadId: "thread-1", turn: {
+        ...turn, status: "inProgress", completedAt: null, durationMs: null,
+      } });
+      harness.enqueue("thread/turns/list", {
+        data: index === 0 ? [notLoadedTurn(index)] : [notLoadedTurn(index), notLoadedTurn(index - 1)],
+        backwardsCursor: `head-${index}`,
+        nextCursor: index > 1 ? `head-${index - 2}` : null,
+      });
+      harness.notify("turn/completed", { threadId: "thread-1", turn: notLoadedTurn(index) });
+      await vi.waitFor(async () => {
+        const current = (await handle.readCurrent()).snapshot;
+        expect(current.runState).toBe("idle");
+        expect(current.turnsById[codexBackendTurnId("thread-1", turn.id)]?.status).toBe("completed");
+      });
+    }
+    expect(harness.calls.filter(({ method }) => method === "thread/items/list")).toHaveLength(0);
+    expect(harness.calls.filter(({ method }) => method === "thread/turns/list")).toHaveLength(12);
+    const newest = await handle.history({ limit: 10 });
+    expect(newest.orderedBackendTurnIds[0]).toBe(codexBackendTurnId("thread-1", "turn-2"));
+    expect(newest.previousCursor).toBeDefined();
+    harness.enqueue("thread/turns/list", { data: [notLoadedTurn(1)], backwardsCursor: "head-1", nextCursor: "head-0" });
+    harness.enqueue("thread/items/list", paginatedItems(1));
+    const older = await handle.history({ limit: 1, cursor: newest.previousCursor });
+    expect(older.orderedBackendTurnIds).toEqual([codexBackendTurnId("thread-1", "turn-1")]);
+    expect(harness.calls.filter(({ method }) => method === "thread/turns/list").at(-1)?.params).toMatchObject({ cursor: "head-1" });
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
   it("bounds a stalled paginated completion refresh and requests replacement", async () => {
     vi.useFakeTimers();
     try {
@@ -10135,6 +10416,32 @@ describe("CodexConversationHandle", () => {
       .sort();
     expect(conversationAdvisoryFixtures.map(({ method }) => method).sort()).toEqual(informationalMethods);
   });
+
+  it.each(["final_answer", "commentary", "partial_answer", null] as const)(
+    "qualifies only an explicit initial commentary or final-answer phase for early observation (%s)", async phase => {
+      const harness = new RpcHarness();
+      const handle = await attachIdle(harness);
+      const established = await establish(harness, handle);
+      const events: BackendConversationEvent[] = [];
+      established.subscribeFromNext(({ event }) => events.push(event));
+      const active = { ...nativeTurn(2), items: [], itemsView: "notLoaded", status: "inProgress", completedAt: null };
+      const message = { type: "agentMessage", moderation: null, id: "voice-answer", text: "", phase,
+        memoryCitation: null, delivery: null, questions: null };
+      harness.notify("turn/started", { threadId: "thread-1", turn: active });
+      harness.notify("item/started", { threadId: "thread-1", turnId: active.id, item: message, startedAtMs: 1_700_000_003_000 });
+      harness.notify("item/agentMessage/delta", { threadId: "thread-1", turnId: active.id, itemId: message.id, delta: "One sentence." });
+      harness.notify("item/completed", { threadId: "thread-1", turnId: active.id,
+        item: { ...message, phase: phase ?? "final_answer", text: "One sentence." }, completedAtMs: 1_700_000_004_000 });
+      await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ type: "item_completed" })));
+      const marked = events.filter(event => event.type === "item_started" && event.liveSpeechStart);
+      const expected = phase === "final_answer" ? "final" : phase === "commentary" ? "provisional" : undefined;
+      expect(marked).toHaveLength(expected ? 1 : 0);
+      if (expected) expect(marked[0]).toMatchObject({ liveSpeechStart: expected, item: { responsePhase: expected, markdown: { text: "" } } });
+      expect((await handle.backendCapabilities()).liveSpeechStarts).toEqual({ final: true, provisional: true });
+      harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+      await handle.close();
+    },
+  );
 
   it.each(conversationAdvisoryFixtures)("keeps repeated $method advisory without history reads or old completion replay", async ({ method, metadata }) => {
     const harness = new RpcHarness();
@@ -13326,15 +13633,11 @@ describe("CodexConversationHandle", () => {
         .then(page => ({ page }), error => ({ error }));
       await vi.waitFor(() => expect(releaseOlder).toBeDefined());
       const completed = { ...nativeTurn(12), items: [...nativeTurn(12).items, nativeGeneratedImage()] };
-      const refreshedIndexes = Array.from({ length: 10 }, (_, index) => 12 - index);
-      harness.enqueue("thread/turns/list", {
-        data: refreshedIndexes.map(notLoadedTurn), nextCursor: "older-refresh", backwardsCursor: "refreshed-head",
-      }, { data: [notLoadedTurn(2)], nextCursor: "still-older", backwardsCursor: "older-refresh-head" });
-      harness.enqueue("thread/items/list", {
-        ...paginatedItems(12), data: completed.items.map(item => ({ startedAtMs: null, completedAtMs: null, turnId: completed.id, item })),
-      }, ...refreshedIndexes.slice(1).map(paginatedItems), paginatedItems(2));
+      const readsBeforeCompletion = harness.calls.length;
       harness.notify("turn/completed", { threadId: "thread-1", turn: completed });
       await vi.waitFor(() => expect(artifacts.publishImage).toHaveBeenCalledOnce());
+      // The proof of the paging boundary follows the turn and its artifacts.
+      expect(harness.calls).toHaveLength(readsBeforeCompletion);
       harness.lifecycle("reconciling");
       harness.lifecycle("ready", generation === "same" ? 1 : 2);
       const invalidated = (await handle.readCurrent()).snapshot;

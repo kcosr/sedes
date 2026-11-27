@@ -32,7 +32,16 @@ final class NativeVoiceQueue {
         /** User admission watermark for automatic turn notices; other notices and replays have none. */
         final long userInputRevision;
         boolean followUp, followUpCancelled;
-        final int bytes;
+        int bytes;
+        NativeEarlyReply early;
+        boolean opening() { return early != null && envelope == null; }
+        Item(NativeEarlyReply early) {
+            this.early = early; id = early.id; event = early.event; speech = "";
+            threadId = early.thread; threadTitle = early.title; origin = early.origin;
+            policyGeneration = early.generation; userInputRevision = early.inputRevision;
+            automatic = true; envelope = null; request = null; subject = null; target = null;
+            bytes = early.pendingBytes();
+        }
         /** Notifications are automatic. A replay is user-requested: notification filters and cancellation do not apply. */
         final boolean automatic;
         Item(JSONObject envelope, NativeVoiceSettings settings) {
@@ -113,7 +122,9 @@ final class NativeVoiceQueue {
         }
         /** Presentation for new settings, rebuilt from the original envelope or replay request. */
         Item rebuild(NativeVoiceSettings settings) {
-            return request == null ? new Item(envelope, settings) : new Item(id, request, threadTitle, settings);
+            if (opening()) return new Item(early);
+            Item result = request == null ? new Item(envelope, settings) : new Item(id, request, threadTitle, settings);
+            result.early = early; return result;
         }
         boolean isReplay() { return request != null; }
         boolean hasInputRevision() { return userInputRevision >= 0; }
@@ -145,6 +156,44 @@ final class NativeVoiceQueue {
     int size() { return pending.size(); }
     int bytes() { return bytes; }
     boolean contains(String id) { for (Item item : pending) if (item.id.equals(id)) return true; return false; }
+    boolean urgentPending() {
+        for (Item item : pending) if (item.event.equals("approval.requested") || item.event.equals("input.requested")) return true;
+        return false;
+    }
+    boolean addOpening(Item opening) { return !seen.contains(opening.id) && !contains(opening.id) && enqueue(opening); }
+    /** Grow only the owning queue position. Overflow yields that position. */
+    boolean accountOpening(NativeEarlyReply reply) {
+        for (Item item : pending) if (item.opening() && item.early == reply) {
+            int growth = reply.pendingBytes() - item.bytes;
+            if (bytes + growth > MAX_BYTES) { removeOpening(reply); drop(item, "overflow"); return false; }
+            item.bytes += growth; bytes += growth; break;
+        }
+        return true;
+    }
+    void removeOpening(NativeEarlyReply reply) {
+        for (Iterator<Item> it = pending.iterator(); it.hasNext();) {
+            Item item = it.next();
+            if (item.opening() && item.early == reply) { bytes -= item.bytes; it.remove(); return; }
+        }
+    }
+    /** Adopt an authoritative terminal at its opening's reserved position, subject to ordinary queue capacity. */
+    boolean sealPending(Item terminal) {
+        for (Item item : pending) if (item.opening() && item.early == terminal.early) {
+            if (!remember(terminal.id)) return true;
+            ArrayList<Item> prior = new ArrayList<>(pending);
+            pending.clear(); bytes -= item.bytes;
+            for (Iterator<Item> it = prior.iterator(); !terminal.progress() && bytes + terminal.bytes > MAX_BYTES && it.hasNext();) {
+                Item candidate = it.next();
+                if (candidate.progress()) { bytes -= candidate.bytes; it.remove(); drop(candidate, "progress_evicted"); }
+            }
+            if (bytes + terminal.bytes > MAX_BYTES) {
+                prior.remove(item); pending.addAll(prior); drop(terminal, "overflow"); return true;
+            }
+            for (Item old : prior) pending.addLast(old == item ? terminal : old);
+            bytes += terminal.bytes; return true;
+        }
+        return false;
+    }
     boolean remember(String id) {
         if (!seen.add(id)) return false;
         remembered.addLast(id);
@@ -208,7 +257,7 @@ final class NativeVoiceQueue {
         for (Item item : old) {
             Item next = item.rebuild(settings); next.followUpCancelled = item.followUpCancelled;
             if (next.followUpCancelled) next.followUp = false;
-            if (!next.speech.isEmpty() || next.followUp) enqueue(next); else drop(next, "settings_changed");
+            if (next.opening() || !next.speech.isEmpty() || next.followUp) enqueue(next); else drop(next, "settings_changed");
         }
     }
     Item take() { Item value = pending.pollFirst(); if (value != null) bytes -= value.bytes; return value; }
@@ -244,8 +293,10 @@ final class NativeVoiceQueue {
         return NativeVoiceJson.object("count", size(), "bytes", bytes, "droppedCount", count, "droppedReasons", reasons);
     }
     private static String speech(JSONObject payload, NativeVoiceSettings settings) {
+        return speech(payload, settings.text("speechContent"), settings.flag("cleanSpeechText"));
+    }
+    static String speech(JSONObject payload, String content, boolean cleanup) {
         ArrayList<String> parts = new ArrayList<>();
-        String content = settings.text("speechContent");
         if (!content.equals("messages")) {
             add(parts, payload.optString("title", ""));
             add(parts, payload.optString("message", ""));
@@ -254,7 +305,7 @@ final class NativeVoiceQueue {
             if (payload.optString("event").equals("turn.progress") || payload.optString("event").equals("turn.partial")) appendBounded(parts, payload.optJSONObject("progress"));
             else if (payload.optString("event").equals("turn.completed")) appendResult(parts, payload.optJSONObject("assistantResult"));
         }
-        return assemble(parts, settings.flag("cleanSpeechText"));
+        return assemble(parts, cleanup);
     }
     /** A replay explicitly requests the reply alone, independently of automatic speech content. */
     private static String replaySpeech(JSONObject result, NativeVoiceSettings settings) {
@@ -265,7 +316,7 @@ final class NativeVoiceQueue {
     private static void appendResult(List<String> parts, JSONObject result) {
         if (result != null) for (String phase : NativeVoiceProtocol.RESULT_PHASES) appendBounded(parts, result.optJSONObject(phase));
     }
-    private static String assemble(List<String> parts, boolean cleanup) {
+    static String assemble(List<String> parts, boolean cleanup) {
         StringBuilder speech = new StringBuilder();
         // Each notification part is an independent document. An unfinished fence in a
         // truncated section must not consume context, its truncation notice, or later results.
@@ -285,26 +336,34 @@ final class NativeVoiceQueue {
     }
     private static void add(List<String> parts, String text) { if (text != null && !text.trim().isEmpty()) parts.add(text); }
     static List<String> chunks(String input, int limit) {
-        if (limit < 2) throw new IllegalArgumentException("voice_text_limit_invalid");
+        if (limit < 1) throw new IllegalArgumentException("voice_text_limit_invalid");
         ArrayList<String> result = new ArrayList<>();
         BreakIterator sentences = BreakIterator.getSentenceInstance(Locale.ROOT); sentences.setText(input);
         int start = 0;
         while (start < input.length()) {
-            int end = Math.min(input.length(), start + limit);
-            if (end < input.length()) {
-                int sentence = sentences.preceding(end + 1);
-                if (sentence > start) end = sentence;
-                else {
-                    int word = end;
-                    while (word > start && !Character.isWhitespace(input.charAt(word - 1))) word--;
-                    if (word > start) end = word;
-                }
-                if (end > start && Character.isHighSurrogate(input.charAt(end - 1)) && Character.isLowSurrogate(input.charAt(end))) end--;
-            }
-            if (end <= start) throw new IllegalArgumentException("voice_text_split_failed");
+            int end = chunkEnd(input, start, limit, sentences);
             result.add(input.substring(start, end)); start = end;
         }
         return result;
+    }
+    static String firstChunk(String input, int start, int limit) {
+        BreakIterator sentences = BreakIterator.getSentenceInstance(Locale.ROOT); sentences.setText(input);
+        return input.substring(start, chunkEnd(input, start, limit, sentences));
+    }
+    private static int chunkEnd(String input, int start, int limit, BreakIterator sentences) {
+        int end = Math.min(input.length(), start + limit);
+        if (end < input.length()) {
+            int sentence = sentences.preceding(end + 1);
+            if (sentence > start) end = sentence;
+            else {
+                int word = end;
+                while (word > start && !Character.isWhitespace(input.charAt(word - 1))) word--;
+                if (word > start) end = word;
+            }
+            if (end > start && Character.isHighSurrogate(input.charAt(end - 1)) && Character.isLowSurrogate(input.charAt(end))) end--;
+        }
+        if (end <= start) throw new IllegalArgumentException("voice_text_split_failed");
+        return end;
     }
     static boolean isStopCommand(String text) {
         String normalized = text.trim().toLowerCase(Locale.ROOT).replaceFirst("[\\p{Punct}\\p{P}]+$", "").trim();

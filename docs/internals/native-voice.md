@@ -18,7 +18,17 @@ without an alias or migration. Client protocol 150 and client-control tool schem
 version 2 carry the audio-mode values. Notification payload version 5 carries
 Partial response sections, independent `turn.partial` delivery, and the required
 live `progress.phase` field.
-Native snapshot version 16 includes `speech.audioQuality`, its independent
+Native snapshot version 17 includes the device preference `speech.earlyReplyPlayback`
+and its independent `speech.earlyReplyRevision`. The setter checks the expected
+connection generation and preference revision. An open early reply that has
+caught up to its writer exposes `waiting_for_reply_text`. This phase retains
+the reply's playback controls. Android keeps its foreground service's partial
+wake lock while waiting so the runtime can release the queue while the screen
+is off. A pending approval or blocking input shortens that wait to two seconds.
+Otherwise the runtime releases the reply after sixty seconds without an
+eligible span. Audio focus follows its usual post-drain grace period, and
+automatic listening requires an eligible terminal notification.
+The snapshot also includes `speech.audioQuality`, its independent
 `audioQualityRevision`, per-model picker `audioInputFormats`, and
 `active.recording` (ID, Keep listening and
 Reconnecting), native-authoritative `canSetKeepListening`/`canSend` actions, the
@@ -397,7 +407,7 @@ an origin or recognition target. A `turn.progress` or `turn.partial` payload ove
 payload limit keeps a shortened `progress.text` with byte-limit truncation
 metadata. It is dropped only if its metadata alone exceeds the limit.
 
-`GET /api/application/events` carries two additional named frames:
+`GET /api/application/events` carries the ordinary notification frames:
 
 - `notification_policy`: `{ generation, settings }`.
 - `notification`: `{ payload, sourceEventId, voice, generation, origin?,
@@ -411,6 +421,42 @@ authentication and is independent of client-control registration. It does not
 require `X-Sedes-Client`. The server admits at most 128 identified voice streams
 per principal and rejects excess subscriptions before sending response headers.
 Ordinary inventory streams omit the parameter and keep their existing behavior.
+
+With client protocol 183, the voice reservation declares its early playback
+interest using the paired `earlyReply=on|off` and `earlyRevision` query parameters.
+After policy, `voice_early_session` gives the device a reservation token.
+Authenticated `PUT /api/application/voice-streams/:voiceStreamId/early-reply`
+updates that reservation in place. An interest change takes effect against the
+current stream. Each new connection receives a fresh token.
+
+A continuously observed Codex commentary item captures subscribers eligible for
+`turn.progress`. A final item captures subscribers eligible for
+`turn.completed` with final response text selected. The server scans plain
+prose into contiguous UTF-16 ranges and sends `voice_early_reply` frames
+(`begin`, `append`, `yield`, and `cancel`) to those reservations. The required
+`event` on `begin` identifies the matching notification. Each commentary
+message uses the ordinary progress ID for its thread, turn, and item. The final
+answer uses the turn outcome ID. Devices match that notification to the
+existing queue item, then play any remaining text. A revised prefix can
+require reading the corrected text again.
+
+A `begin` carries the first eligible segment of a classified live item. Once
+that message reaches the front of the queue and passes the device's input
+freshness check, **Both** can start the type and thread title preamble. Word
+counts apply only to message text. The device groups unscheduled whole sentences
+when starting or prefetching a request. Responsive requires
+six words and Balanced fifteen. Natural requires fifteen words plus a paragraph
+end or a sentence ending at or beyond word sixty of its paragraph. Every mode
+takes the furthest qualifying ending already available, up to the device and
+provider request limits. Larger qualified groups can span physical requests.
+An explicit server `yield` releases the remaining eligible prefix, including
+a short tail. A matching notification supplies the rest of the message after
+reconciliation with audio already played.
+
+Skipping retires the whole message. Newer input, stream loss, policy changes,
+and deadlines retire live playback independently of ordinary notification
+delivery. Scripts, microphone activation, and deferred controls follow their
+existing notification rules. Progress is speak-only.
 
 The server records only the UUIDs of captured native streams that actually
 received a notification; it retains no client-control token or subscriber
@@ -1375,7 +1421,8 @@ AudioRecordingCallback plus the initial active recording configuration
 detect Android client silencing even while zero PCM continues. Quiet PCM alone is not
 microphone failure. Callbacks are capture-generation fenced and unregistered on
 cleanup. The service renews its bounded ten-minute wake lock every five minutes
-only during active capture/drain; a retained draft holds no wake lock.
+during active voice interactions, including speech waiting for more reply text.
+Idle, retained-draft recovery and service teardown release the lock.
 
 Speech synthesis sends one complete bounded text chunk to `/audio/speech` and
 consumes its raw 24 kHz PCM response incrementally. Outgoing transcription

@@ -2945,6 +2945,35 @@ Claude retain their existing provisional/final/unclassified dispositions; Grok
 and OpenCode do not manufacture partial evidence. A partial message is neither
 a user question nor terminal turn evidence.
 
+A live handle declares which assistant phases it can identify at the native item
+start through `liveSpeechStarts`. Codex certifies `item/started` for the exact
+`agentMessage` with `phase: "final_answer"` or `phase: "commentary"`, setting
+`liveSpeechStart` to the corresponding normalized phase. The actor captures the
+projected application turn, item, and accepted input correlations synchronously.
+The manager freezes voice recipients before waiting for preceding submission
+observers. Every qualifying provisional item can own its own progress publication.
+Only the first final item can own the turn's completion publication. Rewrites stop
+further offers for that item. A qualified completed progress item hands its
+opening to ordinary progress delivery under the same durable application item ID.
+Progress and partial-answer notification keys use the projector's durable item
+identity across refreshes. A temporary loss of early authority stops speech
+offers while preserving the later ordinary decision for that item. A
+definitively skipped publication settles that opening even when the turn ends
+while submission admission is pending. Completed items, baseline items, replay,
+late phase labels, partial answers and passive history handles use ordinary
+notifications. Other backends may enable either phase when their live handle has
+the same explicit start, stable item identity and cumulative source text.
+
+A provider can confirm one turn before it knows whether the thread is idle.
+Publish any corrected items before the turn completion. If the actor receives
+a contiguous live success for the same turn, item, and accepted input, a later
+projection gap stops new speech offers and lets the queued completion reconcile
+the opening already playing. Expiration of the provider connection follows the
+same ordering. A gap before that terminal revokes the opening. User interruption,
+policy withdrawal, replacement of a live control, and loss of the actor's
+ownership still retire early playback. Controls that require an idle thread
+continue to wait for evidence of thread-wide settlement.
+
 Live progress is a separate, passive observation of an already projected,
 completed provisional or partial assistant item on an active Sedes-accepted turn. Providers
 must attach `liveProgress: true` to the qualifying live `item_completed` or

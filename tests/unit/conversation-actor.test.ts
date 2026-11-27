@@ -1,3 +1,7 @@
+import { randomUUID } from "node:crypto";
+import { ClientControlService } from "../../src/server/domain/client-control-service.js";
+import { TurnVoiceCompletion } from "../../src/server/domain/turn-voice-completion.js";
+import type { VoiceNotificationPublication } from "../../src/server/domain/notification-service.js";
 import { describe, expect, it, vi } from "vitest";
 import {
   type BackendCapabilityDocument,
@@ -31,6 +35,7 @@ import type {
   LiveProgressObserver,
   ModelFeedbackObserver,
 } from "../../src/server/conversations/conversation-actor-manager.js";
+import type { EarlyReplySource } from "../../src/server/conversations/early-reply-observation.js";
 import type { ConversationActor, ConversationActorEvent } from "../../src/server/conversations/conversation-actor.js";
 import { applicationTurnIdForBackendTurn, ConversationProjector } from "../../src/server/conversations/conversation-projector.js";
 import { InteractionBroker } from "../../src/server/conversations/interaction-broker.js";
@@ -152,7 +157,7 @@ function selectedBranchingCapabilities(
       creationRecovery: "idempotent",
     },
     interactionKinds: [],
-    usageAccounting: "supported" as const, turnThroughput: "unsupported" as const, usageSections: [],
+    usageAccounting: "supported" as const, turnThroughput: "unsupported" as const, liveSpeechStarts: { final: false, provisional: false }, usageSections: [],
     effectiveSettings: { toolAccess: "read_only" },
   };
 }
@@ -215,7 +220,7 @@ class FakeHandle {
         reason: { text: "Branching is unavailable in this fixture." },
       },
       interactionKinds: [],
-      usageAccounting: "supported" as const, turnThroughput: "unsupported" as const, usageSections: [],
+      usageAccounting: "supported" as const, turnThroughput: "unsupported" as const, liveSpeechStarts: { final: false, provisional: false }, usageSections: [],
       effectiveSettings: {},
     }),
   );
@@ -324,6 +329,8 @@ function fixture(
   captureResponseVoiceContext?: NonNullable<ConstructorParameters<typeof ConversationActorManager>[0]["captureResponseVoiceContext"]>,
   applicationPublications?: (requestedScope: typeof scope, threadId: string, turnIds: readonly string[]) => readonly PagePublication[],
   onModelFeedback?: ModelFeedbackObserver,
+  captureEarlyReply?: ConstructorParameters<typeof ConversationActorManager>[0]["captureEarlyReply"],
+  onLiveProgressSkipped?: ConstructorParameters<typeof ConversationActorManager>[0]["onLiveProgressSkipped"],
 ) {
   const closeOrder: string[] = [];
   const handle = new FakeHandle(closeOrder);
@@ -388,6 +395,8 @@ function fixture(
     ...(onAuthoritativeCompletion ? { onAuthoritativeCompletion } : {}),
     ...(onAuthoritativeSubmission ? { onAuthoritativeSubmission } : {}),
     ...(onLiveProgress ? { onLiveProgress } : {}),
+    ...(onLiveProgressSkipped ? { onLiveProgressSkipped } : {}),
+    ...(captureEarlyReply ? { captureEarlyReply } : {}),
     ...(onModelFeedback ? { onModelFeedback } : {}),
     ...(captureResponseVoiceContext ? { captureResponseVoiceContext } : {}),
     ...(applicationPublications ? { applicationPublications } : {}),
@@ -3415,7 +3424,7 @@ describe("ConversationActorManager", () => {
         creationRecovery: "idempotent",
       },
       interactionKinds: [],
-      usageAccounting: "supported" as const, turnThroughput: "unsupported" as const, usageSections: [],
+      usageAccounting: "supported" as const, turnThroughput: "unsupported" as const, liveSpeechStarts: { final: false, provisional: false }, usageSections: [],
       effectiveSettings: {
         model: { provider: "test", id: "model" },
         thinkingLevel: "low",
@@ -4047,7 +4056,7 @@ describe("ConversationActorManager", () => {
         creationRecovery: "idempotent",
       },
       interactionKinds: [],
-      usageAccounting: "supported" as const, turnThroughput: "unsupported" as const, usageSections: [],
+      usageAccounting: "supported" as const, turnThroughput: "unsupported" as const, liveSpeechStarts: { final: false, provisional: false }, usageSections: [],
       effectiveSettings: { toolAccess: "read_only" },
     });
     const acquired = await manager.acquire({
@@ -4183,7 +4192,7 @@ describe("ConversationActorManager", () => {
           creationRecovery: "idempotent",
         },
         interactionKinds: [],
-        usageAccounting: "supported" as const, turnThroughput: "unsupported" as const, usageSections: [],
+        usageAccounting: "supported" as const, turnThroughput: "unsupported" as const, liveSpeechStarts: { final: false, provisional: false }, usageSections: [],
         effectiveSettings: { toolAccess: "read_only" },
       });
       handle.establishmentHistories[0] = {
@@ -5857,6 +5866,539 @@ describe("ConversationActorManager", () => {
     } finally { release(); acquired.release(); await manager.close(); }
   });
 
+  it.each(["stream", "item_done", "authority_lost"] as const)(
+    "captures live final recipients before ordered submission and fences pending text at %s",
+    async (end) => {
+      let release!: () => void;
+      const admission = new Promise<void>(resolve => { release = resolve; });
+      const submission = vi.fn<AuthoritativeSubmissionObserver>(() => admission);
+      const observation = { observe: vi.fn(), finish: vi.fn() };
+      const capture = vi.fn(() => observation);
+      const { driver, handle, manager } = fixture(undefined, submission, 10, undefined, 8,
+        undefined, undefined, undefined, undefined, capture);
+      const baseline = snapshot("running", "Previous feedback");
+      baseline.turnsById["turn-1"]!.completionCorrelations = ["accepted"];
+      handle.establishmentSnapshots[0] = baseline;
+      handle.establishmentSnapshots.push(baseline);
+      const capabilities = await handle.backendCapabilities();
+      handle.backendCapabilities.mockResolvedValue({ ...capabilities, liveSpeechStarts: { final: true, provisional: false } });
+      const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+      const item = { backendTurnId: "turn-1", backendItemId: "early-answer", status: "streaming" as const,
+        semanticKind: "assistant_message" as const, responsePhase: "final" as const, sourceOrder: 1, markdown: { text: "" } };
+      try {
+        handle.emit(0, { type: "item_started", item, liveSpeechStart: "final" }, 0);
+        handle.emit(0, { type: "item_updated", item: { ...item, markdown: { text: "One" } } }, 1);
+        handle.emit(0, { type: "item_updated", item: { ...item, markdown: { text: "One. Two." } } }, 2);
+        await acquired.actor.captureSnapshotState();
+        expect(capture).toHaveBeenCalledOnce();
+        expect(capture).toHaveBeenCalledWith(scope, binding.applicationThreadId, expect.objectContaining({
+          backendCorrelations: ["accepted"], applicationTurnId: projectedTurnId,
+        }));
+        expect(observation.observe).not.toHaveBeenCalled();
+        if (end === "item_done") {
+          handle.emit(0, { type: "item_completed", item: { ...item, status: "completed", markdown: { text: "One. Two." } } }, 3);
+        } else if (end === "authority_lost") {
+          handle.emit(0, { type: "resnapshot_required", reason: "history_changed" }, 3);
+        }
+        await acquired.actor.captureSnapshotState();
+        release();
+        if (end === "stream") {
+          await vi.waitFor(() => expect(observation.observe).toHaveBeenCalledOnce());
+          expect(observation.observe).toHaveBeenCalledWith("One. Two.", ["unclassified"]);
+          handle.emit(0, { type: "item_updated", item: { ...item, markdown: { text: "Changed." } } }, 3);
+          await acquired.actor.captureSnapshotState();
+          expect(observation.finish).toHaveBeenCalledWith("source_changed");
+          handle.emit(0, { type: "item_started", item: { ...item, sourceOrder: 2, backendItemId: "later-answer" }, liveSpeechStart: "final" }, 4);
+          await acquired.actor.captureSnapshotState();
+          expect(capture).toHaveBeenCalledOnce();
+        } else {
+          expect(observation.finish).toHaveBeenCalledWith(end);
+          expect(observation.observe).not.toHaveBeenCalled();
+          if (end === "item_done") {
+            handle.emit(0, { type: "resnapshot_required", reason: "sequence_gap" }, 4);
+            await acquired.actor.captureSnapshotState();
+            expect(observation.finish.mock.calls.map(args => args[0])).toEqual(["item_done", "authority_lost"]);
+          }
+        }
+      } finally {
+        release();
+        acquired.release();
+        await manager.close();
+      }
+    },
+  );
+
+  it.each(["owner abort", "control abort", "control replacement", "terminal then owner abort", "replacement during history reconciliation"] as const)(
+    "retains authority over yielded speech until true settlement (%s)", async disposition => {
+      const observation = { observe: vi.fn(), finish: vi.fn() };
+      const { driver, handle, manager } = fixture(undefined, undefined, 10, undefined, 8,
+        undefined, undefined, undefined, undefined, () => observation);
+      const controlLifetime = new AbortController();
+      const control = { generation: "first-control", lifetime: controlLifetime.signal,
+        interrupt: handle.interrupt, reconcileInterrupt: handle.reconcileInterrupt };
+      let attached!: Parameters<ConversationBackendDriver["attach"]>[0];
+      vi.mocked(driver.attach).mockImplementation(async input => {
+        attached = input;
+        input.onControlReady?.(control);
+        return handle as unknown as ConversationHandle;
+      });
+      const initial = snapshot("running", "");
+      initial.turnsById["turn-1"]!.completionCorrelations = ["accepted"];
+      handle.establishmentSnapshots[0] = initial;
+      handle.backendCapabilities.mockResolvedValue({ ...await handle.backendCapabilities(), liveSpeechStarts: { final: true, provisional: false } });
+      const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+      const borrowed = manager.acquireExistingControl(scope, binding.applicationThreadId)!;
+      try {
+        const item = { backendItemId: "final", backendTurnId: "turn-1", sourceOrder: 1, status: "streaming" as const,
+          semanticKind: "assistant_message" as const, responsePhase: "final" as const, markdown: { text: "One sentence. Another follows." } };
+        handle.emit(0, { type: "item_started", item, liveSpeechStart: "final" }, 0);
+        handle.emit(0, { type: "item_completed", item: { ...item, status: "completed" } }, 1);
+        await acquired.actor.captureSnapshotState();
+        expect(observation.finish.mock.calls).toEqual([["item_done"]]);
+
+        if (disposition === "terminal then owner abort" || disposition === "replacement during history reconciliation") {
+          handle.emit(0, { type: "turn_completed", turn: { ...initial.turnsById["turn-1"]!,
+            orderedBackendItemIds: ["item-1", "final"], status: "completed" } }, 2);
+          if (disposition === "replacement during history reconciliation") {
+            handle.emit(0, { type: "resnapshot_required", reason: "history_changed" }, 3);
+          } else await acquired.actor.captureSnapshotState();
+        }
+        if (disposition === "control abort") controlLifetime.abort();
+        else if (disposition === "control replacement" || disposition === "replacement during history reconciliation") {
+          attached.onControlReady?.({ ...control, generation: "replacement-control", lifetime: new AbortController().signal });
+        } else {
+          void manager.close();
+          // Shutdown still awaits the borrowed control. The source must be fenced now.
+          expect(handle.close).not.toHaveBeenCalled();
+        }
+        expect(observation.finish.mock.calls).toEqual(disposition === "terminal then owner abort"
+          ? [["item_done"]] : [["item_done"], ["authority_lost"]]);
+      } finally {
+        borrowed.release();
+        acquired.release();
+        await manager.close();
+      }
+    },
+  );
+
+  it.each([
+    ["matching terminal", ["item_done"]],
+    ["queued text before terminal", ["item_done"]],
+    ["corrected terminal text", ["item_done", "source_changed"]],
+    ["replacement turn", ["item_done", "authority_lost"]],
+    ["history before terminal", ["item_done", "authority_lost"]],
+    ["missing sequence before terminal", ["item_done", "authority_lost"]],
+    ["different correlation", ["item_done", "authority_lost"]],
+    ["uncorrelated terminal without a gap", ["item_done", "authority_lost"]],
+    ["recovered terminal", ["item_done", "authority_lost"]],
+    ["rejected terminal", ["item_done", "authority_lost"]],
+    ["contradiction after terminal", ["item_done"]],
+    ["closed handle after terminal", ["item_done"]],
+  ] as const)("applies terminal evidence in order when a history rebuild races early speech (%s)", async (scenario, expected) => {
+    const early = { observe: vi.fn(), finish: vi.fn() };
+    const completion = vi.fn<AuthoritativeCompletionObserver>();
+    const { driver, handle, manager } = fixture(completion, undefined, 10, undefined, 8,
+      undefined, undefined, undefined, undefined, () => early);
+    const turn = { backendTurnId: "turn-1", status: "in_progress" as const,
+      orderedBackendItemIds: [], completionCorrelations: ["accepted"] };
+    const initial: BackendConversationSnapshot = { runState: "running", activeBackendTurnId: turn.backendTurnId,
+      orderedBackendTurnIds: [turn.backendTurnId], turnsById: { [turn.backendTurnId]: turn }, itemsById: {} };
+    const item = { backendItemId: "final", backendTurnId: turn.backendTurnId, sourceOrder: 0, status: "streaming" as const,
+      semanticKind: "assistant_message" as const, responsePhase: "final" as const, markdown: { text: "Original sentence." } };
+    handle.establishmentSnapshots[0] = initial;
+    handle.backendCapabilities.mockResolvedValue({ ...await handle.backendCapabilities(), liveSpeechStarts: { final: true, provisional: false } });
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    try {
+      let sequence = 0;
+      const emit = (event: BackendConversationEvent) => handle.emit(0, event, sequence++);
+      emit({ type: "item_started", item, liveSpeechStart: "final" });
+      const open = scenario === "corrected terminal text" || scenario === "queued text before terminal" || scenario === "closed handle after terminal";
+      if (!open) emit({ type: "item_completed", item: { ...item, status: "completed" } });
+      await acquired.actor.captureSnapshotState();
+      expect(early.finish.mock.calls).toEqual(open ? [] : [["item_done"]]);
+
+      // No waits between these notifications: ingress already knows the terminal while the actor still has to apply it.
+      const gap = { type: "resnapshot_required", reason: "history_changed" } as const;
+      if (scenario === "history before terminal") emit(gap);
+      if (scenario === "missing sequence before terminal") sequence++;
+      let finalText = item.markdown.text;
+      if (scenario === "queued text before terminal") {
+        finalText += " More.";
+        emit({ type: "item_updated", item: { ...item, markdown: { text: finalText } } });
+      }
+      if (scenario === "corrected terminal text") finalText = "Corrected answer.";
+      if (open) emit({ type: "item_completed", item: { ...item, status: "completed", markdown: { text: finalText } } });
+      if (scenario === "replacement turn") {
+        emit({ type: "turn_started", turn: { backendTurnId: "next", status: "in_progress", orderedBackendItemIds: [] } });
+        emit({ type: "run_state_changed", state: "running", activeBackendTurnId: "next" });
+      }
+      emit({ type: "turn_completed", ...(scenario === "recovered terminal" ? { completionProvenance: "recovered" } : {}),
+        turn: { ...turn, status: "completed", orderedBackendItemIds: scenario === "rejected terminal" ? ["final", "unseen"] : ["final"],
+          completionCorrelations: [scenario === "different correlation" || scenario === "uncorrelated terminal without a gap" ? "other-input" : "accepted"] } });
+      if (scenario === "contradiction after terminal") emit({ type: "resnapshot_required", reason: "contradictory_state" });
+      else if (scenario === "closed handle after terminal") emit({ type: "resnapshot_required", reason: "provider_handle_closed" });
+      else if (scenario !== "history before terminal" && scenario !== "uncorrelated terminal without a gap") emit(gap);
+      if (scenario === "closed handle after terminal") await vi.waitFor(() => expect(completion).toHaveBeenCalledTimes(1));
+      else await acquired.actor.captureSnapshotState();
+      expect(early.finish.mock.calls.map(([reason]) => reason)).toEqual(expected);
+      if (scenario === "rejected terminal") expect(completion).not.toHaveBeenCalled();
+      if (scenario === "matching terminal" || scenario === "contradiction after terminal" || open) {
+        expect(early.observe.mock.calls.map(([text]) => text)).toEqual([item.markdown.text]);
+        await vi.waitFor(() => expect(completion).toHaveBeenCalledTimes(1));
+        expect(completion.mock.calls[0]![2]).toMatchObject({ provenance: "live", backendCorrelation: "accepted",
+          classifiedResult: { final: { text: finalText } } });
+      }
+    } finally { acquired.release(); await manager.close(); }
+  });
+
+  it.each(["on", "off"] as const)("retains one deferred-control receipt for a steered turn with early playback %s", async mode => {
+    const controls = new ClientControlService();
+    const finishEarlyReply = vi.fn();
+    const coordinator = new TurnVoiceCompletion({ finishEarlyReply }, controls);
+    let deliver!: (receipt: VoiceNotificationPublication) => void;
+    const publication = new Promise<VoiceNotificationPublication>(resolve => { deliver = resolve; });
+    const publish = vi.fn(() => publication);
+    const completed: string[] = [];
+    const batches: Array<readonly string[]> = [];
+    const completion: AuthoritativeCompletionObserver = (eventScope, threadId, observation) => {
+      expect(observation.backendCorrelations).toEqual(["submitted", "steered"]);
+      completed.push(observation.backendCorrelation);
+      batches.push(observation.backendCorrelations);
+      coordinator.observe(eventScope, threadId, observation)(publish);
+    };
+    const early = { observe: vi.fn(), finish: vi.fn() };
+    const capture = vi.fn(() => mode === "on" ? early : undefined);
+    const { driver, handle, manager } = fixture(completion, undefined, 10, undefined, 8,
+      undefined, undefined, undefined, undefined, capture);
+    const initial = snapshot("running", "");
+    initial.turnsById["turn-1"]!.completionCorrelations = ["submitted"];
+    handle.establishmentSnapshots[0] = initial;
+    handle.backendCapabilities.mockResolvedValue({ ...await handle.backendCapabilities(), liveSpeechStarts: { final: true, provisional: false } });
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    const threadId = binding.applicationThreadId;
+    const state = { runtime: { foreground: true, voiceReady: true, interactionActive: false }, settings: null };
+    const client = controls.register(scope, undefined, { platform: "android", capabilities: { navigate: true, voice: true, voiceSettings: true }, state });
+    const receipt = { sourceEventId: "actual-terminal", voiceStreamIds: [randomUUID()] };
+    try {
+      const requested = controls.request(controls.target(scope, client.clientId), { action: "switch_thread",
+        sourceThreadId: threadId, sourceTurnId: projectedTurnId, threadId: randomUUID(), listen: true }, new AbortController().signal);
+      const command = (await controls.poll(scope, client.connectionToken, undefined,
+        { state, acknowledgements: [] }, new AbortController().signal)).commands[0]!;
+      await controls.poll(scope, client.connectionToken, undefined, { state,
+        acknowledgements: [{ id: command.id, result: { status: "accepted", state } }] }, AbortSignal.abort());
+      await requested;
+
+      const steered = { ...initial.turnsById["turn-1"]!, completionCorrelations: ["submitted", "steered"] };
+      handle.emit(0, { type: "turn_updated", turn: steered }, 0);
+      const item = { backendItemId: "final", backendTurnId: "turn-1", sourceOrder: 1, status: "streaming" as const,
+        semanticKind: "assistant_message" as const, responsePhase: "final" as const, markdown: { text: "A sentence. More follows." } };
+      handle.emit(0, { type: "item_started", item, liveSpeechStart: "final" }, 1);
+      await acquired.actor.captureSnapshotState();
+      expect(capture).toHaveBeenCalledWith(scope, threadId, expect.objectContaining({ backendCorrelations: ["submitted", "steered"] }));
+      expect(early.observe).toHaveBeenCalledTimes(mode === "on" ? 1 : 0);
+      handle.emit(0, { type: "item_completed", item: { ...item, status: "completed" } }, 2);
+      handle.emit(0, { type: "turn_completed", turn: { ...steered, orderedBackendItemIds: ["item-1", "final"], status: "completed" } }, 3);
+      await vi.waitFor(() => expect(completed).toEqual(["submitted", "steered"]));
+      // Re-observation while notification settlement is delayed must preserve the first publication.
+      await acquired.actor.replayAuthoritativeCompletions();
+      await vi.waitFor(() => expect(completed).toEqual(["submitted", "steered", "submitted", "steered"]));
+      expect(Object.isFrozen(batches[0])).toBe(true);
+      expect(batches[1]).toBe(batches[0]);
+      expect(batches[2]).not.toBe(batches[0]);
+      expect(batches[3]).toBe(batches[2]);
+      expect(publish).toHaveBeenCalledOnce();
+      expect(finishEarlyReply).not.toHaveBeenCalled();
+      const settled = controls.poll(scope, client.connectionToken, undefined, { state, acknowledgements: [] }, new AbortController().signal);
+      deliver(receipt);
+      expect((await settled).commands).toEqual([expect.objectContaining({ id: command.id,
+        action: "turn_settled", replyEventId: receipt.sourceEventId, replyStreamIds: receipt.voiceStreamIds })]);
+      expect(finishEarlyReply).toHaveBeenCalledExactlyOnceWith(scope, threadId, projectedTurnId, receipt);
+    } finally {
+      deliver(receipt);
+      controls.close();
+      acquired.release();
+      await manager.close();
+    }
+  });
+
+  it("plays a final item already covered by the establishment snapshot only through authoritative completion", async () => {
+    const capture = vi.fn(() => ({ observe: vi.fn(), finish: vi.fn() }));
+    const completion = vi.fn<AuthoritativeCompletionObserver>();
+    const { driver, handle, manager } = fixture(completion, undefined, 10, undefined, 8,
+      undefined, undefined, undefined, undefined, capture);
+    const initial = snapshot("running");
+    initial.turnsById["turn-1"]!.completionCorrelations = ["accepted"];
+    const item = { backendItemId: "item-1", backendTurnId: "turn-1", semanticKind: "assistant_message" as const,
+      responsePhase: "final" as const, status: "streaming" as const, sourceOrder: 0, markdown: { text: "Written during cold start. " } };
+    initial.itemsById["item-1"] = item;
+    handle.establishmentSnapshots[0] = initial;
+    handle.backendCapabilities.mockResolvedValue({ ...await handle.backendCapabilities(), liveSpeechStarts: { final: true, provisional: false } });
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    try {
+      const markdown = { text: item.markdown.text + "A later sentence arrives." };
+      handle.emit(0, { type: "item_updated", item: { ...item, markdown } }, 0);
+      handle.emit(0, { type: "item_completed", item: { ...item, markdown, status: "completed" } }, 1);
+      handle.emit(0, { type: "turn_completed", turn: { ...initial.turnsById["turn-1"]!, status: "completed" } }, 2);
+      await vi.waitFor(() => expect(completion).toHaveBeenCalledOnce());
+      expect(capture).not.toHaveBeenCalled();
+      expect(completion.mock.calls[0]![2]).toMatchObject({ provenance: "live", classifiedResult: { final: markdown } });
+    } finally {
+      acquired.release();
+      await manager.close();
+    }
+  });
+
+  it.each(["no capability", "external", "late label", "already projected"] as const)(
+    "requires a new native final start on a supported running correlated turn (%s)",
+    async (caseName) => {
+      const capture = vi.fn(() => ({ observe: vi.fn(), finish: vi.fn() }));
+      const { driver, handle, manager } = fixture(undefined, undefined, 10, undefined, 8,
+        undefined, undefined, undefined, undefined, capture);
+      const baseline = snapshot("running");
+      if (caseName !== "external") baseline.turnsById["turn-1"]!.completionCorrelations = ["accepted"];
+      handle.establishmentSnapshots[0] = baseline;
+      const capabilities = await handle.backendCapabilities();
+      if (caseName !== "no capability") handle.backendCapabilities.mockResolvedValue({ ...capabilities, liveSpeechStarts: { final: true, provisional: false } });
+      const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+      const item = { backendTurnId: "turn-1", backendItemId: caseName === "already projected" ? "item-1" : "early",
+        sourceOrder: caseName === "already projected" ? 0 : 1, status: "streaming" as const, semanticKind: "assistant_message" as const,
+        responsePhase: "final" as const, markdown: { text: "" } };
+      try {
+        handle.emit(0, { type: "item_started", item, ...(caseName === "late label" ? {} : { liveSpeechStart: "final" }) }, 0);
+        handle.emit(0, { type: "item_updated", item: { ...item, markdown: { text: "A full sentence. " } } }, 1);
+        await acquired.actor.captureSnapshotState();
+        expect(capture).not.toHaveBeenCalled();
+      } finally {
+        acquired.release();
+        await manager.close();
+      }
+    },
+  );
+
+  describe("early commentary speech", () => {
+    const assistant = (id: string, order: number, phase: "final" | "provisional" | "partial" = "provisional") => ({
+      backendItemId: id, backendTurnId: "turn-1", sourceOrder: order, semanticKind: "assistant_message" as const,
+      responsePhase: phase, status: "streaming" as const, markdown: { text: id + " opening. " },
+    });
+    async function setup(submission?: AuthoritativeSubmissionObserver, provisional = true) {
+      const captures: Array<{source: EarlyReplySource, observe: ReturnType<typeof vi.fn>, finish: ReturnType<typeof vi.fn>}> = [];
+      const progress = vi.fn<LiveProgressObserver>();
+      const skipped = vi.fn();
+      const completed = vi.fn<AuthoritativeCompletionObserver>();
+      const { handle, manager, driver } = fixture(completed, submission, 10, undefined, 8, progress, undefined, undefined, undefined,
+        (_scope, _thread, source) => {
+          const sink = { source, observe: vi.fn(), finish: vi.fn() };
+          captures.push(sink);
+          return sink;
+        }, skipped);
+      const baseline = snapshot("running", "");
+      baseline.turnsById["turn-1"]!.completionCorrelations = ["submitted"];
+      handle.establishmentSnapshots[0] = baseline;
+      handle.backendCapabilities.mockResolvedValue({ ...await handle.backendCapabilities(), liveSpeechStarts: { final: true, provisional } });
+      const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "fixture", driver });
+      let sequence = 0, rail = 0;
+      const emit = (event: BackendConversationEvent) => handle.emit(rail, event, sequence++);
+      const refresh = async (item: Omit<ReturnType<typeof assistant>, "status"> & {status: "streaming" | "completed"}, idle = false) => {
+        handle.establishmentSnapshots.push({ ...baseline, ...(idle ? { runState: "idle", activeBackendTurnId: undefined } : {}),
+          itemsById: { ...baseline.itemsById, [item.backendItemId]: item },
+          turnsById: { "turn-1": { ...baseline.turnsById["turn-1"]!, status: idle ? "completed" : "in_progress",
+            orderedBackendItemIds: ["item-1", item.backendItemId] } } });
+        emit({ type: "resnapshot_required", reason: "history_changed" });
+        await acquired.actor.captureSnapshotState();
+        rail++;
+        sequence = 0;
+        expect(handle.establishCount).toBe(rail + 1);
+      };
+      const completeTurn = (...ids: string[]) => emit({ type: "turn_completed", turn: { ...baseline.turnsById["turn-1"]!,
+        orderedBackendItemIds: ["item-1", ...ids], status: "completed" } });
+      return { captures, progress, skipped, completed, emit, refresh, completeTurn,
+        drain: () => acquired.actor.captureSnapshotState(), close: async () => { acquired.release(); await manager.close(); } };
+    }
+
+    it("keeps independent item anchors through interleaved commentary and the first final answer", async () => {
+      const run = await setup();
+      const first = assistant("one", 1), second = assistant("two", 2), final = assistant("result", 3, "final");
+      try {
+        for (const item of [first, second, final]) run.emit({ type: "item_started", item, liveSpeechStart: item.responsePhase === "final" ? "final" : "provisional" });
+        const again = { ...first, markdown: { text: first.markdown.text + "Later sentence." } };
+        run.emit({ type: "item_updated", item: again });
+        // A streaming retransmission with a native label cannot open the same projected item twice.
+        run.emit({ type: "item_started", item: again, liveSpeechStart: "provisional" });
+        await run.drain();
+        expect(run.captures.map(sink => sink.source.event)).toEqual(["turn.progress", "turn.progress", "turn.completed"]);
+        const [a, b, answer] = run.captures;
+        for (const sink of run.captures) {
+          expect(sink.source).toMatchObject({ applicationTurnId: projectedTurnId, backendCorrelations: ["submitted"] });
+        }
+        expect(new Set(run.captures.map(sink => sink.source.applicationItemId)).size).toBe(3);
+        expect(a!.observe).toHaveBeenLastCalledWith(again.markdown.text, []);
+        expect(b!.observe).toHaveBeenLastCalledWith(second.markdown.text, []);
+        expect(answer!.observe).toHaveBeenLastCalledWith(final.markdown.text, ["provisional"]);
+
+        for (const item of [second, again]) run.emit({ type: "item_completed", item: { ...item, status: "completed" }, liveProgress: true });
+        await vi.waitFor(() => expect(run.progress).toHaveBeenCalledTimes(2));
+        expect(run.progress.mock.calls.map(call => call[2].applicationItemId)).toEqual([b!.source.applicationItemId, a!.source.applicationItemId]);
+        expect(a!.finish.mock.calls).toEqual([["item_done"]]);
+        expect(b!.finish.mock.calls).toEqual([["item_done"]]);
+        expect(answer!.finish).not.toHaveBeenCalled();
+        run.emit({ type: "item_completed", item: { ...final, status: "completed" } });
+        run.completeTurn("one", "two", "result");
+        await vi.waitFor(() => expect(run.completed).toHaveBeenCalledOnce());
+        expect(answer!.finish.mock.calls).toEqual([["item_done"]]);
+        expect(run.skipped).not.toHaveBeenCalled();
+      } finally { await run.close(); }
+    });
+
+    it.each(["turn end", "rewritten progress", "phase changed to partial"] as const)(
+      "settles the exact item on %s", async disposition => {
+        const run = await setup();
+        const item = assistant("source", 1);
+        try {
+          run.emit({ type: "item_started", item, liveSpeechStart: "provisional" });
+          await run.drain();
+          const sink = run.captures[0]!;
+          if (disposition === "turn end") run.completeTurn(item.backendItemId);
+          else {
+            const revised = disposition === "rewritten progress" ? { ...item, markdown: { text: "Corrected commentary." } }
+              : { ...item, responsePhase: "partial" as const };
+            run.emit({ type: "item_updated", item: revised });
+            await run.drain();
+            expect(sink.finish).toHaveBeenCalledWith("source_changed");
+            expect(run.skipped).not.toHaveBeenCalled();
+            run.emit({ type: "item_completed", liveProgress: true, item: { ...revised, status: "completed" } });
+            await vi.waitFor(() => expect(run.progress).toHaveBeenCalledOnce());
+            expect(run.progress.mock.calls[0]![2]).toMatchObject({ applicationItemId: sink.source.applicationItemId, text: revised.markdown });
+            if (disposition === "phase changed to partial") {
+              expect(run.skipped).toHaveBeenCalledExactlyOnceWith(scope, binding.applicationThreadId, projectedTurnId, sink.source.applicationItemId);
+            } else expect(run.skipped).not.toHaveBeenCalled();
+            return;
+          }
+          await vi.waitFor(() => expect(run.skipped).toHaveBeenCalledExactlyOnceWith(scope, binding.applicationThreadId,
+            projectedTurnId, sink.source.applicationItemId));
+          expect(run.progress).not.toHaveBeenCalled();
+          expect(sink.finish).toHaveBeenCalledWith("authority_lost");
+        } finally { await run.close(); }
+      });
+
+    it.each(["projection refresh", "temporarily missing correlation", "unannotated completion"] as const)(
+      "cancels early offers while preserving a later qualified progress for the same durable item after %s", async loss => {
+        const run = await setup();
+        const item = assistant("recoverable", 1);
+        const turn = { backendTurnId: "turn-1", status: "in_progress" as const, orderedBackendItemIds: ["item-1", item.backendItemId] };
+        try {
+          run.emit({ type: "item_started", item, liveSpeechStart: "provisional" });
+          const live = await run.drain();
+          const sink = run.captures[0]!;
+          const anchor = sink.source.applicationItemId;
+          const liveId = live.timeline.turnsById[projectedTurnId]!.orderedItemIds.at(-1);
+          expect(anchor).not.toBe(liveId);
+          if (loss === "projection refresh") {
+            await run.refresh(item);
+            const replaced = await run.drain();
+            expect(replaced.timeline.generation).not.toBe(live.timeline.generation);
+            expect(replaced.timeline.itemsById[anchor]).toMatchObject({ status: "streaming" });
+          } else if (loss === "temporarily missing correlation") {
+            run.emit({ type: "turn_updated", turn: { ...turn, completionCorrelations: [] } });
+            run.emit({ type: "turn_updated", turn: { ...turn, completionCorrelations: ["submitted"] } });
+          } else run.emit({ type: "item_completed", item: { ...item, status: "completed" } });
+          await run.drain();
+          expect(sink.finish.mock.calls).toEqual([["authority_lost"]]);
+          expect(run.skipped).not.toHaveBeenCalled();
+          if (loss !== "unannotated completion") run.emit({ type: "item_updated", item: { ...item, markdown: { text: "updated" } } });
+          run.emit({ type: "item_updated", item: { ...item, status: "completed" }, liveProgress: true });
+          await vi.waitFor(() => expect(run.progress).toHaveBeenCalledOnce());
+          expect(run.progress.mock.calls[0]![2]).toMatchObject({ applicationItemId: anchor, text: item.markdown });
+          expect(sink.observe).toHaveBeenCalledTimes(1);
+          run.completeTurn(item.backendItemId);
+          await vi.waitFor(() => expect(run.completed).toHaveBeenCalledOnce());
+          expect(run.skipped).not.toHaveBeenCalled();
+        } finally { await run.close(); }
+      });
+
+    it.each(["turn end", "idle baseline", "shutdown"] as const)(
+      "settles a withdrawn commentary exactly once on %s when no ordinary progress arrives", async end => {
+        const run = await setup();
+        const item = assistant("abandoned", 1);
+        try {
+          run.emit({ type: "item_started", item, liveSpeechStart: "provisional" });
+          await run.drain();
+          await run.refresh(item);
+          const sink = run.captures[0]!;
+          expect(run.skipped).not.toHaveBeenCalled();
+          if (end === "turn end") run.completeTurn(item.backendItemId);
+          if (end === "idle baseline") await run.refresh(item, true);
+          if (end === "shutdown") await run.close();
+          await vi.waitFor(() => expect(run.skipped).toHaveBeenCalledExactlyOnceWith(scope, binding.applicationThreadId,
+            projectedTurnId, sink.source.applicationItemId));
+          expect(sink.finish.mock.calls).toEqual([["authority_lost"]]);
+        } finally { await run.close(); }
+        expect(run.skipped).toHaveBeenCalledOnce();
+      });
+
+    it("drops a pre-refresh close delayed by submission and permits a genuinely new qualified close after refresh", async () => {
+      let release!: () => void;
+      const wait = new Promise<void>(resolve => { release = resolve; });
+      const submit = vi.fn(() => wait);
+      const run = await setup(submit);
+      const item = assistant("delayed", 1);
+      const completed = { ...item, status: "completed" as const };
+      try {
+        run.emit({ type: "item_started", item, liveSpeechStart: "provisional" });
+        run.emit({ type: "item_completed", item: completed, liveProgress: true });
+        await run.drain();
+        await run.refresh(completed);
+        const sink = run.captures[0]!;
+        expect(run.progress).not.toHaveBeenCalled();
+        release();
+        // The replacement baseline's submission observer runs behind the now-stale progress observation.
+        await vi.waitFor(() => expect(submit).toHaveBeenCalledTimes(2));
+        expect(run.progress).not.toHaveBeenCalled();
+        expect(run.skipped).not.toHaveBeenCalled();
+        expect(sink.finish.mock.calls).toEqual([["item_done"], ["authority_lost"]]);
+        run.emit({ type: "item_updated", item: completed, liveProgress: true });
+        await vi.waitFor(() => expect(run.progress).toHaveBeenCalledOnce());
+        expect(run.progress.mock.calls[0]![2].applicationItemId).toBe(sink.source.applicationItemId);
+        expect(run.skipped).not.toHaveBeenCalled();
+      } finally { release(); await run.close(); }
+    });
+
+    it("skips a completed commentary held behind submission when the live turn ends first", async () => {
+      let release!: () => void;
+      const waiting = new Promise<void>(resolve => { release = resolve; });
+      const run = await setup(() => waiting);
+      const item = assistant("waiting", 1);
+      try {
+        run.emit({ type: "item_started", item, liveSpeechStart: "provisional" });
+        run.emit({ type: "item_completed", item: { ...item, status: "completed" }, liveProgress: true });
+        run.completeTurn(item.backendItemId);
+        await run.drain();
+        const sink = run.captures[0]!;
+        expect(sink.observe).not.toHaveBeenCalled();
+        expect(sink.finish).toHaveBeenCalledWith("item_done");
+        expect(run.skipped).not.toHaveBeenCalled();
+        release();
+        await vi.waitFor(() => expect(run.completed).toHaveBeenCalledOnce());
+        expect(run.skipped).toHaveBeenCalledExactlyOnceWith(scope, binding.applicationThreadId, projectedTurnId, sink.source.applicationItemId);
+        expect(run.progress).not.toHaveBeenCalled();
+      } finally { release(); await run.close(); }
+    });
+
+    it.each(["unsupported provisional", "late phase", "partial answer", "established item"] as const)(
+      "requires native streaming evidence for a new commentary item (%s)", async reason => {
+        const run = await setup(undefined, reason !== "unsupported provisional");
+        const item = assistant(reason === "established item" ? "item-1" : "new", reason === "established item" ? 0 : 1,
+          reason === "partial answer" ? "partial" : "provisional");
+        try {
+          run.emit({ type: "item_started", item,
+            ...(reason === "late phase" || reason === "partial answer" ? {} : { liveSpeechStart: "provisional" as const }) });
+          run.emit({ type: "item_completed", item: { ...item, status: "completed" }, liveProgress: true });
+          await vi.waitFor(() => expect(run.progress).toHaveBeenCalledOnce());
+          expect(run.captures).toHaveLength(0);
+          expect(run.skipped).not.toHaveBeenCalled();
+        } finally { await run.close(); }
+      });
+  });
+
   it.each(["provisional", "partial"] as const)("publishes qualified live %s progress after projection, including late phase evidence, but not snapshots or terminal backfill", async (phase) => {
     const observed = vi.fn<LiveProgressObserver>();
     const capture = vi.fn(() => ({ userInputRevision: 5, superseded: false, subscriberWatermark: 10 }));
@@ -6483,18 +7025,42 @@ describe("ConversationActorManager", () => {
   );
 
   it.each([
-    { completionFirst: true, provenance: "live" },
-    { completionFirst: false, provenance: "recovered" },
-  ] as const)("preserves receipt ordering with a blocked mailbox when completionFirst=$completionFirst", async ({ completionFirst, provenance }) => {
+    { completionFirst: true, provenance: "live", control: "unchanged" },
+    { completionFirst: false, provenance: "recovered", control: "unchanged" },
+    { completionFirst: true, provenance: "live", control: "reconnect" },
+    { completionFirst: false, provenance: "recovered", control: "reconnect" },
+    { completionFirst: true, provenance: "live", control: "reconnect during abort" },
+  ] as const)("preserves receipt ordering with a blocked mailbox when completionFirst=$completionFirst and control=$control", async ({ completionFirst, provenance, control }) => {
     const observed = vi.fn<AuthoritativeCompletionObserver>();
-    const { driver, handle, manager } = fixture(observed);
-    handle.establishmentSnapshots[0] = snapshot("running");
+    const early = { observe: vi.fn(), finish: vi.fn() };
+    const { driver, handle, manager } = fixture(observed, undefined, 10, undefined, 8,
+      undefined, undefined, undefined, undefined, () => early);
+    handle.backendCapabilities.mockResolvedValue({ ...await handle.backendCapabilities(), liveSpeechStarts: { final: true, provisional: false } });
+    const controlLifetime = new AbortController();
+    const first = { generation: "original", lifetime: controlLifetime.signal, interrupt: handle.interrupt, reconcileInterrupt: handle.reconcileInterrupt };
+    const next = { ...first, generation: "reconnected", lifetime: new AbortController().signal };
+    let reconnect!: () => void;
+    vi.mocked(driver.attach).mockImplementation(async input => {
+      reconnect = () => input.onControlReady?.(next);
+      if (control === "reconnect during abort") controlLifetime.signal.addEventListener("abort", reconnect, { once: true });
+      input.onControlReady?.(first);
+      return handle as unknown as ConversationHandle;
+    });
+    const initial = snapshot("running");
+    initial.turnsById["turn-1"]!.completionCorrelations = ["accepted-operation"];
+    handle.establishmentSnapshots[0] = initial;
+    const item = { backendItemId: "final", backendTurnId: "turn-1", sourceOrder: 1, status: "streaming" as const,
+      semanticKind: "assistant_message" as const, responsePhase: "final" as const, markdown: { text: "An audible answer." } };
     const terminal = snapshot();
     terminal.turnsById["turn-1"] = {
-      ...terminal.turnsById["turn-1"]!, completionCorrelations: ["accepted-operation"],
+      ...terminal.turnsById["turn-1"]!, orderedBackendItemIds: ["item-1", "final"], completionCorrelations: ["accepted-operation"],
     };
+    terminal.itemsById.final = { ...item, status: "completed" };
     handle.establishmentSnapshots.push(terminal);
     const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    handle.emit(0, { type: "item_started", item, liveSpeechStart: "final" }, 0);
+    await acquired.actor.captureSnapshotState();
+    expect(early.observe).toHaveBeenCalledWith(item.markdown.text, ["unclassified"]);
     let release!: () => void;
     const blocked = new Promise<void>((resolve) => { release = resolve; });
     let reached!: () => void;
@@ -6502,20 +7068,32 @@ describe("ConversationActorManager", () => {
     handle.usage.mockImplementationOnce(async () => { reached(); await blocked; return {}; });
     const reading = acquired.actor.usage();
     await waiting;
-    if (completionFirst) {
-      handle.emit(0, { type: "turn_completed", turn: terminal.turnsById["turn-1"]! }, 0);
-      handle.emit(0, { type: "resnapshot_required", reason: "sequence_gap" }, 1);
-    } else {
-      handle.emit(0, { type: "resnapshot_required", reason: "sequence_gap" }, 0);
-      handle.emit(0, { type: "turn_completed", turn: terminal.turnsById["turn-1"]! }, 1);
-    }
-    release();
+    const disconnect = (sequence: number) => {
+      if (control !== "unchanged") {
+        // Codex expires this control synchronously, then reports its projection gap later.
+        controlLifetime.abort();
+        expect(early.finish.mock.calls).toEqual([[completionFirst ? "item_done" : "authority_lost"]]);
+        if (control === "reconnect") reconnect();
+        expect(early.finish.mock.calls).toEqual([[completionFirst ? "item_done" : "authority_lost"]]);
+      }
+      handle.emit(0, { type: "resnapshot_required", reason: "sequence_gap" }, sequence);
+    };
+    try {
+      handle.emit(0, { type: "item_completed", item: terminal.itemsById.final! }, 1);
+      if (!completionFirst) disconnect(2);
+      handle.emit(0, { type: "turn_completed", turn: terminal.turnsById["turn-1"]! }, completionFirst ? 2 : 3);
+      if (completionFirst) disconnect(3);
+      expect(observed).not.toHaveBeenCalled();
+      expect(early.finish.mock.calls).toEqual([[completionFirst ? "item_done" : "authority_lost"]]);
+    } finally { release(); }
     await reading;
     const expectedPublications = completionFirst ? 2 : 1;
     await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(expectedPublications));
     await acquired.actor.replayAuthoritativeCompletions();
     await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(expectedPublications + 1));
-    expect(observed.mock.calls.every((call) => call[2].provenance === provenance)).toBe(true);
+    expect(early.finish.mock.calls).toEqual([[completionFirst ? "item_done" : "authority_lost"]]);
+    expect(observed.mock.calls.every(([, , completion]) => completion.provenance === provenance &&
+      completion.backendCorrelation === "accepted-operation" && completion.classifiedResult?.final?.text === item.markdown.text)).toBe(true);
     acquired.release();
     await manager.close();
   });

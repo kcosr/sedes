@@ -536,6 +536,7 @@ export const backendCapabilityDocumentSchema = z.strictObject({
     ),
   usageAccounting: z.enum(["supported", "unsupported"]),
   turnThroughput: z.enum(["supported", "unsupported"]),
+  liveSpeechStarts: z.strictObject({ final: z.boolean(), provisional: z.boolean() }),
   usageSections: z
     .array(z.enum(["context", "counters"]))
     .max(2),
@@ -860,6 +861,8 @@ export const backendConversationEventSchema = z
     z.strictObject({
       type: z.literal("item_started"),
       item: backendItemSchema,
+      /** Continuous native start evidence, never synthesized from a snapshot or a later classification. */
+      liveSpeechStart: z.enum(["final", "provisional"]).optional(),
     }),
     z.strictObject({
       type: z.literal("item_updated"),
@@ -910,6 +913,10 @@ export const backendConversationEventSchema = z
         (event.item.semanticKind !== "assistant_message" || event.item.status !== "completed" ||
          (event.item.responsePhase !== "provisional" && event.item.responsePhase !== "partial") || event.item.markdown.text.trim().length === 0)) {
       context.addIssue({ code: "custom", message: "Live progress requires a completed provisional or partial assistant message.", path: ["liveProgress"] });
+    }
+    if (event.type === "item_started" && event.liveSpeechStart &&
+        (event.item.semanticKind !== "assistant_message" || event.item.responsePhase !== event.liveSpeechStart)) {
+      context.addIssue({ code: "custom", message: "A live speech start requires an assistant message with the same explicit phase.", path: ["liveSpeechStart"] });
     }
     if (event.type === "item_started" && event.item.status !== "streaming") {
       context.addIssue({

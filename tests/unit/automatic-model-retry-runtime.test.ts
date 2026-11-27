@@ -154,7 +154,7 @@ function fixture(options: { source?: "user" | "automation" | "agent_control"; fi
     steerTarget: null, composerAttachments: { fileStaging: false, nativeImage: false }, nonblockingQuestions: false,
     providerOutputArtifacts: { nativeImage: false }, supportsHistory: true,
     branching: { availability: "unavailable", reason: { text: "Not used by retry admission" } }, interactionKinds: [],
-    usageAccounting: "unsupported", turnThroughput: "unsupported", usageSections: [], effectiveSettings: {} };
+    usageAccounting: "unsupported", turnThroughput: "unsupported", liveSpeechStarts: { final: false, provisional: false }, usageSections: [], effectiveSettings: {} };
   const observeInputRuntime = vi.fn<ConversationActorManager["observeInputRuntime"]>((scope, threadId) => {
     if (scope.tenantId !== current.scope.tenantId || scope.principalId !== current.scope.principalId) return undefined;
     const state = states.get(threadId);

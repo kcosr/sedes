@@ -28,6 +28,11 @@ android {
         }
     }
     buildFeatures { buildConfig = true }
+    sourceSets {
+        test.java.srcDir 'src/sharedTest/java'
+        androidTest.java.srcDir 'src/sharedTest/java'
+        androidTest.resources.srcDir 'src/test/resources'
+    }
     buildTypes {
         release {
             minifyEnabled false

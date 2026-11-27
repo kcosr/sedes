@@ -114,7 +114,7 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
   const missingRecovery = phase === "recordingRecovery" && saved === null;
   const needsStorageRetry = native.readiness === "storageUnavailable";
   const failed = phase === "error" || missingRecovery;
-  const speaking = phase === "synthesizing" || phase === "speaking";
+  const speaking = phase === "synthesizing" || phase === "speaking" || phase === "waiting_for_reply_text";
   const recording = phase === "listening";
   const capture = active?.recording;
   const recordingTools = recording && capture != null;
@@ -409,7 +409,7 @@ const eventLabels = new Map([["turn.completed", "Response"], ["turn.progress", "
   ["thread.woke", "Snooze wake"], ["automation.started", "Automation"], ["automation.failed", "Automation"], ["approval.requested", "Approval"],
   ["input.requested", "Input request"], ["question.requested", "Question"], ["replay", "Replay"]]);
 function phaseLabel(phase: string): string {
-  return ({ starting: "Starting…", synthesizing: "Preparing speech…", speaking: "Speaking", validating: "Checking thread…", announcing: "Announcing thread…", arming: "Preparing microphone…", listening: "Listening", recognizing: "Recognizing…", submitting: "Sending…", cancelling: "Stopping…", recovering: "Checking submission…", recordingRecovery: "Needs attention", error: "Needs attention" } as Record<string, string>)[phase] ?? phase;
+  return ({ starting: "Starting…", synthesizing: "Preparing speech…", speaking: "Speaking", waiting_for_reply_text: "Waiting for reply text…", validating: "Checking thread…", announcing: "Announcing thread…", arming: "Preparing microphone…", listening: "Listening", recognizing: "Recognizing…", submitting: "Sending…", cancelling: "Stopping…", recovering: "Checking submission…", recordingRecovery: "Needs attention", error: "Needs attention" } as Record<string, string>)[phase] ?? phase;
 }
 function keepListeningBlockedReason(reason: NativeVoiceState["actions"]["keepListeningBlockedReason"]): string | undefined {
   if (reason === null) return undefined;

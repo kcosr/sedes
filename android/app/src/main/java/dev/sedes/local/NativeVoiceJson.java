@@ -12,6 +12,7 @@ import org.json.JSONObject;
 
 /** Small strict JSON helpers shared by the bridge, wire protocol and encrypted records. */
 final class NativeVoiceJson {
+    static final long MAX_SAFE_INTEGER = 9_007_199_254_740_991L;
     private NativeVoiceJson() {}
     /** Field names are source-defined schema keys; field values never enter bridge error codes. */
     static final class InvalidFieldException extends IllegalArgumentException {

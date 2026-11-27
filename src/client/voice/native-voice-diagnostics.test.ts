@@ -56,6 +56,11 @@ describe("native voice diagnostics", () => {
     expect(JSON.stringify(await readNativeVoiceDiagnostics())).not.toContain("private");
     expect(nativeVoiceDiagnosticsSchema.parse({ ...snapshot(), entries: [{ ...entry, eventKind: "turn.partial" }] })
       .entries[0]).toMatchObject({ eventKind: "turn.partial" });
+    for (const event of ["early_begin", "early_append", "early_yield", "early_cancel", "early_sealed", "early_waiting", "early_prefetched", "early_promoted"]) {
+      const metadata = { ...entry, event, reason: "authority_lost" };
+      const exported = nativeVoiceDiagnosticsSchema.parse({ ...snapshot(), entries: [{ ...metadata, text: "private reply", token: "private stream token" }] });
+      expect(exported.entries).toEqual([metadata]);
+    }
     for (const patch of [{ sourceEventId: "private identifier" }, { eventKind: "private speech" }, { reason: "private error" },
       { event: "private title" }, { queueCount: 65 }, { queueBytes: 256 * 1024 + 1 }, { elapsedMilliseconds: Infinity }]) {
       expect(nativeVoiceDiagnosticsSchema.safeParse({ ...snapshot(), entries: [{ ...entry, ...patch }] }).success).toBe(false);

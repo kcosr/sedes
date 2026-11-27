@@ -2,6 +2,9 @@ import type { PluginListenerHandle } from "@capacitor/core";
 import { z } from "zod";
 import { clientVoiceSettingsSchema, type ClientActionResult, type ClientCommand, type ClientState } from "../../shared/protocol/client-controls.js";
 import { notificationPolicySchema, selectedAssistantResultSchema, voiceNotificationSchema, type NotificationPolicy } from "../../shared/protocol/notification.js";
+import { earlyReplyFrameSchema, type EarlyReplyFrame } from "../../shared/protocol/early-reply.js";
+import { ElectronEarlyReply, type EarlySpeechChunk } from "./electron-early-reply.js";
+import { ElectronEarlyOutput } from "./electron-early-output.js";
 import { directInputReceiptSchema, directInputRequestBodySchema, threadInputContextSchema, type ThreadInputContext } from "../../shared/protocol/thread-input.js";
 import { configuredSedesServer } from "../app/server-endpoint.js";
 import { ElectronVoiceAudio, type ElectronVoiceCaptureOptions, type ElectronVoicePlayback, type ElectronVoicePlaybackOptions } from "./electron-voice-audio.js";
@@ -57,6 +60,8 @@ interface SpeechPlayback {
   playback: ElectronVoicePlayback;
   pending: Promise<void>;
   nextSequence: number;
+  staged?: boolean;
+  onError?: (error: unknown) => void;
 }
 interface ComposerOffer {
   event: NativeVoiceComposerHandoff;
@@ -72,7 +77,7 @@ interface DeferredControl {
   voiceOnly: boolean;
   timer: ReturnType<typeof setTimeout>;
 }
-const playbackPhases = new Set<NativeVoiceState["phase"]>(["synthesizing", "speaking"]);
+const playbackPhases = new Set<NativeVoiceState["phase"]>(["synthesizing", "speaking", "waiting_for_reply_text"]);
 const bindingSchema = z.strictObject({ profileId: z.string().min(1).max(160), serverOrigin: z.string(), identity: z.string().regex(/^[a-f0-9]{64}$/u), reconnect: z.boolean().optional() });
 const replaySchema = z.strictObject({ expectedConnectionGeneration: z.number().int().nonnegative(), threadId: z.uuid(), turnId: z.string().min(1).max(160),
   threadTitle: z.string().max(512).nullable().optional(), assistantResult: selectedAssistantResultSchema });
@@ -93,6 +98,8 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
   readonly #playbacks = new Map<string, SpeechPlayback>();
   readonly #offers = new Map<string, ComposerOffer>();
   readonly #controls = new Map<string, DeferredControl>();
+  readonly #early = new Map<string, ElectronEarlyReply>();
+  #lastAudibleOwner?: string;
   readonly #drained = new Set<string>();
   #state: NativeVoiceState;
   #binding: ElectronVoiceBinding | undefined;
@@ -129,7 +136,7 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
     this.#preferences = new ElectronVoicePreferences(dependencies.storage ?? (typeof localStorage === "undefined" ? undefined : localStorage));
     this.#connectionFactory = dependencies.connection ?? ((binding, callbacks, resumeToken) => new ElectronVoiceConnection(binding, callbacks, resumeToken));
     this.#uuid = dependencies.uuid ?? (() => crypto.randomUUID()); this.#now = dependencies.now ?? Date.now; this.#startedAt = this.#now();
-    this.#state = emptyElectronVoiceState(this.#preferences.get());
+    this.#state = emptyElectronVoiceState(this.#preferences.get(), this.#preferences.early);
     this.#state.settingsRevision = this.#preferences.revision;
   }
 
@@ -140,17 +147,22 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
       handles.push(await this.#speech.addAudioListener(event => {
         const output = this.#playbacks.get(event.requestId);
         if (!output || !this.#current(output.active)) return;
-        if (event.sequence !== output.nextSequence++) { this.#fail(output.active, new Error("Speech audio arrived out of order.")); return; }
+        const fail = (error: unknown) => {
+          if (this.#playbacks.get(event.requestId) === output) {
+            if (output.onError) output.onError(error); else this.#fail(output.active, error);
+          }
+        };
+        if (event.sequence !== output.nextSequence++) { fail(new Error("Speech audio arrived out of order.")); return; }
         output.pending = output.pending.then(async () => {
-          if (!this.#current(output.active)) return;
+          if (!this.#current(output.active) || this.#playbacks.get(event.requestId) !== output) return;
           await output.playback.append(base64Pcm(event.pcm));
-          if (!this.#current(output.active)) return;
-          this.#state.phase = "speaking"; this.#publish();
+          if (!this.#current(output.active) || this.#playbacks.get(event.requestId) !== output) return;
+          if (!output.staged) this.#audible(output.active);
           await this.#speech.acknowledgeAudio({ requestId: event.requestId, sequence: event.sequence });
-        }).catch(error => this.#fail(output.active, error));
+        }).catch(fail);
       }));
       handles.push(await this.#speech.addInterruptedListener(() => {
-        this.#queue.items.length = 0; this.#clearControls();
+        this.#discardQueuedReplies(); this.#clearControls();
         if (this.#active?.directInputPending) { this.#cancelActive(); this.#publish(); }
         else if (this.#active) this.#fail(this.#active, new Error("Desktop audio was interrupted. The recording was not saved or resent."));
       }));
@@ -279,12 +291,13 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
     const binding = { profileId: parsed.profileId, serverOrigin: configuredSedesServer(parsed.serverOrigin).baseUrl!, identity: parsed.identity };
     const sameBinding = this.#binding && Object.keys(binding).every(key => binding[key as keyof ElectronVoiceBinding] === this.#binding![key as keyof ElectronVoiceBinding]);
     if (!parsed.reconnect && sameBinding) return this.#snapshot();
-    if (!sameBinding) this.#resumeToken = undefined;
+    this.#retireOpenReplies();
+    if (!sameBinding) { this.#resumeToken = undefined; this.#early.clear(); this.#lastAudibleOwner = undefined; }
     this.#clearReconnect();
     this.#connection?.close(); this.#connection = undefined;
     this.#cancelActive(); this.#clearControls(); this.#queue.reset(); this.#drained.clear();
     this.#binding = binding;
-    this.#state = { ...emptyElectronVoiceState(this.#preferences.get(binding)), ...binding,
+    this.#state = { ...emptyElectronVoiceState(this.#preferences.get(binding), this.#preferences.early), ...binding,
       connectionGeneration: this.#state.connectionGeneration + 1, stateRevision: this.#state.stateRevision,
       settingsRevision: this.#preferences.revision, phase: "starting" };
     this.#policy = null; this.#notificationsConnected = false; this.#notificationsFailed = false; this.#connectionFailed = false;
@@ -304,7 +317,9 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
           if (registration) this.#resumeToken = registration.resumeToken;
           this.#publish();
         },
-        frame: (event, value) => { if (generation === this.#state.connectionGeneration) this.#frame(event, value); },
+        frame: (event, value, stream) => {
+          if (generation === this.#state.connectionGeneration && stream && stream === this.#connection?.voiceStreamId) this.#frame(event, value);
+        },
         notificationsChanged: connected => {
           if (generation !== this.#state.connectionGeneration) return;
           this.#notificationsConnected = connected;
@@ -322,7 +337,7 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
             if (!reconnects) this.#clearReconnect();
             this.#connectionFailed = true;
             const uncertainInput = this.#cancelActive();
-            this.#clearControls(); this.#queue.items.length = 0;
+            this.#clearControls(); this.#discardQueuedReplies();
             this.#state.phase = "error";
             if (!uncertainInput) this.#error(code, new Error(code === "client_connection_replaced"
               ? "Client controls are active in another window. Reconnect to use this window."
@@ -334,6 +349,7 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
         },
       }, this.#resumeToken);
       this.#connection = connection;
+      connection.earlyReplyInterest(this.#earlyEnabled());
       await connection.connect();
       if (generation !== this.#state.connectionGeneration) { connection.close(); return this.#snapshot(); }
       if (this.#state.settings.audioMode !== "off") connection.notifications(true);
@@ -356,9 +372,10 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
     this.#clearReconnect();
     this.#resumeToken = undefined;
     this.#connection?.close(); this.#connection = undefined; this.#cancelActive(); this.#clearControls(); this.#queue.reset();
+    this.#retireOpenReplies(); this.#early.clear(); this.#lastAudibleOwner = undefined;
     this.#binding = undefined; this.#policy = null; this.#catalogRequest++; this.#speechGeneration++;
     const generation = this.#state.connectionGeneration + 1, revision = this.#state.stateRevision;
-    this.#state = { ...emptyElectronVoiceState(this.#preferences.get()), connectionGeneration: generation, stateRevision: revision,
+    this.#state = { ...emptyElectronVoiceState(this.#preferences.get(), this.#preferences.early), connectionGeneration: generation, stateRevision: revision,
       settingsRevision: this.#preferences.revision };
     this.#trace("disconnected");
     await this.#speech.cancelAll().catch(() => undefined);
@@ -369,7 +386,7 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
     const generation = this.#state.connectionGeneration, request = ++this.#speechGeneration;
     const { speechProvider: provider, speechEndpoint: endpoint } = this.#state.settings;
     this.#catalog = undefined; this.#catalogRequest++;
-    this.#state.speech = { audioQuality: "original", audioQualityRevision: 0, credentialConfigured: false, catalogStatus: "idle", catalog: null, error: null };
+    this.#state.speech = { ...this.#preferences.early, audioQuality: "original", audioQualityRevision: 0, credentialConfigured: false, catalogStatus: "idle", catalog: null, error: null };
     if (!endpoint) { await this.#speech.cancelAll(); return; }
     const configured = await this.#speech.configure({ provider, endpoint });
     if (generation !== this.#state.connectionGeneration || request !== this.#speechGeneration) return;
@@ -425,6 +442,20 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
     this.#scheduleDrain();
     return this.#publish();
   }
+  #earlyEnabled(): boolean {
+    const settings = this.#state.settings;
+    return this.#state.speech.earlyReplyPlayback !== "off" && settings.audioMode === "speak" && settings.speechContent !== "announcements";
+  }
+  async setEarlyReplyPlayback(input: Parameters<NativeVoicePlugin["setEarlyReplyPlayback"]>[0]): Promise<NativeVoiceState> {
+    this.#assertGeneration(input);
+    this.#preferences.setEarly(input.earlyReplyPlayback, input.expectedEarlyReplyRevision);
+    Object.assign(this.#state.speech, this.#preferences.early);
+    this.#connection?.earlyReplyInterest(this.#earlyEnabled());
+    if (!this.#earlyEnabled()) this.#retireOpenReplies();
+    else this.#active?.item?.early?.changed?.();
+    return this.#publish(true);
+  }
+
   async updateSettings(input: Parameters<NativeVoicePlugin["updateSettings"]>[0]): Promise<NativeVoiceState> {
     this.#assertGeneration(input);
     if (!this.#binding) throw new Error("Connect to Sedes first.");
@@ -434,13 +465,18 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
     this.#preferences.save(this.#binding, next);
     this.#state.settings = next; this.#state.settingsRevision = this.#preferences.revision;
     const savedRevision = this.#state.settingsRevision;
-    for (const id of this.#queue.reconfigure(next)) this.#rememberDrained(id);
+    this.#connection?.earlyReplyInterest(this.#earlyEnabled());
+    for (const reply of this.#early.values()) {
+      if (!reply.retired && !this.#earlyEligible(reply)) this.#releaseEarly(reply);
+      else reply.changed?.();
+    }
+    for (const item of this.#queue.reconfigure(next)) this.#discardQueuedItem(item);
     if (old.pinDefaultVoiceThread !== next.pinDefaultVoiceThread || old.voiceThreadId !== next.voiceThreadId) {
       this.#state.retainedVoiceTarget = null; this.#state.idleTargetRevision++;
     }
     const speechChanged = (["speechProvider", "speechEndpoint", "sttModel", "ttsModel", "ttsVoice", "ttsSpeed"] as const).some(key => old[key] !== next[key]);
     if (next.audioMode === "off") {
-      this.#cancelActive(); this.#clearControls(); this.#queue.items.length = 0;
+      this.#cancelActive(); this.#clearControls(); this.#discardQueuedReplies();
       this.#state.nextRecordingTarget = null; this.#state.retainedVoiceTarget = null;
       this.#connection?.notifications(false); this.#state.phase = "off";
     } else if (old.audioMode !== next.audioMode) this.#cancelAutomatic();
@@ -531,7 +567,7 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
   }
   #activate(target: string | null, title: string | null, item?: ElectronVoiceQueueItem): ActiveInteraction {
     const active: ActiveInteraction = { id: item?.id ?? this.#uuid(), generation: this.#state.connectionGeneration,
-      abort: new AbortController(), item, target, title, automatic: !!item?.notification, held: false,
+      abort: new AbortController(), item, target, title, automatic: !!(item?.notification || item?.early), held: false,
       finishing: false, retargeting: false, finalized: false, captureStarted: false };
     this.#active = active;
     void this.#speech.setAudioActive({ active: true }).catch(error => this.#fail(active, error));
@@ -754,10 +790,82 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
     this.#finish(active);
   }
 
+  #audible(active: ActiveInteraction): void {
+    if (!this.#current(active)) return;
+    this.#lastAudibleOwner = active.id;
+    this.#state.phase = "speaking"; this.#publish();
+  }
+  #earlyEligible(reply: ElectronEarlyReply): boolean {
+    const policy = this.#policy, settings = this.#state.settings, source = reply.identity;
+    return this.#earlyEnabled() && this.#sessionReady() && !!policy && this.#notificationsConnected && policy.settings.enabled &&
+      !policy.settings.silenced && (source.event === "turn.progress" || policy.settings.assistantResultPhases.includes("final")) &&
+      policy.settings.delivery[source.event].voice !== "none" && policy.generation === source.generation &&
+      !(settings.ignoreOtherDevices && source.origin && source.origin.clientId !== this.#state.originClientId) &&
+      (!settings.onlyVoiceThread || settings.voiceThreadId === source.threadId);
+  }
+  #releaseEarly(reply: ElectronEarlyReply): void {
+    if (reply.retired && (this.#active?.item?.early !== reply || this.#active.item.notification)) return;
+    reply.detach();
+    const index = this.#queue.items.findIndex(item => item.early === reply && !item.notification);
+    if (index >= 0) this.#queue.items.splice(index, 1);
+    if (this.#active?.item?.early === reply && !this.#active.item.notification) this.#cancelActive();
+    this.#scheduleDrain(); this.#publish();
+  }
+  #retireOpenReplies(): void {
+    for (const reply of this.#early.values()) this.#releaseEarly(reply);
+  }
+  #earlyFrame(frame: EarlyReplyFrame): void {
+    let reply = this.#early.get(frame.replyId);
+    if (!reply) {
+      if (frame.kind !== "begin" || this.#early.size >= 4096 || this.#queue.seen.has(frame.replyId) || this.#drained.has(frame.replyId)) return;
+      reply = new ElectronEarlyReply(frame, performance.now(), this.#connection!.voiceStreamId!);
+      if (!this.#earlyEligible(reply)) return;
+      const item = { id: frame.replyId, early: reply, event: frame.event, threadId: frame.threadId, threadTitle: nativeThreadTitle(frame.threadTitle) };
+      if (!this.#enqueue(item)) return;
+      this.#early.set(frame.replyId, reply); this.#trace("early_begin");
+      reply.timer = setTimeout(() => this.#releaseEarly(reply!), 600_000);
+    } else {
+      if (this.#connection?.voiceStreamId !== reply.streamId) return;
+      const source = reply.identity;
+      if (reply.retired) {
+        if (frame.kind === "cancel" && frame.reason === "publication_suppressed" && frame.threadId === source.threadId &&
+            frame.turnId === source.turnId && frame.itemId === source.itemId && frame.generation === source.generation) this.#early.delete(frame.replyId);
+        return;
+      }
+      if (this.#active?.item?.early === reply && this.#active.item.notification ||
+          this.#queue.items.some(item => item.early === reply && item.notification)) return;
+      if (!this.#earlyEligible(reply)) { this.#releaseEarly(reply); return; }
+      const result = reply.receive(frame, performance.now());
+      if (result === "ignored") return;
+      if (result === "invalid" || this.#queue.bytes(this.#state.settings) > 256 * 1024) {
+        this.#releaseEarly(reply); return;
+      }
+      this.#trace(`early_${frame.kind}`);
+      if (frame.kind === "cancel") {
+        if (frame.reason === "superseded" && this.#active?.item?.early === reply && this.#state.phase === "speaking") {
+          reply.detach();
+        } else this.#releaseEarly(reply);
+        if (frame.reason === "publication_suppressed") this.#early.delete(frame.replyId);
+        return;
+      }
+      reply.changed?.();
+    }
+    this.#scheduleDrain(); this.#publish();
+  }
   #eligible(item: ElectronVoiceQueueItem): boolean {
+    if (item.early && !item.notification) return this.#earlyEligible(item.early);
     return !item.notification || notificationEligible(item.notification, this.#policy, this.#state.settings, this.#state.originClientId);
   }
-  #frame(event: "notification_policy" | "notification", raw: unknown): void {
+  #frame(event: "notification_policy" | "notification" | "voice_early_reply", raw: unknown): void {
+    if (event === "voice_early_reply") {
+      const parsed = earlyReplyFrameSchema.safeParse(raw);
+      if (parsed.success) this.#earlyFrame(parsed.data);
+      else if (raw && typeof raw === "object" && "replyId" in raw && typeof raw.replyId === "string") {
+        const reply = this.#early.get(raw.replyId);
+        if (reply) this.#releaseEarly(reply);
+      }
+      return;
+    }
     try {
       if (event === "notification_policy") {
         const policy = notificationPolicySchema.parse(raw);
@@ -766,16 +874,48 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
         this.#policy = policy; this.#notificationsFailed = false; this.#trace("policy_received"); this.#publish(); this.#scheduleDrain(); return;
       }
       const notice = voiceNotificationSchema.parse(raw);
-      const item: ElectronVoiceQueueItem = { id: notice.sourceEventId, notification: notice, event: notice.payload.event,
+      let item: ElectronVoiceQueueItem = { id: notice.sourceEventId, notification: notice, event: notice.payload.event,
         threadId: notice.payload.thread?.id ?? null, threadTitle: notice.payload.thread ? nativeThreadTitle(notice.payload.thread.title) : null };
       this.#trace("received");
+      // Definitive suppression releases the receipt while previously submitted audio can still be draining.
+      const playing = this.#active?.item;
+      const reply = this.#early.get(item.id) ?? (playing?.id === item.id && !playing.notification ? playing.early : undefined);
+      if (reply && item.threadId === reply.identity.threadId && notice.payload.turn?.id === reply.identity.turnId) {
+        const existing = this.#queue.items.find(other => other.early === reply) ?? (this.#active?.item?.early === reply ? this.#active.item : undefined);
+        if (existing?.notification || this.#queue.seen.has(item.id)) return;
+        if (notice.payload.event === reply.identity.event &&
+            (notice.payload.event !== "turn.progress" || notice.payload.progress?.itemId === reply.identity.itemId)) {
+          this.#trace("early_sealed");
+          if (reply.suppressed || !this.#eligible(item) || !voiceItemText(item, this.#state.settings) && !notificationListens(notice, this.#state.settings)) {
+            this.#queue.remember(item.id); this.#releaseEarly(reply); this.#early.delete(item.id); this.#rememberDrained(item.id); this.#scheduleDrain(); return;
+          }
+          // Seal in place, including when a physical request has already reached the speaker.
+          if (existing) {
+            clearTimeout(reply.timer);
+            existing.notification = notice;
+            this.#queue.remember(item.id);
+            reply.cancelLookahead?.();
+            if (this.#queue.items.includes(existing)) {
+              reply.detach();
+              for (const dropped of this.#queue.fitSealed(existing, this.#state.settings)) this.#discardQueuedItem(dropped);
+            } else {
+              if (this.#active?.item === existing) {
+                this.#active.target = notice.recognitionTarget?.threadId ?? item.threadId;
+                this.#active.title = this.#active.target === item.threadId ? item.threadTitle : null;
+              }
+              reply.changed?.();
+            }
+            this.#scheduleDrain(); this.#publish(); return;
+          }
+          item = { ...item, early: reply };
+        } else { this.#releaseEarly(reply); this.#early.delete(item.id); }
+      }
       if (!this.#eligible(item) || !voiceItemText(item, this.#state.settings) && !notificationListens(notice, this.#state.settings)) {
         this.#rememberDrained(item.id); this.#queue.drop("ineligible"); this.#scheduleDrain(); this.#publish(); return;
       }
-      const previous = this.#queue.items.map(queued => queued.id);
-      if (this.#active?.item?.id !== item.id && this.#queue.add(item, this.#state.settings)) this.#trace("queued");
-      for (const id of previous) if (!this.#queue.items.some(queued => queued.id === id)) this.#rememberDrained(id);
+      if (this.#active?.item?.id !== item.id && this.#enqueue(item)) this.#trace("queued");
       if (this.#active?.item?.id !== item.id && !this.#queue.items.some(queued => queued.id === item.id)) this.#rememberDrained(item.id);
+      this.#active?.item?.early?.changed?.();
       this.#publish(); this.#scheduleDrain();
     } catch (error) {
       this.#connection?.notifications(false); this.#notificationsFailed = true; this.#policy = null; this.#cancelAutomatic();
@@ -783,14 +923,25 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
     }
   }
   #cancelAutomatic(): void {
+    this.#retireOpenReplies();
     for (const item of this.#queue.items) if (item.notification) this.#rememberDrained(item.id);
     this.#queue.clearAutomatic("notification_policy_changed");
     if (this.#active?.automatic && !this.#active.finalized) this.#cancelActive();
     this.#scheduleDrain();
   }
+  #discardQueuedItem(item: ElectronVoiceQueueItem): void {
+    // Only an actual terminal delivery can fulfill its stream's drain barrier.
+    if (item.early && !item.notification) item.early.detach();
+    else this.#rememberDrained(item.id);
+  }
+  #enqueue(item: ElectronVoiceQueueItem): boolean {
+    const previous = this.#queue.items.slice();
+    const added = this.#queue.add(item, this.#state.settings);
+    for (const old of previous) if (!this.#queue.items.includes(old)) this.#discardQueuedItem(old);
+    return added;
+  }
   #discardQueuedReplies(): void {
-    for (const item of this.#queue.items) this.#rememberDrained(item.id);
-    this.#queue.items.length = 0;
+    for (const item of this.#queue.items.splice(0)) this.#discardQueuedItem(item);
   }
   async speakReply(input: Parameters<NativeVoicePlugin["speakReply"]>[0]): Promise<NativeVoiceState> {
     const request = replaySchema.parse(input); this.#assertGeneration(request);
@@ -800,7 +951,7 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
       threadTitle: request.threadTitle ?? null, replay: { threadId: request.threadId, turnId: request.turnId,
         threadTitle: request.threadTitle, assistantResult: request.assistantResult } };
     if (!voiceItemText(item, this.#state.settings)) throw new Error("This reply has no text to speak.");
-    this.#queue.add(item, this.#state.settings); this.#scheduleDrain();
+    this.#enqueue(item); this.#scheduleDrain();
     return this.#publish();
   }
   #scheduleDrain(): void {
@@ -813,7 +964,7 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
     if (this.#applyControls()) return;
     if (!this.#sessionReady()) return;
     for (let item = this.#queue.items.shift(); item; item = this.#queue.items.shift()) {
-      if (!this.#eligible(item)) { this.#queue.drop("ineligible"); this.#rememberDrained(item.id); continue; }
+      if (!this.#eligible(item)) { this.#queue.drop("ineligible"); if (item.early && !item.notification) this.#releaseEarly(item.early); else this.#rememberDrained(item.id); continue; }
       const target = item.notification?.recognitionTarget?.threadId ?? item.threadId;
       const active = this.#activate(target, target === item.threadId ? item.threadTitle : null, item);
       this.#trace("dequeued");
@@ -824,20 +975,48 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
   }
   async #playItem(active: ActiveInteraction): Promise<void> {
     const item = active.item!;
-    const settings = structuredClone(this.#state.settings);
-    const text = voiceItemText(item, settings);
-    if (item.notification?.userInputRevision !== undefined && item.threadId) {
+    const settings = structuredClone(item.early?.presentationSettings(this.#state.settings) ?? this.#state.settings);
+    const revision = item.notification?.userInputRevision ?? item.early?.identity.userInputRevision;
+    if (revision !== undefined && item.threadId) {
       this.#state.phase = "synthesizing"; this.#publish();
       const context = await this.#context(item.threadId, active.abort.signal); this.#assertCurrent(active);
-      if (context.userInputRevision > item.notification.userInputRevision) {
-        this.#discardSourceControls(item.notification.payload.thread!.id, item.notification.payload.turn?.id);
+      if (context.userInputRevision > revision) {
+        if (item.event !== "turn.progress") this.#discardSourceControls(item.threadId, item.notification?.payload.turn?.id ?? item.early?.identity.turnId);
         this.#finish(active); return;
       }
     }
     if (!this.#eligible(item)) { this.#finish(active); return; }
+    const text = voiceItemText(item, settings);
     if (text) this.#retain(item.threadId, item.threadTitle);
     const modelLimit = this.#catalog?.speechModels.find(model => model.id === settings.ttsModel)?.maxTextLength ?? 4096;
-    for (const chunk of voiceChunks(text, Math.min(settings.speechTextLimit, modelLimit))) {
+    const limit = Math.min(settings.speechTextLimit, modelLimit);
+    let chunks = item.early ? [] : voiceChunks(text, limit);
+    if (item.early) {
+      if (!item.notification) {
+        try { await this.#playEarly(active, settings, modelLimit); }
+        catch (error) {
+          this.#assertCurrent(active);
+          // If the ordinary seal arrived during a failed early request, it still
+          // receives one normal attempt from the preceding drained frontier.
+          if (!item.notification) throw error;
+        }
+      }
+      this.#assertCurrent(active);
+      if (!item.notification || !this.#eligible(item)) { this.#finish(active); return; }
+      const context = await this.#context(item.threadId!, active.abort.signal);
+      this.#assertCurrent(active);
+      if (context.userInputRevision > item.notification.userInputRevision!) {
+        if (item.event !== "turn.progress") this.#discardSourceControls(item.threadId!, item.notification.payload.turn?.id);
+        this.#finish(active); return;
+      }
+      const continuation = item.early.continuation(item.notification, settings, this.#lastAudibleOwner);
+      const parts = continuation ?? [voiceItemText(item, settings)];
+      chunks = parts.flatMap(part => voiceChunks(part, Math.min(settings.speechTextLimit, modelLimit)));
+      item.early.detach();
+      await this.#playEarly(active, settings, modelLimit, chunks);
+      chunks = [];
+    }
+    for (const chunk of chunks) {
       this.#assertCurrent(active);
       const requestId = this.#uuid();
       this.#state.phase = "synthesizing"; this.#publish();
@@ -861,10 +1040,108 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
     if (listens && active.target && this.#sessionReady()) await this.#listen(active);
     else this.#finish(active);
   }
+  async #playEarly(active: ActiveInteraction, settings: NativeVoiceSettings, modelLimit: number, continuation?: string[]): Promise<void> {
+    const item = active.item!, reply = item.early!;
+    let mode: NativeVoiceState["speech"]["earlyReplyPlayback"] | undefined;
+    let blockingSince: number | undefined;
+    let terminalIndex = 0;
+    const next = () => {
+      if (continuation) {
+        const text = continuation[terminalIndex++];
+        return text === undefined ? undefined : { text };
+      }
+      if (item.notification || reply.retired || !this.#earlyEligible(reply) || performance.now() - reply.openedAt >= 600_000) return;
+      const preference = mode ?? this.#state.speech.earlyReplyPlayback;
+      if (mode === undefined) Object.assign(settings, this.#state.settings);
+      const chunk = reply.next(settings, preference, Math.min(settings.speechTextLimit, modelLimit));
+      if (chunk) mode = preference;
+      return chunk;
+    };
+    const start = (chunk: EarlySpeechChunk) => {
+      const requestId = this.#uuid();
+      const buffer = new ElectronEarlyOutput(() => this.#audible(active));
+      const output: SpeechPlayback = { active, playback: buffer, staged: true, pending: Promise.resolve(), nextSequence: 0 };
+      this.#playbacks.set(requestId, output);
+      let stopped = false, onStop!: () => void;
+      const stopping = new Promise<void>((resolve, reject) => { onStop = resolve; output.onError = reject; });
+      const receiving = this.#speech.speak({ requestId, provider: settings.speechProvider, endpoint: settings.speechEndpoint,
+        model: settings.ttsModel, voice: settings.ttsVoice, speed: settings.ttsSpeed, text: chunk.text }).then(() => output.pending);
+      const arrived = Promise.race([receiving, stopping]);
+      void arrived.catch(() => undefined); // A staged transport can fail while the preceding speaker is draining.
+      const close = (cancel: boolean) => {
+        if (stopped) return;
+        stopped = true; this.#playbacks.delete(requestId); buffer.cancel(); onStop();
+        if (cancel) void this.#speech.cancel({ requestId }).catch(() => undefined);
+      };
+      return { chunk, buffer, arrived, close, stopping, stopped: () => stopped };
+    };
+    let current: ReturnType<typeof start> | undefined, staged: typeof current;
+    let waitingDrain = false, wake: (() => void) | undefined;
+    const cancelStaged = () => { staged?.close(true); staged = undefined; };
+    const changed = () => {
+      if (item.notification && current?.chunk.frontier &&
+          !reply.matches(reply.sealedSection(item.notification)?.text ?? "", settings.cleanSpeechText, current.chunk.frontier)) {
+        current.close(true);
+      }
+      if (waitingDrain && !staged && current && !current.stopped()) {
+        const chunk = next();
+        if (chunk) { staged = start(chunk); this.#trace("early_prefetched"); }
+      }
+      wake?.();
+    };
+    const abort = () => { cancelStaged(); current?.close(true); wake?.(); };
+    reply.changed = changed; reply.cancelLookahead = cancelStaged;
+    active.abort.signal.addEventListener("abort", abort, { once: true });
+    try {
+      while (this.#current(active)) {
+        if (!current) {
+          const chunk = next();
+          if (!chunk) {
+            if (continuation || item.notification || reply.retired) break;
+            const now = performance.now();
+            const blocking = this.#queue.items.some(other => ["approval.requested", "input.requested"].includes(other.event));
+            if (blocking) blockingSince ??= now; else blockingSince = undefined;
+            const deadline = Math.min(reply.openedAt + 600_000, reply.lastSpanAt + 60_000, (blockingSince ?? Infinity) + 2_000);
+            if (reply.yielded || deadline <= now || !this.#earlyEligible(reply)) break;
+            if (this.#state.phase !== "waiting_for_reply_text") this.#trace("early_waiting");
+            this.#state.phase = "waiting_for_reply_text"; this.#publish();
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            await new Promise<void>(resolve => { wake = resolve; timer = setTimeout(resolve, deadline - now); });
+            clearTimeout(timer); wake = undefined; continue;
+          }
+          current = start(chunk);
+        }
+        blockingSince = undefined;
+        // The preceding physical request may have drained before promotion.
+        // Supersession may only drain a request that itself reached the speaker.
+        this.#state.phase = "synthesizing"; this.#publish();
+        const sink = await this.#audio.createPlayback({ gain: settings.ttsGain / 100, signal: active.abort.signal });
+        current.buffer.promote(sink);
+        await current.arrived; this.#assertCurrent(active);
+        if (!current.stopped()) {
+          waitingDrain = true; changed();
+          await Promise.race([current.buffer.finish(), current.stopping]);
+          this.#assertCurrent(active);
+          if (!current.stopped()) {
+            if (current.chunk.frontier) reply.frontier = current.chunk.frontier;
+            if (current.chunk.preambleEnd !== undefined) reply.preambleEnd = current.chunk.preambleEnd;
+            this.#trace("playback_drained");
+          }
+          waitingDrain = false;
+        }
+        current.close(false); current = staged; staged = undefined;
+        if (current) this.#trace("early_promoted");
+      }
+    } finally {
+      active.abort.signal.removeEventListener("abort", abort);
+      cancelStaged(); current?.close(true); reply.changed = undefined; reply.cancelLookahead = undefined;
+    }
+  }
   async recordDuringPlayback(input: Parameters<NativeVoicePlugin["recordDuringPlayback"]>[0]): Promise<NativeVoiceState> {
     const old = this.#assertActive(input);
     if (!playbackPhases.has(this.#state.phase) || !this.#sessionReady() || !old.item?.threadId) throw new Error("This playback cannot start a recording.");
     const target = old.item.threadId, title = old.item.threadTitle;
+    if (old.item?.early) old.item.early.suppressed = true;
     this.#cancelActive(); this.#clearControls(); this.#state.nextRecordingTarget = null;
     const active = this.#activate(target, title); this.#state.phase = "validating";
     void this.#listen(active).catch(error => this.#fail(active, error));
@@ -873,19 +1150,23 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
   async skipCurrentPlayback(input: Parameters<NativeVoicePlugin["skipCurrentPlayback"]>[0]): Promise<NativeVoiceState> {
     const active = this.#assertActive(input);
     if (!active.item || active.finalized) return this.#snapshot();
+    if (active.item.early) active.item.early.suppressed = true;
     this.#cancelActive(); this.#scheduleDrain();
     return this.#publish();
   }
   async stopPlayback(input: Parameters<NativeVoicePlugin["stopPlayback"]>[0]): Promise<NativeVoiceState> {
-    this.#assertActive(input);
-    this.#cancelActive(); this.#clearControls(); this.#queue.items.length = 0;
+    const active = this.#assertActive(input);
+    for (const item of [active.item, ...this.#queue.items]) if (item?.early && !item.notification) item.early.suppressed = true;
+    this.#cancelActive(); this.#clearControls(); this.#discardQueuedReplies();
     this.#state.retainedVoiceTarget = null; this.#state.idleTargetRevision++; this.#rememberIdleTarget();
     return this.#publish();
   }
   async stopCurrentInteraction(input: Parameters<NativeVoicePlugin["stopCurrentInteraction"]>[0]): Promise<NativeVoiceState> {
-    this.#assertActive(input); this.#cancelActive(); this.#scheduleDrain(); return this.#publish();
+    const active = this.#assertActive(input); if (active.item?.early) active.item.early.suppressed = true;
+    this.#cancelActive(); this.#scheduleDrain(); return this.#publish();
   }
   #rememberDrained(id: string): void {
+    const reply = this.#early.get(id); if (reply) { reply.detach(); this.#early.delete(id); }
     this.#drained.add(id); if (this.#drained.size > 4096) this.#drained.delete(this.#drained.values().next().value!);
   }
   #finish(active: ActiveInteraction): void {
@@ -907,7 +1188,8 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
       this.#error("input_submission_uncertain", new Error(uncertainInputMessage));
     }
     this.#active = undefined; active.abort.abort(); clearTimeout(active.limitTimer); active.recording?.cancel();
-    if (active.item) this.#rememberDrained(active.item.id);
+    if (active.item?.early && !active.item.notification) active.item.early.detach();
+    else if (active.item) this.#rememberDrained(active.item.id);
     for (const [requestId, output] of this.#playbacks) if (output.active === active) {
       output.playback.cancel(); this.#playbacks.delete(requestId);
       void this.#speech.cancel({ requestId }).catch(() => undefined);

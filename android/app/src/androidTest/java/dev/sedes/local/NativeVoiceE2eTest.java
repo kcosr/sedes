@@ -539,6 +539,116 @@ public class NativeVoiceE2eTest {
             instrumentation.runOnMainSync(activity::finish);
         }
     }
+    /** Exercise the packaged service while its Activity is backgrounded. Enrollment uses real HTTP and Android Keystore. */
+    @Test(timeout = 210000) public void nativeBackgroundEarlyReply() throws Exception {
+        Bundle args = InstrumentationRegistry.getArguments();
+        boolean progress = "progress".equals(args.getString("earlyKind"));
+        String server = args.getString("serverOrigin"), endpoint = args.getString("speechEndpoint"), pairing = args.getString("pairingCode");
+        Assume.assumeTrue("Requires the isolated native voice host harness", server != null && endpoint != null && pairing != null);
+        instrumentation = InstrumentationRegistry.getInstrumentation();
+        Context context = instrumentation.getTargetContext();
+        NativeVoiceAudioTest.grant(context, "android.permission.RECORD_AUDIO");
+        if (Build.VERSION.SDK_INT >= 33) NativeVoiceAudioTest.grant(context, "android.permission.POST_NOTIFICATIONS");
+        MainActivity activity = (MainActivity) instrumentation.startActivitySync(new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        runtime = NativeVoiceRuntime.get(context);
+        NativeVoiceRuntime.Observer observer = (event, value) -> {
+            if (event.equals("stateChanged")) phases.add(value.optString("phase"));
+        };
+        runtime.observe(observer);
+        runtime.setDiagnosticsEnabled(true);
+        AtomicInteger captures = new AtomicInteger();
+        NativeVoiceAudio.setTestSource(() -> { captures.incrementAndGet(); return null; });
+        try {
+            CountDownLatch paired = new CountDownLatch(1);
+            AtomicReference<JSONObject> enrollment = new AtomicReference<>();
+            new NativeVoiceHttp().request(server, null, null, "POST", "/api/auth/pair",
+                NativeVoiceJson.object("token", pairing, "kind", "device", "clientName", "Background voice qualification"),
+                (status, body, error) -> { if (status == 200 && error == null) enrollment.set(body); paired.countDown(); });
+            assertTrue("Native enrollment finished", paired.await(30, TimeUnit.SECONDS));
+            assertNotNull("Sedes paired this device", enrollment.get());
+            String profile = java.util.UUID.randomUUID().toString();
+            new ClientCredentialStore(context).setCredential(profile, server, enrollment.get().getString("credential"));
+            new SpeechCredentialStore(context).setCredential("server", endpoint, required(args, "speechToken"));
+            command("setConnection", NativeVoiceJson.object("profileId", profile, "serverOrigin", server,
+                "identity", enrollment.get().getString("navigationNamespace")));
+            await(() -> !runtime.snapshot().isNull("clientConnectionToken"), 45000, "registered packaged Android client");
+            command("setEarlyReplyPlayback", NativeVoiceJson.object("expectedEarlyReplyRevision", runtime.snapshot().getJSONObject("speech").getLong("earlyReplyRevision"),
+                "earlyReplyPlayback", required(args, "earlyMode")));
+            command("updateSettings", NativeVoiceJson.object("expectedRevision", runtime.snapshot().getLong("settingsRevision"), "patch",
+                NativeVoiceJson.object("speechProvider", "server", "speechEndpoint", endpoint, "ttsModel", "kokoro-local",
+                    "sttModel", "parakeet-local", "ttsVoice", "af_heart", "speechContent", "both", "autoListen", false, "startupPreRollMs", 0)));
+            command("updateSettings", NativeVoiceJson.object("expectedRevision", runtime.snapshot().getLong("settingsRevision"), "patch", NativeVoiceJson.object("audioMode", "speak")));
+            await(() -> runtime.snapshot().optBoolean("ready") && idleVoice(runtime.snapshot()), 45000, "foreground service and native policy ready");
+            verifyBackgroundEarlyReply(activity, server, required(args, "threadId"), required(args, "initialText"), captures, progress);
+        } finally {
+            Bundle evidence = new Bundle();
+            evidence.putString("voiceTrace", runtime.readDiagnostics().toString());
+            instrumentation.sendStatus(0, evidence);
+            runtime.setDiagnosticsEnabled(false);
+            runtime.unobserve(observer);
+            try { if (!runtime.snapshot().isNull("identity")) command("disconnect", new JSONObject()); }
+            finally { NativeVoiceAudio.setTestSource(null); instrumentation.runOnMainSync(activity::finish); }
+        }
+    }
+    /** Device stage reports let the host withhold item completion and send late commentary after Next. */
+    private void verifyBackgroundEarlyReply(MainActivity activity, String server, String thread, String input, AtomicInteger supplied, boolean progress) throws Exception {
+        NativeVoiceAudio audio = runtimeAudio(runtime);
+        List<NativeVoiceAudio.PlaybackDrain> baseline = audio.playbackDrainsForTest();
+        AtomicBoolean moved = new AtomicBoolean();
+        instrumentation.runOnMainSync(() -> moved.set(activity.moveTaskToBack(true)));
+        assertTrue("Activity task moved to the background", moved.get());
+        await(() -> !activity.getLifecycle().getCurrentState().isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)
+            && !runtime.snapshot().optJSONObject("foreground").optBoolean("visible"), 15000, "Activity stopped and native foreground context hidden");
+        Bundle admission = new Bundle();
+        admission.putString("voiceAdmission", submitRegisteredInput(server, thread, input));
+        instrumentation.sendStatus(0, admission);
+        await(() -> runtime.snapshot().optString("phase").equals("waiting_for_reply_text") && newPlaybackDrains(audio, baseline).size() == 1,
+            45000, "preamble physically drained while only the first short sentence was available");
+        JSONObject preamble = assertPlaybackDrain(newPlaybackDrains(audio, baseline).get(0), 24_000, 24_000);
+        String firstId = runtime.snapshot().getJSONObject("active").getString("id");
+        reportVoiceStage("voicePreamble", NativeVoiceJson.object("drain", preamble, "interactionId", firstId));
+        int openingDrains = 2; // The preamble and grouped opening drain before the item closes.
+        await(() -> runtime.snapshot().optString("phase").equals("waiting_for_reply_text") && newPlaybackDrains(audio, baseline).size() == openingDrains,
+            45000, "opening sentence physically drained before the source item completed");
+        JSONObject waiting = runtime.snapshot();
+        assertEquals(progress ? "turn.progress" : "turn.completed", waiting.getJSONObject("active").getString("eventKind"));
+        assertFalse(waiting.getJSONObject("foreground").getBoolean("visible"));
+        assertEquals(thread, waiting.getJSONObject("active").getString("threadId"));
+        assertEquals(0, waiting.getJSONObject("queue").getInt("count"));
+        assertEquals(0, supplied.get());
+        JSONObject first = assertPlaybackDrain(newPlaybackDrains(audio, baseline).get(openingDrains - 1), 24_000, 24_000);
+        assertEquals(firstId, waiting.getJSONObject("active").getString("id"));
+        reportVoiceStage("voiceOpening", NativeVoiceJson.object("drain", first, "foreground", false, "interactionId", firstId));
+        await(() -> idleVoice(runtime.snapshot()) && newPlaybackDrains(audio, baseline).size() == openingDrains + 1, 45000, "terminal suffix drained");
+        if (progress) {
+            reportVoiceStage("voiceProgressSettled", NativeVoiceJson.object("interactionId", firstId));
+            await(() -> runtime.snapshot().optString("phase").equals("waiting_for_reply_text") && newPlaybackDrains(audio, baseline).size() == 5,
+                45000, "second progress preamble and opening drained");
+            JSONObject secondActive = runtime.snapshot().getJSONObject("active");
+            assertEquals("turn.progress", secondActive.getString("eventKind"));
+            String secondId = secondActive.getString("id");
+            assertNotEquals(firstId, secondId);
+            assertEquals(0, runtime.snapshot().getJSONObject("queue").getInt("count"));
+            command("skipCurrentPlayback", NativeVoiceJson.object("interactionId", secondId));
+            reportVoiceStage("voiceSkipped", NativeVoiceJson.object("interactionId", secondId));
+            await(() -> idleVoice(runtime.snapshot()) && newPlaybackDrains(audio, baseline).size() == 6, 45000, "independent final reply drained after skip");
+        }
+        assertFalse(runtime.snapshot().getJSONObject("foreground").getBoolean("visible"));
+        assertFalse(phases.contains("listening"));
+        assertEquals(0, supplied.get());
+        assertEquals(0, runtime.snapshot().getJSONArray("errors").length());
+        List<NativeVoiceAudio.PlaybackDrain> drains = newPlaybackDrains(audio, baseline);
+        for (NativeVoiceAudio.PlaybackDrain drain : drains) assertPlaybackDrain(drain, 24_000, 24_000);
+        JSONObject second = playbackDrainJson(drains.get(openingDrains));
+        assertNotEquals(first.getString("requestId"), second.getString("requestId"));
+        reportVoiceStage("voiceResult", NativeVoiceJson.object("opening", first, "suffix", second, "physicalDrains", drains.size(),
+            "captureChunks", supplied.get(), "phases", new JSONArray(phases)));
+    }
+    private void reportVoiceStage(String name, JSONObject value) {
+        Bundle status = new Bundle();
+        status.putString(name, value.toString());
+        instrumentation.sendStatus(0, status);
+    }
     /** One state chain through real playback, both control surfaces, native capture and both idle-release paths. */
     private JSONObject retainedTargetCycle(Bundle args, AtomicInteger supplied, List<NativeVoiceAudio.PlaybackDrain> replyBaseline,
         AtomicInteger inputAttempts, List<JSONObject> submittedInputs) throws Exception {
@@ -835,7 +945,7 @@ public class NativeVoiceE2eTest {
         return sampler;
     }
     /** Start a real source turn while backgrounded, retaining this device's authenticated client provenance. */
-    private void submitRegisteredInput(String server, String thread, String text) throws Exception {
+    private String submitRegisteredInput(String server, String thread, String text) throws Exception {
         JSONObject state = runtime.snapshot();
         String credential = new ClientCredentialStore(instrumentation.getTargetContext()).getCredential(state.getString("profileId"), server);
         assertNotNull("No stored credential for the paired server", credential);
@@ -854,6 +964,7 @@ public class NativeVoiceE2eTest {
         assertNull(failure.get()); assertEquals(200, status.get()); assertNotNull(body.get());
         assertEquals(thread, body.get().getString("threadId"));
         assertTrue("Source prompt must be admitted", List.of("accepted", "queued", "submitting").contains(body.get().getString("status")));
+        return body.get().getString("mutationId");
     }
     /** The composer autosaves after a debounce, so poll Sedes itself for the persisted draft. */
     private boolean awaitServerDraft(String server, String thread, String expected, long timeout) throws Exception {

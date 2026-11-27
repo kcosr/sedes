@@ -4,7 +4,7 @@ import type { NativeVoiceComposerHandoff, NativeVoiceInputSubmitted, NativeVoice
 const profileId = "c61b5d8b-4a77-43c6-bd72-12e23fe42e38";
 export function voiceFixtureState(): NativeVoiceState {
   return {
-    version: 16, stateRevision: 1, connectionGeneration: 1, profileId, serverOrigin: null, identity: null,
+    version: 17, stateRevision: 1, connectionGeneration: 1, profileId, serverOrigin: null, identity: null,
     originClientId: "34612c41-0bbb-455f-a5af-725bfc7ae768", clientConnectionToken: null, settingsRevision: 0,
     settings: { audioMode: "speak", autoListen: true, keepListeningByDefault: false, announceRecordingThread: false, ignoreOtherDevices: true, speechContent: "both", cleanSpeechText: true,
       speechProvider: "openai", speechEndpoint: "https://api.openai.com/v1", sttModel: "gpt-live-transcribe", ttsModel: "gpt-4o-mini-tts",
@@ -12,7 +12,7 @@ export function voiceFixtureState(): NativeVoiceState {
       onlyVoiceThread: false, followComposerMode: false, inputDevice: null, recognitionStartTimeoutMs: 30000, recognitionCompletionTimeoutMs: 60000,
       recognitionResultTimeoutMs: 60000, longDictationTimeoutMs: 3_600_000, recognitionEndSilenceMs: 1200, recognizeStopCommand: true,
       recognitionCues: true, cueGain: 100, startupPreRollMs: 512, ttsGain: 100, headsetControls: true },
-    speech: { audioQuality: "original", audioQualityRevision: 0, credentialConfigured: true, catalogStatus: "idle", catalog: null, error: null }, phase: "idle", ready: true, readiness: "ready",
+    speech: { earlyReplyPlayback: "off", earlyReplyRevision: 0, audioQuality: "original", audioQualityRevision: 0, credentialConfigured: true, catalogStatus: "idle", catalog: null, error: null }, phase: "idle", ready: true, readiness: "ready",
     foreground: { visible: false, threadId: null, threadTitle: null, composerAvailable: false }, nextRecordingTarget: null, retainedVoiceTarget: null, idleTargetRevision: 0, active: null,
     queue: { count: 0, bytes: 0, droppedCount: 0, droppedReasons: {} },
     actions: { canStart: true, canStop: false, canSkip: false, canRecordDuringPlayback: false, canReleaseRetainedTarget: false, canRetarget: false, canResume: false,
@@ -115,7 +115,7 @@ export async function installVoiceFixture(page: Page): Promise<void> {
             if (state.retainedVoiceTarget) state.retainedVoiceTarget = { ...state.retainedVoiceTarget, revision: state.idleTargetRevision };
           }
           const recording = ["announcing", "arming", "listening", "recognizing", "submitting", "recovering"].includes(state.phase);
-          const threadId = recording ? state.active.recognitionThreadId : ["synthesizing", "speaking"].includes(state.phase) ? state.active.threadId : null;
+          const threadId = recording ? state.active.recognitionThreadId : ["synthesizing", "speaking", "waiting_for_reply_text"].includes(state.phase) ? state.active.threadId : null;
           const threadTitle = recording ? state.active.recognitionThreadTitle : state.active.threadTitle;
           if (threadId && state.settings.audioMode !== "off" && !state.settings.pinDefaultVoiceThread &&
               (state.retainedVoiceTarget?.threadId !== threadId || state.retainedVoiceTarget.threadTitle !== threadTitle)) {
@@ -193,7 +193,7 @@ export async function installVoiceFixture(page: Page): Promise<void> {
           header("NativeVoice", ["setDiagnosticsEnabled", "readDiagnostics", "clearDiagnostics", "setConnection", "getState", "disconnect", "setForegroundContext", "updateSettings", "startManualListen", "setNextRecordingTarget", "releaseRetainedVoiceTarget",
             "retargetActiveRecognition", "setKeepListening", "sendRecording", "stopCurrentInteraction", "stopPlayback", "skipCurrentPlayback", "recordDuringPlayback", "retryRecordingRecognition",
             "sendRecoveredRecording", "copyRecognizedRecordingText", "readRecognizedRecordingText", "discardRecording", "resumeInput", "discardInput", "listInputDevices",
-            "refreshSpeechCatalog", "setSpeechAudioQuality", "openSpeechCredentialDialog", "speakReply", "claimComposerHandoff", "completeComposerHandoff", "settleComposerSubmission"], true),
+            "refreshSpeechCatalog", "setEarlyReplyPlayback", "setSpeechAudioQuality", "openSpeechCredentialDialog", "speakReply", "claimComposerHandoff", "completeComposerHandoff", "settleComposerSubmission"], true),
         ],
         nativeCallback(plugin: string, method: string, args: { eventName: string }, callback: (value: unknown) => void) {
           if (method !== "addListener") throw new Error(`Unexpected callback: ${plugin}.${method}`);
@@ -249,6 +249,13 @@ export async function installVoiceFixture(page: Page): Promise<void> {
             const changedProvider = patch.speechProvider !== undefined && patch.speechProvider !== current.settings.speechProvider;
             fixture.publish({ settingsRevision: current.settingsRevision + 1, settings: { ...current.settings, ...patch },
               ...(changedProvider ? { speech: { ...current.speech, catalog: null, catalogStatus: "idle" as const, credentialConfigured: false } } : {}) });
+          } else if (method === "setEarlyReplyPlayback") {
+            if (args.expectedConnectionGeneration !== current.connectionGeneration || args.expectedEarlyReplyRevision !== current.speech.earlyReplyRevision)
+              throw new Error("Early reply playback changed.");
+            const mode = args.earlyReplyPlayback;
+            if (mode !== "off" && mode !== "responsive" && mode !== "balanced" && mode !== "natural") throw new Error("Invalid early reply playback.");
+            if (mode !== current.speech.earlyReplyPlayback)
+              fixture.publish({ speech: { ...current.speech, earlyReplyPlayback: mode, earlyReplyRevision: current.speech.earlyReplyRevision + 1 } });
           } else if (method === "setSpeechAudioQuality") {
             if (args.expectedConnectionGeneration !== current.connectionGeneration || args.expectedAudioQualityRevision !== current.speech.audioQualityRevision)
               throw new Error("Upload quality changed.");
@@ -315,7 +322,7 @@ export async function installVoiceFixture(page: Page): Promise<void> {
                 canSend: true, keepListeningBlockedReason: null } });
           } else if (method === "stopPlayback") {
             if (args.interactionId !== current.active?.id || args.expectedConnectionGeneration !== current.connectionGeneration ||
-                !["synthesizing", "speaking"].includes(current.phase)) throw new Error("The playback changed.");
+                !["synthesizing", "speaking", "waiting_for_reply_text"].includes(current.phase)) throw new Error("The playback changed.");
             queuedReplays.clear();
             // Playback Stop releases continuity before idle uses the normal
             // explicit choice, pin, viewed thread, or default policy.

@@ -54,6 +54,10 @@ final class NativeVoiceHttp {
             public void onFailure(Call call, IOException error) { result.done(0, null, "network_unavailable"); }
             public void onResponse(Call call, Response response) {
                 try (Response closed = response) {
+                    if (response.code() == 204) {
+                        if (fixture == null || !fixture.after(method, path, body, 204, null, result)) result.done(204, null, null);
+                        return;
+                    }
                     if (response.body() == null) { result.done(response.code(), null, "empty_response"); return; }
                     ByteArrayOutputStream bytes = new ByteArrayOutputStream();
                     InputStream input = response.body().byteStream();
@@ -70,8 +74,20 @@ final class NativeVoiceHttp {
         });
         return call;
     }
-    Call events(String origin, String credential, String voiceStreamId, Stream listener) {
-        Request.Builder builder = new Request.Builder().url(NativeVoiceSettings.origin(origin) + "/api/application/events?voiceStreamId=" + voiceStreamId)
+    Call setEarlyInterest(String origin, String credential, String csrf, String voiceStreamId, String token,
+        long revision, boolean enabled, Result listener) {
+        JSONObject body = NativeVoiceJson.object("token", token, "revision", revision, "enabled", enabled);
+        NativeVoiceEarlyFrames.token(body);
+        NativeVoiceJson.integer(body, "revision", 0, NativeVoiceEarlyFrames.MAX_REVISION);
+        NativeVoiceProtocol.uuid(NativeVoiceJson.object("voiceStreamId", voiceStreamId), "voiceStreamId");
+        return request(origin, credential, csrf, "PUT", "/api/application/voice-streams/" + voiceStreamId + "/early-reply", body, listener);
+    }
+
+    Call events(String origin, String credential, String voiceStreamId, boolean earlyEnabled, long earlyRevision, Stream listener) {
+        NativeVoiceProtocol.uuid(NativeVoiceJson.object("voiceStreamId", voiceStreamId), "voiceStreamId");
+        if (earlyRevision < 0 || earlyRevision > NativeVoiceEarlyFrames.MAX_REVISION) throw new IllegalArgumentException("invalid_earlyRevision");
+        Request.Builder builder = new Request.Builder().url(NativeVoiceSettings.origin(origin) + "/api/application/events?voiceStreamId=" + voiceStreamId +
+            "&earlyReply=" + (earlyEnabled ? "on" : "off") + "&earlyRevision=" + earlyRevision)
             .header("Accept", "text/event-stream").header("Cache-Control", "no-cache");
         if (credential != null) builder.header("Authorization", "Bearer " + credential);
         Call call = streams.newCall(builder.build());
@@ -84,15 +100,21 @@ final class NativeVoiceHttp {
                     if (!type.startsWith("text/event-stream")) throw new IOException("invalid_stream_type");
                     NativeVoiceSse parser = new NativeVoiceSse((event, data) -> {
                         if (event.equals(NativeVoiceSse.LIVE)) { listener.live(); return; }
-                        try { listener.frame(event, new JSONObject(data)); }
-                        catch (Exception error) { listener.closed("invalid_notification_frame"); call.cancel(); }
+                        JSONObject frame;
+                        try {
+                            frame = new JSONObject(data);
+                            if (event.equals(NativeVoiceSse.EARLY_SESSION)) NativeVoiceEarlyFrames.session(frame, voiceStreamId);
+                            if (event.equals(NativeVoiceSse.EARLY_REPLY)) NativeVoiceEarlyFrames.reply(frame);
+                        } catch (Exception error) { throw new IllegalArgumentException("invalid_notification_frame", error); }
+                        listener.frame(event, frame);
                     });
                     try (Reader input = new InputStreamReader(response.body().byteStream(), StandardCharsets.UTF_8)) {
                         char[] chars = new char[4096]; int count;
                         while ((count = input.read(chars)) != -1) parser.accept(chars, count);
                     }
                     listener.closed("stream_closed");
-                } catch (Exception error) { listener.closed("stream_unavailable"); }
+                } catch (IllegalArgumentException error) { listener.closed("invalid_notification_frame"); }
+                catch (Exception error) { listener.closed("stream_unavailable"); }
             }
         });
         return call;

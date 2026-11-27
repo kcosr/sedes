@@ -426,6 +426,13 @@ server handed the frame to that stream's queue. Application-stream closure
 records include a bounded reason, lifetime, and pending inventory/transient
 counts and bytes before cleanup.
 
+When an opted-in reservation is eligible, `early_reply_captured` identifies
+its live source by hashed event ID. `early_reply_first_segment` gives the
+number of recipients and elapsed milliseconds since capture.
+`early_reply_stopped` records the bounded reason and elapsed time. Compare
+these events with the same ID's terminal publication and the device playback
+records to distinguish source timing, speech synthesis, and output timing.
+
 To investigate missing speech, match the server's hashed `sourceEventId` to the
 native record: `recovered` suppression is expected during state reconciliation;
 `no_recipients` means no eligible application stream at dispatch. A published

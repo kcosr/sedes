@@ -94,6 +94,16 @@ public class NativeVoiceNotificationTargetTest {
         assertEquals("saved", NativeVoiceRuntimeService.notificationTarget(state).optString("threadId"));
         assertEquals("next", state.optJSONObject("nextRecordingTarget").optString("threadId"));
     }
+    @Test public void liveReplyWaitKeepsTheCpuAwakeAndAnEndedSessionReleasesIt() {
+        JSONObject state = idle(false, false);
+        NativeVoiceJson.put(state, "active", NativeVoiceJson.object("id", "reply"));
+        NativeVoiceJson.put(state, "phase", "waiting_for_reply_text");
+        assertTrue(NativeVoiceRuntimeService.wakeLockNeeded(state));
+        NativeVoiceJson.put(state, "active", null); NativeVoiceJson.put(state, "phase", "idle");
+        assertFalse(NativeVoiceRuntimeService.wakeLockNeeded(state));
+        NativeVoiceJson.put(state, "phase", "off");
+        assertFalse(NativeVoiceRuntimeService.wakeLockNeeded(state));
+    }
     @Test public void aBlockingSavedRecordingUsesItsOwnTargetWithoutHoldingTheWakeLock() {
         JSONObject state = idle(false, false);
         NativeVoiceJson.put(state, "phase", "recordingRecovery");

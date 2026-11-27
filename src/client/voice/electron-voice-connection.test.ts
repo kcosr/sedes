@@ -273,6 +273,67 @@ describe("Electron voice live notification stream", () => {
     expect(streams[0]!.url.searchParams.get("voiceStreamId")).toBe(client.voiceStreamId);
   });
 
+  it("updates the reservation after the handshake and gates early frames without reconnecting", async () => {
+    const { client, streams, calls, event, callbacks } = fixture(path =>
+      path.endsWith("/early-reply") ? new Response(null, { status: 204 }) : undefined);
+    await client.connect(); client.notifications(true);
+    await vi.waitFor(() => expect(streams).toHaveLength(1));
+    expect(streams[0]!.url.searchParams.get("earlyReply")).toBe("off");
+    client.earlyReplyInterest(true);
+    event("notification_policy", policy);
+    event("voice_early_session", { voiceStreamId: client.voiceStreamId, token: "b".repeat(43), revision: 0 });
+    await vi.waitFor(() => expect(calls.filter(call => call.path.endsWith("/early-reply"))).toHaveLength(1));
+    const update = calls.find(call => call.path.endsWith("/early-reply"))!;
+    expect(update.path).toBe(`/api/application/voice-streams/${client.voiceStreamId}/early-reply`);
+    expect(new Headers(update.init.headers).get("X-CSRF-Token")).toBe("csrf");
+    expect(JSON.parse(update.init.body as string)).toEqual({ token: "b".repeat(43), revision: 1, enabled: true });
+    event("voice_early_reply", { kind: "append" });
+    await vi.waitFor(() => expect(callbacks.frame).toHaveBeenCalledWith("voice_early_reply", { kind: "append" }, client.voiceStreamId));
+    client.earlyReplyInterest(false);
+    event("voice_early_reply", { kind: "yield" });
+    event("voice_early_reply", { kind: "cancel", reason: "publication_suppressed" }); event("notification", notification);
+    await vi.waitFor(() => expect(callbacks.frame).toHaveBeenCalledWith("notification", notification, client.voiceStreamId));
+    expect(callbacks.frame).not.toHaveBeenCalledWith("voice_early_reply", { kind: "yield" }, client.voiceStreamId);
+    expect(callbacks.frame).toHaveBeenCalledWith("voice_early_reply", { kind: "cancel", reason: "publication_suppressed" }, client.voiceStreamId);
+    expect(streams).toHaveLength(1);
+  });
+
+  it.each([400, 403, 404, 409])("replaces the reservation and converges on the current interest after a permanent %s", async status => {
+    const { client, streams, calls, event, callbacks } = fixture(path => path.endsWith("/early-reply") ? new Response(null, { status }) : undefined);
+    await client.connect(); client.notifications(true);
+    await vi.waitFor(() => expect(streams).toHaveLength(1));
+    const previous = client.voiceStreamId;
+    event("notification_policy", policy);
+    event("voice_early_session", { voiceStreamId: previous, token: "b".repeat(43), revision: 0 });
+    client.earlyReplyInterest(true);
+    await vi.waitFor(() => expect(streams).toHaveLength(2));
+    expect(client.voiceStreamId).not.toBe(previous);
+    expect(streams[1]!.url.searchParams.get("earlyReply")).toBe("on");
+    expect(streams[1]!.url.searchParams.get("earlyRevision")).toBe("1");
+    expect(callbacks.notificationsChanged).toHaveBeenCalledWith(false);
+    event("notification_policy", policy);
+    event("voice_early_session", { voiceStreamId: client.voiceStreamId, token: "c".repeat(43), revision: 1 });
+    event("voice_early_reply", { kind: "begin" }); event("notification", notification);
+    await vi.waitFor(() => expect(callbacks.frame).toHaveBeenCalledWith("notification", notification, client.voiceStreamId));
+    expect(callbacks.frame).toHaveBeenCalledWith("voice_early_reply", { kind: "begin" }, client.voiceStreamId);
+    expect(calls.filter(call => call.path.endsWith("/early-reply"))).toHaveLength(1);
+    expect(callbacks.failed).not.toHaveBeenCalled();
+  });
+
+  it("preserves Off across quick re-enable while the handshake is pending", async () => {
+    const { client, streams, calls, event } = fixture(path => path.endsWith("/early-reply") ? new Response(null, { status: 204 }) : undefined);
+    client.earlyReplyInterest(true);
+    await client.connect(); client.notifications(true);
+    await vi.waitFor(() => expect(streams).toHaveLength(1));
+    client.earlyReplyInterest(false); client.earlyReplyInterest(true);
+    event("notification_policy", policy);
+    const token = "b".repeat(43);
+    event("voice_early_session", { voiceStreamId: client.voiceStreamId, token, revision: 1 });
+    await vi.waitFor(() => expect(calls.filter(call => call.path.endsWith("/early-reply"))
+      .map(call => JSON.parse(call.init.body as string))).toEqual([{ token, revision: 2, enabled: false }, { token, revision: 3, enabled: true }]));
+    expect(streams).toHaveLength(1);
+  });
+
   it("reads fragmented UTF-8 and CRLF frames while ignoring inventory IDs and retry hints", async () => {
     const { client, callbacks, streams, event, send } = fixture();
     await client.connect(); client.notifications(true);
@@ -304,7 +365,7 @@ describe("Electron voice live notification stream", () => {
     expect(streams[0]!.cancelled).toHaveBeenCalledOnce();
     expect(client.voiceStreamId).not.toBe(first);
     expect(callbacks.notificationsChanged).toHaveBeenLastCalledWith(false);
-    for (const stream of streams) expect([...stream.url.searchParams.keys()]).toEqual(["voiceStreamId"]);
+    for (const stream of streams) expect([...stream.url.searchParams.keys()]).toEqual(["voiceStreamId", "earlyReply", "earlyRevision"]);
     for (const call of calls.filter(call => call.path.endsWith("/events"))) {
       expect(new Headers(call.init.headers).has("Last-Event-ID")).toBe(false);
     }

@@ -39,6 +39,7 @@ export const DEFAULT_PAYLOAD_LIMITS: PayloadLimits = {
   maximumStructuralBytes: 64 * 1_024,
 };
 
+export const MAX_LIVE_PROGRESS_BYTES = 8 * 1024;
 export const MAXIMUM_BROWSER_ITEM_BYTES = MAXIMUM_BROWSER_ENTITY_BYTES;
 
 /** Preserve authoritative chat text exactly within the message contract. */
@@ -64,7 +65,7 @@ function utf8Bytes(value: string): number {
 
 const ELLIPSIS = "…";
 /** UTF-8 byte length of U+2026 HORIZONTAL ELLIPSIS. */
-const ELLIPSIS_BYTES = 3;
+export const ELLIPSIS_BYTES = 3;
 
 /** Lone (unpaired) surrogate: high not followed by low, or low not preceded by high. */
 const LONE_SURROGATE_PATTERN =

@@ -179,6 +179,62 @@ are silent with Messages selected; use Announcements or Both to hear them.
 Changing Read aloud applies to queued and future speech; it does not interrupt
 an item already playing. Switching to Input stops automatic notification speech.
 
+### Early reply playback
+
+In **Settings → Voice**, choose **Speak** and select **Messages** or **Both** to
+show **Early reply playback**. This preference belongs to the device and defaults
+to **Off**. Codex can identify a progress update or final answer as soon as it
+starts writing the message. To hear progress, set **Voice: Turn progress** to **Speak**
+in Notifications. If Codex supplies the label later, ordinary playback starts
+when the progress update or turn finishes. Partial answers use their existing
+notification when the message finishes.
+
+| Choice | When the device can start the next group of message text |
+| --- | --- |
+| Off | When the progress update or turn finishes. |
+| Responsive | At a sentence ending, once at least **6 words** are ready. |
+| Balanced | At a sentence ending, once at least **15 words** are ready. |
+| Natural | At a paragraph break, once at least **15 words** are ready. In a paragraph that has reached **60 words**, any sentence ending also qualifies. |
+
+The word minimum applies to each new group. When several sentences are ready,
+the device takes as many as it can through a qualifying ending, within the
+device and speech provider’s request limits. If a qualifying group exceeds a
+limit, the device divides it into requests, preferring whole sentences. The
+60-word count in Natural carries across requests until the next paragraph.
+
+For example, “It passed. The tests are green.” supplies six words. Responsive
+can speak both sentences together. Balanced and Natural wait for more text.
+In every mode, when the message ends, the device reads whatever is left, even
+a single “Yes.” If the server ends early delivery before the message finishes,
+the device can speak the short remainder of the eligible prefix. Each group stays
+within its own message.
+
+An eligible plain-prose opening can play early. Markdown such as links, code,
+and lists moves the remaining text to playback when the message finishes. The
+queue gives each progress update and the final answer a separate position. **Next** skips
+the whole current message, including any sentences still arriving. Skipping a
+progress update leaves later progress updates and the final answer eligible.
+**Stop** also clears queued playback. **Record** replaces playback with a recording for the spoken
+thread. Each action discards buffered audio and later text for that reply,
+including its completion and automatic listening. This decision survives a
+voice-stream reconnect within the same signed-in session and running app.
+Between sentences, the microphone stays closed. If a reply yields its
+queue position, the device can play another notification and return to the
+remaining text when the progress update or turn finishes.
+
+With **Both**, the first eligible segment lets the device start the preamble
+as soon as the message reaches the speaker. It says “Agent progress” or
+“Agent finished,” then the thread title. The preamble can play while the device
+waits for enough body words. Later sentences continue directly.
+If another item speaks before a reply resumes, the device reintroduces the
+reply before reading the remaining text. “Agent finished” can introduce a final
+answer while the agent is still writing. Automatic listening and deferred
+thread actions still wait for turn settlement and playback. An interrupted or
+revised turn can change words you already heard. Turning Early reply playback Off
+during a reply returns its remaining eligible text to completion playback.
+
+### Listening after a reply
+
 Automatic recognition requires **Speak then listen**, **Auto-listen**, and a
 still-current eligible target. In Input mode only completions listen
 afterward. Progress, partial answers, approvals, blocking input, and nonblocking questions are

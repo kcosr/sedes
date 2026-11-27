@@ -82,7 +82,8 @@ final class NativeSpeechCatalog {
     }
     static JSONObject empty(String source) {
         return NativeVoiceJson.object("source", source, "sttModels", new JSONArray(), "ttsModels", new JSONArray(),
-            "voices", new JSONArray(), "speed", null, "formats", new JSONArray(), "realtime", new JSONObject(), "audioInputFormats", new JSONObject());
+            "voices", new JSONArray(), "speed", null, "formats", new JSONArray(), "realtime", new JSONObject(), "audioInputFormats", new JSONObject(),
+            "speechTextLimits", new JSONObject());
     }
     /** The bridge exposes choices only; recognition authority stays in the native fresh-preflight result. */
     static JSONObject picker(JSONObject catalog) {
@@ -141,7 +142,9 @@ final class NativeSpeechCatalog {
                 NativeVoiceJson.put(catalog.optJSONObject("audioInputFormats"), id, NativeSpeechCapabilities.audioInputFormats(model));
             }
             if (!task.equals("speech")) continue;
-            tts.add(id);
+            if (!tts.add(id)) throw new IllegalArgumentException("speech_discovery_invalid");
+            if (model.has("max_text_length")) NativeVoiceJson.put(catalog.optJSONObject("speechTextLimits"), id,
+                NativeVoiceJson.integer(model, "max_text_length", 1, NativeVoiceJson.MAX_SAFE_INTEGER));
             if (!id.equals(speechModel)) continue;
             JSONArray voices = new JSONArray(), formats = new JSONArray();
             JSONArray advertised = model.optJSONArray("voices");
@@ -160,6 +163,12 @@ final class NativeSpeechCatalog {
         }
         NativeVoiceJson.put(catalog, "sttModels", array(stt)); NativeVoiceJson.put(catalog, "ttsModels", array(tts));
         return catalog;
+    }
+    /** Cap synthesis by both the selected model’s advertised UTF-16 limit and our local chunk limit. */
+    static int textLimit(JSONObject catalog, String model, int localLimit) {
+        JSONObject limits = catalog == null ? null : catalog.optJSONObject("speechTextLimits");
+        return limits == null || !limits.has(model) ? localLimit :
+            (int) Math.min(localLimit, NativeVoiceJson.integer(limits, model, 1, NativeVoiceJson.MAX_SAFE_INTEGER));
     }
     static NativeSpeechCapabilities serverCapabilities(JSONObject catalog, String model) {
         JSONObject realtime = catalog == null ? null : catalog.optJSONObject("realtime");

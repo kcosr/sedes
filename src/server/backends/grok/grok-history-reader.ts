@@ -126,7 +126,7 @@ export class GrokHistoryReader implements ConversationHistoryReader {
       composerAttachments: { fileStaging: false, nativeImage: false },
       nonblockingQuestions: false, providerOutputArtifacts: { nativeImage: true }, supportsHistory: true,
       branching: { availability: "unavailable", reason: boundDisplayText("Historical readers do not support branching.") },
-      interactionKinds: [], usageAccounting: "unsupported", turnThroughput: "unsupported", usageSections: [], effectiveSettings: {},
+      interactionKinds: [], usageAccounting: "unsupported", turnThroughput: "unsupported", liveSpeechStarts: { final: false, provisional: false }, usageSections: [], effectiveSettings: {},
     };
   }
 

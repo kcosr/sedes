@@ -260,6 +260,7 @@ describe("normalized Grok conversation driver", () => {
       });
       expect(await handle.backendCapabilities()).toMatchObject({
         turnThroughput: "unsupported",
+        liveSpeechStarts: { final: false, provisional: false },
         actions: ["rename"],
         deliveryModes: ["submit"],
         steerTarget: null,

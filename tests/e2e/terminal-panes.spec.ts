@@ -265,10 +265,12 @@ test("Windows terminals stop idle painting and toggle blink without reconnecting
   let sockets = 0;
   page.on("websocket", (socket) => { if (new URL(socket.url()).pathname === "/api/terminal") sockets++; });
   const id = await createTerminal(page, "Windows terminal");
-  await emitTerminalOutput(page, id, "Windows terminal output\r\n$ ");
   // Settings keeps the thread mounted but hidden; retain its canvas and socket.
   const canvas = page.locator(".terminal-panel-emulator canvas");
   await expect(canvas).toBeVisible();
+  const initial = await canvas.evaluate((node) => (node as HTMLCanvasElement).toDataURL());
+  await emitTerminalOutput(page, id, "Windows terminal output\r\n$ ");
+  await expect.poll(() => canvas.evaluate((node) => (node as HTMLCanvasElement).toDataURL())).not.toBe(initial);
   await expectIdleTerminalCanvas(canvas);
   const before = await canvas.evaluate((node) => (node as HTMLCanvasElement).toDataURL());
   await emitTerminalOutput(page, id, "updated output\r\n");

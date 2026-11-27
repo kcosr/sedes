@@ -1,10 +1,13 @@
 import { z } from "zod";
 import { connectionScope, connectionScopeKey } from "../app/connection-scope.js";
-import { nativeVoiceSettingsSchema, type NativeVoiceSettings, type NativeVoiceState } from "./native-voice-plugin.js";
+import { nativeEarlyReplyPlaybackModeSchema, nativeVoiceSettingsSchema, type NativeEarlyReplyPlaybackMode, type NativeVoiceSettings, type NativeVoiceState } from "./native-voice-plugin.js";
 
 export interface ElectronVoiceBinding { profileId: string; serverOrigin: string; identity: string }
 export interface VoicePreferenceStorage { getItem(key: string): string | null; setItem(key: string, value: string): void }
 const SETTINGS_KEY = "sedes.electron.voice.preferences.v1";
+const EARLY_KEY = "sedes.electron.voice.early-reply.v1";
+const earlyPreferenceSchema = z.strictObject({ version: z.literal(1), mode: nativeEarlyReplyPlaybackModeSchema,
+  revision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER) });
 const selectionSchema = z.strictObject({ scope: z.string(), threadId: z.string().nullable(), threadTitle: z.string().nullable() });
 const preferencesSchema = z.strictObject({ version: z.literal(1), revision: z.number().int().nonnegative(),
   settings: nativeVoiceSettingsSchema, selections: z.array(selectionSchema).max(256) });
@@ -57,6 +60,7 @@ export function desktopVoiceSettings(value: unknown): NativeVoiceSettings {
 /** Only preferences are persisted. Audio, transcripts, pending sends and connection tokens never enter this record. */
 export class ElectronVoicePreferences {
   #record: z.infer<typeof preferencesSchema> = { version: 1, revision: 0, settings: electronVoiceDefaults(), selections: [] };
+  #early: z.infer<typeof earlyPreferenceSchema> = { version: 1, mode: "off", revision: 0 };
   readonly reset: boolean;
   constructor(readonly storage?: VoicePreferenceStorage) {
     let reset = false;
@@ -68,7 +72,19 @@ export class ElectronVoicePreferences {
         this.#record = record;
       } catch { reset = true; }
     }
+    const early = storage?.getItem(EARLY_KEY);
+    if (early) {
+      try { this.#early = earlyPreferenceSchema.parse(JSON.parse(early)); }
+      catch { reset = true; }
+    }
     this.reset = reset;
+  }
+  get early() { return { earlyReplyPlayback: this.#early.mode, earlyReplyRevision: this.#early.revision }; }
+  setEarly(mode: NativeEarlyReplyPlaybackMode, expectedRevision: number): void {
+    if (expectedRevision !== this.#early.revision) throw new Error("Early reply playback changed. Try the action again.");
+    const record = earlyPreferenceSchema.parse({ version: 1, mode, revision: expectedRevision + 1 });
+    this.storage?.setItem(EARLY_KEY, JSON.stringify(record));
+    this.#early = record;
   }
   get revision(): number { return this.#record.revision; }
   get(binding?: ElectronVoiceBinding): NativeVoiceSettings {
@@ -89,11 +105,11 @@ export class ElectronVoicePreferences {
   }
 }
 
-export function emptyElectronVoiceState(settings = electronVoiceDefaults()): NativeVoiceState {
+export function emptyElectronVoiceState(settings = electronVoiceDefaults(), early: Pick<NativeVoiceState["speech"], "earlyReplyRevision" | "earlyReplyPlayback"> = { earlyReplyPlayback: "off", earlyReplyRevision: 0 }): NativeVoiceState {
   return {
-    version: 16, stateRevision: 0, connectionGeneration: 0, profileId: null, serverOrigin: null, identity: null,
+    version: 17, stateRevision: 0, connectionGeneration: 0, profileId: null, serverOrigin: null, identity: null,
     originClientId: null, clientConnectionToken: null, settingsRevision: 0, settings,
-    speech: { audioQuality: "original", audioQualityRevision: 0, credentialConfigured: false, catalogStatus: "idle", catalog: null, error: null },
+    speech: { ...early, audioQuality: "original", audioQualityRevision: 0, credentialConfigured: false, catalogStatus: "idle", catalog: null, error: null },
     phase: "off", ready: false, readiness: "disconnected",
     foreground: { visible: false, threadId: null, threadTitle: null, composerAvailable: false },
     nextRecordingTarget: null, retainedVoiceTarget: null, idleTargetRevision: 0, active: null,

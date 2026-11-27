@@ -1716,6 +1716,7 @@ class GrokConversationHandle implements ConversationHandle {
       interactionKinds: [],
       usageAccounting: "unsupported",
       turnThroughput: "unsupported",
+      liveSpeechStarts: { final: false, provisional: false },
       usageSections: [],
       effectiveSettings: {
         model: {

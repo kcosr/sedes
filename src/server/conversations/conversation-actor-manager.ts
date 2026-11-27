@@ -1,3 +1,4 @@
+import { afterSubmissionAdmission, type EarlyReplySource, type EarlyReplyObservation } from "./early-reply-observation.js";
 import { ConversationNativeEffectFence } from "./conversation-native-effect-fence.js";
 import { randomUUID } from "node:crypto";
 import type { ClassifiedAssistantResult } from "../../shared/protocol/completion-result.js";
@@ -118,6 +119,7 @@ export type AuthoritativeCompletionObserver = (
   applicationThreadId: string,
   input: {
     readonly backendCorrelation: string;
+    /** One freshly frozen array per actor fan-out, shared by all its callbacks. */
     readonly backendCorrelations: readonly string[];
     readonly backendTurnId: string;
     readonly applicationTurnId: string;
@@ -332,7 +334,12 @@ type NonblockingQuestionObserver = (
   payload: NonblockingQuestionsPayload,
 ) => void;
 
+type LiveProgressSkippedObserver = (scope: ExecutionScope, threadId: string, turnId: string, itemId: string) => void;
+
+type CaptureEarlyReplyObserver = (scope: ExecutionScope, threadId: string, source: EarlyReplySource) => EarlyReplyObservation | null | undefined;
+
 export class ConversationActorManager {
+  readonly #captureEarlyReply?: CaptureEarlyReplyObserver;
   readonly #onNonblockingQuestions?: NonblockingQuestionObserver;
   readonly #onHistoricalQuestion?: HistoricalQuestionObserver;
   readonly #environments: ExecutionEnvironmentProvider;
@@ -345,6 +352,7 @@ export class ConversationActorManager {
   readonly #captureResponseVoiceContext?: (scope: ExecutionScope, threadId: string, backendCorrelations: readonly string[]) => CapturedResponseVoiceContext;
   readonly #onAuthoritativeSubmission?: AuthoritativeSubmissionObserver;
   readonly #onLiveProgress?: LiveProgressObserver;
+  readonly #onLiveProgressSkipped?: LiveProgressSkippedObserver;
   readonly #onModelFeedback?: ModelFeedbackObserver;
   readonly #entries = new Map<string, ActorEntry>();
   readonly #inputActivityListeners = new Set<InputActivityListener>();
@@ -363,7 +371,9 @@ export class ConversationActorManager {
     readonly onAuthoritativeCompletion?: AuthoritativeCompletionObserver;
     readonly captureResponseVoiceContext?: (scope: ExecutionScope, threadId: string, backendCorrelations: readonly string[]) => CapturedResponseVoiceContext;
     readonly onAuthoritativeSubmission?: AuthoritativeSubmissionObserver;
+    readonly captureEarlyReply?: CaptureEarlyReplyObserver;
     readonly onLiveProgress?: LiveProgressObserver;
+    readonly onLiveProgressSkipped?: LiveProgressSkippedObserver;
     readonly onModelFeedback?: ModelFeedbackObserver;
     readonly onNonblockingQuestions?: NonblockingQuestionObserver;
     readonly onHistoricalQuestion?: HistoricalQuestionObserver;
@@ -375,7 +385,9 @@ export class ConversationActorManager {
     this.#onAuthoritativeCompletion = input.onAuthoritativeCompletion;
     this.#captureResponseVoiceContext = input.captureResponseVoiceContext;
     this.#onAuthoritativeSubmission = input.onAuthoritativeSubmission;
+    this.#captureEarlyReply = input.captureEarlyReply;
     this.#onLiveProgress = input.onLiveProgress;
+    this.#onLiveProgressSkipped = input.onLiveProgressSkipped;
     this.#onModelFeedback = input.onModelFeedback;
     this.#onNonblockingQuestions = input.onNonblockingQuestions;
     this.#onHistoricalQuestion = input.onHistoricalQuestion;
@@ -560,7 +572,11 @@ export class ConversationActorManager {
         });
         entry = createdEntry;
         this.#entries.set(key, createdEntry);
-        creationAbort.signal.addEventListener("abort", () => this.#publishInputActivity(createdEntry), { once: true });
+        creationAbort.signal.addEventListener("abort", () => {
+          // This owner can be fenced before borrowed controls and actor cleanup drain.
+          createdEntry.actor?.retireEarlyReplyAuthority();
+          this.#publishInputActivity(createdEntry);
+        }, { once: true });
         void createdEntry.promise.catch((error) => {
           if (this.#entries.get(key) === createdEntry) {
             if (error instanceof ConversationActorCreationCleanupError) {
@@ -1423,6 +1439,8 @@ export class ConversationActorManager {
         nativeEffects: entry.nativeEffects,
         attachmentDelivery: this.#attachmentDelivery,
         initialObserver: onStateChanged,
+        onEarlyProgressSkipped: source => this.#onLiveProgressSkipped?.(input.scope, input.binding.applicationThreadId,
+          source.applicationTurnId, source.applicationItemId),
         onInputStateChanged: () => this.#publishInputActivity(entry),
         projector: new ConversationProjector({
           backendInstanceId: input.binding.backendInstanceId,
@@ -1495,6 +1513,11 @@ export class ConversationActorManager {
         opaqueBindingDetail: input.opaqueBindingDetail,
         onControlReady: control => {
           if (signal.aborted || control.lifetime.aborted || !control.generation) return;
+          if (entry.control !== control && !entry.controlEnded) {
+            // An earlier abort listener can install the new control synchronously.
+            if (entry.control?.lifetime.aborted) actor?.noteEarlyReplyObservationGap();
+            else actor?.withdrawEarlyReplyAuthority();
+          }
           entry.control = control;
           entry.controlEnded = false;
           this.#publishInputActivity(entry);
@@ -1502,6 +1525,7 @@ export class ConversationActorManager {
             if (entry.control === control) {
               entry.control = undefined;
               entry.controlEnded = true;
+              actor?.noteEarlyReplyObservationGap();
               this.#publishInputActivity(entry);
             }
           }, { once: true });
@@ -1519,6 +1543,24 @@ export class ConversationActorManager {
         handle,
         nativeEffects: entry.nativeEffects,
         environmentLease: lease,
+        ...(this.#captureEarlyReply ? { captureEarlyReply: (source: EarlyReplySource) => {
+          const generation = actor?.peekSnapshotState()?.timeline.generation;
+          const control = entry.control;
+          const isCurrent = () => {
+            const state = actor?.peekSnapshotState();
+            return !signal.aborted && !control?.lifetime.aborted && entry.control === control && !entry.controlEnded &&
+              state?.timeline.generation === generation &&
+              state?.timeline.runState === "running" && state.timeline.activeTurnId === source.applicationTurnId &&
+              state.timeline.turnsById[source.applicationTurnId]?.status === "in_progress" &&
+              state.backendCapabilities.liveSpeechStarts[source.event === "turn.progress" ? "provisional" : "final"];
+          };
+          if (!isCurrent()) return;
+          // Capture scope, policy, freshness and exact reservations before durable admission can wait.
+          const sink = this.#captureEarlyReply!(input.scope, input.binding.applicationThreadId, source);
+          return sink && afterSubmissionAdmission(sink, observationChain, isCurrent);
+        } } : {}),
+        onEarlyProgressSkipped: source => this.#onLiveProgressSkipped?.(input.scope, input.binding.applicationThreadId,
+          source.applicationTurnId, source.applicationItemId),
         onInputStateChanged: () => this.#publishInputActivity(entry),
         attachmentDelivery: this.#attachmentDelivery,
         ...(this.#deliveryInputSnapshots
@@ -1586,23 +1628,37 @@ export class ConversationActorManager {
               provenance: event.provenance,
             });
           }
-          if (event.type === "live_progress" && this.#onLiveProgress) {
+          if (event.type === "live_progress") {
+            const skip = () => {
+              if (event.phase !== "provisional") return;
+              actor?.resolveEarlyProgress(event.applicationItemId, "settled");
+              this.#onLiveProgressSkipped?.(input.scope, input.binding.applicationThreadId, event.applicationTurnId, event.applicationItemId);
+            };
             try { responseVoice = this.#captureResponseVoiceContext?.(input.scope, input.binding.applicationThreadId, event.backendCorrelations); }
             catch { /* Do not affect provider progress. */ }
             const progressVoice = responseVoice;
+            const progressGeneration = timeline?.generation;
+            const progressControl = entry.control;
             // Preceding submission observers establish durable admission first.
             // Delayed observers must never revive progress after the live turn ends.
             observationChain = observationChain.then(() => {
               const timeline = actor?.timeline;
-              if (signal.aborted || !timeline || timeline.runState !== "running" ||
-                  timeline.activeTurnId !== event.applicationTurnId ||
-                  timeline.turnsById[event.applicationTurnId]?.status !== "in_progress") return;
-              this.#onLiveProgress?.(input.scope, input.binding.applicationThreadId, {
+              const turn = timeline?.turnsById[event.applicationTurnId];
+              if (signal.aborted || !this.#onLiveProgress || timeline?.runState === "idle" || timeline?.runState === "failed" ||
+                  (turn && turn.status !== "in_progress")) return skip();
+              if (!turn || timeline?.runState !== "running" || timeline.activeTurnId !== event.applicationTurnId ||
+                  entry.controlEnded || entry.control !== progressControl || progressControl?.lifetime.aborted || timeline.generation !== progressGeneration) {
+                // This observation became stale; a later live close of the same item can still qualify.
+                if (event.phase === "provisional") actor?.resolveEarlyProgress(event.applicationItemId, "deferred");
+                return;
+              }
+              if (event.phase === "provisional") actor?.resolveEarlyProgress(event.applicationItemId, "settled");
+              this.#onLiveProgress(input.scope, input.binding.applicationThreadId, {
                 ...event, ...(progressVoice ? { responseVoice: {
                   userInputRevision: progressVoice.userInputRevision, superseded: progressVoice.superseded,
                 } } : {}),
               });
-            }).catch(() => undefined);
+            }).catch(() => { try { skip(); } catch { /* Notification settlement is passive. */ } });
           }
           if (
             (event.type === "authoritative_completion" && this.#onAuthoritativeCompletion) ||
