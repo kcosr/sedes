@@ -103,14 +103,16 @@ describe("Electron early phrasing and source reconciliation", () => {
     expect(reply.matches(corrected, true, pending.frontier)).toBe(false);
     reply.detach(); expect(reply.matches(corrected, true)).toBe(true);
   });
-  it.each([false, true])("applies Natural's paragraph requirement when catching up a split sentence (closed %s)", closed => {
+  it.each([
+    [15, false, false], [15, true, true], [60, false, true],
+  ] as const)("catches up a split Natural sentence with %i paragraph words and the next paragraph-end flag %s", (words, closed, qualifies) => {
     const word = "w".repeat(30);
-    const reply = source((word + " ").repeat(14) + "now.", true);
+    const reply = source((word + " ").repeat(words - 1) + "now.", words < 60);
     const next = () => reply.next(settings, "natural", 34)?.text;
-    for (let i = 0; i < 14; i++) expect(next()).toBe(word + " ");
+    for (let i = 1; i < words; i++) expect(next()).toBe(word + " ");
     const fresh = " " + sentence(14, "x").trimEnd();
     append(reply, 1, fresh, closed);
-    expect(next()).toBe(closed ? "now." + fresh : "now.");
+    expect(next()).toBe(qualifies ? "now." + fresh : "now.");
     expect(next()).toBeUndefined();
   });
   it.each(["responsive", "balanced", "natural"] as const)("speaks the Both preamble immediately and only once in %s", mode => {
