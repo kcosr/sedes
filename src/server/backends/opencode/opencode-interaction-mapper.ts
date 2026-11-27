@@ -64,7 +64,7 @@ function authority(value: OpenCodeInteractionAuthority): OpenCodeInteractionAuth
 function fingerprint(kind: "permission" | "form", request: PermissionRequest | FormInfo): string { return `ocif_${digest({ kind, request })}`; }
 function base(authority: OpenCodeInteractionAuthority, kind: "permission" | "form", requestFingerprint: string, openedAt: string, title: string) {
   if (!z.iso.datetime().safeParse(openedAt).success) throw new OpenCodeInteractionMappingError("invalid_request");
-  return { backendInteractionId: `oci_${digest({ authority, kind, requestFingerprint })}`, sourceLabel: boundDisplayText("OpenCode"),
+  return { backendInteractionId: `oci_${digest({ authority, kind, requestFingerprint })}`, requestIdentity: requestFingerprint, sourceLabel: boundDisplayText("OpenCode"),
     title: boundDisplayText(title), openedAt, secret: false, destructive: kind === "permission", cancellable: kind === "form" };
 }
 function mapped(input: { authority: OpenCodeInteractionAuthority; kind: MappingState["kind"]; request: MappingState["request"];

@@ -1,3 +1,4 @@
+import { blockingRequestWakeIdentity } from "./interaction-broker.js";
 import { afterSubmissionAdmission, type EarlyReplySource, type EarlyReplyObservation } from "./early-reply-observation.js";
 import { ConversationNativeEffectFence } from "./conversation-native-effect-fence.js";
 import { randomUUID } from "node:crypto";
@@ -322,6 +323,8 @@ function isCompletedModelToolActivity(item: ConversationItem): boolean {
   }
 }
 
+type BlockingRequestObserver = (scope: ExecutionScope, threadId: string, requestIdentity: string) => void;
+
 type HistoricalQuestionObserver = (
   scope: ExecutionScope,
   threadId: string,
@@ -347,6 +350,7 @@ type CaptureEarlyReplyObserver = (scope: ExecutionScope, threadId: string, sourc
 export class ConversationActorManager {
   readonly #captureEarlyReply?: CaptureEarlyReplyObserver;
   readonly #readProgressParkRevision?: (scope: ExecutionScope, threadId: string) => number | undefined;
+  readonly #onBlockingRequest?: BlockingRequestObserver;
   readonly #onNonblockingQuestions?: NonblockingQuestionObserver;
   readonly #onHistoricalQuestion?: HistoricalQuestionObserver;
   readonly #environments: ExecutionEnvironmentProvider;
@@ -390,6 +394,7 @@ export class ConversationActorManager {
     readonly onLiveProgress?: LiveProgressObserver;
     readonly onLiveProgressSkipped?: LiveProgressSkippedObserver;
     readonly onModelFeedback?: ModelFeedbackObserver;
+    readonly onBlockingRequest?: BlockingRequestObserver;
     readonly onNonblockingQuestions?: NonblockingQuestionObserver;
     readonly onHistoricalQuestion?: HistoricalQuestionObserver;
   }) {
@@ -407,6 +412,7 @@ export class ConversationActorManager {
     this.#onLiveProgress = input.onLiveProgress;
     this.#onLiveProgressSkipped = input.onLiveProgressSkipped;
     this.#onModelFeedback = input.onModelFeedback;
+    this.#onBlockingRequest = input.onBlockingRequest;
     this.#onNonblockingQuestions = input.onNonblockingQuestions;
     this.#onHistoricalQuestion = input.onHistoricalQuestion;
     assertConversationRetentionMilliseconds(input.retentionMilliseconds);
@@ -1637,6 +1643,10 @@ export class ConversationActorManager {
           : {}),
         initialObserver: (event) => {
           onStateChanged();
+          if (event.type === "backend_event" && event.event.type === "interaction_opened" && !signal.aborted) {
+            this.#onBlockingRequest?.(input.scope, input.binding.applicationThreadId,
+              blockingRequestWakeIdentity(event.event.interaction));
+          }
           const historyItems = event.type === "projection_replaced"
             ? Object.values(event.state.timeline.itemsById)
             : event.type === "projection_events"

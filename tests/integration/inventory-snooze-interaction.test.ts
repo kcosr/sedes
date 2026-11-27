@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
 import { describe, expect, it } from "vitest";
 import type { ConversationActorListener } from "../../src/server/conversations/conversation-actor.js";
 import { InteractionBroker } from "../../src/server/conversations/interaction-broker.js";
@@ -106,4 +108,56 @@ describe("snooze while a blocking interaction is open", () => {
       }
     },
   );
+});
+
+describe("new blocking requests", () => {
+  it("keeps a second Park across reconnect and wakes a self-park only for a fresh request", () => {
+    const { database, scope, ids } = applicationSummaryFixture(2);
+    const [threadId, otherThread] = ids as [string, string];
+    const inventory = new InventoryRepository(database, () => "turn");
+    const park = (id: string, revision: number) => inventory.parkThread(scope, id, {
+      expectedRevision: revision, selfParkTurnId: "turn", mutationId: randomUUID(), now: 400 + revision,
+    });
+    const first = "a".repeat(43);
+    const next = "b".repeat(43);
+    try {
+      expect(inventory.observeBlockingRequest(scope, threadId, first, 350)).toBeUndefined();
+      park(threadId, 0);
+      const replacement = new InventoryRepository(database);
+      expect(replacement.observeBlockingRequest(scope, threadId, first, 500)).toBeUndefined();
+      expect(() => replacement.observeBlockingRequest({ ...scope, principalId: "other" }, threadId, next, 500)).toThrow();
+      expect(replacement.getInventory(scope, threadId)).toMatchObject({ inventoryState: "parked", inventoryRevision: 1 });
+      expect(replacement.observeBlockingRequest(scope, threadId, next, 510)).toMatchObject({
+        inventoryState: "active", inventoryRevision: 2, wokeAt: null, wakeReason: null,
+      });
+      expect(database.prepare(`SELECT parked_until_turn_id, park_keep_on_success, progress_park_revision
+        FROM thread_principal_state WHERE thread_id = ?`).get(threadId)).toEqual({
+        parked_until_turn_id: null, park_keep_on_success: 0, progress_park_revision: 1,
+      });
+      park(threadId, 2);
+      expect(replacement.observeBlockingRequest(scope, threadId, next, 520)).toBeUndefined();
+      park(otherThread, 0);
+      expect(replacement.observeBlockingRequest(scope, otherThread, next, 525)?.inventoryState).toBe("active");
+    } finally { database.close(); }
+  });
+
+  it("preserves the snooze reminder and wakes only once for the same request", () => {
+    const { database, inventory, scope, ids } = applicationSummaryFixture(1);
+    const threadId = ids[0]!;
+    const request = "c".repeat(43);
+    const snooze = (expectedRevision: number) => inventory.transitionInventory(scope, threadId, {
+      expectedRevision, mutationId: randomUUID(), now: 600 + expectedRevision,
+      change: { action: "snooze", snoozedUntil: 900, wakeReminderText: "Review the reply" },
+    });
+    try {
+      snooze(0);
+      expect(inventory.observeBlockingRequest(scope, threadId, request, 650)).toMatchObject({
+        inventoryState: "active", inventoryRevision: 2, wokeAt: 650, wakeReason: "needs-input",
+        snoozedUntil: null, wakeReminderText: "Review the reply",
+      });
+      snooze(2);
+      expect(inventory.observeBlockingRequest(scope, threadId, request, 750)).toBeUndefined();
+      expect(inventory.getInventory(scope, threadId)).toMatchObject({ inventoryState: "snoozed", inventoryRevision: 3 });
+    } finally { database.close(); }
+  });
 });

@@ -436,7 +436,7 @@ describe("QuestionRequestService", () => {
     expect(publish).toHaveBeenCalledExactlyOnceWith(scope, threadId, {
       revision: 1,
       requests: [request],
-    });
+    }, undefined);
     service.dismiss(scope, threadId, request.id, { revision: 1 });
     service.observe(scope, threadId, "new", payload);
     expect(service.list(scope, threadId)).toEqual({
@@ -444,6 +444,64 @@ describe("QuestionRequestService", () => {
       requests: [],
     });
     expect(onOpened).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["park", "snooze"] as const)("preserves a deliberate %s on replay and wakes on a new question", (action) => {
+    const { database, scope, threadId, service, inventory, publish, onOpened } = serviceFixture();
+    const hide = (mutationId: string) => {
+      const now = Date.now();
+      return inventory.transitionInventory(scope, threadId, {
+        expectedRevision: inventory.getInventory(scope, threadId).inventoryRevision,
+        mutationId,
+        change: action === "park" ? { action } : { action, snoozedUntil: now + 60_000 },
+        now,
+      }).state;
+    };
+    const hidden = hide("first");
+    service.remember(scope, threadId, "historical");
+    service.observe(scope, threadId, "historical", payload);
+    service.observe(scope, threadId, "invalid", { questions: [] });
+    expect(inventory.getInventory(scope, threadId)).toEqual(hidden);
+    expect(publish).not.toHaveBeenCalled();
+    expect(onOpened).not.toHaveBeenCalled();
+
+    service.observe(scope, threadId, "live", payload);
+    const active = inventory.getInventory(scope, threadId);
+    expect(active).toMatchObject({ inventoryState: "active", inventoryRevision: hidden.inventoryRevision + 1 });
+    const inbox = service.list(scope, threadId);
+    expect(publish).toHaveBeenCalledExactlyOnceWith(scope, threadId, inbox, active);
+    expect(onOpened).toHaveBeenCalledExactlyOnceWith(scope, inbox.requests[0]);
+
+    const hiddenAgain = hide("second");
+    const reloaded = new QuestionRequestService({
+      ...service.input, repository: new QuestionRequestRepository(database, inventory),
+    });
+    reloaded.observe(scope, threadId, "live", payload);
+    const request = reloaded.list(scope, threadId).requests[0]!;
+    reloaded.dismiss(scope, threadId, request.id, { revision: request.revision });
+    reloaded.observe(scope, threadId, "live", payload);
+    reloaded.observe(scope, threadId, "invalid", payload);
+    expect(inventory.getInventory(scope, threadId)).toEqual(hiddenAgain);
+    expect(onOpened).toHaveBeenCalledTimes(1);
+    reloaded.observe(scope, threadId, "another-live", payload);
+    expect(inventory.getInventory(scope, threadId)).toMatchObject({
+      inventoryState: "active", inventoryRevision: hiddenAgain.inventoryRevision + 1,
+    });
+    expect(onOpened).toHaveBeenCalledTimes(2);
+  });
+
+  it("rolls back question admission when waking fails and lets a retry admit it", () => {
+    const { scope, threadId, service, inventory, publish, onOpened } = serviceFixture();
+    vi.spyOn(inventory, "wakeForUserRequest").mockImplementationOnce(() => {
+      throw new Error("wake failed");
+    });
+    expect(() => service.observe(scope, threadId, "live", payload)).toThrow("wake failed");
+    expect(service.list(scope, threadId)).toEqual({ revision: 0, requests: [] });
+    expect(publish).not.toHaveBeenCalled();
+    expect(onOpened).not.toHaveBeenCalled();
+    service.observe(scope, threadId, "live", payload);
+    expect(service.list(scope, threadId).requests).toHaveLength(1);
+    expect(onOpened).toHaveBeenCalledOnce();
   });
 
   it("queues a normal reply atomically, preserves the composer, and deduplicates equal retries", async () => {

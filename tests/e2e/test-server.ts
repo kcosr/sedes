@@ -4648,6 +4648,11 @@ async function main(): Promise<void> {
   const actorTargets = new DatabaseActorTargetResolver(targets);
   const lifecycleTargets = new DatabaseLifecycleTargetResolver(targets);
   let questions: QuestionRequestService | undefined;
+  function observeBlockingRequest(eventScope: RequestScope, threadId: string, requestIdentity: string): void {
+    const now = Date.now();
+    const state = inventoryRepository.observeBlockingRequest(eventScope, threadId, requestIdentity, now);
+    if (state) authoritativeCompletionFollowUp.defer(() => inventory.publishCommitted(eventScope, [state], now));
+  }
   let mutationsForSubmissions: ThreadMutationGateway | undefined;
   let automaticModelRetries: AutomaticModelRetryService | undefined;
   let observeAuthoritativeCompletion:
@@ -4682,6 +4687,13 @@ async function main(): Promise<void> {
     deliveryInputSnapshots,
     retentionMilliseconds: config.conversationRetentionMilliseconds,
     runtimeBudget: config.conversationRuntimeBudget,
+    onBlockingRequest(eventScope, threadId, requestIdentity) {
+      // An attached broker owns admission (including capacity and cancellation).
+      // Actors without a thread viewer still need to surface their requests.
+      if (!interactions.hasBindingForThread(eventScope, threadId)) {
+        observeBlockingRequest(eventScope, threadId, requestIdentity);
+      }
+    },
     onHistoricalQuestion: (eventScope, threadId, sourceItemId) =>
       questions?.remember(eventScope, threadId, sourceItemId),
     onNonblockingQuestions: (eventScope, threadId, sourceItemId, payload) =>
@@ -4761,13 +4773,12 @@ async function main(): Promise<void> {
   const threadHubs = new ScopedThreadEventHubRegistry();
   const applicationHubs = new ScopedApplicationEventHubs();
   const interactions = new InteractionBroker({
-    onOpened: (eventScope, interaction) => {
-      notificationLifecycle.interactionOpened(eventScope, interaction);
-      authoritativeCompletionFollowUp.defer(async () => {
-        await inventory.wakeForRuntimeSignal(eventScope, interaction.threadId, {
-          kind: "needs_input",
-        });
-      });
+    onOpened(eventScope, interaction, requestIdentity) {
+      try {
+        observeBlockingRequest(eventScope, interaction.threadId, requestIdentity);
+      } finally {
+        notificationLifecycle.interactionOpened(eventScope, interaction);
+      }
     },
   });
   const threadInventory = new DatabaseThreadApplicationInventoryReader({
@@ -4933,10 +4944,12 @@ async function main(): Promise<void> {
     queue: queueRepository,
     gateway: queueGateway,
     dispatch: queue,
-    publish(eventScope, threadId, result) {
-      void publishApplicationThread
-        ?.publish(eventScope, threadId)
-        .catch(() => undefined);
+    publish(eventScope, threadId, result, changedInventory) {
+      if (changedInventory) {
+        authoritativeCompletionFollowUp.defer(() => inventory.publishCommitted(eventScope, [changedInventory], changedInventory.stateChangedAt));
+      } else {
+        void publishApplicationThread?.publish(eventScope, threadId).catch(() => undefined);
+      }
       const hub = threadHubs.thread(eventScope, threadId);
       if (hub.projectionGeneration) {
         hub.publish({

@@ -5,6 +5,7 @@ import type {
 } from "../../src/server/conversations/conversation-actor.js";
 import {
   InteractionBroker as ProductionInteractionBroker,
+  blockingRequestWakeIdentity,
   type InteractionConversation,
   type InteractionBrokerPublisher,
 } from "../../src/server/conversations/interaction-broker.js";
@@ -247,6 +248,26 @@ function deferred(): {
 }
 
 describe("InteractionBroker", () => {
+  it("keeps wake receipts independent of presentation and private to the server", async () => {
+    const publisher = { opened: vi.fn(), resolved: vi.fn() };
+    const broker = new InteractionBroker({ publisher });
+    const conversation = new FakeConversation();
+    broker.bind(scope, "thread-1", conversation);
+    const event = opened();
+    if (event.type !== "backend_event" || event.event.type !== "interaction_opened") throw new Error("fixture");
+    const initial = event.event.interaction;
+    const receipt = blockingRequestWakeIdentity(initial);
+    expect(receipt).toMatch(/^[A-Za-z0-9_-]{43}$/u);
+    expect(blockingRequestWakeIdentity({ ...initial, title: { text: "Updated label" } })).toBe(receipt);
+    expect(blockingRequestWakeIdentity({ ...initial, backendInteractionId: "another-request" })).not.toBe(receipt);
+    event.event.interaction = { ...initial, requestIdentity: "private-stable-id" };
+    const replay = { ...event.event.interaction, backendInteractionId: "replacement-routing-id" };
+    expect(blockingRequestWakeIdentity(replay)).toBe(blockingRequestWakeIdentity(event.event.interaction));
+    conversation.emit(event);
+    expect(broker.listPending(scope, "thread-1")[0]).not.toHaveProperty("requestIdentity");
+    await broker.close();
+  });
+
   it("preserves readonly invocation details only within their thread and principal", async () => {
     const publisher = { opened: vi.fn(), resolved: vi.fn() };
     const broker = new InteractionBroker({ publisher });
@@ -289,7 +310,7 @@ describe("InteractionBroker", () => {
     const binding = broker.bind(scope, "thread-1", conversation);
     conversation.emit(opened());
     const [interaction] = broker.listPending(scope, "thread-1");
-    expect(onOpened).toHaveBeenCalledExactlyOnceWith(scope, interaction);
+    expect(onOpened).toHaveBeenCalledExactlyOnceWith(scope, interaction, expect.stringMatching(/^[A-Za-z0-9_-]{43}$/u));
     conversation.emit(opened());
     conversation.emit(projectionReplaced("generation-2"));
     binding.publishPending();
@@ -340,14 +361,20 @@ describe("InteractionBroker", () => {
       }
       await ordinaryRespond(input);
     });
+    const onOpened = vi.fn();
     const broker = new InteractionBroker({
       publisher: { opened: vi.fn(), resolved: vi.fn() },
+      onOpened,
     });
+    expect(broker.hasBindingForThread(scope, "thread-1")).toBe(false);
     broker.bind(scope, "thread-1", conversation);
+    expect(broker.hasBindingForThread({ ...scope, principalId: "other" }, "thread-1")).toBe(false);
     for (let index = 0; index < 32; index += 1) {
       conversation.emit(opened(`provider-${index}`));
     }
+    expect(onOpened).toHaveBeenCalledTimes(32);
     conversation.emit(opened("provider-over-capacity"));
+    expect(onOpened).toHaveBeenCalledTimes(32);
     await vi.waitFor(() => {
       expect(conversation.respond).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -364,9 +391,11 @@ describe("InteractionBroker", () => {
     });
     await Promise.resolve();
     expect(closed).toBe(false);
+    expect(broker.hasBindingForThread(scope, "thread-1")).toBe(true);
     capacityResponse.resolve();
     await close;
     expect(closed).toBe(true);
+    expect(broker.hasBindingForThread(scope, "thread-1")).toBe(false);
   });
 
   it("reports failed exact capacity cancellation without interrupting or abandoning unrelated waiters", async () => {

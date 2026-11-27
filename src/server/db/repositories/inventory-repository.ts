@@ -37,14 +37,12 @@ export type InventoryState = "active" | "snoozed" | "parked" | "archived";
 export type InventoryWakeReason =
   "manual" | "deadline" | "completion" | "failure" | "needs-input" | "activity";
 
-export type InventoryRuntimeWakeSignal =
-  | {
-      readonly kind: "submission_completion";
-      readonly acceptedAt: number;
-      readonly completionObservedAt: number | null;
-      readonly outcome: "completed" | "interrupted" | "failed";
-    }
-  | { readonly kind: "needs_input" };
+export type InventoryRuntimeWakeSignal = {
+  readonly kind: "submission_completion";
+  readonly acceptedAt: number;
+  readonly completionObservedAt: number | null;
+  readonly outcome: "completed" | "interrupted" | "failed";
+};
 
 export type InventoryEnvironmentRecord = {
   readonly tenantId: string;
@@ -2809,6 +2807,34 @@ export class InventoryRepository {
     })();
   }
 
+  observeBlockingRequest(
+    scope: RequestScope, threadId: string, requestIdentity: string, now: number,
+  ): InventoryPrincipalStateRecord | undefined {
+    return this.database.transaction(() => {
+      // Record first sight even while Active. A reconnect after a deliberate
+      // Park must not be able to wake the thread for the same request.
+      const inserted = prepareCached(this.database, `
+        INSERT INTO blocking_request_observations (tenant_id, principal_id, thread_id, request_identity)
+        VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING
+      `).run(scope.tenantId, scope.principalId, threadId, requestIdentity);
+      if (!inserted.changes) return undefined;
+      return this.wakeForUserRequest(scope, threadId, now);
+    })();
+  }
+
+  /** The caller admits the new blocking or nonblocking request in the same transaction. */
+  wakeForUserRequest(
+    scope: RequestScope, threadId: string, now: number,
+  ): InventoryPrincipalStateRecord | undefined {
+    const current = this.getInventory(scope, threadId);
+    if (current.inventoryState === "parked") {
+      activateParkedThread(this.database, scope, threadId, now);
+      return this.getInventory(scope, threadId);
+    }
+    if (current.inventoryState === "snoozed") return this.#wakeSnoozed(scope, current, "needs-input", now);
+    return undefined;
+  }
+
   wakeForRuntimeSignal(
     scope: RequestScope,
     threadId: string,
@@ -2817,53 +2843,31 @@ export class InventoryRepository {
   ): InventoryPrincipalStateRecord {
     return this.database.transaction(() => {
       const current = this.getInventory(scope, threadId);
-      if (current.inventoryState !== "snoozed" || current.snoozedAt === null) {
-        return current;
-      }
       // Replays keep the time of the first durable observation. Completion
       // attention is committed independently of the inventory wake.
-      if (
-        signal.kind === "submission_completion" &&
-        (signal.completionObservedAt === null ||
-          signal.completionObservedAt < current.snoozedAt ||
-          (signal.outcome === "completed" && signal.acceptedAt < current.snoozedAt))
-      ) {
+      if (current.inventoryState !== "snoozed" || current.snoozedAt === null ||
+          signal.completionObservedAt === null || signal.completionObservedAt < current.snoozedAt ||
+          (signal.outcome === "completed" && signal.acceptedAt < current.snoozedAt)) {
         return current;
       }
-      const reason = signal.kind === "needs_input"
-        ? "needs-input"
-        : signal.outcome === "failed"
-          ? "failure"
-          : "completion";
-      const changed = prepareCached(this.database,
-          `
-            UPDATE thread_principal_state
-            SET inventory_state = 'active', state_changed_at = ?,
-              snoozed_at = NULL, snoozed_until = NULL,
-              woke_at = ?, wake_reason = ?, wake_acknowledged_at = NULL,
-              inventory_revision = inventory_revision + 1
-            WHERE tenant_id = ? AND principal_id = ? AND thread_id = ?
-              AND inventory_revision = ?
-          `,
-        )
-        .run(
-          now,
-          now,
-          reason,
-          scope.tenantId,
-          scope.principalId,
-          threadId,
-          current.inventoryRevision,
-        );
-      if (changed.changes !== 1) {
-        throw new DomainError(
-          "conflict",
-          "The thread inventory changed while it was being woken.",
-        );
-      }
-      this.#bumpGeneration(scope);
-      return this.getInventory(scope, threadId);
+      return this.#wakeSnoozed(scope, current, signal.outcome === "failed" ? "failure" : "completion", now);
     })();
+  }
+
+  #wakeSnoozed(
+    scope: RequestScope, current: InventoryPrincipalStateRecord, reason: InventoryWakeReason, now: number,
+  ): InventoryPrincipalStateRecord {
+    const changed = prepareCached(this.database, `
+      UPDATE thread_principal_state
+      SET inventory_state = 'active', state_changed_at = ?, snoozed_at = NULL, snoozed_until = NULL,
+        woke_at = ?, wake_reason = ?, wake_acknowledged_at = NULL, inventory_revision = inventory_revision + 1
+      WHERE tenant_id = ? AND principal_id = ? AND thread_id = ? AND inventory_revision = ?
+    `).run(now, now, reason, scope.tenantId, scope.principalId, current.threadId, current.inventoryRevision);
+    if (changed.changes !== 1) {
+      throw new DomainError("conflict", "The thread inventory changed while it was being woken.");
+    }
+    this.#bumpGeneration(scope);
+    return this.getInventory(scope, current.threadId);
   }
 
   wakeDueSnoozes(now: number): Array<{

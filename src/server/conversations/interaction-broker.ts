@@ -2,7 +2,7 @@ import {
   validateFormAnswers,
   type FormField,
 } from "../../shared/protocol/interactions.js";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type {
   DriverInteraction,
@@ -135,6 +135,13 @@ function backendKey(
   backendInteractionId: string,
 ): string {
   return `${ownerKey(scope, applicationThreadId)}\0${backendInteractionId}`;
+}
+
+/** Thread-scoped receipt identity, independent of broker IDs and presentation. */
+export function blockingRequestWakeIdentity(interaction: DriverInteraction): string {
+  return createHash("sha256")
+    .update(interaction.requestIdentity ?? interaction.backendInteractionId)
+    .digest("base64url");
 }
 
 function sameScope(left: RequestScope, right: RequestScope): boolean {
@@ -377,6 +384,7 @@ export class InteractionBroker {
       readonly onOpened?: (
         scope: RequestScope,
         interaction: BackendInteraction,
+        requestIdentity: string,
       ) => void;
     } = {},
   ) {}
@@ -465,6 +473,10 @@ export class InteractionBroker {
           Date.parse(right.interaction.openedAt),
       )
       .map(({ interaction }) => structuredClone(interaction));
+  }
+
+  hasBindingForThread(scope: RequestScope, applicationThreadId: string): boolean {
+    return this.#bindings.has(ownerKey(scope, applicationThreadId));
   }
 
   hasPendingForThread(scope: RequestScope, applicationThreadId: string): boolean {
@@ -1095,6 +1107,7 @@ export class InteractionBroker {
       this.observers.onOpened?.(
         { ...pending.scope },
         structuredClone(pending.interaction),
+        blockingRequestWakeIdentity(pending.driverInteraction),
       );
     } catch {
       // Passive observers must not change request publication or settlement.

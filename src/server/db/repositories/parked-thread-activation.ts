@@ -4,7 +4,7 @@ import type { RequestScope } from "../../identity/identity-provider.js";
 
 /**
  * Returns a parked thread to Active when input is accepted, its captured
- * turn ends, or an anchored automation fails or becomes uncertain.
+ * turn ends, a new user request opens, or an anchored automation fails or becomes uncertain.
  * Callers verify the triggering fact inside the same transaction so replay
  * cannot undo a later manual Park.
  */

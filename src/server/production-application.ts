@@ -1240,6 +1240,11 @@ export async function startProductionApplication(
       { mode: "ownership_critical" },
     );
     let questions: QuestionRequestService | undefined;
+    function observeBlockingRequest(eventScope: RequestScope, threadId: string, requestIdentity: string): void {
+      const now = Date.now();
+      const state = inventoryRepository.observeBlockingRequest(eventScope, threadId, requestIdentity, now);
+      if (state) threadRuntimeFollowUp.defer(() => inventory.publishCommitted(eventScope, [state], now));
+    }
     let observeAuthoritativeCompletion:
       AuthoritativeCompletionObserver | undefined;
     const pageRepository = new PageRepository(database);
@@ -1276,6 +1281,13 @@ export async function startProductionApplication(
       deliveryInputSnapshots,
       retentionMilliseconds: config.conversationRetentionMilliseconds,
       runtimeBudget: config.conversationRuntimeBudget,
+      onBlockingRequest(eventScope, threadId, requestIdentity) {
+        // An attached broker owns admission (including capacity and cancellation).
+        // Actors without a thread viewer still need to surface their requests.
+        if (!interactions?.hasBindingForThread(eventScope, threadId)) {
+          observeBlockingRequest(eventScope, threadId, requestIdentity);
+        }
+      },
       onHistoricalQuestion: (eventScope, threadId, sourceItemId) =>
         questions?.remember(eventScope, threadId, sourceItemId),
       onNonblockingQuestions: (eventScope, threadId, sourceItemId, payload) =>
@@ -1389,13 +1401,12 @@ export async function startProductionApplication(
     const threadHubs = new ScopedThreadEventHubRegistry();
     const applicationHubs = new ScopedApplicationEventHubs();
     interactions = new InteractionBroker({
-      onOpened: (eventScope, interaction) => {
-        notificationLifecycle.interactionOpened(eventScope, interaction);
-        threadRuntimeFollowUp.defer(async () => {
-          await inventory.wakeForRuntimeSignal(eventScope, interaction.threadId, {
-            kind: "needs_input",
-          });
-        });
+      onOpened(eventScope, interaction, requestIdentity) {
+        try {
+          observeBlockingRequest(eventScope, interaction.threadId, requestIdentity);
+        } finally {
+          notificationLifecycle.interactionOpened(eventScope, interaction);
+        }
       },
     });
     resources.defer(
@@ -1570,10 +1581,12 @@ export async function startProductionApplication(
       queue: queueRepository,
     gateway: queueGateway,
       dispatch: queueDispatcher,
-      publish(eventScope, threadId, result) {
-        void publishApplicationThread
-          ?.publish(eventScope, threadId)
-          .catch(reportBackgroundError("Question summary publication"));
+      publish(eventScope, threadId, result, changedInventory) {
+        if (changedInventory) {
+          threadRuntimeFollowUp.defer(() => inventory.publishCommitted(eventScope, [changedInventory], changedInventory.stateChangedAt));
+        } else {
+          void publishApplicationThread?.publish(eventScope, threadId).catch(reportBackgroundError("Question summary publication"));
+        }
         const hub = threadHubs.thread(eventScope, threadId);
         if (hub.projectionGeneration) {
           hub.publish({

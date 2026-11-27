@@ -367,21 +367,28 @@ in view without a deadline, pin it; to keep a note about it, add a Task.
 Snoozing leaves an active provider turn running. When a submission accepted
 before the snooze completes successfully, the thread stays snoozed and its
 reply is still marked unread. A submission accepted later can wake the thread
-when it finishes. A failure, a blocking request for input or approval, or the
-snooze deadline also wakes it. The wake remains visible until acknowledged.
-Pinning and Group membership remain intact. Resolve pending input or approval
-before snoozing. Sedes also blocks snoozing when a scheduled automation run has
-begun dispatching.
+when it finishes. A failure, interruption, or the snooze deadline also wakes it.
+A new approval or input request wakes the thread, including a follow-up question
+from an agent that keeps working while it waits for your answer. The wake remains
+visible until acknowledged. Pinning and Group membership remain intact. Resolve
+any pending blocking input or approval before snoozing. Sedes also blocks
+snoozing when a scheduled automation run has begun dispatching.
 
 ## Park quiet work
 
-Use **Park** to set a thread aside until its next input. When a turn is in
+Use **Park** to set a thread aside. When a turn is in
 progress, choose **Park until done** from the thread header or its sidebar menu.
 If only background work remains after a turn finishes, the sidebar offers **Park**.
 The turn keeps running. Its progress speech stops immediately, and the thread
 returns to Active when that turn completes, fails, or is interrupted. A confirmed
 outcome recovered after a disconnect also brings it back. **Unpark** brings it
 back early. New progress can speak again, and skipped updates stay silent.
+
+A new approval, input dialog, or nonblocking follow-up question also returns
+the thread to Active, even if the agent parked its own thread. You can finish
+what you’re doing in your current chat before opening the request. If you park
+the thread again while the request is pending, reopening the same dialog leaves
+it parked. A new request can bring it back again.
 
 - Timeline and Flat list place unpinned parked threads in a bottom **Parked**
   section.

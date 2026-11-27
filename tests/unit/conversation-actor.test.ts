@@ -8102,10 +8102,13 @@ describe("authoritative pending interaction subscription replay", () => {
     },
   };
   it("replays an early pending interaction to a late broker and never replays its settled result", async () => {
-    const { manager, handle, driver } = fixture();
-    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    const { managerOptions, handle, driver } = fixture();
+    const onBlockingRequest = vi.fn();
+    const manager = new ConversationActorManager({ ...managerOptions, onBlockingRequest });
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver }, { idleRelease: "retain" });
     handle.emit(0, opened, 0);
     await acquired.actor.captureSnapshotState();
+    expect(onBlockingRequest).toHaveBeenCalledExactlyOnceWith(scope, binding.applicationThreadId, expect.stringMatching(/^[\w-]{43}$/));
     const pendingEvents: ConversationActorEvent[] = [];
     const unsubscribe = acquired.actor.subscribe(event => pendingEvents.push(event));
     expect(pendingEvents[0]?.type).toBe("projection_replaced");

@@ -16,7 +16,10 @@ import {
   type QuestionStatusesResult,
 } from "../../shared/protocol/questions.js";
 import type { QuestionRequestRepository } from "../db/repositories/question-request-repository.js";
-import type { InventoryRepository } from "../db/repositories/inventory-repository.js";
+import type {
+  InventoryPrincipalStateRecord,
+  InventoryRepository,
+} from "../db/repositories/inventory-repository.js";
 import type { QueuedInputRepository } from "../db/repositories/queued-input-repository.js";
 import type { QueuedInputDispatcher } from "../conversations/queued-input-dispatcher.js";
 import type { QueuedInputConversationGateway } from "../conversations/queued-input-conversation-gateway.js";
@@ -37,6 +40,7 @@ export class QuestionRequestService {
         scope: RequestScope,
         threadId: string,
         result: QuestionRequestsResult,
+        changedInventory?: InventoryPrincipalStateRecord,
       ): void;
       onOpened(scope: RequestScope, request: QuestionRequest): void;
     },
@@ -69,17 +73,17 @@ export class QuestionRequestService {
     sourceItemId: string,
     payload: NonblockingQuestionsPayload,
   ): void {
-    const request = this.input.repository.admit(
-      scope,
-      threadId,
-      sourceItemId,
-      payload,
-      Date.now(),
-    );
-    if (!request) return;
-    this.#publish(scope, threadId);
+    const now = Date.now();
+    const admitted = this.input.repository.database.transaction(() => {
+      const request = this.input.repository.admit(scope, threadId, sourceItemId, payload, now);
+      if (!request) return undefined;
+      const changedInventory = this.input.inventory.wakeForUserRequest(scope, threadId, now);
+      return { request, changedInventory };
+    })();
+    if (!admitted) return;
+    this.#publish(scope, threadId, admitted.changedInventory);
     try {
-      this.input.onOpened(scope, request);
+      this.input.onOpened(scope, admitted.request);
     } catch {
       // Notification delivery never changes admission.
     }
@@ -298,10 +302,14 @@ export class QuestionRequestService {
     return result;
   }
 
-  #publish(scope: RequestScope, threadId: string): QuestionRequestsResult {
+  #publish(
+    scope: RequestScope,
+    threadId: string,
+    changedInventory?: InventoryPrincipalStateRecord,
+  ): QuestionRequestsResult {
     const result = this.list(scope, threadId);
     try {
-      this.input.publish(scope, threadId, result);
+      this.input.publish(scope, threadId, result, changedInventory);
     } catch {
       // Reconnect reloads durable state.
     }

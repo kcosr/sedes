@@ -140,11 +140,6 @@ describe("backend-neutral completion observation work", () => {
       signal: { kind: "submission_completion", acceptedAt: 601, completionObservedAt: 650, outcome: "completed" },
       reason: "completion",
     },
-    {
-      name: "new blocking input request",
-      signal: { kind: "needs_input" },
-      reason: "needs-input",
-    },
   ])("applies the wake rule for a $name", async ({ signal, reason }) => {
     const f = applicationSummaryFixture(1);
     try {

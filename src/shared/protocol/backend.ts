@@ -549,6 +549,8 @@ export type BackendCapabilityDocument = z.infer<
 const driverInteractionBaseShape = {
   invocation: interactionInvocationSchema.optional(),
   backendInteractionId: z.string().min(1).max(512),
+  /** Stable across replay of this request. Supply when its response routing ID can change or be reused. */
+  requestIdentity: z.string().min(1).max(512).optional(),
   sourceLabel: boundedDisplayTextSchema,
   title: boundedDisplayTextSchema,
   openedAt: z.iso.datetime(),
