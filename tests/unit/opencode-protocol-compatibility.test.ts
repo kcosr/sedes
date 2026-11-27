@@ -3,7 +3,7 @@ import { Model } from "@opencode/schema/model";
 import { Provider } from "@opencode/schema/provider";
 import { Schema } from "effect";
 import { OpenCodeHttpClient } from "../../src/server/backends/opencode/opencode-http-client.js";
-import { openCodeNativeParser, parseForm, parseModels, parseOpenCodeNativeEvent, parseOpenCodeNativeMessage, parseSession } from "../../src/server/backends/opencode/opencode-native-codecs.js";
+import { openCodeNativeParser, parseForm, parseMessagePage, parseModels, parseOpenCodeNativeEvent, parseOpenCodeNativeMessage, parseSession } from "../../src/server/backends/opencode/opencode-native-codecs.js";
 import { OpenCodeHistoryProjection } from "../../src/server/backends/opencode/opencode-history-projection.js";
 
 describe("OpenCode runtime protocol compatibility", () => {
@@ -41,6 +41,19 @@ describe("OpenCode runtime protocol compatibility", () => {
     }] };
     expect(parseModels(models)).toEqual(models);
     expect(() => parseModels({ ...models, data: [{ ...models.data[0], compatibility: { mediaInput: "unknown" } }] })).toThrow("opencode_native_protocol_invalid");
+  });
+
+  it("reads an OpenCode 2.3 history page containing an assistant first-token timestamp", () => {
+    const assistant = { id: "msg_assistant", type: "assistant", agent: "build", model,
+      time: { created: 1, firstToken: 2, streamed: 3, completed: 4 }, content: [{ type: "text", text: "Answer" }] };
+    const page = { data: [assistant, { id: "msg_idle", type: "idle", outcome: "succeeded", time: { created: 5 } }], cursor: {} };
+    expect(parseMessagePage(page)).toEqual(page);
+    const firstToken = event("session.step.first-token", { assistantMessageID: assistant.id });
+    expect(parseOpenCodeNativeEvent(firstToken)).toEqual(firstToken);
+    expect(() => parseMessagePage({ ...page, data: [{ ...assistant, time: { ...assistant.time, firstToken: "now" } }] }))
+      .toThrow("opencode_native_protocol_invalid");
+    expect(() => parseMessagePage({ ...page, data: [{ ...assistant, time: { ...assistant.time, unexpected: 2 } }] }))
+      .toThrow("opencode_native_protocol_invalid");
   });
 
   it("accepts only the 2.1 native replay fields and keeps them private in normalized history", () => {

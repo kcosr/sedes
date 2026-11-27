@@ -658,21 +658,21 @@ Packages listed: 618.
 - Shipped by: sedes
 - License text (`LICENSE`): [4f221aee6e07](#license-text-4f221aee6e07)
 
-### @opencode/client 2.2.6
+### @opencode/client 2.3.0
 
 - License: MIT
 - URL: https://github.com/anomalyco/opencode/tree/HEAD/packages/client
 - Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
-### @opencode/protocol 2.2.6
+### @opencode/protocol 2.3.0
 
 - License: MIT
 - URL: https://github.com/anomalyco/opencode/tree/HEAD/packages/protocol
 - Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
-### @opencode/schema 2.2.6
+### @opencode/schema 2.3.0
 
 - License: MIT
 - URL: https://github.com/anomalyco/opencode/tree/HEAD/packages/schema

@@ -3,8 +3,8 @@ import { access, realpath, stat } from "node:fs/promises";
 import { constants } from "node:fs";
 import path from "node:path";
 
-export const OPENCODE_RELEASE = "2.2.6" as const;
-export const OPENCODE_SOURCE_REVISION = "dc2ffcf8bf26f9e669b6aa22b95f50e12be15e06" as const;
+export const OPENCODE_RELEASE = "2.3.0" as const;
+export const OPENCODE_SOURCE_REVISION = "a6b15d33daf6ab7d35569f6d711fdb630b9f04e7" as const;
 export const OPENCODE_RUNTIME_MINIMUM_SUPPORTED_RELEASE = "2.2.6";
 export const OPENCODE_RUNTIME_TESTED_THROUGH_RELEASE = "2.2.6";
 // Regressions may exclude exact stable releases, regardless of build metadata.

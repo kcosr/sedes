@@ -509,6 +509,10 @@ User-facing changes are collected here before release. See the
 
 ### Fixed
 
+- OpenCode threads with first-token timestamps reopen on OpenCode 2.3.0.
+  Update the server and OpenCode sidecars together for the new provider
+  protocol profile. See [OpenCode compatibility](docs/operator/backends/opencode.md).
+
 - Claude threads keep the name you set in Sedes across daemon restarts and
   workspace refreshes, including names set before the first message. On upgrade,
   Sedes restores the last successful rename when its record is still available.

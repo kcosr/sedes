@@ -79,7 +79,7 @@ the most queued data must resnapshot. Retention exhaustion for unacknowledged
 critical evidence prevents new ordinary work while preserving the independent
 control path.
 
-The persistent sidecar advertises major 5 of the private `opencode_runtime`
+The persistent sidecar advertises major 6 of the private `opencode_runtime`
 capability under sidecar wire protocol 18 on Linux. Its registry owns the same
 runtime/host used locally; SSH and outbound
 carriers share typed operations and the bounded runtime body channel. Carrier
@@ -119,8 +119,8 @@ Pi, Codex, Claude and Grok retain their existing backend contracts.
 ## Native ownership
 
 The immutable compiled HTTP/SSE profile pins `@opencode/client`,
-`@opencode/protocol` and `@opencode/schema` to **2.2.6**, upstream source revision
-`dc2ffcf8bf26f9e669b6aa22b95f50e12be15e06`. Runtime admission is independent:
+`@opencode/protocol` and `@opencode/schema` to **2.3.0**, upstream source revision
+`a6b15d33daf6ab7d35569f6d711fdb630b9f04e7`. Runtime admission is independent:
 stable stock releases **2.2.6 or newer** are admitted, tested through **2.2.6**.
 Prereleases, malformed versions and releases below the floor fail closed; build
 metadata does not change version precedence. Every admitted runtime uses the
@@ -130,7 +130,9 @@ backend resolves `opencode2` from its execution environment’s PATH unless an
 absolute executable override is supplied. Sedes never searches for the older
 `opencode` executable as an alternative.
 
-The 2.2.6 profile is one strict schema cutover, with no legacy message parser.
+The 2.3.0 profile uses one strict schema for native history and events. It
+recognizes the optional assistant first-token timestamp and the associated
+native event. The remote carrier uses capability `opencode_runtime@6`.
 The qualified runtime floor is 2.2.6: older releases before 2.2.4 omit the
 required persistent-terminal `userTitle` field in the global event stream.
 Validation precedes session routing, so unsupported terminal events cannot be
@@ -303,7 +305,7 @@ it never resends a native effect. Lifetime invalidation remains visible on the
 separate raw subscription while snapshot hydration is pending.
 
 Only `/api/event` and the finite native input-log route use the provider-private
-SSE framing reader. The official 2.2.6 client hardcodes a 16 MiB decoded buffer,
+SSE framing reader. The official client hardcodes a 16 MiB decoded buffer,
 including several frames received in one chunk, and offers no override. The
 local reader enforces 32 MiB UTF-8 line/frame bounds, preserves finite EOF flush
 and multiline framing, and rejects malformed JSON/UTF-8. Payloads still pass
@@ -764,7 +766,7 @@ context, and native history does not attest those producers or final media
 lineage. This qualification assumes the admitted stock runtime and trusted
 configuration, not arbitrary adversarial context hooks.
 
-The pinned upstream 2.2.6 `Prompt.Base64` schema uses a stack-safe linear
+The pinned upstream `Prompt.Base64` schema uses a stack-safe linear
 validator. The adapter uses the official encoded schemas directly; the older
 local Base64 predicate replacement and AST drift guard are removed. Existing
 large-image and strict-shape tests retain the same lexical and byte bounds.

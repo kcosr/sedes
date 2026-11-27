@@ -6,7 +6,7 @@ import { openCodeRuntimeInfoSchema, openCodeRuntimeOperations } from "../../src/
 
 describe("OpenCode runtime compatibility policy", () => {
   it("keeps the compiled protocol profile separate from runtime admission evidence", () => {
-    expect(OPENCODE_RELEASE).toBe("2.2.6");
+    expect(OPENCODE_RELEASE).toBe("2.3.0");
     expect(OPENCODE_RUNTIME_MINIMUM_SUPPORTED_RELEASE).toBe("2.2.6");
     expect(OPENCODE_RUNTIME_TESTED_THROUGH_RELEASE).toBe("2.2.6");
   });
@@ -44,6 +44,6 @@ describe("OpenCode runtime compatibility policy", () => {
     for (const runtimeVersion of ["1.18.30", "2.0.32", "2.1.0", "2.1.0+build.1", "2.1.1", "2.1.1+build.1", "2.2.5", "2.2.5+build.1", "2.2.6-rc.1", "2.2.6 credential"]) {
       expect(openCodeRuntimeInfoSchema.safeParse({ ...info, snapshot: { ...info.snapshot, runtimeVersion } }).success).toBe(false);
     }
-    expect(openCodeRuntimeOperations.every(operation => operation.majorVersion === 5)).toBe(true);
+    expect(openCodeRuntimeOperations.every(operation => operation.majorVersion === 6)).toBe(true);
   });
 });
