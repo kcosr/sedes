@@ -83,8 +83,10 @@ worktree also clears the stale preference and Files falls back to Primary.
 Type **@** in Chat to choose an existing thread. The picker opens on the
 current project. Choose **All threads…** to search across projects and
 execution environments. Type a title, provider, project or environment to
-filter the results. Use Up and Down to move, Enter to choose, and Escape to
-close the picker. Left goes back from All threads.
+filter the results. Use Up and Down to move, Enter or Tab to choose, and
+Escape to close the picker. Left goes back from All threads. If you press
+Enter or Tab while a search is running, the picker selects its first match
+when it arrives.
 
 The mention appears where you typed **@**. You can also drag a sidebar thread
 onto the text. The insertion caret shows where it will land. Dropping on the

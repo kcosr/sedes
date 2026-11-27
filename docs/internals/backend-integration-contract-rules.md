@@ -3589,7 +3589,10 @@ composer snapshot uses fingerprint version 3 and retains its format on fork.
 The shared delivery path expands each reference to a Markdown link with a
 `sedes-thread:` UUID target for the provider. Browser history gets the ordered
 `thread_reference_body` part only from an ordinary composer's captured source.
-Display metadata comes from scoped Sedes inventory. Historical references
+The browser searches candidates in the authenticated source thread's project
+or across the principal's inventory. Results are ordered by latest activity,
+then by thread ID. A continuation keeps its source, scope and query through
+draft autosave. The next page rechecks candidate eligibility. Historical references
 that recorded only a list keep their leading display. A thread reference
 grants no tool or resource authority. Use Chat to stage and submit references.
 

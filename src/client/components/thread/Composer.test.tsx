@@ -1163,11 +1163,63 @@ describe("thread references", () => {
     expect(store.deliver.mock.calls[0]![1].text).toBe("npm i @types/nodeMore");
   });
 
-  it("submits an unmatched @ token normally without converting it into a reference", async () => {
+  it.each(["Enter", "Tab"])("confirms a pending search with %s without submitting the raw query", async (key) => {
+    const store = new FakeComposerStore(snapshot(), "");
+    const application = referenceApplication();
+    let finish!: () => void;
+    const pending = new Promise<void>(resolve => { finish = resolve; });
+    application.api.listMentionCandidates.mockImplementation(async () => {
+      await pending;
+      return { threads: [referencedThread], nextCursor: undefined };
+    });
+    render(<Composer store={store as unknown as ThreadClientStore} applicationStore={application.store} />);
+    const input = screen.getByRole("textbox");
+    input.focus();
+    await userEvent.keyboard(`Compare @Other{${key}}`);
+    expect(store.deliver).not.toHaveBeenCalled();
+    expect(input).toHaveFocus();
+    await act(async () => { finish(); });
+    await waitFor(() => expect(inlineReferenceNodes()).toHaveLength(1));
+    expect(composerText(input)).toBe("Compare Other thread");
+    expect(store.deliver).not.toHaveBeenCalled();
+  });
+
+  it("discards an early confirmation when the user changes the query", async () => {
+    const store = new FakeComposerStore(snapshot(), "");
+    const application = referenceApplication();
+    render(<Composer store={store as unknown as ThreadClientStore} applicationStore={application.store} />);
+    const input = screen.getByRole("textbox");
+    input.focus();
+    await userEvent.keyboard("@O{Enter}ther");
+    expect(await screen.findByRole("option", { name: "Other thread" })).toBeVisible();
+    expect(inlineReferenceNodes()).toHaveLength(0);
+    expect(composerText(input)).toBe("@Other");
+    expect(store.deliver).not.toHaveBeenCalled();
+  });
+
+  it("retries a failed search on Enter and keeps the draft in the composer", async () => {
+    const store = new FakeComposerStore(snapshot(), "");
+    const application = referenceApplication();
+    application.api.listMentionCandidates.mockRejectedValue(new Error("Unavailable"));
+    render(<Composer store={store as unknown as ThreadClientStore} applicationStore={application.store} />);
+    const input = screen.getByRole("textbox");
+    input.focus();
+    await userEvent.keyboard("Compare @Other");
+    expect(await screen.findByRole("option", { name: "Retry search" })).toHaveAttribute("aria-selected", "true");
+    application.api.listMentionCandidates.mockResolvedValue({ threads: [referencedThread], nextCursor: undefined });
+    await userEvent.keyboard("{Enter}");
+    expect(await screen.findByRole("option", { name: "Other thread" })).toBeVisible();
+    expect(store.deliver).not.toHaveBeenCalled();
+    expect(composerText(input)).toBe("Compare @Other");
+  });
+
+  it("submits a settled unmatched @ token normally without converting it into a reference", async () => {
     const store = new FakeComposerStore(snapshot(), "");
     render(<Composer store={store as unknown as ThreadClientStore} applicationStore={referenceApplication().store} />);
     screen.getByRole("textbox").focus();
-    await userEvent.keyboard("npm i @types/node{Enter}");
+    await userEvent.keyboard("npm i @types/node");
+    expect(await screen.findByText("No matching active threads")).toBeVisible();
+    await userEvent.keyboard("{Enter}");
     await waitFor(() => expect(store.deliver).toHaveBeenCalled());
     expect(store.deliver.mock.calls[0]![1].text).toBe("npm i @types/node");
     expect(screen.queryByRole("dialog", { name: "Reference a thread" })).not.toBeInTheDocument();

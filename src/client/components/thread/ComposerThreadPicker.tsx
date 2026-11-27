@@ -51,7 +51,7 @@ export function ComposerThreadPicker({ open, onOpenChange, menu, locations, back
           </button>}
           {menu.scope === "all" ? "All threads" : "Current project"}
         </div>
-        <div ref={list} id={listId} role="listbox" aria-label="Matching threads" className="composer-thread-picker-list flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain p-(--menu-panel-padding)">
+        <div ref={list} id={listId} role="listbox" aria-label="Matching threads" aria-busy={menu.status === "loading"} className="composer-thread-picker-list flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain p-(--menu-panel-padding)">
           {!menu.rows.some(row => row.kind === "thread") && <p className={menuEmptyClass} role="status">
             {menu.status === "loading" ? "Searching threads…" : menu.status === "failed" ? "Couldn't load threads" : "No matching active threads"}
           </p>}

@@ -11,29 +11,27 @@ function readPosition(encoded: string, fingerprint: string): CandidatePosition {
   try {
     const [binding, activity, id] = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
     if (binding === fingerprint && Number.isSafeInteger(activity) && typeof id === "string" && id) return { activity, id };
-  } catch { /* Treat malformed and expired cursors alike. */ }
-  throw new DomainError("cursor_invalid", "Thread inventory or search changed. Restart the search.");
+  } catch { /* Treat malformed cursors and search mismatches alike. */ }
+  throw new DomainError("cursor_invalid", "Invalid cursor for this thread search. Restart the search.");
 }
 
 export function listMentionCandidateIds(
   database: Database.Database, scope: RequestScope, sourceId: string, input: ListMentionCandidatesQuery,
 ): { ids: string[]; nextCursor?: string } {
   const source = prepareCached(database, `
-    SELECT workspace.project_id AS projectId, principal.inventory_generation AS generation
+    SELECT workspace.project_id AS projectId
     FROM application_threads AS thread
     JOIN workspaces AS workspace ON workspace.tenant_id = thread.tenant_id
       AND workspace.owner_principal_id = thread.owner_principal_id AND workspace.id = thread.workspace_id
       AND workspace.removed_at IS NULL
-    JOIN principal_generations AS principal ON principal.tenant_id = thread.tenant_id
-      AND principal.principal_id = thread.owner_principal_id
     WHERE thread.tenant_id = ? AND thread.owner_principal_id = ? AND thread.id = ?
-  `).get(scope.tenantId, scope.principalId, sourceId) as { projectId: string; generation: number } | undefined;
+  `).get(scope.tenantId, scope.principalId, sourceId) as { projectId: string } | undefined;
   if (!source) throw new DomainError("not_found", "The thread was not found.");
 
   const query = (input.query ?? "").trim().toLowerCase();
   const projectId = input.scope === "project" ? source.projectId : null;
   const binding = createHash("sha256").update(JSON.stringify([
-    scope.tenantId, scope.principalId, sourceId, projectId, query, source.generation,
+    scope.tenantId, scope.principalId, sourceId, source.projectId, input.scope, query,
   ])).digest("base64url");
   const after = input.cursor ? readPosition(input.cursor, binding) : undefined;
   const rows = prepareCached(database, `

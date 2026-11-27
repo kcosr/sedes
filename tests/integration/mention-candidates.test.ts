@@ -31,8 +31,8 @@ describe("human thread mention search", () => {
     } finally { database.close(); }
   });
 
-  it("pages on the activity/ID tuple and restarts when scope, query, source, or inventory generation changes", () => {
-    const { database, scope, bindings, ids } = applicationSummaryFixture(36);
+  it("continues after draft autosave using the scoped search and activity/ID tuple", () => {
+    const { database, scope, inventory, bindings, ids } = applicationSummaryFixture(36);
     const source = ids[35]!;
     try {
       const child = ids[2]!;
@@ -45,6 +45,10 @@ describe("human thread mention search", () => {
       const first = listMentionCandidateIds(database, scope, source, { scope: "project" });
       expect(first.ids).toHaveLength(30);
       const cursor = first.nextCursor!;
+      inventory.saveDraft(scope, source, {
+        text: "Compare @", contextExcerpts: [], attachmentIds: [], taskReferenceIds: [],
+        expectedRevision: inventory.getDraft(scope, source).revision, now: 3_000,
+      });
       const second = listMentionCandidateIds(database, scope, source, { scope: "project", cursor });
       expect([...first.ids, ...second.ids]).toEqual([...ids.slice(2, 35).reverse(), ids[0], ids[1]]);
       expect(second.ids).toContain(child);
@@ -52,8 +56,8 @@ describe("human thread mention search", () => {
       expect(() => listMentionCandidateIds(database, scope, ids[0]!, { scope: "project", cursor })).toThrow("Restart");
       expect(() => listMentionCandidateIds(database, scope, source, { scope: "all", cursor })).toThrow("Restart");
       expect(() => listMentionCandidateIds(database, scope, source, { scope: "project", query: "other", cursor })).toThrow("Restart");
-      database.prepare("UPDATE principal_generations SET inventory_generation = inventory_generation + 1").run();
-      expect(() => listMentionCandidateIds(database, scope, source, { scope: "project", cursor })).toThrow("Restart");
+      database.prepare("UPDATE thread_principal_state SET inventory_state = 'archived' WHERE thread_id = ?").run(child);
+      expect(listMentionCandidateIds(database, scope, source, { scope: "project", cursor }).ids).not.toContain(child);
     } finally { database.close(); }
   });
 });

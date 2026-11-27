@@ -81,7 +81,7 @@ it("continues typing after pasting over a selected range", async () => {
 it("drops external plain text at the pointer and preserves line breaks beside a reference", () => {
   const { input, editor } = renderEditor(["Before ", thread, " after"]);
   const at = "Before ".length;
-  const hit = vi.spyOn(EditorView.prototype, "posAtCoords").mockReturnValue({ pos: at, inside: -1 });
+  const hit = vi.spyOn(EditorView.prototype, "posAtCoords").mockReturnValue({ pos: at, inside: -1, affinity: 0 });
   const event = new Event("drop", { bubbles: true, cancelable: true });
   Object.assign(event, { clientX: 15, clientY: 32, dataTransfer: {
     types: ["text/html", "text/plain"], files: [],
@@ -102,8 +102,8 @@ it("moves a selected reference inside the editor as an atom", () => {
   fireEvent(document, new Event("selectionchange"));
   expect(editor.current!.selection()).toMatchObject({ from: 1, to: 2 });
   vi.spyOn(EditorView.prototype, "posAtCoords")
-    .mockReturnValueOnce({ pos: 1, inside: -1 })
-    .mockReturnValue({ pos: 3, inside: -1 });
+    .mockReturnValueOnce({ pos: 1, inside: -1, affinity: 0 })
+    .mockReturnValue({ pos: 3, inside: -1, affinity: 0 });
   const values = new Map<string, string>();
   const dataTransfer = {
     get types() { return [...values.keys()]; },
