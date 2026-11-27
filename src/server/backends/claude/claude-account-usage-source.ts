@@ -1,14 +1,19 @@
-import { MAXIMUM_ACCOUNT_USAGE_ELIGIBLE_THREADS, type BackendAccountUsage } from "../../../shared/protocol/account-usage.js";
+import { MAXIMUM_ACCOUNT_USAGE_ELIGIBLE_THREADS, type BackendAccountUsage, type BackendAccountUsageReport } from "../../../shared/protocol/account-usage.js";
 import type { BackendAccountUsageSource } from "../backend-account-usage.js";
 import type { ClaudeRuntimeClient } from "./claude-runtime-client.js";
+import { CLAUDE_ACCOUNT_USAGE_REFRESH_INTERVAL_MS } from "./worker/claude-runtime-v4.js";
 
-const REFRESH_INTERVAL_MS = 5 * 60_000;
 const REATTACH_RETRY_MS = 5_000;
 
 interface AttachedClaudeQuery {
   readonly applicationThreadId: string;
   readonly sessionId: string;
   readonly startupProbeUuid: string;
+}
+
+interface CachedObservation {
+  readonly id: string;
+  readonly usage: BackendAccountUsageReport;
 }
 
 type VerifiedAccountUsage = BackendAccountUsage & { eligibleThreadIds: string[] };
@@ -19,7 +24,9 @@ export class ClaudeAccountUsageSource implements BackendAccountUsageSource {
   readonly #listeners = new Set<() => void>();
   #snapshot: VerifiedAccountUsage | null = null;
   #timer: ReturnType<typeof setTimeout> | undefined;
-  #request: AbortController | undefined;
+  #request: { controller: AbortController; cached?: CachedObservation } | undefined;
+  #cached: CachedObservation | undefined;
+  #needsMembership = false;
   #nextReadAt = 0;
   readonly #attachments = new Map<string, AttachedClaudeQuery>();
   #closed = false;
@@ -39,7 +46,8 @@ export class ClaudeAccountUsageSource implements BackendAccountUsageSource {
     const attachment = { ...query };
     this.#attachments.set(applicationThreadId, attachment);
     this.#removeEligibility(applicationThreadId);
-    this.#schedule();
+    this.#needsMembership = true;
+    queueMicrotask(() => this.#schedule());
     return () => {
       if (this.#attachments.get(applicationThreadId) !== attachment) return;
       this.#attachments.delete(applicationThreadId);
@@ -52,6 +60,7 @@ export class ClaudeAccountUsageSource implements BackendAccountUsageSource {
     if (this.#closed) return;
     this.#closed = true;
     this.#attachments.clear();
+    this.#cached = undefined;
     this.#cancel();
     this.#publish(null);
     this.#listeners.clear();
@@ -60,47 +69,71 @@ export class ClaudeAccountUsageSource implements BackendAccountUsageSource {
   #cancel(): void {
     clearTimeout(this.#timer);
     this.#timer = undefined;
-    if (this.#request && !this.#request.signal.aborted) {
-      // A detach interrupted this observation. A new attachment can retry
-      // shortly after cleanup without a new quota query per transient attach.
-      this.#nextReadAt = Math.min(this.#nextReadAt, performance.now() + REATTACH_RETRY_MS);
-      this.#request.abort();
+    const request = this.#request;
+    if (request && !request.controller.signal.aborted) {
+      if (request.cached) {
+        this.#request = undefined;
+      } else {
+        // Reopening after an interrupted provider read may retry shortly after cleanup.
+        this.#nextReadAt = Math.min(this.#nextReadAt, performance.now() + REATTACH_RETRY_MS);
+      }
+      request.controller.abort();
     }
   }
 
   #schedule(): void {
-    if (this.#closed || !this.#attachments.size || this.#timer || this.#request) return;
-    this.#timer = setTimeout(() => {
-      this.#timer = undefined;
-      void this.#refresh();
-    }, Math.max(0, this.#nextReadAt - performance.now()));
-    this.#timer.unref();
+    if (this.#closed || !this.#attachments.size || (this.#request && !this.#request.cached)) return;
+    const remaining = this.#nextReadAt - performance.now();
+    if (!this.#timer) {
+      this.#timer = setTimeout(() => {
+        this.#timer = undefined;
+        // A slow membership-only RPC must never postpone the next provider read.
+        this.#request?.controller.abort();
+        void this.#read();
+      }, Math.max(0, remaining));
+      this.#timer.unref();
+    }
+    if (remaining > 0 && this.#needsMembership && this.#cached && !this.#request) {
+      void this.#read(this.#cached);
+    }
   }
 
-  async #refresh(): Promise<void> {
-    const request = new AbortController();
+  async #read(cached?: CachedObservation): Promise<void> {
+    const request = { controller: new AbortController(), cached };
     this.#request = request;
-    this.#nextReadAt = performance.now() + REFRESH_INTERVAL_MS;
+    this.#needsMembership = false;
+    if (!cached) {
+      this.#cached = undefined;
+      this.#nextReadAt = performance.now() + CLAUDE_ACCOUNT_USAGE_REFRESH_INTERVAL_MS;
+    }
     const attachments = [...this.#attachments.values()];
     let usage: VerifiedAccountUsage | null = null;
     try {
-      const observation = await this.runtime.readAccountUsage(request.signal);
-      if (observation) {
+      const observation = await this.runtime.readAccountUsage(request.controller.signal, cached?.id);
+      if (request.controller.signal.aborted) return;
+      if (!cached) {
+        // Main observed the fresh reply now. Remote worker clocks can differ.
+        this.#cached = observation ? {
+          id: observation.observationId, usage: { ...observation.usage, capturedAt: Date.now() },
+        } : undefined;
+      }
+      if (this.#cached && observation?.observationId === this.#cached.id) {
         const verified = new Map(observation.verifiedSessions.map(session => [session.sessionId, session.startupProbeUuid]));
         const eligibleThreadIds = attachments.filter(query =>
           this.#attachments.get(query.applicationThreadId) === query && verified.get(query.sessionId) === query.startupProbeUuid,
         ).map(query => query.applicationThreadId);
         if (eligibleThreadIds.length > 0 && eligibleThreadIds.length <= MAXIMUM_ACCOUNT_USAGE_ELIGIBLE_THREADS) {
-          // Main observed the reply now. Remote worker clocks can differ.
-          usage = { ...observation.usage, capturedAt: Date.now(), eligibleThreadIds, reportedBy: "Claude Code" };
+          usage = { ...this.#cached.usage, eligibleThreadIds, reportedBy: "Claude Code" };
         }
       }
     } catch {
-      // Optional provider observations may fail independently of the conversation.
+      // Optional provider and membership reads may fail independently of the conversation.
     } finally {
-      if (!request.signal.aborted) this.#publish(usage);
-      this.#request = undefined;
-      this.#schedule();
+      if (!request.controller.signal.aborted) this.#publish(usage);
+      if (this.#request === request) {
+        this.#request = undefined;
+        this.#schedule();
+      }
     }
   }
 

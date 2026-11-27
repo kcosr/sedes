@@ -403,13 +403,15 @@ export class ClaudePersistentRuntimeHost {
         const attached = (session: Session | undefined) => session && session.epoch === command.controllerEpoch &&
           session.listener && session.runtime.initialization && !session.runtime.closed && !session.failureCode;
         if (![...this.#sessions.values()].some(attached)) return { observation: null };
-        const report = await this.input.client.readAccountUsage(signal ?? AbortSignal.timeout(CLAUDE_ACCOUNT_USAGE_TIMEOUT_MS));
-        if (!report) return { observation: null };
+        const report = await this.input.client.readAccountUsage(signal ?? AbortSignal.timeout(CLAUDE_ACCOUNT_USAGE_TIMEOUT_MS), command.request.observationId);
+        if (!report || ![...this.#sessions.values()].some(attached) || (command.request.observationId !== undefined && report.observationId !== command.request.observationId)) {
+          return { observation: null };
+        }
         const verifiedSessions = report.verifiedSessions.filter(({ sessionId, startupProbeUuid }) => {
           const session = this.#sessions.get(sessionId);
           return attached(session) && session?.runtime.startupProbeUuid === startupProbeUuid;
         });
-        return { observation: verifiedSessions.length ? { usage: report.usage, verifiedSessions } : null };
+        return { observation: { observationId: report.observationId, usage: report.usage, verifiedSessions } };
       }
       case "probe": return await this.input.client.probe({ executablePath: config.executablePath, timeoutMs: config.initializationTimeoutMs, environment: {}, cwd: command.request.cwd });
       case "list": return { sessions: await this.input.client.listSessions(command.request, {}) };

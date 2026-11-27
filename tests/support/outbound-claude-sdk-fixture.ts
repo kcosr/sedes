@@ -31,7 +31,7 @@ export const OUTBOUND_CLAUDE_AUTH_STATUS = {
 };
 
 export interface OutboundClaudeFixtureEvent {
-  readonly event: "query_open" | "startup_probe" | "send" | "permission_pending" |
+  readonly event: "query_open" | "startup_probe" | "account_usage" | "send" | "permission_pending" |
     "permission_resolved" | "result" | "interrupt" | "query_close" | "query_error";
   readonly pid: number;
   readonly queryId: string;
@@ -185,6 +185,7 @@ export class FakeOutboundClaudeSdkFacade implements ClaudeSdkFacade {
         if (options.skipBehaviors !== true || input.options.persistSession !== false || cwd !== "/" || sendCount !== 0) {
           throw new Error("outbound_claude_fixture_account_query_invalid");
         }
+        log("account_usage");
         const reset = new Date(Date.now() + 7 * 86_400_000).toISOString();
         return {
           subscription_type: "max", behaviors: null, rate_limits_available: true,

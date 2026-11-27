@@ -18,7 +18,7 @@ import { SidecarProtocolDeliveryError } from "../../../../internal/sidecar-proto
 import { claudeConfigDirectory, type ClaudeChildEnvironment } from "../claude-child-environment.js";
 import { snapshotBoundedJson } from "../../../provider-protocol/json/bounded-json-snapshot.js";
 import type { ClaudeSdkFacade } from "../claude-sdk-facade.js";
-import { readClaudeAccountUsage, selectClaudeAccountUsageObservation } from "../claude-account-usage-probe.js";
+import { ClaudeAccountUsageCache, readClaudeAccountUsage } from "../claude-account-usage-probe.js";
 import { probeClaudeSdkDirect } from "../claude-sdk-probe.js";
 import { ClaudeSdkSession } from "../claude-sdk-session.js";
 import { ClaudeRuntimeCompactError } from "../claude-compact-operation.js";
@@ -106,6 +106,7 @@ export class ClaudeRuntimeWorkerHost {
   readonly #retirements = new Map<string, Promise<void>>();
   readonly #queryProcessScope: () => ClaudeQueryProcessScope;
   readonly #closeController = new AbortController();
+  readonly #accountUsageCache = new ClaudeAccountUsageCache();
   #accountRead?: ReturnType<typeof readClaudeAccountUsage>;
   #configuration: RuntimeConfiguration | undefined;
   #initializing: Promise<RuntimeConfiguration> | undefined;
@@ -131,7 +132,7 @@ export class ClaudeRuntimeWorkerHost {
     const handlers: ClaudeRuntimeV4WorkerHandlers = {
       initialize: async (request, context) =>
         await this.#initialize(request, context.signal),
-      accountUsage: async (_request, context) => ({ observation: await this.#readAccountUsage(context.signal) }),
+      accountUsage: async ({ observationId }, context) => ({ observation: await this.#readAccountUsage(context.signal, observationId) }),
       probe: async ({ cwd }, context) => await this.#probe(cwd, context.signal),
       listSessions: async (request) => await this.#listSessions(request),
       getSessionInfo: async (request) => await this.#getSessionInfo(request),
@@ -203,6 +204,7 @@ export class ClaudeRuntimeWorkerHost {
   close(): Promise<void> {
     this.#closed = true;
     this.#history.close();
+    this.#accountUsageCache.clear();
     this.#closeController.abort();
     this.#closePromise ??= Promise.allSettled([
       ...[...this.#queries.values()].map(({ session }) => session.close()), this.#accountRead,
@@ -214,11 +216,14 @@ export class ClaudeRuntimeWorkerHost {
     return this.#closePromise;
   }
 
-  async #readAccountUsage(signal: AbortSignal) {
+  async #readAccountUsage(signal: AbortSignal, observationId?: string) {
     this.#assertOpen();
     signal.throwIfAborted();
-    if (this.#accountRead || ![...this.#queries.values()].some(({ session, launch }) =>
+    if (![...this.#queries.values()].some(({ session, launch }) =>
       launch !== "fork" && session.initialization && !session.closed)) return null;
+    if (observationId !== undefined) return await this.#accountUsageCache.observe(observationId, this.#queries.values());
+    if (this.#accountRead) return null;
+    this.#accountUsageCache.clear();
     const configuration = this.#configured();
     const processes = this.#queryProcessScope();
     // The resident conversation permits a read; its own workspace, credentials,
@@ -227,7 +232,12 @@ export class ClaudeRuntimeWorkerHost {
       sdk: processes.sdk, executablePath: configuration.executablePath, environment: configuration.environment,
       signal: AbortSignal.any([signal, this.#closeController.signal]),
     }).finally(() => processes.terminate());
-    try { return await selectClaudeAccountUsageObservation(await this.#accountRead, this.#queries.values()); }
+    try {
+      const sample = await this.#accountRead;
+      if (this.#closed || signal.aborted || !sample) return null;
+      const id = this.#accountUsageCache.store(sample);
+      return await this.#accountUsageCache.observe(id, this.#queries.values());
+    }
     finally { this.#accountRead = undefined; }
   }
 

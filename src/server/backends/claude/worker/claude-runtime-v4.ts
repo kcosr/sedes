@@ -26,6 +26,7 @@ export const CLAUDE_RUNTIME_MAXIMUM_JSON_BYTES = 64 * 1024 * 1024;
 export const CLAUDE_RUNTIME_MAXIMUM_HISTORY_RESPONSE_BYTES = 32 * 1024 * 1024;
 export const CLAUDE_RUNTIME_MAXIMUM_QUERIES = 32;
 export const CLAUDE_ACCOUNT_USAGE_TIMEOUT_MS = 10_000;
+export const CLAUDE_ACCOUNT_USAGE_REFRESH_INTERVAL_MS = 5 * 60_000;
 
 const boundedJsonValueSchema = z
   .unknown()
@@ -535,14 +536,15 @@ function operation<Request, Response>(input: {
 }
 
 export const claudeAccountUsageObservationSchema = z.strictObject({
+  observationId: uuidSchema,
   usage: backendAccountUsageReportSchema,
-  verifiedSessions: z.array(z.strictObject({ sessionId: uuidSchema, startupProbeUuid: uuidSchema })).min(1).max(CLAUDE_RUNTIME_MAXIMUM_QUERIES),
+  verifiedSessions: z.array(z.strictObject({ sessionId: uuidSchema, startupProbeUuid: uuidSchema })).max(CLAUDE_RUNTIME_MAXIMUM_QUERIES),
 });
 export type ClaudeAccountUsageObservation = z.infer<typeof claudeAccountUsageObservationSchema>;
 
 export const claudeRuntimeAccountUsageOperation = operation({
   operation: "runtime.account_usage",
-  requestSchema: z.strictObject({}),
+  requestSchema: z.strictObject({ observationId: uuidSchema.optional() }),
   responseSchema: z.strictObject({ observation: claudeAccountUsageObservationSchema.nullable() }),
   maximumDeadlineMilliseconds: CLAUDE_ACCOUNT_USAGE_TIMEOUT_MS,
   lane: "operation",

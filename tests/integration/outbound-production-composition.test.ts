@@ -305,14 +305,20 @@ describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")("
       const claudeThread = await fixture.submit(workspace.id, newTarget, "Confirm that the new backend is ready.");
       await fixture.waitFor(async () => JSON.stringify((await fixture.thread(claudeThread)).itemsById).includes("Offline outbound Claude response."));
       const backendId = (await fixture.snapshot()).executionTargets.find(target => target.id === newTarget)!.backendInstanceId;
-      await fixture.waitFor(async () => (await fixture.snapshot()).accountUsages.some(usage => usage.backendInstanceId === backendId));
-      expect((await fixture.snapshot()).accountUsages.find(usage => usage.backendInstanceId === backendId)).toMatchObject({
+      const readQuota = async () => (await fixture.snapshot()).accountUsages.find(usage => usage.backendInstanceId === backendId);
+      await fixture.waitFor(async () => (await readQuota()) !== undefined);
+      const quota = (await readQuota())!;
+      expect(quota).toMatchObject({
         executionEnvironmentId: fixture.environmentId, eligibleThreadIds: [claudeThread], windows: [
           { scope: { kind: "account" }, remainingPercent: 47 },
           { scope: { kind: "model", label: "Fable" }, remainingPercent: 35 },
         ],
       });
       expect((await fixture.claudeEvents()).filter(event => event.event === "send")).toHaveLength(1);
+      const nextClaudeThread = await fixture.submit(workspace.id, newTarget, "Verify quota on the next Claude thread.");
+      await fixture.waitFor(async () => (await readQuota())?.eligibleThreadIds?.includes(nextClaudeThread) === true);
+      expect(await readQuota()).toEqual({ ...quota, eligibleThreadIds: expect.arrayContaining([claudeThread, nextClaudeThread]) });
+      expect((await fixture.claudeEvents()).filter(event => event.event === "account_usage")).toHaveLength(1);
       const secondTarget = await fixture.addCodexBackend("second-codex");
       const second = await fixture.json("/api/threads", "POST", { workspaceId: workspace.id, title: "Second Codex", executionWorkspace: { kind: "direct" },
         configuration: { kind: "custom", targetId: secondTarget } }) as { threadId: string };

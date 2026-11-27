@@ -12,14 +12,15 @@ const queryA = { applicationThreadId: "thread-a", sessionId: "session-a", startu
 const queryB = { applicationThreadId: "thread-b", sessionId: "session-b", startupProbeUuid: "query-b" };
 const proofA = { sessionId: queryA.sessionId, startupProbeUuid: queryA.startupProbeUuid };
 const proofB = { sessionId: queryB.sessionId, startupProbeUuid: queryB.startupProbeUuid };
-const observation = { usage: sample, verifiedSessions: [proofA, proofB] };
+const observationId = "bc65667f-11e4-4a22-9651-e9ef6c596845";
+const observation = { observationId, usage: sample, verifiedSessions: [proofA, proofB] };
 
 beforeEach(() => { vi.useFakeTimers(); });
 afterEach(() => { vi.useRealTimers(); });
 
 describe("Claude account usage polling", () => {
   it("keeps a single backend cache and cadence while any admitted conversation is present", async () => {
-    const readAccountUsage = vi.fn(async () => observation);
+    const readAccountUsage = vi.fn(async (_signal: AbortSignal, _id?: string) => observation);
     const source = new ClaudeAccountUsageSource({ readAccountUsage });
     const notify = vi.fn();
     source.subscribe(notify);
@@ -44,23 +45,108 @@ describe("Claude account usage polling", () => {
     await vi.advanceTimersByTimeAsync(interval / 2);
     const releaseC = source.retain(queryA);
     await vi.advanceTimersByTimeAsync(interval / 2 - 1);
-    expect(readAccountUsage).toHaveBeenCalledTimes(2);
+    expect(readAccountUsage.mock.calls.map(([, id]) => id)).toEqual([undefined, undefined, observationId]);
     await vi.advanceTimersByTimeAsync(1);
-    expect(readAccountUsage).toHaveBeenCalledTimes(3);
+    expect(readAccountUsage.mock.calls.map(([, id]) => id)).toEqual([undefined, undefined, observationId, undefined]);
     releaseC();
     await vi.advanceTimersByTimeAsync(2 * interval);
-    expect(readAccountUsage).toHaveBeenCalledTimes(3);
+    expect(readAccountUsage).toHaveBeenCalledTimes(4);
+    source.close();
+  });
+
+  it("coalesces new matching attachments into one membership check and retains the original quota and capture time", async () => {
+    const readAccountUsage = vi.fn(async (_signal: AbortSignal, id?: string) => id
+      ? { ...observation, usage: { ...sample, plan: null }, verifiedSessions: [proofA, proofB] }
+      : { ...observation, verifiedSessions: [proofA] });
+    const source = new ClaudeAccountUsageSource({ readAccountUsage });
+    source.retain(queryA);
+    await vi.advanceTimersByTimeAsync(0);
+    const original = source.snapshot()!;
+    await vi.advanceTimersByTimeAsync(60_000);
+    source.retain(queryB);
+    source.retain({ ...queryB, applicationThreadId: "also-b" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(readAccountUsage.mock.calls.map(([, id]) => id)).toEqual([undefined, observationId]);
+    expect(source.snapshot()).toEqual({ ...original, eligibleThreadIds: ["thread-a", "thread-b", "also-b"] });
+    await vi.advanceTimersByTimeAsync(interval - 60_000);
+    expect(readAccountUsage.mock.calls.map(([, id]) => id)).toEqual([undefined, observationId, undefined]);
+    expect(source.snapshot()?.capturedAt).toBe(Date.now());
+    source.close();
+  });
+
+  it("keeps a private sample even without eligible threads and verifies a reopened query incarnation", async () => {
+    const replacement = { ...queryB, startupProbeUuid: "fresh-query" };
+    const readAccountUsage = vi.fn(async (_signal: AbortSignal, _id?: string) => observation)
+      .mockResolvedValueOnce({ ...observation, verifiedSessions: [] })
+      .mockResolvedValueOnce({ ...observation, verifiedSessions: [proofB] })
+      .mockResolvedValueOnce({ ...observation, verifiedSessions: [{ ...proofB, startupProbeUuid: replacement.startupProbeUuid }] });
+    const source = new ClaudeAccountUsageSource({ readAccountUsage });
+    const releaseA = source.retain(queryA);
+    await vi.advanceTimersByTimeAsync(0);
+    const capturedAt = Date.now();
+    expect(source.snapshot()).toBeNull();
+    releaseA();
+    await vi.advanceTimersByTimeAsync(30_000);
+    const releaseB = source.retain(queryB);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(source.snapshot()).toMatchObject({ capturedAt, eligibleThreadIds: ["thread-b"] });
+    releaseB();
+    expect(source.snapshot()).toBeNull();
+    await vi.advanceTimersByTimeAsync(10_000);
+    source.retain(replacement);
+    expect(source.snapshot()).toBeNull();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(source.snapshot()).toMatchObject({ capturedAt, eligibleThreadIds: ["thread-b"] });
+    expect(readAccountUsage.mock.calls.map(([, id]) => id)).toEqual([undefined, observationId, observationId]);
+    source.close();
+  });
+
+  it.each([null, { ...observation, observationId: "foreign-worker-sample" }])(
+    "withholds cached quota when the current worker cannot confirm the original observation", async reply => {
+      const readAccountUsage = vi.fn(async (_signal: AbortSignal, id?: string) => id ? reply : observation);
+      const source = new ClaudeAccountUsageSource({ readAccountUsage });
+      source.retain(queryA);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(source.snapshot()?.eligibleThreadIds).toEqual(["thread-a"]);
+      await vi.advanceTimersByTimeAsync(10_000);
+      source.retain(queryB);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(source.snapshot()).toBeNull();
+      expect(readAccountUsage.mock.calls.map(([, id]) => id)).toEqual([undefined, observationId]);
+      await vi.advanceTimersByTimeAsync(interval - 10_000);
+      expect(source.snapshot()?.eligibleThreadIds).toEqual(["thread-a", "thread-b"]);
+      source.close();
+    },
+  );
+
+  it("preempts a slow cache check at the provider deadline and ignores its late reply", async () => {
+    let complete!: (reply: typeof observation) => void;
+    const readAccountUsage = vi.fn(async (_signal: AbortSignal, id?: string) => id
+      ? new Promise<typeof observation>(resolve => { complete = resolve; })
+      : { ...observation, verifiedSessions: [proofA] });
+    const source = new ClaudeAccountUsageSource({ readAccountUsage });
+    source.retain(queryA);
+    await vi.advanceTimersByTimeAsync(interval - 1_000);
+    source.retain(queryB);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(readAccountUsage.mock.calls.map(([, id]) => id)).toEqual([undefined, observationId]);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(readAccountUsage.mock.calls[1]![0].aborted).toBe(true);
+    expect(readAccountUsage.mock.calls.map(([, id]) => id)).toEqual([undefined, observationId, undefined]);
+    complete(observation);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(source.snapshot()).toMatchObject({ capturedAt: Date.now(), eligibleThreadIds: ["thread-a"] });
     source.close();
   });
 
   it("only shares a reading with live queries proven to use the observed account", async () => {
-    const readAccountUsage = vi.fn(async () => ({ usage: sample, verifiedSessions: [proofA] }));
+    const readAccountUsage = vi.fn(async () => ({ observationId, usage: sample, verifiedSessions: [proofA] }));
     const source = new ClaudeAccountUsageSource({ readAccountUsage });
     source.retain(queryA);
     source.retain(queryB);
     await vi.advanceTimersByTimeAsync(0);
     expect(source.snapshot()?.eligibleThreadIds).toEqual(["thread-a"]);
-    readAccountUsage.mockResolvedValueOnce({ usage: sample, verifiedSessions: [] });
+    readAccountUsage.mockResolvedValueOnce({ observationId, usage: sample, verifiedSessions: [] });
     await vi.advanceTimersByTimeAsync(interval);
     expect(source.snapshot()).toBeNull();
     source.close();
@@ -102,7 +188,7 @@ describe("Claude account usage polling", () => {
     // An old worker reply for the same native session cannot verify its replacement.
     await vi.advanceTimersByTimeAsync(interval);
     expect(source.snapshot()?.eligibleThreadIds).toEqual(["thread-b"]);
-    readAccountUsage.mockResolvedValueOnce({ usage: sample, verifiedSessions: [
+    readAccountUsage.mockResolvedValueOnce({ observationId, usage: sample, verifiedSessions: [
       { ...proofA, startupProbeUuid: "replacement-query" }, proofB,
     ] });
     await vi.advanceTimersByTimeAsync(interval);

@@ -237,11 +237,23 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
       windows: [{ scope: { kind: "account" as const }, remainingPercent: 47, durationMinutes: 10_080, resetsAt: null }],
     };
     const current = { sessionId, startupProbeUuid: session.startupProbeUuid! };
-    f.runtime.readAccountUsage.mockResolvedValue({ usage, verifiedSessions: [
+    const observationId = randomUUID();
+    const report = { observationId, usage, verifiedSessions: [current] };
+    f.runtime.readAccountUsage.mockResolvedValue({ ...report, verifiedSessions: [
       { sessionId, startupProbeUuid: randomUUID() }, { sessionId: randomUUID(), startupProbeUuid: randomUUID() }, current,
     ] });
-    expect(await client.readAccountUsage(signal)).toEqual({ usage, verifiedSessions: [current] });
-    expect(f.runtime.readAccountUsage).toHaveBeenCalledExactlyOnceWith(expect.any(AbortSignal));
+    expect(await client.readAccountUsage(signal)).toEqual(report);
+    expect(f.runtime.readAccountUsage).toHaveBeenCalledExactlyOnceWith(expect.any(AbortSignal), undefined);
+    const secondId = randomUUID();
+    const second = client.createSession(sessionOptions(secondId));
+    await second.start();
+    const extended = { ...report, verifiedSessions: [current, { sessionId: secondId, startupProbeUuid: second.startupProbeUuid! }] };
+    f.runtime.readAccountUsage.mockResolvedValue(extended);
+    expect(await client.readAccountUsage(signal, observationId)).toEqual(extended);
+    expect(f.runtime.readAccountUsage).toHaveBeenLastCalledWith(expect.any(AbortSignal), observationId);
+    // A mismatch across the host/client boundary must not adopt another observation.
+    expect(await client.readAccountUsage(signal, randomUUID())).toBeNull();
+    await second.close();
     f.runtime.readAccountUsage.mockRejectedValueOnce(new Error("quota_unavailable"));
     await expect(client.readAccountUsage(signal)).rejects.toThrow("sidecar_operation_failed");
     expect(f.sessions[0]!.closed).toBe(false);
@@ -249,7 +261,7 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     expect(await client.readAccountUsage(signal)).toBeNull();
     await carrier.close();
     expect(await client.readAccountUsage(signal)).toBeNull();
-    expect(f.runtime.readAccountUsage).toHaveBeenCalledTimes(2);
+    expect(f.runtime.readAccountUsage).toHaveBeenCalledTimes(4);
   });
 
   it("round-trips bounded context telemetry and refuses a stale query generation", async () => {

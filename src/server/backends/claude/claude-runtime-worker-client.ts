@@ -147,10 +147,10 @@ export class ClaudeRuntimeWorkerClient implements ClaudeOwnedRuntimeClient {
     );
   }
 
-  async readAccountUsage(signal: AbortSignal) {
+  async readAccountUsage(signal: AbortSignal, observationId?: string) {
     signal.throwIfAborted();
     this.#assertOpen();
-    const { observation } = await this.#peer.call(claudeRuntimeAccountUsageOperation, {}, { signal });
+    const { observation } = await this.#peer.call(claudeRuntimeAccountUsageOperation, observationId === undefined ? {} : { observationId }, { signal });
     return observation;
   }
 

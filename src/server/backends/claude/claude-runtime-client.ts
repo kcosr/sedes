@@ -192,8 +192,8 @@ export interface ClaudeOwnedRuntimeSession extends ClaudeRuntimeSession {
  * not cross this interface.
  */
 export interface ClaudeRuntimeClient {
-  /** Read the backend login on a resident worker. No caller-supplied account or environment. */
-  readAccountUsage(signal: AbortSignal): Promise<ClaudeAccountUsageObservation | null>;
+  /** An observation ID only rechecks membership against the resident worker’s unexpired sample. */
+  readAccountUsage(signal: AbortSignal, observationId?: string): Promise<ClaudeAccountUsageObservation | null>;
   startupEnvironmentState?(): Promise<"not_started" | "started" | "unknown">;
   submissionDisposition?(input: {
     readonly sessionId: string;
@@ -269,7 +269,7 @@ export class ClaudeSdkRuntimeAdapter implements ClaudeRuntimeClient {
     this.#sdk = sdk;
   }
 
-  async readAccountUsage(_signal: AbortSignal): Promise<ClaudeAccountUsageObservation | null> {
+  async readAccountUsage(_signal: AbortSignal, _observationId?: string): Promise<ClaudeAccountUsageObservation | null> {
     // The direct adapter has no configured backend worker or startup environment.
     return null;
   }

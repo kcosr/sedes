@@ -222,6 +222,13 @@ test("Claude quota follows the model selected for the next turn", async ({ page,
     await createClaudeDraft(page, "Unbound Claude draft");
     await expect(page.locator(".account-usage-line")).toHaveCount(0);
     await expect(mobileCard.getByText("35% left", { exact: true })).toBeVisible();
+    await fillAndPersistDraft(page, "/review second thread", "Message Claude");
+    await sendCurrentDraft(page);
+    await expect(line).toHaveAccessibleName(/Weekly · All models, 47% remaining/);
+    await line.hover();
+    await expect(card.getByText("35% left", { exact: true })).toBeVisible();
+    await expect(card.locator(".account-usage-checked time")).toHaveAttribute("datetime", checked!);
+    await expect(mobileCard.locator(".account-usage-checked time")).toHaveAttribute("datetime", checked!);
   } finally {
     await mobile.close();
   }

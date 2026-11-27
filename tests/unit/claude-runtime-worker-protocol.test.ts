@@ -12,9 +12,11 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { SidecarOperationRegistry } from "../../src/internal/sidecar-protocol/index.js";
 import { SidecarProtocolDeliveryError } from "../../src/internal/sidecar-protocol/contracts.js";
+import { ClaudeAccountUsageCache } from "../../src/server/backends/claude/claude-account-usage-probe.js";
 import { readClaudeSessionHistory } from "../../src/server/backends/claude/claude-session-history.js";
 import type { ClaudeSdkFacade } from "../../src/server/backends/claude/claude-sdk-facade.js";
 import {
+  CLAUDE_ACCOUNT_USAGE_REFRESH_INTERVAL_MS,
   CLAUDE_RUNTIME_MAXIMUM_HISTORY_RESPONSE_BYTES,
   CLAUDE_RUNTIME_MAXIMUM_JSON_BYTES,
   claudeRuntimeCanUseToolOperation,
@@ -800,6 +802,32 @@ describe("ClaudeRuntimeWorkerHost", () => {
     }
   });
 
+  it("drops expired, replaced, and previous-worker quota observations even during proof resolution", async () => {
+    const cache = new ClaudeAccountUsageCache();
+    const usage = { capturedAt: 123, accountId: null, plan: "Max", includedUsageAllowed: null,
+      windows: [{ scope: { kind: "account" as const }, remainingPercent: 50, durationMinutes: 10_080, resetsAt: null }] };
+    const sample = { usage, accountKey: "private" };
+    vi.useFakeTimers({ toFake: ["performance"] });
+    try {
+      const first = cache.store(sample);
+      const nextWorker = new ClaudeAccountUsageCache();
+      expect(await nextWorker.observe(first, [])).toBeNull();
+      const proof = deferred<string>();
+      const session = { closed: false, quotaAccountKey: proof.promise, startupProbeUuid: randomUUID() };
+      const verifying = cache.observe(first, [{ launch: "new", sessionId: SESSION_ID, session }]);
+      const second = cache.store(sample);
+      expect(second).not.toBe(first);
+      proof.resolve(sample.accountKey);
+      expect(await verifying).toBeNull();
+      expect(await cache.observe(second, [])).toMatchObject({ observationId: second, usage, verifiedSessions: [] });
+      vi.advanceTimersByTime(CLAUDE_ACCOUNT_USAGE_REFRESH_INTERVAL_MS);
+      expect(await cache.observe(second, [])).toBeNull();
+      const third = cache.store(sample);
+      cache.clear();
+      expect(await cache.observe(third, [])).toBeNull();
+    } finally { vi.useRealTimers(); }
+  });
+
   it("admits one backend-account probe only with a resident query and keeps thread settings out of it", async () => {
     const previousConfig = process.env.CLAUDE_CONFIG_DIR;
     const configDirectory = await mkdtemp("/tmp/sedes-claude-worker-test-");
@@ -836,7 +864,7 @@ describe("ClaudeRuntimeWorkerHost", () => {
         startupEnvironmentVariables: { ACCOUNT_SCOPE: { kind: "literal", value: "backend" } },
         startupEnvironment: { ACCOUNT_SCOPE: "backend" },
       }, context());
-      const check = async () => await host.handlers.accountUsage({}, context());
+      const check = async (observationId?: string) => await host.handlers.accountUsage({ observationId }, context());
       await expect(check()).resolves.toEqual({ observation: null });
       expect(scopes).not.toHaveBeenCalled();
       const opened = await host.handlers.openQuery({
@@ -863,17 +891,39 @@ describe("ClaudeRuntimeWorkerHost", () => {
         session: { total_cost_usd: 0, total_api_duration_ms: 0, total_duration_ms: 0,
           total_lines_added: 0, total_lines_removed: 0, model_usage: {} },
       });
-      await expect(reading).resolves.toEqual({ observation: { verifiedSessions: [{ sessionId: SESSION_ID, startupProbeUuid: opened.startupProbeUuid }], usage: {
+      const observation = (await reading).observation!;
+      expect(observation).toEqual({ observationId: expect.any(String), verifiedSessions: [{ sessionId: SESSION_ID, startupProbeUuid: opened.startupProbeUuid }], usage: {
         capturedAt: expect.any(Number), accountId: null, plan: "Max", includedUsageAllowed: null,
         windows: [{ scope: { kind: "account" }, remainingPercent: 47, durationMinutes: 10_080, resetsAt: null }],
-      } } });
+      } });
       expect(account.close).toHaveBeenCalledOnce();
       expect(conversation.close).not.toHaveBeenCalled();
+      // A resumed native session changes incarnation. Recheck it without a second CLI or quota read.
+      await host.handlers.closeQuery({ queryId: QUERY_ID }, context());
+      await expect(check(observation.observationId)).resolves.toEqual({ observation: { ...observation, verifiedSessions: [] } });
+      scopes.mockReturnValueOnce({ sdk: conversation.sdk, settled: async () => {}, terminate: vi.fn() });
+      const resumed = await host.handlers.openQuery({
+        queryId: QUERY_ID, sessionId: SESSION_ID, cwd: "/workspace", launch: "resume", enableCanUseTool: false, environment: {},
+      }, context());
+      expect(resumed.startupProbeUuid).not.toBe(opened.startupProbeUuid);
+      await expect(check(observation.observationId)).resolves.toEqual({ observation: {
+        ...observation, verifiedSessions: [{ sessionId: SESSION_ID, startupProbeUuid: resumed.startupProbeUuid }],
+      } });
+      await expect(check(randomUUID())).resolves.toEqual({ observation: null });
+      expect(account.sdk.readCliAuthStatus).toHaveBeenCalledOnce();
+      expect(usage).toHaveBeenCalledOnce();
+      expect(scopes).toHaveBeenCalledTimes(5);
+      // A fresh failed probe invalidates the previous observation immediately.
+      const unavailable = queryFacade();
+      vi.mocked(unavailable.sdk.readCliAuthStatus).mockRejectedValue(new Error("login_expired"));
+      scopes.mockReturnValueOnce({ sdk: unavailable.sdk, settled: async () => {}, terminate: vi.fn() });
+      await expect(check()).rejects.toThrow("login_expired");
+      await expect(check(observation.observationId)).resolves.toEqual({ observation: null });
       await host.handlers.closeQuery({ queryId: routedQuery }, context());
       await host.handlers.closeQuery({ queryId: otherQuery }, context());
       await host.handlers.closeQuery({ queryId: QUERY_ID }, context());
       await expect(check()).resolves.toEqual({ observation: null });
-      expect(scopes).toHaveBeenCalledTimes(4);
+      expect(scopes).toHaveBeenCalledTimes(6);
     } finally {
       await host.close();
       if (previousConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR;

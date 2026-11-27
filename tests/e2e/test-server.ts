@@ -289,7 +289,7 @@ import type {
 } from "../../src/server/backends/claude/claude-sdk-facade.js";
 import { ClaudeSdkRuntimeAdapter, type ClaudeRuntimeSessionOptions } from "../../src/server/backends/claude/claude-runtime-client.js";
 import { ClaudeSdkSession } from "../../src/server/backends/claude/claude-sdk-session.js";
-import { readClaudeAccountUsage, selectClaudeAccountUsageObservation } from "../../src/server/backends/claude/claude-account-usage-probe.js";
+import { ClaudeAccountUsageCache, readClaudeAccountUsage } from "../../src/server/backends/claude/claude-account-usage-probe.js";
 import { ClaudeThreadActionPersistence } from "../../src/server/backends/claude/claude-thread-action-persistence.js";
 import { ClaudeModelEffortCatalog } from "../../src/server/backends/claude/claude-model-effort-catalog.js";
 import { ClaudeThreadPresentationProvider } from "../../src/server/backends/claude/claude-thread-presentation-provider.js";
@@ -357,6 +357,7 @@ class ClaudeE2eMessageQueue implements AsyncIterable<ClaudeMessage> {
 
 /** Run the account query against the same offline SDK used to open the conversation. */
 class ClaudeE2eRuntime extends ClaudeSdkRuntimeAdapter {
+  readonly #accountUsage = new ClaudeAccountUsageCache();
   readonly #sessions = new Map<string, { sessionId: string; launch: ClaudeRuntimeSessionOptions["launch"]; session: ClaudeSdkSession }>();
   constructor(private readonly fixture: ClaudeE2eSdk) { super(fixture); }
 
@@ -368,12 +369,14 @@ class ClaudeE2eRuntime extends ClaudeSdkRuntimeAdapter {
     return session;
   }
 
-  override async readAccountUsage(signal: AbortSignal) {
-    const account = await readClaudeAccountUsage({ sdk: this.fixture, executablePath: process.execPath, environment: {}, signal });
+  override async readAccountUsage(signal: AbortSignal, observationId?: string) {
     for (const { sessionId, session } of this.#sessions.values()) {
       if (session.closed) this.#sessions.delete(sessionId);
     }
-    return selectClaudeAccountUsageObservation(account, this.#sessions.values());
+    if (observationId !== undefined) return this.#accountUsage.observe(observationId, this.#sessions.values());
+    this.#accountUsage.clear();
+    const account = await readClaudeAccountUsage({ sdk: this.fixture, executablePath: process.execPath, environment: {}, signal });
+    return account && this.#accountUsage.observe(this.#accountUsage.store(account), this.#sessions.values());
   }
 }
 
