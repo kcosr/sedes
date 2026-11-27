@@ -4,7 +4,7 @@ import type { BackendAccountUsageReport } from "../../../shared/protocol/account
 import { withAbort } from "../../runtime/with-abort.js";
 import { projectClaudeAccountUsage } from "./claude-account-usage-projection.js";
 import type { ClaudeChildEnvironment } from "./claude-child-environment.js";
-import { claudeQuotaAccountKey, verifyClaudeQuotaSettings } from "./claude-quota-account.js";
+import { claudeQuotaAccountKey, permitsClaudeSubscriptionQuota } from "./claude-quota-account.js";
 import type { ClaudeSdkSession } from "./claude-sdk-session.js";
 import { ClaudeInputQueue } from "./claude-input-queue.js";
 import type { ClaudeSdkFacade } from "./claude-sdk-facade.js";
@@ -21,6 +21,8 @@ export async function readClaudeAccountUsage(input: {
   const signal = AbortSignal.any([input.signal, AbortSignal.timeout(CLAUDE_ACCOUNT_USAGE_TIMEOUT_MS)]);
   signal.throwIfAborted();
   const cwd = "/";
+  if (!await withAbort(permitsClaudeSubscriptionQuota(cwd, input.environment, ["user"]), signal)) return null;
+  signal.throwIfAborted();
   const status = await input.sdk.readCliAuthStatus(
     input.executablePath, CLAUDE_ACCOUNT_USAGE_TIMEOUT_MS, input.environment, cwd, signal,
   );
@@ -40,7 +42,7 @@ export async function readClaudeAccountUsage(input: {
   try {
     const { account } = await withAbort(query.initializationResult(), signal);
     const accountKey = claudeQuotaAccountKey(status, account);
-    if (!accountKey || !await withAbort(verifyClaudeQuotaSettings(accountKey, cwd, input.environment, ["user"]), signal)) return null;
+    if (!accountKey) return null;
     signal.throwIfAborted();
     const report = await withAbort(query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({
       skipBehaviors: true,

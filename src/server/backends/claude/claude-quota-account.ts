@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { homedir } from "node:os";
 import { resolveSettings, type AccountInfo, type SettingSource } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { assertClaudeSdkHelperEnvironment, type ClaudeChildEnvironment } from "./claude-child-environment.js";
@@ -32,25 +33,39 @@ export function claudeQuotaAccountKey(status: ClaudeCliAuthStatus, account: Acco
 
 const quotaCredentialOverrides = [
   "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_CUSTOM_HEADERS",
-  "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR", "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
+  "CLAUDE_CODE_API_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+  "CLAUDE_CODE_SESSION_ACCESS_TOKEN", "CLAUDE_CODE_SESSIONS_OAUTH_TOKEN", "CLAUDE_CODE_HOST_CREDS_FILE",
+  "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR", "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
+  "CLAUDE_CODE_GATEWAY_TOKEN_FILE_DESCRIPTOR", "CLAUDE_SESSION_INGRESS_TOKEN_FILE",
 ] as const;
 
 function hasCredentialOverride(environment: ClaudeChildEnvironment | undefined): boolean {
   return quotaCredentialOverrides.some(name => Boolean(environment?.[name]));
 }
 
-/** Inspect the raw SDK settings cascade locally; project auth must never select another account's quota. */
+/** The settings resolver uses the worker's home and native configuration directory. */
+function usesWorkerLoginEnvironment(environment: ClaudeChildEnvironment): boolean {
+  if (hasCredentialOverride(environment) || (environment.HOME !== undefined && environment.HOME !== homedir())) return false;
+  assertClaudeSdkHelperEnvironment(environment);
+  return true;
+}
+
+export async function permitsClaudeSubscriptionQuota(
+  cwd: string, environment: ClaudeChildEnvironment, settingSources: SettingSource[],
+): Promise<boolean> {
+  try {
+    if (!usesWorkerLoginEnvironment(environment)) return false;
+    const { effective } = await withAbort(resolveSettings({ cwd, settingSources }), AbortSignal.timeout(1_000));
+    // resolveSettings skips dynamic policy from both the generic and per-OS helper.
+    if (effective.policyHelper || "policyHelpers" in effective || effective.apiKeyHelper) return false;
+    return usesWorkerLoginEnvironment({ ...environment, ...effective.env });
+  } catch {
+    return false;
+  }
+}
+
 export async function verifyClaudeQuotaSettings(
   accountKey: string, cwd: string, environment: ClaudeChildEnvironment, settingSources: SettingSource[],
 ): Promise<string | null> {
-  try {
-    if (hasCredentialOverride(environment)) return null;
-    // resolveSettings reads user configuration through the worker process environment.
-    assertClaudeSdkHelperEnvironment(environment);
-    const { effective } = await withAbort(resolveSettings({ cwd, settingSources }), AbortSignal.timeout(1_000));
-    // The SDK intentionally skips policyHelper. Its effective launch credentials are unknown.
-    return effective.policyHelper || effective.apiKeyHelper || hasCredentialOverride(effective.env) ? null : accountKey;
-  } catch {
-    return null;
-  }
+  return await permitsClaudeSubscriptionQuota(cwd, environment, settingSources) ? accountKey : null;
 }

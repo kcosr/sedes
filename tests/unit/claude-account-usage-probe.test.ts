@@ -1,9 +1,10 @@
 import type { AccountInfo, Query, SDKControlGetUsageResponse } from "@anthropic-ai/claude-agent-sdk";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { readClaudeAccountUsage } from "../../src/server/backends/claude/claude-account-usage-probe.js";
+import { verifyClaudeQuotaSettings } from "../../src/server/backends/claude/claude-quota-account.js";
 import { OfficialClaudeSdkFacade } from "../../src/server/backends/claude/claude-sdk-facade.js";
 
 const identity = { email: "quota@example.test", organizationId: "db334f78-8fe4-44e3-9c25-9b661c2df56a", organizationName: "Workspace" };
@@ -26,7 +27,7 @@ const response = {
   rate_limits: { seven_day: { utilization: 53, resets_at: "2030-05-08T18:00:00Z" } },
 } satisfies SDKControlGetUsageResponse;
 
-function fixture() {
+function fixture(childEnvironment: Record<string, string> = environment) {
   const sdk = new OfficialClaudeSdkFacade();
   const auth = vi.spyOn(sdk, "readCliAuthStatus").mockResolvedValue(subscription);
   const initialize = vi.fn<() => Promise<{ account: AccountInfo }>>()
@@ -39,7 +40,7 @@ function fixture() {
     close,
   } as unknown as Query);
   const abort = new AbortController();
-  const read = () => readClaudeAccountUsage({ sdk, executablePath: "/bin/claude", environment, signal: abort.signal });
+  const read = () => readClaudeAccountUsage({ sdk, executablePath: "/bin/claude", environment: childEnvironment, signal: abort.signal });
   return { auth, create, initialize, usage, close, abort, read };
 }
 
@@ -63,6 +64,48 @@ describe("Claude's backend subscription probe", () => {
     expect(usage).toHaveBeenCalledExactlyOnceWith({ skipBehaviors: true });
     expect(options.abortController?.signal.aborted).toBe(true);
     expect(close).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    "CLAUDE_CODE_API_BASE_URL", "CLAUDE_CODE_SESSION_ACCESS_TOKEN", "CLAUDE_CODE_SESSIONS_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN", "CLAUDE_CODE_HOST_CREDS_FILE", "CLAUDE_SESSION_INGRESS_TOKEN_FILE",
+    "CLAUDE_CODE_GATEWAY_TOKEN_FILE_DESCRIPTOR", "HOME",
+  ])("avoids launching either CLI with %s overriding the worker login", async name => {
+    const { read, auth, create } = fixture({ ...environment, [name]: "/unverified" });
+    await expect(read()).resolves.toBeNull();
+    expect(auth).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { env: { CLAUDE_CODE_SESSIONS_OAUTH_TOKEN: "fixture-override" } },
+    { env: { HOME: "/alternate-home" } },
+    { env: { CLAUDE_CONFIG_DIR: "/alternate-config" } },
+    { policyHelpers: { linux: { path: "/unexecuted-helper" } } },
+  ])("checks resolved user settings before probing auth or opening the quota query", async settings => {
+    const directory = await mkdtemp(path.join(environment.CLAUDE_CONFIG_DIR, "settings-"));
+    await writeFile(path.join(directory, "settings.json"), JSON.stringify(settings));
+    vi.stubEnv("CLAUDE_CONFIG_DIR", directory);
+    try {
+      const { read, auth, create } = fixture({ CLAUDE_CONFIG_DIR: directory });
+      await expect(read()).resolves.toBeNull();
+      expect(auth).not.toHaveBeenCalled();
+      expect(create).not.toHaveBeenCalled();
+    } finally {
+      vi.stubEnv("CLAUDE_CONFIG_DIR", environment.CLAUDE_CONFIG_DIR);
+    }
+  });
+
+  it("retains the primary proof for the same configured login and rejects a project-local alternate home", async () => {
+    const project = await mkdtemp(path.join(environment.CLAUDE_CONFIG_DIR, "project-"));
+    await mkdir(path.join(project, ".claude"));
+    await writeFile(path.join(project, ".claude/settings.json"), JSON.stringify({ env: {
+      HOME: homedir(), CLAUDE_CONFIG_DIR: environment.CLAUDE_CONFIG_DIR,
+    } }));
+    const verify = () => verifyClaudeQuotaSettings("private-proof", project, environment, ["user", "project", "local"]);
+    expect(await verify()).toBe("private-proof");
+    await writeFile(path.join(project, ".claude/settings.local.json"), JSON.stringify({ env: { HOME: "/alternate-home" } }));
+    expect(await verify()).toBeNull();
   });
 
   it("rejects an API-key override before creating a query", async () => {
