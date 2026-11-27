@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { AntigravityNativeHistoryStore, createAntigravityNativeHistoryReader } from "../../src/server/backends/antigravity/native-history.js";
+import { antigravityNativeActivity } from "../../src/server/backends/antigravity/host/native-activity.js";
 
 const parentId = "8a54e222-1000-4000-8000-000000000001", childId = "8a54e222-1000-4000-8000-000000000002";
 const cleanups: (() => Promise<void>)[] = [];
@@ -18,8 +19,9 @@ function field(number: number, value: string | number | Buffer): Buffer {
 }
 const proto = (...values: Buffer[]) => Buffer.concat(values);
 function response(text: string, status = 3) { return proto(field(1, 15), field(4, status), field(20, proto(field(1, text), field(12, status === 3 ? 2 : 0)))); }
-function invocation(root: string) {
-  return proto(field(1, 132), field(4, 3), field(5, proto(field(4, proto(field(1, "child"), field(2, "invoke_subagent"))), field(38, 1))),
+function invocation(root: string, executionId?: string) {
+  return proto(field(1, 132), field(4, 3), field(5, proto(field(4, proto(field(1, "child"), field(2, "invoke_subagent"))),
+    ...(executionId ? [field(12, executionId)] : []), field(38, 1))),
     field(140, field(2, field(6, proto(field(1, "type.googleapis.com/exa.cortex.core.tools.InvokeSubagent"),
       field(2, field(2, proto(field(1, childId), field(3, pathToFileURL(root).href)))))))));
 }
@@ -114,6 +116,38 @@ describe("retained Antigravity native history", () => {
     });
     expect((await f.store.read(f.identity)).native.steps[0]?.response?.text).toBe("before");
     expect((await f.store.read(f.identity)).native.steps[0]?.response?.text).toBe("after");
+  });
+  it.each([{ cache: "cold", races: 1 }, { cache: "warm", races: 1 }, { cache: "warm", races: 2 }])(
+    "rechecks the parent after $races racing wake commits in a $cache store", async ({ cache, races }) => {
+    const f = await fixture(), parent = f.create(), child = f.create(childId, parentId);
+    f.step(parent, 0, invocation(f.root, "parent-execution"), 132);
+    parent.prepare("INSERT INTO executor_metadata VALUES (0, ?)").run(proto(field(1, 2), field(9, "parent-execution")));
+    f.step(child, 0, response("running", 2), 15, 2);
+    if (cache === "warm") expect((await f.store.read(f.identity)).native.steps[0]?.subagents?.[0]?.state).toBe("active");
+
+    const wakeId = "8a54e222-1000-4000-8000-000000000003";
+    const connect = f.store.connection.bind(f.store);
+    let committed = 0;
+    vi.spyOn(f.store, "connection").mockImplementation(identity => {
+      if (committed < races && identity.sessionId === childId) {
+        committed++;
+        // The reader has already collected the parent. Publish its wake before
+        // settling the child, so there is never a moment with no outstanding work.
+        const message = proto(field(1, wakeId), field(2, parentId), field(3, childId), field(4, `Child update ${committed}`));
+        f.step(parent, 1, proto(field(1, 101), field(4, 3), field(5, field(3, 5)),
+          field(114, proto(field(3, "agent_message"), field(4, message)))), 101);
+        if (committed === 1) child.transaction(() => {
+          f.step(child, 0, proto(field(1, 132), field(4, 3), field(5, field(12, "child-execution")), field(140, Buffer.alloc(0))), 132);
+          child.prepare("INSERT INTO executor_metadata VALUES (0, ?)").run(proto(field(1, 1), field(9, "child-execution")));
+        })();
+      }
+      return connect(identity);
+    });
+    if (races === 2) await expect(f.store.read(f.identity)).rejects.toThrow("antigravity_parent_history_changed");
+    const { native } = await f.store.read(f.identity);
+    expect(native.steps[0]?.subagents?.[0]?.state).toBe("failed");
+    expect(native.steps[1]?.continuation).toMatchObject({ id: wakeId, sender: childId, content: `Child update ${races}` });
+    expect(antigravityNativeActivity(native)).toMatchObject({ active: true, foregroundActive: true, pendingContinuations: true, agents: 1 });
   });
   it("rechecks cached child executor evidence against the aggregate allowance", async () => {
     const f = await fixture(), parent = f.create(), child = f.create(childId, parentId);

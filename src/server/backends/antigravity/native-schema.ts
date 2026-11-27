@@ -22,6 +22,7 @@ export const antigravityNativeStepSchema = z.strictObject({
   completedAt: z.iso.datetime().optional(),
   executionId: id.optional(),
   standaloneSystemDiagnostic: z.literal(true).optional(),
+  failedSubagentSessionId: z.string().uuid().optional(),
   isInterruptingStep: z.literal(true).optional(),
   user: z.strictObject({ text, clientMessageId: z.string().max(4096).optional(), isQueuedMessage: z.literal(true).optional() }).optional(),
   response: z.strictObject({ text, thinking: text, messageId: z.string().max(512).optional(),

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assertAntigravityNativeSemantics } from "../../src/server/backends/antigravity/native-guards.js";
+import { antigravityFailedSubagentSessionId, assertAntigravityNativeSemantics } from "../../src/server/backends/antigravity/native-guards.js";
 import { decodeAntigravityNativeMessage } from "../../src/server/backends/antigravity/native-protobuf.js";
 
 describe("Antigravity native schema admission", () => {
@@ -23,5 +23,42 @@ describe("Antigravity native schema admission", () => {
     expect(() => decodeAntigravityNativeMessage(Uint8Array.of(8, 14, 8, 15), ".gemini_coder.Step")).toThrow("duplicate_field");
     expect(() => decodeAntigravityNativeMessage(Uint8Array.of(154, 1, 99), ".gemini_coder.Step")).toThrow("length_invalid");
     expect(() => decodeAntigravityNativeMessage(Uint8Array.of(8, 128), ".gemini_coder.Step")).toThrow("varint_invalid");
+  });
+});
+
+describe("Antigravity system subagent failure messages", () => {
+  const parentId = "8a54e222-1000-4000-8000-000000000001", childId = "8a54e222-1000-4000-8000-000000000002";
+  const otherId = "8a54e222-1000-4000-8000-000000000003", messageId = "8a54e222-1000-4000-8000-000000000004";
+  const body = (name: string, id: string, error = "Execution failed") =>
+    `The subagent ${name} with id "${id}" encountered an error and has either stopped or failed to start execution: ${error}`;
+  const agentMessage = (name = "Reviewer") => ({ id: messageId, sender: "system", recipient: parentId,
+    render_details: { message_title: `Error from ${name}` }, content: body(name, childId) });
+  const incoming = agentMessage();
+  const system = { agent_message: incoming };
+  const step = { type: 101, status: 3, metadata: { source: 5 }, system_message: system };
+
+  it("correlates the UUID after the entire display name independently of error details", () => {
+    const name = body("Reviewer", otherId);
+    const agent = { ...agentMessage(name), content: body(name, childId, body("Other", otherId)) };
+    expect(antigravityFailedSubagentSessionId({ ...step, system_message: { agent_message: agent } }, parentId)).toBe(childId);
+  });
+  it.each([
+    { ...step, type: 17 }, { ...step, status: 8 }, { ...step, metadata: { source: 2 } },
+    { ...step, metadata: { source: 5, tool_call: {} } },
+    { ...step, system_message: { ...system, event_type: "agent_message" } },
+    { ...step, system_message: { ...system, event_type: "" } },
+  ])("requires the completed native system step and an untyped provider message", bad => {
+    expect(antigravityFailedSubagentSessionId(bad, parentId)).toBeUndefined();
+  });
+  it.each([
+    { ...incoming, sender: childId }, { ...incoming, recipient: otherId }, { ...incoming, id: "unknown" },
+    { ...incoming, render_details: {} }, { ...incoming, render_details: { message_title: "Error from " } },
+    { ...incoming, render_details: { message_title: "Error from Other" } },
+    { ...incoming, content: body("Reviewer", "invalid") }, { ...incoming, content: body("Reviewer", parentId) },
+    { ...incoming, content: `Arbitrary text: ${incoming.content}` },
+    { ...incoming, content: incoming.content.replace("encountered an error", "sent an update") },
+    { ...incoming, content: body("Reviewer", childId, "") },
+  ])("requires a bound system sender, valid IDs and matching provider title and body", agent => {
+    expect(antigravityFailedSubagentSessionId({ ...step, system_message: { agent_message: agent } }, parentId)).toBeUndefined();
   });
 });

@@ -8,7 +8,7 @@ import { z } from "zod";
 import { antigravityNativeHistorySchema, type AntigravityNativeHistory, type AntigravityNativeStep } from "./native-schema.js";
 import { decodeAntigravityNativeMessage as decode, message, string, integer, repeated, bytes, type Message } from "./native-protobuf.js";
 import { AntigravityError, type AntigravityHistory, type AntigravityIdentity, type AntigravityRuntimeConfiguration } from "./port.js";
-import { assertAntigravityNativeSemantics } from "./native-guards.js";
+import { antigravityFailedSubagentSessionId, assertAntigravityNativeSemantics } from "./native-guards.js";
 import { antigravityNativeActivity } from "./host/native-activity.js";
 import { antigravityTerminatedExecutionHeads, antigravityNativeTerminalOutcome, antigravityUnstartedInputs, isAntigravityStandaloneDiagnostic } from "./native-execution.js";
 export { createAntigravityNativeHistoryReader, type AntigravityNativeHistoryReader } from "./native-history-reader.js";
@@ -26,6 +26,9 @@ type Size = { count: number; bytes: number };
 type ExecutorSize = Size & { maximum: number };
 class NativeHistoryBudgetError extends Error {
   constructor() { super("antigravity_history_capacity_exceeded"); }
+}
+class ParentHistoryChangedError extends Error {
+  constructor() { super("antigravity_parent_history_changed"); }
 }
 type OwnHistory = { native: AntigravityNativeHistory; childReferences: Map<number, readonly ChildReference[]>;
   size: Size; executionSize: ExecutorSize; includesExecutions: boolean; version: number;
@@ -47,9 +50,13 @@ export class AntigravityNativeHistoryStore {
   read(identity: AntigravityIdentity, signal?: NativeReadCancellation): Promise<AntigravityHistory> {
     return this.#serialize(async () => {
       if (this.#closed) throw new AntigravityError("antigravity_history_reader_closed");
-      return readNative(this, identity, signal, { remainingBytes: MAXIMUM_HISTORY_BYTES, remainingRows: MAXIMUM_ROWS,
+      const read = () => readNative(this, identity, signal, { remainingBytes: MAXIMUM_HISTORY_BYTES, remainingRows: MAXIMUM_ROWS,
         remainingExecutorBytes: MAXIMUM_EXECUTOR_BYTES, remainingExecutorRows: MAXIMUM_EXECUTOR_ROWS,
         remainingSessions: 32, ancestors: new Set() });
+      try { return await read(); } catch (error) {
+        if (error instanceof ParentHistoryChangedError) return read();
+        throw error;
+      }
     });
   }
   forget(identity: AntigravityIdentity): Promise<void> {
@@ -152,7 +159,8 @@ async function readNative(store: AntigravityNativeHistoryStore, identity: Antigr
     // Only values from this retained connection are comparable. Sample before
     // the transaction: a racing external commit must invalidate the next read,
     // never label an older snapshot with a later connection version.
-    const version = (database.prepare("PRAGMA data_version").get() as { data_version: number }).data_version;
+    const dataVersion = () => (database.prepare("PRAGMA data_version").get() as { data_version: number }).data_version;
+    const version = dataVersion();
     let own = entry.own;
     if (own && (own.version !== version || own.includesExecutions !== includesExecutions(own.executionSize, budget))) own = undefined;
     if (own) chargeBudget(own.size, own.executionSize, own.includesExecutions, budget);
@@ -235,6 +243,7 @@ async function readNative(store: AntigravityNativeHistoryStore, identity: Antigr
     // A launch result grants only its exact native child, never an arbitrary path.
     const aggregate = createHash("sha256").update(native.revision);
     const childSteps = new Map<number, AntigravityNativeStep>();
+    let hasFailedChild = false;
     for (const step of native.steps) {
       const references = childReferences.get(step.index);
       if (!references) continue;
@@ -250,14 +259,21 @@ async function readNative(store: AntigravityNativeHistoryStore, identity: Antigr
           try { child = await readNative(store, { sessionId: reference.sessionId, cwd: identity.cwd }, signal, budget, identity.sessionId); }
           finally { budget.ancestors = previousAncestors; }
           const state = childState(child.native);
+          if (state === "failed") hasFailedChild = true;
           childStep.subagents.push({ sessionId: reference.sessionId, state, revision: child.native.revision });
           aggregate.update(JSON.stringify([reference.sessionId, state, child.native.revision]));
-        } catch {
+        } catch (error) {
+          if (error instanceof ParentHistoryChangedError) throw error;
           checkCancellation(); childStep.subagents.push({ sessionId: reference.sessionId, state: "unknown" });
           aggregate.update(JSON.stringify([reference.sessionId, "unknown"]));
         }
       }
     }
+    // The child ERROR receipt and absence of its message are read from
+    // different databases. Resample the same parent after reading its children
+    // so a message committed during traversal cannot be missed, even on cache hits.
+    if (hasFailedChild && (await store.connection(identity) !== entry || dataVersion() !== version))
+      throw new ParentHistoryChangedError();
     checkCancellation();
     const revision = childReferences.size ? aggregate.digest("hex") : native.revision;
     if (own.aggregate?.revision === revision) return { ...identity, native: own.aggregate };
@@ -286,7 +302,7 @@ async function readNative(store: AntigravityNativeHistoryStore, identity: Antigr
     // Neither caller cancellation nor a tighter aggregate allowance invalidates
     // a previously acquired snapshot. Failed rollback does invalidate its SQL
     // connection, even when the triggering error was otherwise harmless.
-    let invalid = !cancelled && !(error instanceof NativeHistoryBudgetError);
+    let invalid = !cancelled && !(error instanceof NativeHistoryBudgetError) && !(error instanceof ParentHistoryChangedError);
     if (transactionOpen) {
       transactionOpen = false;
       try { database.exec("ROLLBACK"); } catch { invalid = true; }
@@ -362,9 +378,11 @@ function projectStep(index: number, hasSubtrajectory: boolean, value: Message, s
   const standaloneSystemDiagnostic = value.type === 17 && value.status === 3 && value.error_message !== undefined &&
     source === 5 && !string(metadata.execution_id) && metadata.tool_call === undefined && !hasSubtrajectory &&
     Object.keys(value).every(key => ["type", "status", "metadata", "error_message"].includes(key));
+  const failedSubagentSessionId = antigravityFailedSubagentSessionId(value, sessionId);
   const projected: AntigravityNativeStep = {
     index, type: integer(value.type), status: integer(value.status), hasSubtrajectory,
     ...(standaloneSystemDiagnostic ? { standaloneSystemDiagnostic: true } : {}),
+    ...(failedSubagentSessionId ? { failedSubagentSessionId } : {}),
     ...(started ? { createdAt: started } : {}), ...(completed ? { completedAt: completed } : {}),
     ...(executionStarted ? { startedAt: executionStarted } : {}),
     ...(string(metadata.execution_id) ? { executionId: string(metadata.execution_id) } : {}),
@@ -461,11 +479,12 @@ function childState(native: AntigravityNativeHistory): NonNullable<AntigravityNa
   if (outcome === "interrupted") return "cancelled";
   if (outcome === "completed") return "terminal";
   const execution = final?.executionId ? antigravityTerminatedExecutionHeads(native).get(final.executionId) : undefined;
-  // Only a proved executor failure allows the parent to retire a missing child
-  // message. A planner error on its own retains the ordinary callback expectation.
-  if (execution && execution.index === final?.index) {
-    if (execution.outcome === "failed") return "failed";
-    if (!outcome) return "cancelled";
-  }
-  return outcome === "failed" ? "terminal" : "unknown";
+  if (!execution || execution.index !== final?.index) return outcome === "failed" ? "terminal" : "unknown";
+  if (execution.outcome === "interrupted") return outcome === "failed" ? "terminal" : "cancelled";
+  // The system's error notice names the child session, not its executor or
+  // any explicit outgoing messages. Accept it only for an unambiguous ERROR.
+  if (execution.terminationReason !== 1 || native.executions.length !== 1) return "terminal";
+  if (steps.some(step => (step.executionId && step.executionId !== final.executionId) ||
+      step.tool?.name === "send_message" || step.response?.toolCalls.some(call => call.name === "send_message"))) return "terminal";
+  return "failed";
 }

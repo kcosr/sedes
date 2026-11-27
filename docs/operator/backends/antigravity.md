@@ -97,11 +97,11 @@ work, and subagents can outlive a prompt and produce new messages or permission
 requests. While the CLI still holds a prompt open for background work, Send
 remains unavailable even after the foreground reply finishes. A standalone
 quota notice after a proven executor failure leaves the turn failed, with the
-quota message visible when you reopen the thread. If a subagent fails on quota
-without sending a completion message, Sedes stops counting it as active once
-the parent execution that launched it has a terminal failure or cancellation
-receipt. Stop can then finish and the thread can accept another message when
-all other work has settled. Pending work and undelivered
+quota message visible when you reopen the thread. If a subagent fails on quota,
+Antigravity 1.5.18 can report the failure to its parent on the child's behalf.
+Once native records confirm the failure and show that the parent finished
+processing the report, the subagent stops counting as active. Stop and Send
+can then recover when all other work has settled. Pending work and undelivered
 outcomes block ordinary runtime retirement. A disconnected runtime is not evidence that work stopped.
 
 Remote instances require an execution sidecar advertising

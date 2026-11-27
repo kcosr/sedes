@@ -207,7 +207,8 @@ native inputs proven unstarted do not advance the executed head. The same proof
 settles background continuations and retires retained ACP tools only when no
 newer activity invalidates it. A failed or cancelled tool step alone is
 insufficient. Capability 6 of `antigravity_runtime` carries the diagnostic
-classification and the `failed` child state. Remote peers negotiate this
+classification, the `failed` child state and the child ID from a qualified
+system failure notice (`failedSubagentSessionId`). Remote peers negotiate this
 capability before opening a runtime.
 
 Executor termination reasons have explicit dispositions. The same exact
@@ -234,9 +235,11 @@ and child history skip these notices when locating the executed head. If an exac
 notice with error text supplies the failure message. If neither source supplies
 text, Sedes displays a generic failure.
 
-A linked child has state `failed` when its final executed step has an exact
-failing executor receipt and its terminal planner evidence, if any, agrees.
-A terminal planner response alone retains the ordinary child completion path.
+Sedes qualifies the `failed` child state for a single child execution with
+one exact `ERROR` receipt at its final executed step and no attempted
+`send_message`. Its terminal planner evidence, if any, must agree. Children
+with multiple executions, attempted sends, invocation or token limit receipts,
+or only a terminal planner response retain the ordinary callback expectation.
 A cancelled tool tail likewise requires exact executor proof to establish child
 cancellation. An unproven tool tail keeps the child unknown and blocks
 quiescence. Embedded subtrajectories use
@@ -254,12 +257,18 @@ of retained ACP tool work, so a tool-call response cannot bypass those fences.
 Typed system-message receipts can begin autonomous continuation turns without
 an application submission. They never consume a pending user operation merely
 because text or timing is similar. Native child linkage and terminal receipts
-govern background quiescence. A failed child can end without sending its parent
-a completion message. If that message is absent and an exact terminal executor
-receipt covers the launch in the same parent execution, the child no longer
-counts as active. A delivered message still requires evidence that the parent
-processed it. A successfully completed child still requires its completion
-message.
+govern background quiescence. When a child fails without sending its own
+completion message, stock CLI 1.5.18 can send the parent a system-authored
+subagent error notice. The reader recognizes the qualified message shape,
+checks the parent recipient, matches the child name in the title and body,
+and extracts the child ID from the body. The wording identifies the notice. To settle the child, Sedes
+requires its exact `ERROR` receipt and terminal executor receipts covering both
+the launch and the later notice in their respective parent executions. A notice
+that is missing, unrecognized or still awaiting execution keeps the expected
+child message outstanding. The reader rechecks the parent database after
+reading the children and retries a changed snapshot. Each delivered child
+message still requires evidence that the parent processed it. A successfully
+completed child still requires its own completion message.
 
 Conversation-scoped steering uses concurrent ACP prompt requests. A native user
 row can be staged without consumption. Sedes requires native execution/start

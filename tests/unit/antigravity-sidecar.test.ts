@@ -201,10 +201,12 @@ describe("Antigravity persistent sidecar", () => {
     await expect(port.readHistory({ ...identity, knownRevision: "a".repeat(64) })).resolves.toBeNull();
     expect(f.readHistory).toHaveBeenCalledOnce();
     expect(encoded).toHaveBeenLastCalledWith({ status: "ok", runtimeVersion: null, value: null });
+    const childId = "ec2e00ac-87cb-48ab-9240-26e19de7e980";
     const updated: AntigravityHistory = { ...identity, native: { executions: [], revision: "b".repeat(64),
       steps: [
-        { index: 0, type: 132, status: 3, hasSubtrajectory: false, subagents: [{ sessionId: "ec2e00ac-87cb-48ab-9240-26e19de7e980", state: "failed" }] },
+        { index: 0, type: 132, status: 3, hasSubtrajectory: false, executionId: "launch", subagents: [{ sessionId: childId, state: "failed" }] },
         { index: 1, type: 17, status: 3, hasSubtrajectory: false, standaloneSystemDiagnostic: true, error: "Individual quota reached." },
+        { index: 2, type: 101, status: 3, hasSubtrajectory: false, executionId: "report", failedSubagentSessionId: childId },
       ] } };
     f.readHistory.mockResolvedValue(updated);
     await expect(port.readHistory({ ...identity, knownRevision: "a".repeat(64) })).resolves.toEqual(updated);

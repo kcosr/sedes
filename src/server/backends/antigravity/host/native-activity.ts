@@ -1,4 +1,4 @@
-import type { AntigravityNativeHistory } from "../native-schema.js";
+import type { AntigravityNativeHistory, AntigravityNativeStep } from "../native-schema.js";
 import { antigravityTerminatedExecutionHeads, antigravityNativeTerminalOutcome, antigravityUnstartedInputs } from "../native-execution.js";
 
 const activeStatuses = new Set([1, 2, 8, 9, 11]);
@@ -9,6 +9,19 @@ export function antigravityNativeActivity(history: AntigravityNativeHistory): { 
   const agents = new Set<string>(), commands = new Set<string>(), other = new Set<string>();
   const commandTerminals = new Set(history.steps.flatMap(step => step.commandStatus && terminalStatuses.has(step.commandStatus.status) ? [step.commandStatus.commandId] : []));
   const terminated = antigravityTerminatedExecutionHeads(history), unstarted = antigravityUnstartedInputs(history);
+  const endedExecutionCovers = (step: AntigravityNativeStep) =>
+    step.executionId !== undefined && (terminated.get(step.executionId)?.index ?? -1) >= step.index;
+  const childFailureReported = (sessionId: string, launch: AntigravityNativeStep) => {
+    if (!endedExecutionCovers(launch)) return false;
+    let report: AntigravityNativeStep | undefined;
+    for (const step of history.steps) {
+      if (step !== launch && step.subagents?.some(child => child.sessionId === sessionId)) return false;
+      if (step.failedSubagentSessionId !== sessionId) continue;
+      if (report || step.index <= launch.index) return false;
+      report = step;
+    }
+    return report !== undefined && endedExecutionCovers(report);
+  };
   const executionSettledAfter = (index: number) => {
     let executionId: string | undefined, receiptEligible = true;
     for (const step of history.steps) {
@@ -46,11 +59,10 @@ export function antigravityNativeActivity(history: AntigravityNativeHistory): { 
       if (child.state === "active") { active = true; agents.add(child.sessionId); }
       else if (child.state === "unknown") { unknown = true; agents.add(child.sessionId); }
       else if (child.state === "terminal" || child.state === "failed") {
-        // A failed child may never notify its parent. Only the receipt for
-        // the execution that launched it can retire that missing notification.
-        const owner = step.executionId ? terminated.get(step.executionId) : undefined;
-        const expectDelivery = child.state !== "failed" || !owner || owner.index < step.index;
-        if (awaitingContinuation(child.sessionId, step.index, expectDelivery)) { pendingContinuations = true; agents.add(child.sessionId); }
+        // agy reports executor errors as the system. Wait for its notice to
+        // arrive and settle, even if the launching execution stopped earlier.
+        const reportedFailure = child.state === "failed" && childFailureReported(child.sessionId, step);
+        if (awaitingContinuation(child.sessionId, step.index, !reportedFailure)) { pendingContinuations = true; agents.add(child.sessionId); }
       }
     }
     let pendingTask = false;
