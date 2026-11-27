@@ -318,6 +318,8 @@ export class ThreadArchiveService {
     scope: RequestScope,
     threadId: string,
     input: {
+      /** The interactive Park action follows the active turn. A lifecycle assignment persists. */
+      readonly untilTurnEnds?: boolean;
       readonly expectedRevision: number;
       readonly mutationId: string;
       readonly expectedStashedPromptCount?: number;

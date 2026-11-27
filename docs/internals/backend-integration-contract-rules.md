@@ -120,7 +120,10 @@ but cannot establish native non-consumption or discard a pending callback.
 Park during a run belongs to the principal's thread inventory. On Pi SDK,
 native Pi, Codex, Claude, Grok, OpenCode, and Antigravity, only confirmed
 terminal evidence for the turn captured at Park can unpark it, including
-evidence recovered from history. Shared speech policy uses normalized item
+evidence recovered from history. On startup or after losing control, Sedes
+checks the saved turn in read-only backend history, including provider-originated
+turns with no accepted Sedes submission. An unfinished transcript can carry a
+display status without proving that the turn ended. Shared speech policy uses normalized item
 identity and live-progress provenance. It applies to Codex early and ordinary
 progress and to ordinary Pi SDK, Claude, and OpenCode progress. Native Pi,
 Grok, and Antigravity do not publish provisional progress speech.

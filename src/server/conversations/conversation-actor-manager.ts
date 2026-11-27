@@ -17,7 +17,7 @@ import type {
 import { callRuntime } from "../runtime/runtime-errors.js";
 import type { ComposerAttachmentDeliveryService } from "../composer-attachments/composer-attachment-delivery-service.js";
 import { ConversationActor } from "./conversation-actor.js";
-import { ConversationProjector, type ProjectedConversationTimeline } from "./conversation-projector.js";
+import { ConversationProjector, hasConfirmedTurnEnd } from "./conversation-projector.js";
 import { historyConversationHandle } from "./history-conversation-handle.js";
 import { assertConversationRetentionMilliseconds } from "./conversation-retention-policy.js";
 import { assertConversationRuntimeBudget } from "./conversation-runtime-budget-policy.js";
@@ -340,11 +340,6 @@ type TurnSettlementObserver = (
   hasEnded: (turnId: string) => boolean,
 ) => void;
 
-function isTurnTerminal(timeline: ProjectedConversationTimeline, turnId: string): boolean {
-  const turn = timeline.turnsById[turnId];
-  return !!turn && turn.status !== "in_progress";
-}
-
 type LiveProgressSkippedObserver = (scope: ExecutionScope, threadId: string, turnId: string, itemId: string) => void;
 
 type CaptureEarlyReplyObserver = (scope: ExecutionScope, threadId: string, source: EarlyReplySource) => EarlyReplyObservation | null | undefined;
@@ -363,6 +358,7 @@ export class ConversationActorManager {
   readonly #onAuthoritativeCompletion?: AuthoritativeCompletionObserver;
   readonly #captureResponseVoiceContext?: (scope: ExecutionScope, threadId: string, backendCorrelations: readonly string[]) => CapturedResponseVoiceContext;
   readonly #observeTurnSettlement?: TurnSettlementObserver;
+  readonly #onControlLost?: (backendInstanceId: string) => void;
   readonly #onAuthoritativeSubmission?: AuthoritativeSubmissionObserver;
   readonly #onLiveProgress?: LiveProgressObserver;
   readonly #onLiveProgressSkipped?: LiveProgressSkippedObserver;
@@ -384,6 +380,7 @@ export class ConversationActorManager {
     readonly onAuthoritativeCompletion?: AuthoritativeCompletionObserver;
     readonly captureResponseVoiceContext?: (scope: ExecutionScope, threadId: string, backendCorrelations: readonly string[]) => CapturedResponseVoiceContext;
     readonly observeTurnSettlement?: TurnSettlementObserver;
+    readonly onControlLost?: (backendInstanceId: string) => void;
     readonly onAuthoritativeSubmission?: AuthoritativeSubmissionObserver;
     readonly captureEarlyReply?: CaptureEarlyReplyObserver;
     readonly readProgressParkRevision?: (scope: ExecutionScope, threadId: string) => number | undefined;
@@ -400,6 +397,7 @@ export class ConversationActorManager {
     this.#onAuthoritativeCompletion = input.onAuthoritativeCompletion;
     this.#captureResponseVoiceContext = input.captureResponseVoiceContext;
     this.#observeTurnSettlement = input.observeTurnSettlement;
+    this.#onControlLost = input.onControlLost;
     this.#onAuthoritativeSubmission = input.onAuthoritativeSubmission;
     this.#captureEarlyReply = input.captureEarlyReply;
     this.#readProgressParkRevision = input.readProgressParkRevision;
@@ -1549,6 +1547,7 @@ export class ConversationActorManager {
             if (entry.control === control) {
               entry.control = undefined;
               entry.controlEnded = true;
+              this.#onControlLost?.(input.binding.backendInstanceId);
               actor?.noteEarlyReplyObservationGap();
               this.#publishInputActivity(entry);
             }
@@ -1585,6 +1584,9 @@ export class ConversationActorManager {
           const sink = this.#captureEarlyReply!(input.scope, input.binding.applicationThreadId, source);
           return sink && afterSubmissionAdmission(sink, observationChain, isCurrent);
         } } : {}),
+        onTerminalTurn: applicationTurnId => {
+          if (!signal.aborted) this.#observeTurnSettlement?.(input.scope, input.binding.applicationThreadId, id => id === applicationTurnId);
+        },
         onEarlyProgressSkipped: source => this.#onLiveProgressSkipped?.(input.scope, input.binding.applicationThreadId,
           source.applicationTurnId, source.applicationItemId),
         onInputStateChanged: () => this.#publishInputActivity(entry),
@@ -1621,13 +1623,11 @@ export class ConversationActorManager {
             }
           }
           const timeline = actor?.peekSnapshotState()?.timeline;
-          const includesTurnSettlement = event.type === "projection_replaced" ||
-            (event.type === "projection_events" && event.events.some(update =>
-              update.type === "history_prepend" || (update.type === "turn_upsert" && update.turn.status !== "in_progress")));
-          if (includesTurnSettlement && timeline && !signal.aborted && !entry.controlEnded) {
-            // Even a provider-originated turn with no accepted Sedes submission
-            // can be explicitly parked. A snapshot only resolves an exact ID.
-            this.#observeTurnSettlement?.(input.scope, input.binding.applicationThreadId, id => isTurnTerminal(timeline, id));
+          const receivedHistory = event.type === "projection_replaced" ||
+            (event.type === "projection_events" && event.events.some(update => update.type === "history_prepend"));
+          if (receivedHistory && timeline && !signal.aborted) {
+            this.#observeTurnSettlement?.(input.scope, input.binding.applicationThreadId, id =>
+              hasConfirmedTurnEnd(timeline.turnsById[id]));
           }
           if (this.#onModelFeedback && !signal.aborted && timeline?.runState === "running") {
             if (event.type === "live_progress" && timeline.activeTurnId === event.applicationTurnId) {

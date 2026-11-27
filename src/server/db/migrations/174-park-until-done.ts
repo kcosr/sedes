@@ -18,6 +18,9 @@ ALTER TABLE delivery_input_snapshots ADD COLUMN root_submit_park_revision INTEGE
 -- progress items must remain silent if the user unparks after the upgrade.
 UPDATE thread_principal_state SET progress_park_revision = 1 WHERE inventory_state = 'parked';
 
+CREATE INDEX pending_turn_parks ON thread_principal_state(tenant_id, principal_id, thread_id)
+  WHERE inventory_state = 'parked' AND parked_until_turn_id IS NOT NULL;
+
 -- Single and bulk park, accepted input, automation, reset and manual unpark
 -- all change this row. Retire the old target even for a non-manual transition.
 CREATE TRIGGER inventory_park_transition AFTER UPDATE OF inventory_state ON thread_principal_state

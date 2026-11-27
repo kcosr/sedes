@@ -656,7 +656,7 @@ rename when its record in `overlay.sqlite` contains the title. This can
 replace a newer name set in Claude Code. To change a restored name, rename
 the thread in Sedes. The migration works while Claude is offline.
 
-Migration 174 records the turn associated with a new running-thread Park and
+Migration 174 records the turn selected by **Park until done** and
 the thread’s progress speech revision. New root submissions retain that revision
 for playback checks after reconnect. Previously parked threads keep their manual
 Park. Rebuild packaged clients for the updated voice notification and input-context

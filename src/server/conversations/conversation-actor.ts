@@ -271,6 +271,7 @@ export class ConversationActor {
   readonly #attachmentDelivery: ComposerAttachmentDeliveryService;
   readonly #drainAuthoritativeObservers?: () => Promise<void>;
   readonly #onInputStateChanged?: () => void;
+  readonly #onTerminalTurn?: (applicationTurnId: string) => void;
   readonly #persistDeliveryInputSnapshot?: (
     input: PrepareDeliveryInputSnapshot,
   ) => void;
@@ -329,6 +330,7 @@ export class ConversationActor {
     readonly readProgressParkRevision?: () => number | undefined;
     readonly onEarlyProgressSkipped?: (source: EarlyReplySource) => void;
     readonly onInputStateChanged?: () => void;
+    readonly onTerminalTurn?: (applicationTurnId: string) => void;
     /** Absent only for a passive history projection with no execution authority. */
     readonly environmentLease?: ExecutionEnvironmentLease;
     readonly attachmentDelivery: ComposerAttachmentDeliveryService;
@@ -356,6 +358,7 @@ export class ConversationActor {
     this.#attachmentDelivery = input.attachmentDelivery;
     this.#drainAuthoritativeObservers = input.drainAuthoritativeObservers;
     this.#onInputStateChanged = input.onInputStateChanged;
+    this.#onTerminalTurn = input.onTerminalTurn;
     this.#persistDeliveryInputSnapshot = input.persistDeliveryInputSnapshot;
     this.#removeDeliveryInputSnapshot = input.removeDeliveryInputSnapshot;
     this.#projector = input.projector;
@@ -1704,6 +1707,11 @@ export class ConversationActor {
             return;
           }
           if ((nativeEvent.type === "turn_updated" || nativeEvent.type === "turn_completed") && nativeEvent.turn.status !== "in_progress") {
+            // A sequenced native terminal record establishes the end even if
+            // endedBy is absent. An item or publication can also upsert a
+            // projected turn, so those updates cannot stand in for this record.
+            try { this.#onTerminalTurn?.(this.#projector.durableTurnId(nativeEvent.turn.backendTurnId)); }
+            catch { /* A passive inventory observer cannot affect provider work. */ }
             for (const [id, opening] of this.#progressOpenings) {
               if (opening.turnId === nativeEvent.turn.backendTurnId) this.#progressOpenings.delete(id);
             }

@@ -35,6 +35,7 @@ describe.each(["turn.progress", "turn.completed"] as const)("%s completed-text h
           return true;
         } }],
         { threadTitle: "Thread", userInputRevision: 1, admitted: () => true, fresh: () => true },
+        event === "turn.progress" ? 0 : undefined,
         () => true, () => {},
       );
       try {

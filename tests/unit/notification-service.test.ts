@@ -1529,6 +1529,41 @@ describe("early reply publication", () => {
     expect(executor).toHaveBeenCalledTimes(3);
   });
 
+  it.each(["parked", "manually unparked"] as const)(
+    "rechecks progress before a short item opens or flushes its final words while %s, even before the Park push",
+    state => {
+      const {service, database} = fixture();
+      enableEarly(service);
+      const device = native(service);
+      const capture = (itemId: string) => service.captureEarlyReply(scope, threadId, {
+        ...source, event: "turn.progress", applicationItemId: itemId,
+      }, () => authority)!;
+      const waiting = capture("short");
+      waiting.observe("Checking", []);
+      const speaking = capture("open");
+      speaking.observe(opening, []);
+      expect(device.replies()).toMatchObject([{kind: "begin", itemId: "open", text: "First sentence."}]);
+
+      // Delay the post-commit push so that both authorized callbacks race it.
+      database.prepare("UPDATE thread_principal_state SET inventory_state = 'parked', progress_park_revision = 1 WHERE thread_id = ?").run(threadId);
+      if (state === "manually unparked") {
+        database.prepare("UPDATE thread_principal_state SET inventory_state = 'active' WHERE thread_id = ?").run(threadId);
+      }
+      waiting.finish("item_done", "Checking", []);
+      speaking.finish("item_done", opening, []);
+      expect(device.replies()).toMatchObject([
+        {kind: "begin", itemId: "open"}, {kind: "cancel", itemId: "open", reason: "policy_changed"},
+      ]);
+
+      const final = service.captureEarlyReply(scope, threadId, source, () => authority)!;
+      final.observe("Ready", []);
+      final.finish("item_done", "Ready", []);
+      expect(device.replies().slice(2)).toMatchObject([
+        {kind: "begin", event: "turn.completed", text: "Ready"}, {kind: "yield", reason: "item_done"},
+      ]);
+    },
+  );
+
   it("never speaks past the authoritative progress prefix when a later delta requires truncation", () => {
     const {service} = fixture();
     enableEarly(service);

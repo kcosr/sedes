@@ -337,6 +337,7 @@ describe("live completion notification provenance", { timeout: 30_000 }, () => {
           const [record, turn] = responses.mock.calls[0]!;
           const inventory = () => inventoryRepository.getInventory(scope, id);
           const park = () => inventoryRepository.parkThread(scope, id, {
+            untilTurnEnds: true,
             mutationId: randomUUID(), expectedRevision: inventory().inventoryRevision, now: Date.now(),
           });
           const parked = park();
@@ -360,7 +361,7 @@ describe("live completion notification provenance", { timeout: 30_000 }, () => {
 
           // A provider-originated turn need not retain an application input
           // correlation. Its confirmed normalized end still fulfills this park.
-          const terminal = { ...turn, status: outcome };
+          const terminal = { ...turn, status: outcome, endedBy: outcome === "completed" ? "agent_settled" as const : outcome };
           delete terminal.completionCorrelations;
           record.snapshot.turnsById[turn.backendTurnId] = terminal;
           record.snapshot.runState = "idle";

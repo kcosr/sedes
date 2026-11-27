@@ -377,7 +377,7 @@ function fixture(
       opaqueReference: "selected-checkpoint",
     })),
   } as unknown as ConversationBackendDriver;
-  const actorManager = new ConversationActorManager({
+  const managerOptions = {
     environments,
     attachmentDelivery: {
       materialize: vi.fn(async () => ({
@@ -402,7 +402,8 @@ function fixture(
     ...(onModelFeedback ? { onModelFeedback } : {}),
     ...(captureResponseVoiceContext ? { captureResponseVoiceContext } : {}),
     ...(applicationPublications ? { applicationPublications } : {}),
-  });
+  };
+  const actorManager = new ConversationActorManager(managerOptions);
   const manager = {
     acquire: (
       input: AcquireConversationActorInput,
@@ -417,6 +418,7 @@ function fixture(
   };
   return {
     actorManager,
+    managerOptions,
     closeOrder,
     driver,
     environments,
@@ -425,6 +427,38 @@ function fixture(
     manager,
   };
 }
+
+describe("parked turn settlement", () => {
+  it.each(["turn_updated", "turn_completed"] as const)("accepts a status-only native %s and ignores projected turn upserts", async type => {
+    const { driver, handle, managerOptions } = fixture();
+    const observed = vi.fn();
+    const manager = new ConversationActorManager({
+      ...managerOptions,
+      observeTurnSettlement(_scope, _threadId, hasEnded) {
+        observed(hasEnded(projectedTurnId));
+      },
+    });
+    // A passive tail can have a terminal display status with no observed end.
+    const initial = snapshot();
+    const turn = { backendTurnId: "turn-1", status: "completed" as const, orderedBackendItemIds: ["item-1"] };
+    handle.establishmentSnapshots[0] = { ...initial, turnsById: { "turn-1": turn } };
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver }, { idleRelease: "retain" });
+    try {
+      expect(observed.mock.calls).toEqual([[false]]);
+      observed.mockClear();
+      handle.emit(0, { type: "item_started", item: { backendItemId: "notice", backendTurnId: "turn-1",
+        semanticKind: "notice", sourceOrder: 1, status: "completed", tone: "info", text: { text: "Updated metadata" } } }, 0);
+      const updatedTurn = { ...turn, orderedBackendItemIds: ["item-1", "notice"] };
+      handle.emit(0, { type: "turn_updated", turn: { backendTurnId: "other", status: "in_progress", orderedBackendItemIds: [] } }, 1);
+      await acquired.actor.captureSnapshotState();
+      expect(acquired.actor.timeline.orderedTurnIds).toHaveLength(2);
+      expect(observed).not.toHaveBeenCalled();
+      handle.emit(0, { type, turn: updatedTurn }, 2);
+      await acquired.actor.captureSnapshotState();
+      expect(observed.mock.calls).toEqual([[true]]);
+    } finally { acquired.release(); await manager.close(); }
+  });
+});
 
 describe("page publication turn authority", () => {
   it("forks the native source revision independently of visible page revisions", async () => {

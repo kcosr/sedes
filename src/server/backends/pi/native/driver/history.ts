@@ -173,12 +173,16 @@ export function projectNativeHistory(history: PiNativeHistory, options: {
   let failure: string | undefined;
   const pendingTools = new Set<string>();
   const counters = { userMessages: 0, assistantMessages: 0, toolCalls: 0, toolResults: 0, totalMessages: 0, compactions: 0 };
-  const finish = (running: boolean) => {
+  const finish = (running: boolean, closed: boolean) => {
     if (!turn) return;
-    const status = running ? "in_progress" : terminalReason === "error" ? "failed" : terminalReason === "aborted" ? "interrupted"
-      : terminalReason === "stop" || terminalReason === "length" ? "completed" : "interrupted";
-    turns[turn.backendTurnId] = { ...turn, status,
-      ...(status === "in_progress" ? {} : { endedBy: status === "completed" ? "agent_settled" as const : status === "failed" ? "failed" as const : "interrupted" as const }),
+    const nativeEnd = terminalReason === "stop" || terminalReason === "length" ? "agent_settled" :
+      terminalReason === "error" ? "failed" : terminalReason === "aborted" ? "interrupted" : undefined;
+    const status = running ? "in_progress" : nativeEnd === "agent_settled" ? "completed" : nativeEnd ?? "interrupted";
+    // A passive read of an unfinished tail can present an interrupted status
+    // but cannot establish termination. A subsequent root turn or an idle
+    // owner's state is independent evidence that the prior turn closed.
+    const endedBy = running ? undefined : nativeEnd ?? (closed ? "interrupted" : undefined);
+    turns[turn.backendTurnId] = { ...turn, status, ...(endedBy && { endedBy }),
       ...(status === "failed" ? { failure: turnFailure(failure) } : {}),
       ...(!running && lastTime ? { completedAt: lastTime } : {}) };
   };
@@ -225,7 +229,7 @@ export function projectNativeHistory(history: PiNativeHistory, options: {
       const operation = evidence.get(String(entry.id));
       const steer = operation?.mode === "steer" && operation.targetTurnId === turn?.backendTurnId;
       if (!steer) {
-        finish(false);
+        finish(false, true);
         terminalReason = undefined;
         failure = undefined;
         turn = { backendTurnId: String(entry.id), status: "in_progress", orderedBackendItemIds: [], ...(timestamp(entry.timestamp) ? { startedAt: timestamp(entry.timestamp) } : {}) };
@@ -293,7 +297,7 @@ export function projectNativeHistory(history: PiNativeHistory, options: {
       (recordedOperation?.userEntryId === turn.backendTurnId || (acceptance.mode === "steer" && acceptance.targetTurnId === turn.backendTurnId));
     if (turn && (entry.type === "message" || entry.type === "compaction" || ownAcceptance)) leafByTurn.set(turn.backendTurnId, String(entry.id));
   }
-  finish(options.running === true);
+  finish(options.running === true, options.running === false);
   const activeTurn = options.running ? turn?.backendTurnId : undefined;
   if (activeTurn) for (const itemId of pendingTools) {
     const item = items[itemId];

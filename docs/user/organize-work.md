@@ -397,7 +397,8 @@ remain unchanged and attached to their threads, without a task-handling prompt.
 Stashes also remain attached, with a warning before parking.
 
 Agents with the `thread.set_state` grant can park, unpark, snooze, or wake
-their own thread or another thread within their tool scope. See
+their own thread or another thread within their tool scope. A thread parked
+through this tool stays parked when its current turn ends. See
 [Sedes tools](provider-features.md#let-an-agent-use-sedes-tools).
 
 ## Archive finished work

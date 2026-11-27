@@ -139,8 +139,9 @@ function fixture(nativeArchive?: {
     branchMethod: "provider_native",
     now: 440,
   });
-  const inventory = new InventoryRepository(database);
   const runtimeStates = new Map<string, ThreadRunState>();
+  const inventory = new InventoryRepository(database, (_scope, threadId) =>
+    runtimeStates.get(threadId) === "running" ? "running-turn" : undefined);
   const archiveSafe = new Set<string>();
   const publishCommitted = vi.fn(async () => undefined);
   const questions = new QuestionRequestRepository(database, inventory);
@@ -589,6 +590,7 @@ describe("thread family archive service", () => {
         .resolves.toEqual({ threadId, lifecycle: "parked" });
       await expect(setState({ lifecycle: "parked" }))
         .resolves.toEqual({ threadId, lifecycle: "parked" });
+      expect(current.inventory.unparkIfTurnEnded(scope, threadId, id => id === "running-turn", Date.now())).toBeUndefined();
       expect(inventory()).toMatchObject({ inventoryState: "parked", inventoryRevision: 1 });
       expect(current.tasks.get(scope, task.id)).toMatchObject({
         scopeKind: "thread", threadId, revision: task.revision,

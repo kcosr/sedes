@@ -1966,7 +1966,7 @@ export class InventoryRepository {
       const next = this.#nextInventory(current, input.change, input.now);
       if (next !== current) {
         if (change.action === "snooze") input.assertSnoozeAllowed?.();
-        this.#writeInventory(next);
+        this.#writeInventory(next, change.action === "park");
         this.#bumpGeneration(scope);
       }
       const state =
@@ -2075,6 +2075,7 @@ export class InventoryRepository {
     scope: RequestScope,
     threadId: string,
     input: {
+      readonly untilTurnEnds?: boolean;
       readonly expectedRevision: number;
       readonly mutationId: string;
       readonly now: number;
@@ -2141,7 +2142,7 @@ export class InventoryRepository {
         input.now,
       );
       if (next !== current) {
-        this.#writeInventory(next);
+        this.#writeInventory(next, input.untilTurnEnds === true);
         this.#bumpGeneration(scope);
       }
       const state =
@@ -2524,7 +2525,7 @@ export class InventoryRepository {
         this.#assertTransitionNotBlocked(scope, current.threadId, transition);
         return this.#nextInventory(current, transition, input.now);
       });
-      for (const next of nextStates) this.#writeInventory(next);
+      for (const next of nextStates) this.#writeInventory(next, input.action === "park");
       if (nextStates.length > 0) this.#bumpGeneration(scope);
 
       const disposition = input.openTaskDisposition ?? "keep";
@@ -2753,20 +2754,42 @@ export class InventoryRepository {
     })();
   }
 
+  listParkedTurnTargets(scope: RequestScope, backendInstanceId: string, after: string, limit: number) {
+    return prepareCached(this.database, `
+      SELECT state.thread_id AS threadId, state.parked_until_turn_id AS turnId,
+        state.progress_park_revision AS progressParkRevision,
+        (thread.availability = 'available' AND workspace.availability = 'available') AS readable
+      FROM thread_principal_state state
+      JOIN application_threads thread ON thread.id = state.thread_id AND thread.tenant_id = state.tenant_id
+        AND thread.owner_principal_id = state.principal_id
+      JOIN workspaces workspace ON workspace.id = thread.workspace_id AND workspace.tenant_id = thread.tenant_id
+        AND workspace.owner_principal_id = thread.owner_principal_id
+      JOIN projects project ON project.id = workspace.project_id AND project.tenant_id = workspace.tenant_id
+        AND project.owner_principal_id = workspace.owner_principal_id
+      WHERE state.tenant_id = ? AND state.principal_id = ? AND state.parked_until_turn_id IS NOT NULL
+        AND state.inventory_state = 'parked' AND thread.backend_instance_id = ? AND state.thread_id > ?
+        AND thread.backing_state = 'bound' AND workspace.removed_at IS NULL AND project.removed_at IS NULL
+      ORDER BY state.thread_id LIMIT ?
+    `).all(scope.tenantId, scope.principalId, backendInstanceId, after, limit) as Array<{
+      threadId: string; turnId: string; progressParkRevision: number; readable: 0 | 1;
+    }>;
+  }
+
   /** Only the terminal status of the exact turn captured at park can consume its target. */
   unparkIfTurnEnded(
     scope: RequestScope,
     threadId: string,
     hasEnded: (turnId: string) => boolean,
     now: number,
+    expectedParkRevision?: number,
   ): InventoryPrincipalStateRecord | undefined {
     return this.database.transaction(() => {
       const target = prepareCached(this.database, `
-        SELECT parked_until_turn_id AS turnId FROM thread_principal_state
+        SELECT parked_until_turn_id AS turnId, progress_park_revision AS revision FROM thread_principal_state
         WHERE tenant_id = ? AND principal_id = ? AND thread_id = ?
           AND inventory_state = 'parked' AND parked_until_turn_id IS NOT NULL
-      `).get(scope.tenantId, scope.principalId, threadId) as { turnId: string } | undefined;
-      if (!target || !hasEnded(target.turnId)) return undefined;
+      `).get(scope.tenantId, scope.principalId, threadId) as { turnId: string; revision: number } | undefined;
+      if (!target || (expectedParkRevision !== undefined && expectedParkRevision !== target.revision) || !hasEnded(target.turnId)) return undefined;
       activateParkedThread(this.database, scope, threadId, now);
       return this.getInventory(scope, threadId);
     })();
@@ -3439,7 +3462,7 @@ export class InventoryRepository {
     }
   }
 
-  #writeInventory(state: InventoryPrincipalStateRecord): void {
+  #writeInventory(state: InventoryPrincipalStateRecord, untilTurnEnds = false): void {
     const result = prepareCached(this.database,
         `
           UPDATE thread_principal_state
@@ -3472,7 +3495,7 @@ export class InventoryRepository {
         "The thread inventory changed in another client.",
       );
     }
-    if (state.inventoryState === "parked") {
+    if (untilTurnEnds && state.inventoryState === "parked") {
       // Observe the current execution owner without attaching, in the same
       // synchronous transaction as the transition and its mutation receipt.
       const turnId = this.currentParkTurn?.(state, state.threadId);
