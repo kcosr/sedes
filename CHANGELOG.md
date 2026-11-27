@@ -53,7 +53,7 @@ User-facing changes are collected here before release. See the
   ([#121](https://github.com/kcosr/sedes/pull/121))
 
 - Upgrade the server and browser/packaged clients together for client protocol
-  **183**. Rebuild Android and Electron clients for native voice snapshot **17**
+  **184**. Rebuild Android and Electron clients for native voice snapshot **17**
   and the early reply subscription for progress updates and final answers. See
   [early reply playback](docs/operator/clients/voice.md#early-reply-playback).
   ([#165](https://github.com/kcosr/sedes/pull/165))
@@ -134,7 +134,9 @@ User-facing changes are collected here before release. See the
   while the agent writes. Responsive groups ready sentences starting at six
   words, Balanced at fifteen, and Natural prefers paragraph breaks. With
   **Both**, the device can announce the notification type and thread title
-  while it waits for the message text. Early playback defaults to Off.
+  while it waits for the message text. An opening such as “Yes.” stays with
+  the following sentence when early delivery hands off to completed playback.
+  Early playback defaults to Off.
   Skipping a progress update leaves later updates and the final answer eligible.
   [Voice settings](docs/operator/clients/voice.md#early-reply-playback).
   ([#165](https://github.com/kcosr/sedes/pull/165))

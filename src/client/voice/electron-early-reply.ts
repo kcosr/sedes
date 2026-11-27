@@ -46,8 +46,8 @@ export class ElectronEarlyReply {
   raw = "";
   rawBytes = 0;
   retired = false;
-  #yield: "none" | "server" | "presentation" = "none";
-  get yielded(): boolean { return this.#yield !== "none"; }
+  #yield?: Extract<EarlyReplyFrame, { kind: "yield" }>["reason"] | "presentation";
+  get yielded(): boolean { return this.#yield !== undefined; }
   suppressed = false;
   preambleEnd = 0;
   #preamble = "";
@@ -96,7 +96,7 @@ export class ElectronEarlyReply {
       }
       this.raw += frame.text; this.rawBytes += bytes;
       this.lastSpanAt = now;
-    } else if (frame.kind === "yield") this.#yield = "server";
+    } else if (frame.kind === "yield") this.#yield = frame.reason;
     this.#frames.set(frame.seq, signature);
     return "accepted";
   }
@@ -121,8 +121,10 @@ export class ElectronEarlyReply {
     // sentences are already eligible, even if its last request is short.
     for (let index = first; index < this.#ends.length; index++) {
       const span = this.#ends[index]!;
-      if (index <= this.#qualifiedThrough || this.yielded || span.totalWords - previousWords >= minimumWords[mode] &&
-          (mode !== "natural" || span.paragraph || span.paragraphWords >= longParagraphWords)) eligible.push(index);
+      // Only item_done guarantees the full message. A partial yield can close a group at
+      // this boundary, but a short prefix must wait to join the terminal continuation.
+      if (index <= this.#qualifiedThrough || this.#yield === "item_done" || span.totalWords - previousWords >= minimumWords[mode] &&
+          (this.yielded || mode !== "natural" || span.paragraph || span.paragraphWords >= longParagraphWords)) eligible.push(index);
     }
     if (!eligible.length) return;
     const firstEligible = eligible[0]!, lastEligible = eligible.at(-1)!;

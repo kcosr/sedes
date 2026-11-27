@@ -204,10 +204,11 @@ limit, the device divides it into requests, preferring whole sentences. The
 
 For example, “It passed. The tests are green.” supplies six words. Responsive
 can speak both sentences together. Balanced and Natural wait for more text.
-In every mode, when the message ends, the device reads whatever is left, even
-a single “Yes.” If the server ends early delivery before the message finishes,
-the device can speak the short remainder of the eligible prefix. Each group stays
-within its own message.
+When the full message arrives, all three modes read the remaining words together,
+within the request limit. “Yes. This is a test.” plays as one request, and a reply
+consisting only of “Yes.” plays once. If early delivery stops before the full
+message arrives, the device holds any group below the mode’s word minimum and
+reads it with the rest of the message at completion.
 
 An eligible plain-prose opening can play early. Markdown such as links, code,
 and lists moves the remaining text to playback when the message finishes. The

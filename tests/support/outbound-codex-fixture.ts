@@ -151,8 +151,9 @@ export class OutboundCodexFixture {
         item.text += delta;
         this.#notify("item/agentMessage/delta", { ...scope, itemId: item.id, delta });
       },
-      complete: (terminalPhase = phase) => {
+      complete: (terminalPhase = phase, completedText = item.text) => {
         item.phase = terminalPhase;
+        item.text = completedText;
         this.#notify("item/completed", { ...scope, item, completedAtMs: Date.now() });
       },
     };

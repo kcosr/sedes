@@ -834,6 +834,72 @@ describe("early Electron reply playback", () => {
     expect(h.texts()).toEqual([preamble, "It passed. Now we can continue.", "Done."]);
   });
 
+  const yesOpening = { ...opening, text: "Yes.", rawEnd: 4 };
+  const yesReply = "Yes. This is a test.";
+
+  describe.each(["responsive", "balanced", "natural"] as const)("%s handoff", mode => {
+    it.each([opening, commentary])("speaks the two-sentence $event once when its last words arrive at completion", async frame => {
+      const h = await setup(mode);
+      const drain = deferred<void>();
+      h.playback.finish.mockImplementationOnce(() => drain.promise);
+      h.early({ ...yesOpening, event: frame.event }); await h.waiting();
+      expect(h.texts()).toEqual([]);
+      h.early({ ...append, text: yesReply.slice(4), rawStart: 4, rawEnd: yesReply.length });
+      h.early({ ...common, kind: "yield", reason: "item_done", seq: 2 });
+      await vi.waitFor(() => expect(h.playback.finish).toHaveBeenCalledOnce());
+      expect(h.texts()).toEqual([yesReply]);
+      const seal = frame.event === "turn.progress" ? h.progress : h.complete;
+      seal(yesReply); seal(yesReply);
+      expect((await h.runtime.getState()).active?.id).toBe(id);
+      drain.resolve(); await h.idle();
+      expect(h.texts()).toEqual([yesReply]); expect(h.playback.append).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("includes the rest of a long answer delivered with completion in the first body request", async () => {
+    const h = await setup("responsive");
+    const full = "Yes. Sedes can show whether a thread is running, idle, or waiting for input, either for one thread or across a list of threads.\n" +
+      "The tools I have don’t show whether a thread has an unread or unacknowledged notification, or whether it has an attention badge. " +
+      "They do show when an automation needs attention because a run failed or its outcome is uncertain.";
+    h.early(yesOpening); await h.waiting();
+    h.early({ ...append, text: full.slice(4), rawStart: 4, rawEnd: full.length });
+    h.early({ ...common, kind: "yield", reason: "item_done", seq: 2 });
+    await h.idle(); h.complete(full); await h.idle();
+    expect(h.texts().map(text => text.replace(/\s+/gu, " "))).toEqual([full.replace(/\s+/gu, " ")]);
+  });
+
+  it("speaks a one-word complete answer once before its notification arrives", async () => {
+    const h = await setup("responsive"); h.early(yesOpening); await h.waiting();
+    h.early({ ...common, kind: "yield", reason: "item_done", seq: 1 });
+    await h.idle(); expect(h.texts()).toEqual(["Yes."]);
+    h.complete("Yes."); await h.idle(); expect(h.texts()).toEqual(["Yes."]);
+  });
+
+  it.each(["markup", "stall", "limit", "observation_ended"])("holds a short fragment on %s until it can join the terminal body", async reason => {
+    const h = await setup("responsive");
+    h.early(opening); await h.waiting();
+    h.early({ ...append, rawEnd: opening.rawEnd + 4, text: "Yes." });
+    h.early({ ...common, kind: "yield", reason, seq: 2 }); await h.idle();
+    expect(h.texts()).toEqual([firstBody]);
+    h.complete(firstBody + " " + yesReply); await h.idle();
+    expect(h.texts()).toEqual([firstBody, yesReply]);
+  });
+
+  it.each(["skipCurrentPlayback", "stopPlayback", "recordDuringPlayback"] as const)(
+    "discards the held opening and late notification on %s", async action => {
+      const h = await setup("responsive");
+      h.early(yesOpening); await h.waiting();
+      await h.runtime[action]({ ...await h.command(), interactionId: id });
+      h.early({ ...append, text: yesReply.slice(4), rawStart: 4, rawEnd: yesReply.length });
+      h.early({ ...common, kind: "yield", reason: "item_done", seq: 2 });
+      h.complete(yesReply);
+      if (action === "recordDuringPlayback") {
+        await vi.waitFor(async () => expect((await h.runtime.getState()).phase).toBe("listening"));
+        expect((await h.runtime.getState()).queue.count).toBe(0);
+      } else await h.idle();
+      expect(h.texts()).toEqual([]);
+    });
+
   it("keeps short Responsive sentences in their own items and flushes each once", async () => {
     const h = await setup("responsive");
     h.early({ ...opening, text: "It passed.", rawEnd: 10 }); await h.waiting();
@@ -1022,7 +1088,7 @@ describe("early Electron reply playback", () => {
 
   it("reintroduces yielded speech in Both when another item reached the speaker first", async () => {
     const h = await setup("balanced", { speechContent: "both" }); h.early(opening); await h.waiting();
-    h.early({ ...common, seq: 1, kind: "yield", reason: "item_done" });
+    h.early({ ...common, seq: 1, kind: "yield", reason: "stall" });
     h.complete("B reply.", "other");
     await vi.waitFor(() => expect(h.texts().at(-1)).toContain("B reply."));
     h.complete();
@@ -1043,6 +1109,7 @@ describe("early Electron reply playback", () => {
   it("gives urgent blocking input two seconds of starvation, while ordinary replies wait", async () => {
     vi.useFakeTimers();
     const h = await setup("balanced", { speechContent: "both" }); h.early(opening); await h.waiting();
+    h.early({ ...append, rawEnd: opening.rawEnd + 4, text: "Yes." });
     h.complete("Other reply.", "ordinary"); await vi.advanceTimersByTimeAsync(4_000);
     expect((await h.runtime.getState()).active?.id).toBe(id);
     h.current().callbacks.frame("notification", { sourceEventId: "blocked", generation: 1, voice: "speak",
@@ -1051,13 +1118,14 @@ describe("early Electron reply playback", () => {
     await vi.advanceTimersByTimeAsync(1999); expect((await h.runtime.getState()).active?.id).toBe(id);
     await vi.advanceTimersByTimeAsync(1); await h.idle();
     expect(h.texts().at(-1)).toBe("Input needed");
-    h.early(append); h.complete(); await h.idle(); expect(h.texts().at(-1)).toBe(`${secondBody} Three.`);
+    h.complete(firstBody + " " + yesReply); await h.idle();
+    expect(h.texts().at(-1)).toBe(yesReply); expect(h.texts()).not.toContain("Yes.");
   });
 
   it("expires a starved first paragraph and suppresses unheard queued openings explicitly cleared by Stop", async () => {
     vi.useFakeTimers();
     const h = await setup("natural");
-    h.early(opening); await h.waiting();
+    h.early(yesOpening); await h.waiting();
     await vi.advanceTimersByTimeAsync(60_001); await h.idle();
     expect(h.texts()).toEqual([]);
     h.early({ ...opening, replyId: "c".repeat(64) }); await h.waiting();
@@ -1065,7 +1133,26 @@ describe("early Electron reply playback", () => {
     expect((await h.runtime.getState()).queue.count).toBe(1);
     await h.runtime.stopPlayback({ ...await h.command(), interactionId: "c".repeat(64) });
     h.complete("Stopped.", "b".repeat(64)); h.complete("Stopped.", "c".repeat(64));
-    h.complete(); await h.idle(); expect(h.texts()).toEqual([completeBody]);
+    h.complete(yesReply); await h.idle(); expect(h.texts()).toEqual([yesReply]);
+  });
+
+  it("carries an unheard fragment into completion when fresh spans reach the ten-minute lifetime", async () => {
+    vi.useFakeTimers();
+    const h = await setup("natural");
+    h.early(yesOpening); await h.waiting();
+    let held = "Yes.";
+    for (let seq = 1; seq <= 10; seq++) {
+      await vi.advanceTimersByTimeAsync(59_000);
+      const text = " Oh.";
+      h.early({ ...append, seq, text, rawStart: held.length, rawEnd: held.length + text.length });
+      held += text;
+    }
+    expect((await h.runtime.getState()).active?.id).toBe(id);
+    await vi.advanceTimersByTimeAsync(10_000); await h.idle();
+    expect(h.texts()).toEqual([]);
+    const full = held + " Here is the rest.";
+    h.complete(full); await h.idle();
+    expect(h.texts()).toEqual([full]);
   });
 
   it("lets an independently configured failure speak after the user skipped the early reply", async () => {

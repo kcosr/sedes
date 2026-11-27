@@ -88,7 +88,8 @@ final class NativeEarlyReply {
     final long generation, inputRevision, opened;
     String reservation;
     long lastSpan, urgentSince = -1;
-    boolean yielded, detached, skipped;
+    boolean detached, skipped;
+    private String endReason;
     private final ArrayList<Segment> frames = new ArrayList<>();
     private StringBuilder source = new StringBuilder();
     private int rawBytes, rawEnd, preparedEnd, preambleEnd, groupEnd;
@@ -117,14 +118,15 @@ final class NativeEarlyReply {
             if (sameBegin && frames.get(frame.seq).matches(frame, source)) return false;
             throw invalid();
         }
-        if (frame.seq != frames.size() || yielded && !frame.kind.equals("cancel")) throw invalid();
+        if (frame.seq != frames.size() || yielded() && !frame.kind.equals("cancel")) throw invalid();
         if (frame.text != null) {
             int bytes = rawBytes + NativeVoiceJson.bytes(frame.text);
             if (frame.start != source.length() || bytes > MAX_BYTES || frame.text.isEmpty() && frames.get(frame.seq-1).paragraph) throw invalid();
             rawBytes = bytes; source.append(frame.text); lastSpan = now;
-        } else yielded = true;
+        } else endReason = frame.reason;
         frames.add(new Segment(frame)); return true;
     }
+    boolean yielded() { return endReason != null; }
     int pendingBytes() { return rawBytes; }
     void freeze(String mode, NativeVoiceSettings settings, int limit) {
         if (requested) return;
@@ -177,7 +179,8 @@ final class NativeEarlyReply {
             text = prepared(end);
             start = skipSeparators(text, spoken);
         }
-        if (!text.startsWith(previous) || start == text.length()) throw invalid();
+        if (!text.startsWith(previous)) throw invalid();
+        if (start == text.length()) return null;
         String chunk = NativeVoiceQueue.firstChunk(text, start, limit);
         return new Part(chunk, end, start + chunk.length(), headerEnd, group);
     }
@@ -194,14 +197,17 @@ final class NativeEarlyReply {
             words = Segment.countWords(remainingSentence);
         }
         int minimum = mode.equals("responsive") ? RESPONSIVE_WORDS : BALANCED_WORDS;
-        boolean natural = mode.equals("natural");
+        // Only a complete source can release a new group below the word minimum.
+        boolean complete = "item_done".equals(endReason);
+        boolean waitForParagraph = mode.equals("natural") && !yielded();
         for (Segment frame : frames) {
             if (frame.end < 0) continue;
             int count = frame.words(source);
             paragraphWords += count;
             if (frame.end > raw) {
                 words += count;
-                if (frame.end <= owedThrough || yielded || words >= minimum && (!natural || frame.paragraph || paragraphWords >= LONG_PARAGRAPH_WORDS))
+                if (frame.end <= owedThrough || complete || words >= minimum &&
+                    (!waitForParagraph || frame.paragraph || paragraphWords >= LONG_PARAGRAPH_WORDS))
                     eligible.add(frame.end);
             }
             if (frame.paragraph) paragraphWords = 0;

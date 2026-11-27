@@ -1,7 +1,7 @@
 import { recordVoiceDiagnostic } from "../diagnostics/voice-diagnostics.js";
 import { MAX_EARLY_REPLY_BYTES, MAX_EARLY_REPLY_FRAMES, earlyReplyFrameSchema, type EarlyReplyFrame } from "../../shared/protocol/early-reply.js";
 import type { NotificationAssistantResultPhase } from "../../shared/protocol/notification.js";
-import type { EarlyReplyObservation, EarlyReplySource } from "../conversations/early-reply-observation.js";
+import type { EarlyReplyEnd, EarlyReplyObservation, EarlyReplySource } from "../conversations/early-reply-observation.js";
 import { EarlyReplyScanner } from "../conversations/early-reply-scanner.js";
 import { ELLIPSIS_BYTES, MAX_LIVE_PROGRESS_BYTES } from "../conversations/payload-policy.js";
 import type { RequestScope } from "../identity/identity-provider.js";
@@ -61,10 +61,14 @@ export class EarlyReplyPublication implements EarlyReplyObservation {
   #armStall(): void {
     clearTimeout(this.#inactivity);
     this.#stallDeadline = performance.now() + MAX_STALL_MS;
-    this.#inactivity = setTimeout(() => this.yield("stall"), MAX_STALL_MS).unref();
+    this.#inactivity = setTimeout(() => this.#yield("stall"), MAX_STALL_MS).unref();
   }
 
   observe(text: string, precedingPhases: readonly ("partial" | "provisional" | "unclassified")[]): void {
+    this.#publish(text, precedingPhases, false);
+  }
+
+  #publish(text: string, precedingPhases: readonly ("partial" | "provisional" | "unclassified")[], completed: boolean): void {
     if (!this.#publishing) return;
     // A queued provider callback can run before a delayed timer after host suspension.
     const now = performance.now();
@@ -73,10 +77,10 @@ export class EarlyReplyPublication implements EarlyReplyObservation {
       this.dispose();
       return;
     }
-    if (now >= this.#stallDeadline) { this.yield("stall"); return; }
+    if (now >= this.#stallDeadline) { this.#yield("stall"); return; }
     try {
-      const result = this.#scanner.update(text);
-      if (!this.#initialAuthorityChecked || result.segments.length) {
+      const result = this.#scanner.update(text, completed);
+      if (completed || !this.#initialAuthorityChecked || result.segments.length) {
         if (!this.policyCurrent()) { this.cancel("policy_changed"); return; }
         if (!this.authority.admitted()) { this.cancel("authority_lost"); return; }
         if (!this.checkFreshness()) return;
@@ -88,7 +92,7 @@ export class EarlyReplyPublication implements EarlyReplyObservation {
           return;
         }
         // Reserve room for yield, a later authority cancellation, and the terminal decision.
-        if (this.#seq >= MAX_EARLY_REPLY_FRAMES - 2) { this.yield("limit"); return; }
+        if (this.#seq >= MAX_EARLY_REPLY_FRAMES - 2) { this.#yield("limit"); return; }
         const common = this.#common();
         const frame: EarlyReplyFrame = this.#seq === 0
           ? {...common, kind: "begin", event: this.event, seq: 0, rawStart: 0, rawEnd: segment.rawEnd,
@@ -111,7 +115,8 @@ export class EarlyReplyPublication implements EarlyReplyObservation {
         this.#armStall();
       }
       if (result.stop === "source_changed") this.cancel(result.stop);
-      else if (result.stop) this.yield(result.stop);
+      else if (result.stop) this.#yield(result.stop);
+      else if (completed) this.#yield("item_done");
     } catch {
       this.cancel("authority_lost");
     }
@@ -125,9 +130,10 @@ export class EarlyReplyPublication implements EarlyReplyObservation {
     return false;
   }
 
-  finish(reason: "item_done" | "source_changed" | "authority_lost" | "superseded"): void {
-    if (reason === "item_done") this.yield(reason);
-    else this.cancel(reason);
+  finish(...end: EarlyReplyEnd): void {
+    if (end[0] === "item_done") this.#publish(end[1], end[2], true);
+    else if (end[0] === "observation_ended") this.#yield(end[0]);
+    else this.cancel(end[0]);
   }
 
   #common() {
@@ -135,7 +141,7 @@ export class EarlyReplyPublication implements EarlyReplyObservation {
       generation: this.generation, seq: this.#seq};
   }
 
-  yield(reason: YieldReason): void {
+  #yield(reason: YieldReason): void {
     if (this.#publishing) this.#stop({...this.#common(), kind: "yield", reason});
   }
 

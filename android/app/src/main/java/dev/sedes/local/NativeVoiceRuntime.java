@@ -1354,7 +1354,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             try { item.earlyPart = reply.next(null); }
             catch (IllegalArgumentException mismatch) { retireOpening(reply, false); return; }
             if (item.earlyPart == null) {
-                if (reply.yielded) { retireOpening(reply, false); return; }
+                if (reply.yielded()) { retireOpening(reply, false); return; }
                 if (!phase.equals("waiting_for_reply_text")) traceActive(NativeVoiceDiagnostics.Event.EARLY_WAITING, item, null);
                 phase = "waiting_for_reply_text"; scheduleEarlyDeadline(); publish(); return;
             }

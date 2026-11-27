@@ -41,7 +41,13 @@ export class EarlyReplyDelivery {
     const seq = prior?.identity.seq ?? 0;
     if (seq > MAX_EARLY_REPLY_FRAMES - 1) return false;
     if (frame.kind === "append" && seq !== frame.seq) return false;
-    const outgoing = frame.kind === "yield" || frame.kind === "cancel" ? {...frame, seq} : frame;
+    // An opted-out reservation can still receive a control frame after missing appends.
+    // Only recipients that received the entire item can flush their below-minimum tail.
+    let outgoing = frame;
+    if (frame.kind === "yield") {
+      const reason = frame.reason === "item_done" && seq !== frame.seq ? "observation_ended" : frame.reason;
+      outgoing = {...frame, seq, reason};
+    } else if (frame.kind === "cancel") outgoing = {...frame, seq};
     if (!deliver(outgoing)) return false;
     this.#open.set(replyId, {
       event: frame.kind === "begin" ? frame.event : prior!.event,

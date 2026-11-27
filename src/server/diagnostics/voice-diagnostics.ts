@@ -19,7 +19,7 @@ const reasons = [
   "stream_error", "handshake_error", "unsubscribed", "listener_failed", "service_closed",
 ] as const;
 const earlyReasons = [
-  "markup", "item_done", "limit", "stall", "source_changed", "authority_lost",
+  "markup", "item_done", "observation_ended", "limit", "stall", "source_changed", "authority_lost",
   "superseded", "policy_changed", "publication_suppressed", "expired",
 ] as const;
 export type VoiceDiagnosticReason = typeof reasons[number];

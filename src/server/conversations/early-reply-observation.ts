@@ -10,14 +10,16 @@ export interface EarlyReplySource {
 }
 
 type NonFinalPhase = "provisional" | "partial" | "unclassified";
+type IncompleteReason = "observation_ended" | "source_changed" | "authority_lost" | "superseded";
+export type EarlyReplyEnd = [reason: IncompleteReason] | [reason: "item_done", text: string, precedingPhases: readonly NonFinalPhase[]];
+
 export interface EarlyReplyObservation {
   observe(text: string, precedingPhases: readonly NonFinalPhase[]): void;
-  finish(reason: "item_done" | "source_changed" | "authority_lost" | "superseded"): void;
+  finish(...end: EarlyReplyEnd): void;
 }
 
 export type CaptureEarlyReply = (source: EarlyReplySource) => EarlyReplyObservation | null | undefined;
 
-type FinishReason = Parameters<EarlyReplyObservation["finish"]>[0];
 type SpeechStart = "final" | "provisional";
 type SpeechItemEvent = Extract<BackendConversationEvent, {type: "item_started" | "item_completed" | "item_updated"}>;
 
@@ -76,13 +78,13 @@ export class LiveSpeechTracker {
       if (!item.orderedSettlement) this.#withdraw(item, "authority_lost");
       else if (item.orderedSettlement !== "reconciling") {
         item.orderedSettlement = "reconciling";
-        if (!item.itemClosed && !item.withdrawn) this.#signal(item, "item_done");
+        if (!item.itemClosed && !item.withdrawn) this.#signal(item, "observation_ended");
       }
     }
   }
 
-  #signal(item: ObservedItem, reason: FinishReason): void {
-    try { item.observation.finish(reason); }
+  #signal(item: ObservedItem, ...end: EarlyReplyEnd): void {
+    try { item.observation.finish(...end); }
     catch { /* Voice observation cannot invalidate the provider projection. */ }
   }
 
@@ -109,7 +111,7 @@ export class LiveSpeechTracker {
     }
   }
 
-  #retire(item: ObservedItem, reason: FinishReason): void {
+  #retire(item: ObservedItem, reason: IncompleteReason): void {
     this.#items.delete(item.backendItemId);
     if (!item.withdrawn) this.#signal(item, reason);
     if (item.phase === "provisional" && !item.pendingProgress) {
@@ -131,7 +133,7 @@ export class LiveSpeechTracker {
     }
   }
 
-  finish(reason: FinishReason): void {
+  finish(reason: IncompleteReason): void {
     for (const item of this.#items.values()) this.#retire(item, reason);
   }
 
@@ -149,7 +151,7 @@ export class LiveSpeechTracker {
         const confirmed = (event.type !== "turn_completed" || event.completionProvenance !== "recovered") &&
           this.#settlesFinal(current, event.turn);
         if (confirmed && current.itemClosed) this.#items.delete(current.backendItemId);
-        else this.#retire(current, confirmed ? "item_done" : "authority_lost");
+        else this.#retire(current, confirmed ? "observation_ended" : "authority_lost");
       } else if (current.phase === "provisional" && (projector.runState === "idle" || projector.runState === "failed")) {
         this.#retire(current, "authority_lost");
       } else if (current.phase === "provisional" && handoff && itemEvent) {
@@ -212,11 +214,11 @@ export class LiveSpeechTracker {
   #observe(current: ObservedItem, item: BackendItem, progressScheduled: boolean): void {
     // Keep only the scanner's bounded prefix plus grapheme lookahead and its limit sentinel.
     const text = item.semanticKind === "assistant_message" ? item.markdown.text.slice(0, MAX_EARLY_REPLY_BYTES + 3) : "";
-    const changed = item.semanticKind !== "assistant_message" || item.responsePhase !== current.phase || !text.startsWith(current.previousText);
+    const changed = item.semanticKind !== "assistant_message" || item.responsePhase !== current.phase ||
+      (current.itemClosed ? text !== current.previousText : !text.startsWith(current.previousText));
     if (current.phase === "provisional" && progressScheduled) {
       if (changed) this.#withdraw(current, "source_changed");
-      if (!current.itemClosed && !current.withdrawn) this.#signal(current, "item_done");
-      current.itemClosed = true;
+      if (!current.itemClosed && !current.withdrawn) this.#closeItem(current, text);
       current.pendingProgress++;
       return;
     }
@@ -232,10 +234,7 @@ export class LiveSpeechTracker {
     }
     if (current.withdrawn) return;
     if (item.status === "completed") {
-      if (!current.itemClosed) {
-        current.itemClosed = true;
-        this.#signal(current, "item_done");
-      }
+      if (!current.itemClosed) this.#closeItem(current, text);
     } else if (item.status !== "streaming" || current.itemClosed) {
       this.#retire(current, "authority_lost");
     } else {
@@ -244,13 +243,19 @@ export class LiveSpeechTracker {
       catch { this.#withdraw(current, "authority_lost"); }
     }
   }
+
+  #closeItem(current: ObservedItem, text: string): void {
+    current.itemClosed = true;
+    current.previousText = text;
+    this.#signal(current, "item_done", text, current.precedingPhases);
+  }
 }
 
 /** Freeze the recipient at capture time and coalesce text behind preceding durable submission observers. */
 export function afterSubmissionAdmission(
   sink: EarlyReplyObservation, admission: Promise<void>, isCurrent: () => boolean,
 ): EarlyReplyObservation {
-  let finished: Parameters<EarlyReplyObservation["finish"]>[0] | undefined;
+  let finished: EarlyReplyEnd[0] | undefined;
   let admitted = false;
   let pending: Parameters<EarlyReplyObservation["observe"]> | undefined;
   const observation: EarlyReplyObservation = {
@@ -260,11 +265,16 @@ export function afterSubmissionAdmission(
       if (admitted) sink.observe(text, phases);
       else pending = [text, phases];
     },
-    finish(reason) {
-      if (finished && (finished !== "item_done" || reason === "item_done")) return;
-      finished = reason;
+    finish(...end) {
+      const [reason] = end;
+      if (finished && (finished !== "item_done" && finished !== "observation_ended" ||
+          reason === "item_done" || reason === "observation_ended")) return;
       pending = undefined;
-      sink.finish(reason);
+      // Before admission no recipient has opened. Never release buffered prose on a late admission.
+      if (reason === "item_done" && !admitted) end = ["observation_ended"];
+      else if (reason === "item_done" && !isCurrent()) end = ["authority_lost"];
+      finished = end[0];
+      sink.finish(...end);
     },
   };
   void admission.then(() => {

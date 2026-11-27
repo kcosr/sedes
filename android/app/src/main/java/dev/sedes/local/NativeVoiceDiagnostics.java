@@ -21,7 +21,7 @@ final class NativeVoiceDiagnostics {
         "input.requested", "question.requested", "replay", "manual"));
     private static final Set<String> REASONS = new HashSet<>(Arrays.asList("duplicate", "ineligible", "empty_speech",
         "source_changed", "authority_lost", "superseded", "policy_changed", "publication_suppressed", "expired",
-        "markup", "item_done", "limit", "stall", "early_reply_released", "coalesced", "progress_evicted", "overflow", "settings_changed", "stopped", "skipped", "disconnected",
+        "markup", "item_done", "observation_ended", "limit", "stall", "early_reply_released", "coalesced", "progress_evicted", "overflow", "settings_changed", "stopped", "skipped", "disconnected",
         "service_stopped", "notification_connection_lost", "notification_policy_changed", "invalid_notification_policy",
         "invalid_notification_frame", "record_during_playback", "audio_mode_changed", "audio_off", "speech_settings_changed",
         "speech_configuration_required", "speech_timeout", "playback_failed", "playback_drain_timeout", "empty_pcm_stream",

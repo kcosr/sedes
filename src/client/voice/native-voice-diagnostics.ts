@@ -27,7 +27,7 @@ const notificationEntrySchema = entryBase.extend({
     "speech_settings_changed", "speech_configuration_required", "speech_timeout", "playback_failed", "playback_drain_timeout",
     "empty_pcm_stream", "invalid_pcm", "audio_focus_lost", "audio_focus_unavailable", "stream_closed", "stream_unavailable", "voice_off", "stream_failed",
     "source_changed", "authority_lost", "superseded", "policy_changed", "publication_suppressed",
-    "expired", "markup", "item_done", "limit", "stall", "early_reply_released", "stream_rejected", "unauthorized", "notification_policy_missing", "stream_invalid", "stream_too_large", "connection_changed", "other"]).optional(),
+    "expired", "markup", "item_done", "observation_ended", "limit", "stall", "early_reply_released", "stream_rejected", "unauthorized", "notification_policy_missing", "stream_invalid", "stream_too_large", "connection_changed", "other"]).optional(),
 });
 const composerEntrySchema = entryBase.extend({
   event: z.enum(["foreground_context", "recording_route_selected", "handoff_offered", "handoff_claimed",

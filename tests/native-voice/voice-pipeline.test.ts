@@ -224,6 +224,22 @@ describe("native voice production pipeline with loopback providers", () => {
     });
   });
 
+  it("synthesizes a short opening with the rest of the completed item in one HTTP request", async () => {
+    await withCodexPlayback("short-handoff", "messages", "responsive", async ({ codex, desktop, frames, pcm }) => {
+      const body = "Yes. This is a test.";
+      const answer = codex.startAnswer("final_answer");
+      answer.append("Yes. This");
+      await waitForSpeech(async () => (await desktop.getState()).phase === "waiting_for_reply_text");
+      expect((await speech.observations()).speech).toEqual([]);
+      answer.complete("final_answer", body);
+      codex.completeTurn();
+      await waitForSpeech(() => frames.some(frame => frame.event === "notification" && frame.value.payload.event === "turn.completed"));
+      await waitForSpeech(async () => (await desktop.getState()).phase === "idle");
+      expect((await speech.observations()).speech).toEqual([{ text: body }]);
+      expect(Buffer.concat(pcm)).toEqual(speech.pcm);
+    });
+  });
+
   it.each(["responsive", "balanced", "natural"] as const)("plays the progress and final preambles before the %s body is ready", async mode => {
     await withCodexPlayback(`preamble-${mode}`, "both", mode, async ({ threadId, codex, desktop, pcm, frames }) => {
       const title = "Early playback qualification";
@@ -424,7 +440,11 @@ describe("native voice production pipeline with loopback providers", () => {
         assistantResult: { final: { text } } }, userInputRevision: 2 });
       if (interest === "on") {
         expect(early()[0]!.value.replyId).toBe(completion.value.sourceEventId);
-        expect(early().map(frame => frame.value.kind)).toEqual(["begin", "yield"]);
+        expect(early().map(frame => frame.value)).toMatchObject([
+          { kind: "begin", text: "One change is ready." },
+          { kind: "append", text: " Another change is ready." },
+          { kind: "yield", reason: "item_done" },
+        ]);
       } else {
         expect(early()).toEqual([]);
       }

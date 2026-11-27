@@ -5912,12 +5912,12 @@ describe("ConversationActorManager", () => {
           await acquired.actor.captureSnapshotState();
           expect(capture).toHaveBeenCalledOnce();
         } else {
-          expect(observation.finish).toHaveBeenCalledWith(end);
+          expect(observation.finish).toHaveBeenCalledWith(end === "item_done" ? "observation_ended" : end);
           expect(observation.observe).not.toHaveBeenCalled();
           if (end === "item_done") {
             handle.emit(0, { type: "resnapshot_required", reason: "sequence_gap" }, 4);
             await acquired.actor.captureSnapshotState();
-            expect(observation.finish.mock.calls.map(args => args[0])).toEqual(["item_done", "authority_lost"]);
+            expect(observation.finish.mock.calls.map(args => args[0])).toEqual(["observation_ended", "authority_lost"]);
           }
         }
       } finally {
@@ -5954,7 +5954,7 @@ describe("ConversationActorManager", () => {
         handle.emit(0, { type: "item_started", item, liveSpeechStart: "final" }, 0);
         handle.emit(0, { type: "item_completed", item: { ...item, status: "completed" } }, 1);
         await acquired.actor.captureSnapshotState();
-        expect(observation.finish.mock.calls).toEqual([["item_done"]]);
+        expect(observation.finish.mock.calls).toEqual([["item_done", item.markdown.text, []]]);
 
         if (disposition === "terminal then owner abort" || disposition === "replacement during history reconciliation") {
           handle.emit(0, { type: "turn_completed", turn: { ...initial.turnsById["turn-1"]!,
@@ -5971,8 +5971,8 @@ describe("ConversationActorManager", () => {
           // Shutdown still awaits the borrowed control. The source must be fenced now.
           expect(handle.close).not.toHaveBeenCalled();
         }
-        expect(observation.finish.mock.calls).toEqual(disposition === "terminal then owner abort"
-          ? [["item_done"]] : [["item_done"], ["authority_lost"]]);
+        expect(observation.finish.mock.calls.map(([reason]) => reason)).toEqual(disposition === "terminal then owner abort"
+          ? ["item_done"] : ["item_done", "authority_lost"]);
       } finally {
         borrowed.release();
         acquired.release();
@@ -5983,8 +5983,9 @@ describe("ConversationActorManager", () => {
 
   it.each([
     ["matching terminal", ["item_done"]],
-    ["queued text before terminal", ["item_done"]],
-    ["corrected terminal text", ["item_done", "source_changed"]],
+    ["turn without item close", ["observation_ended"]],
+    ["queued text before terminal", ["observation_ended"]],
+    ["corrected terminal text", ["observation_ended", "source_changed"]],
     ["replacement turn", ["item_done", "authority_lost"]],
     ["history before terminal", ["item_done", "authority_lost"]],
     ["missing sequence before terminal", ["item_done", "authority_lost"]],
@@ -5993,7 +5994,7 @@ describe("ConversationActorManager", () => {
     ["recovered terminal", ["item_done", "authority_lost"]],
     ["rejected terminal", ["item_done", "authority_lost"]],
     ["contradiction after terminal", ["item_done"]],
-    ["closed handle after terminal", ["item_done"]],
+    ["closed handle after terminal", ["observation_ended"]],
   ] as const)("applies terminal evidence in order when a history rebuild races early speech (%s)", async (scenario, expected) => {
     const early = { observe: vi.fn(), finish: vi.fn() };
     const completion = vi.fn<AuthoritativeCompletionObserver>();
@@ -6012,10 +6013,10 @@ describe("ConversationActorManager", () => {
       let sequence = 0;
       const emit = (event: BackendConversationEvent) => handle.emit(0, event, sequence++);
       emit({ type: "item_started", item, liveSpeechStart: "final" });
-      const open = scenario === "corrected terminal text" || scenario === "queued text before terminal" || scenario === "closed handle after terminal";
+      const open = scenario === "turn without item close" || scenario === "corrected terminal text" || scenario === "queued text before terminal" || scenario === "closed handle after terminal";
       if (!open) emit({ type: "item_completed", item: { ...item, status: "completed" } });
       await acquired.actor.captureSnapshotState();
-      expect(early.finish.mock.calls).toEqual(open ? [] : [["item_done"]]);
+      expect(early.finish.mock.calls).toEqual(open ? [] : [["item_done", item.markdown.text, []]]);
 
       // No waits between these notifications: ingress already knows the terminal while the actor still has to apply it.
       const gap = { type: "resnapshot_required", reason: "history_changed" } as const;
@@ -6027,7 +6028,7 @@ describe("ConversationActorManager", () => {
         emit({ type: "item_updated", item: { ...item, markdown: { text: finalText } } });
       }
       if (scenario === "corrected terminal text") finalText = "Corrected answer.";
-      if (open) emit({ type: "item_completed", item: { ...item, status: "completed", markdown: { text: finalText } } });
+      if (open && scenario !== "turn without item close") emit({ type: "item_completed", item: { ...item, status: "completed", markdown: { text: finalText } } });
       if (scenario === "replacement turn") {
         emit({ type: "turn_started", turn: { backendTurnId: "next", status: "in_progress", orderedBackendItemIds: [] } });
         emit({ type: "run_state_changed", state: "running", activeBackendTurnId: "next" });
@@ -6037,7 +6038,7 @@ describe("ConversationActorManager", () => {
           completionCorrelations: [scenario === "different correlation" || scenario === "uncorrelated terminal without a gap" ? "other-input" : "accepted"] } });
       if (scenario === "contradiction after terminal") emit({ type: "resnapshot_required", reason: "contradictory_state" });
       else if (scenario === "closed handle after terminal") emit({ type: "resnapshot_required", reason: "provider_handle_closed" });
-      else if (scenario !== "history before terminal" && scenario !== "uncorrelated terminal without a gap") emit(gap);
+      else if (scenario !== "history before terminal" && scenario !== "uncorrelated terminal without a gap" && scenario !== "turn without item close") emit(gap);
       if (scenario === "closed handle after terminal") await vi.waitFor(() => expect(completion).toHaveBeenCalledTimes(1));
       else await acquired.actor.captureSnapshotState();
       expect(early.finish.mock.calls.map(([reason]) => reason)).toEqual(expected);
@@ -6235,16 +6236,20 @@ describe("ConversationActorManager", () => {
         expect(b!.observe).toHaveBeenLastCalledWith(second.markdown.text, []);
         expect(answer!.observe).toHaveBeenLastCalledWith(final.markdown.text, ["provisional"]);
 
-        for (const item of [second, again]) run.emit({ type: "item_completed", item: { ...item, status: "completed" }, liveProgress: true });
+        const fullProgress = second.markdown.text + "This sentence arrived with completion.";
+        const fullFinal = final.markdown.text + "The rest came with the final item.";
+        for (const item of [{ ...second, markdown: { text: fullProgress } }, again]) {
+          run.emit({ type: "item_completed", item: { ...item, status: "completed" }, liveProgress: true });
+        }
         await vi.waitFor(() => expect(run.progress).toHaveBeenCalledTimes(2));
         expect(run.progress.mock.calls.map(call => call[2].applicationItemId)).toEqual([b!.source.applicationItemId, a!.source.applicationItemId]);
-        expect(a!.finish.mock.calls).toEqual([["item_done"]]);
-        expect(b!.finish.mock.calls).toEqual([["item_done"]]);
+        expect(a!.finish.mock.calls).toEqual([["item_done", again.markdown.text, []]]);
+        expect(b!.finish.mock.calls).toEqual([["item_done", fullProgress, []]]);
         expect(answer!.finish).not.toHaveBeenCalled();
-        run.emit({ type: "item_completed", item: { ...final, status: "completed" } });
+        run.emit({ type: "item_completed", item: { ...final, status: "completed", markdown: { text: fullFinal } } });
         run.completeTurn("one", "two", "result");
         await vi.waitFor(() => expect(run.completed).toHaveBeenCalledOnce());
-        expect(answer!.finish.mock.calls).toEqual([["item_done"]]);
+        expect(answer!.finish.mock.calls).toEqual([["item_done", fullFinal, ["provisional"]]]);
         expect(run.skipped).not.toHaveBeenCalled();
       } finally { await run.close(); }
     });
@@ -6354,7 +6359,7 @@ describe("ConversationActorManager", () => {
         await vi.waitFor(() => expect(submit).toHaveBeenCalledTimes(2));
         expect(run.progress).not.toHaveBeenCalled();
         expect(run.skipped).not.toHaveBeenCalled();
-        expect(sink.finish.mock.calls).toEqual([["item_done"], ["authority_lost"]]);
+        expect(sink.finish.mock.calls).toEqual([["observation_ended"], ["authority_lost"]]);
         run.emit({ type: "item_updated", item: completed, liveProgress: true });
         await vi.waitFor(() => expect(run.progress).toHaveBeenCalledOnce());
         expect(run.progress.mock.calls[0]![2].applicationItemId).toBe(sink.source.applicationItemId);
@@ -6374,7 +6379,7 @@ describe("ConversationActorManager", () => {
         await run.drain();
         const sink = run.captures[0]!;
         expect(sink.observe).not.toHaveBeenCalled();
-        expect(sink.finish).toHaveBeenCalledWith("item_done");
+        expect(sink.finish).toHaveBeenCalledWith("observation_ended");
         expect(run.skipped).not.toHaveBeenCalled();
         release();
         await vi.waitFor(() => expect(run.completed).toHaveBeenCalledOnce());
@@ -7072,9 +7077,9 @@ describe("ConversationActorManager", () => {
       if (control !== "unchanged") {
         // Codex expires this control synchronously, then reports its projection gap later.
         controlLifetime.abort();
-        expect(early.finish.mock.calls).toEqual([[completionFirst ? "item_done" : "authority_lost"]]);
+        expect(early.finish.mock.calls).toEqual([[completionFirst ? "observation_ended" : "authority_lost"]]);
         if (control === "reconnect") reconnect();
-        expect(early.finish.mock.calls).toEqual([[completionFirst ? "item_done" : "authority_lost"]]);
+        expect(early.finish.mock.calls).toEqual([[completionFirst ? "observation_ended" : "authority_lost"]]);
       }
       handle.emit(0, { type: "resnapshot_required", reason: "sequence_gap" }, sequence);
     };
@@ -7084,14 +7089,14 @@ describe("ConversationActorManager", () => {
       handle.emit(0, { type: "turn_completed", turn: terminal.turnsById["turn-1"]! }, completionFirst ? 2 : 3);
       if (completionFirst) disconnect(3);
       expect(observed).not.toHaveBeenCalled();
-      expect(early.finish.mock.calls).toEqual([[completionFirst ? "item_done" : "authority_lost"]]);
+      expect(early.finish.mock.calls).toEqual([[completionFirst ? "observation_ended" : "authority_lost"]]);
     } finally { release(); }
     await reading;
     const expectedPublications = completionFirst ? 2 : 1;
     await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(expectedPublications));
     await acquired.actor.replayAuthoritativeCompletions();
     await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(expectedPublications + 1));
-    expect(early.finish.mock.calls).toEqual([[completionFirst ? "item_done" : "authority_lost"]]);
+    expect(early.finish.mock.calls).toEqual([[completionFirst ? "observation_ended" : "authority_lost"]]);
     expect(observed.mock.calls.every(([, , completion]) => completion.provenance === provenance &&
       completion.backendCorrelation === "accepted-operation" && completion.classifiedResult?.final?.text === item.markdown.text)).toBe(true);
     acquired.release();
