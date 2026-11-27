@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import {
   refineCodexC2ServerRequest,
   encodeCodexC2RoutedServerResponse,
@@ -37,7 +37,7 @@ export type CodexRoutedServerRequest = {
     readonly generation: number;
     readonly sequence: number;
     readonly requestId: string | number;
-    readonly requestIdentity: string;
+    readonly provider: CodexRequestProvider;
     readonly method: Method;
     readonly params: Extract<
       CodexC2ServerRequest,
@@ -64,9 +64,11 @@ export interface CodexServerRequestOwnershipLease {
   release(reason?: string): void;
 }
 
+type CodexRequestProvider = "external" | { readonly runtimeId: string; readonly generation: number };
+
 type ActiveGeneration = {
   readonly generation: number;
-  readonly provider: { readonly runtimeId: string; readonly generation: number };
+  readonly provider: CodexRequestProvider;
   readonly controller: AbortController;
 };
 
@@ -102,7 +104,7 @@ export class CodexServerRequestRouter {
   #active: ActiveGeneration | undefined;
   #latestGeneration = 0;
 
-  activateGeneration(generation: number, provider?: ActiveGeneration["provider"]): void {
+  activateGeneration(generation: number, provider?: CodexRequestProvider): void {
     assertGeneration(generation);
     if (this.#active?.generation === generation) return;
     if (generation <= this.#latestGeneration) {
@@ -113,8 +115,8 @@ export class CodexServerRequestRouter {
     this.#abortActive("codex_server_request_generation_replaced");
     this.#active = {
       generation,
-      // Direct RPC requests belong to this transport lifetime. A retained
-      // runtime supplies the same native generation after a carrier reconnect.
+      // An owned app-server has a new lifetime on launch. A retained owner
+      // supplies its native generation across controller reconnects.
       provider: provider ?? { runtimeId: randomUUID(), generation },
       controller: new AbortController(),
     };
@@ -289,9 +291,7 @@ export class CodexServerRequestRouter {
       generation,
       sequence: request.sequence,
       requestId: request.id,
-      requestIdentity: `codex:${createHash("sha256").update(JSON.stringify([
-        active.provider.runtimeId, active.provider.generation, request.sequence, request.method, request.id,
-      ])).digest("base64url")}`,
+      provider: active.provider,
       method: decoded.method,
       params: decoded.params,
       route,

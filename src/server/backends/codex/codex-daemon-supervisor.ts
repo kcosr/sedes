@@ -371,7 +371,6 @@ export class CodexDaemonSupervisor {
     }
     const generation = ++this.#generation;
     this.#publishLifecycle();
-    this.serverRequests.activateGeneration(generation);
     let transport: FramedMessageTransport | undefined;
     let active: ActiveGeneration | undefined;
     try {
@@ -413,6 +412,7 @@ export class CodexDaemonSupervisor {
           true,
         );
       }
+      this.serverRequests.activateGeneration(generation, transport.assurance.ownership === "external" ? "external" : undefined);
       const rpc = this.#rpcFactory({
         transport,
         expectedScope: this.#scope,

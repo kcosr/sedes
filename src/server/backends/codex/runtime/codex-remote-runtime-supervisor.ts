@@ -259,6 +259,7 @@ export class CodexRemoteRuntimeSupervisor {
       this.#generationOffset = this.#generation;
       const remote = new CodexRuntimeClient({
         connection, authority: { scope: this.#scope, runtimeId, controllerId: String(lease.controllerEpoch) },
+        nativeOwnership: this.#lookupConfiguration.connection.ownership,
         generationOffset: this.#generation, serverRequests: this.input.serverRequests, receipts: this.input.receipts,
         ...(this.input.onRuntimeVersionAssessment ? { onRuntimeVersionAssessment: this.input.onRuntimeVersionAssessment } : {}),
         onAttachmentFailure: failure => this.#lost(lease!, failure.stage, failure.error, failure),

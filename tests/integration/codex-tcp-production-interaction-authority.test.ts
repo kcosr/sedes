@@ -271,6 +271,8 @@ describe.sequential("production-composed TCP interaction authority", () => {
       expect(reconnected.backendInteractionId).not.toBe(
         interrupted.backendInteractionId,
       );
+      expect(reconnected.requestIdentity).toBeDefined();
+      expect(reconnected.requestIdentity).toBe(interrupted.requestIdentity);
       await waitFor(
         () =>
           observer!.count(
@@ -308,6 +310,15 @@ describe.sequential("production-composed TCP interaction authority", () => {
       expect(
         listener.responsesFor("input-production-generation-1", "controller"),
       ).toHaveLength(1);
+      listener.openProviderRequest("next-input", "item/tool/requestUserInput", userInputParams("next-item"));
+      const next = await waitFor(() => opened(events)[3], "production_new_input_missing");
+      expect(next.requestIdentity).not.toBe(reconnected.requestIdentity);
+      const nextResponse = actor.respond({
+        applicationOperationId: "answer-next", interactionId: next.backendInteractionId,
+        kind: "questionnaire", answers: [{ questionId: "environment", answer: { kind: "text", value: "production" } }],
+      });
+      await listener.waitForResponse("next-input", "controller");
+      await nextResponse;
       expect(observer.readyState).toBe(WebSocket.OPEN);
       expect(peer.listening).toBe(true);
       expect(supervisorErrors).toEqual([]);

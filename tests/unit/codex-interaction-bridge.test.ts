@@ -41,6 +41,7 @@ function fixture(input?: {
   router.activateGeneration(1);
   const events: InteractionEvent[] = [];
   const bridge = new CodexInteractionBridge({
+    nativeNamespace: "fixture-store",
     router,
     nativeThreadId: "thread-1",
     ownsRoute: (route) =>
@@ -1186,6 +1187,7 @@ describe("CodexInteractionBridge", () => {
     const current = fixture();
     const observerEvents: InteractionEvent[] = [];
     const observer = new CodexInteractionBridge({
+      nativeNamespace: "fixture-store",
       router: current.router,
       nativeThreadId: "thread-1",
       ownsRoute: () => true,

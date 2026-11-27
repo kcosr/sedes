@@ -66,6 +66,7 @@ describe.sequential("authenticated TCP interaction authority", () => {
     const router = new CodexServerRequestRouter();
     const events: InteractionEvent[] = [];
     const bridge = new CodexInteractionBridge({
+      nativeNamespace: "fixture-store",
       router,
       nativeThreadId: "thread-authoritative",
       ownsRoute: (route) =>
@@ -78,6 +79,7 @@ describe.sequential("authenticated TCP interaction authority", () => {
     });
     const passiveEvents: InteractionEvent[] = [];
     const passiveBridge = new CodexInteractionBridge({
+      nativeNamespace: "fixture-store",
       router,
       nativeThreadId: "thread-authoritative",
       ownsRoute: () => true,

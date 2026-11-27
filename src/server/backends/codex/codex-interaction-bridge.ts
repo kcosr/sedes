@@ -106,6 +106,7 @@ export class CodexInteractionBridgeError extends Error {
 export class CodexInteractionBridge {
   readonly #router: CodexServerRequestRouter;
   readonly #nativeThreadId: string;
+  readonly #nativeNamespace: string;
   readonly #ownsRoute: (route: CodexServerRequestRoute) => boolean;
   readonly #emit: (event: InteractionEvent) => void;
   readonly #now: () => number;
@@ -120,6 +121,7 @@ export class CodexInteractionBridge {
   constructor(input: {
     readonly router: CodexServerRequestRouter;
     readonly nativeThreadId: string;
+    readonly nativeNamespace: string;
     readonly ownsRoute: (route: CodexServerRequestRoute) => boolean;
     readonly emit: (event: InteractionEvent) => void;
     readonly now?: () => number;
@@ -127,6 +129,7 @@ export class CodexInteractionBridge {
   }) {
     this.#router = input.router;
     this.#nativeThreadId = input.nativeThreadId;
+    this.#nativeNamespace = input.nativeNamespace;
     this.#ownsRoute = input.ownsRoute;
     this.#emit = input.emit;
     this.#now = input.now ?? Date.now;
@@ -331,7 +334,7 @@ export class CodexInteractionBridge {
         "codex_interaction_duplicate_request",
       );
     }
-    const presented = presentRequest(request, backendInteractionId, this.#now);
+    const presented = presentRequest(request, backendInteractionId, this.#nativeNamespace, this.#now);
     return new Promise((resolve, reject) => {
       const abort = () => {
         const current = this.#pending.get(backendInteractionId);
@@ -484,6 +487,7 @@ export class CodexInteractionBridge {
 function presentRequest(
   request: CodexRoutedServerRequest,
   backendInteractionId: string,
+  nativeNamespace: string,
   now: () => number,
 ): {
   readonly interaction: DriverInteraction;
@@ -491,7 +495,7 @@ function presentRequest(
 } {
   const base = {
     backendInteractionId,
-    requestIdentity: request.requestIdentity,
+    requestIdentity: requestWakeIdentity(request, nativeNamespace),
     sourceLabel: display("Codex"),
     openedAt: openedAt(request, now),
     secret: false,
@@ -1112,6 +1116,24 @@ function questionnaireOptionId(
 
 function questionnaireOtherOptionId(questionIndex: number): string {
   return `question:${questionIndex}:other`;
+}
+
+function requestWakeIdentity(request: CodexRoutedServerRequest, nativeNamespace: string): string {
+  // An external app-server can redeliver the same pending callback on a new
+  // socket. Its validated payload includes the native thread, turn, item,
+  // approval or elicitation coordinates supplied for this method.
+  const identity = request.provider === "external"
+    ? JSON.stringify(["external", nativeNamespace, request.method, request.requestId, request.params], sortedRequestFields)
+    : JSON.stringify([request.provider.runtimeId, request.provider.generation, request.sequence, request.method, request.requestId]);
+  return `codex:${createHash("sha256").update(identity).digest("base64url")}`;
+}
+
+/** The router already validated this bounded JSON. Retain every own field,
+ * including native metadata keys, independently of JSON member order. */
+function sortedRequestFields(_key: string, value: unknown): unknown {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return value;
+  const fields = value as Record<string, unknown>;
+  return Object.fromEntries(Object.keys(fields).sort().map(key => [key, fields[key]]));
 }
 
 function interactionId(request: CodexRoutedServerRequest): string {

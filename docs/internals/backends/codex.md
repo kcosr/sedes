@@ -666,6 +666,13 @@ questionnaire with private positional option mapping. Provider request IDs and
 answer encoding never enter the browser contract. See
 [Blocking interactions](../blocking-interactions.md).
 
+For inventory wake, an owned app-server identifies a request by its runtime
+lifetime and native ingress sequence. An external app-server can replay an
+approval on a new socket, so Sedes matches the endpoint namespace, method,
+typed RPC ID and validated request parameters. An external MCP form may omit a
+turn or occurrence ID. If the server reuses the same RPC ID and all form
+parameters, Sedes treats it as a replay and respects a later Park or Snooze.
+
 ## Generated image artifacts
 
 The protocol defines a closed `imageGeneration` item with native

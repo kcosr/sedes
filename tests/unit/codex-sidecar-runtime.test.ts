@@ -185,7 +185,7 @@ it.each((["mcp", "command"] as const).flatMap(kind =>
     listener(event);
     if (event.type === "server_request_settled") settled = true;
   }));
-  const bridge = new CodexInteractionBridge({ router: proxy.serverRequests, nativeThreadId: "thread-b", ownsRoute: () => true, emit: () => {}, responseConfirmationTimeoutMilliseconds: ending === "timed_out" ? 1000 : 10_000 });
+  const bridge = new CodexInteractionBridge({ router: proxy.serverRequests, nativeNamespace: "fixture-store", nativeThreadId: "thread-b", ownsRoute: () => true, emit: () => {}, responseConfirmationTimeoutMilliseconds: ending === "timed_out" ? 1000 : 10_000 });
   const unsubscribeLifecycle = proxy.client.subscribeLifecycle(lifecycle => {
     if (lifecycle.state !== "ready") bridge.deactivate();
   });

@@ -696,6 +696,7 @@ export class CodexConversationHandle implements ConversationHandle {
     });
     this.#interactions = new CodexInteractionBridge({
       router: input.serverRequests,
+      nativeNamespace: input.nativeNamespace,
       nativeThreadId: input.binding.backendConversationId,
       ownsRoute: (route) => this.#ownsServerRequestRoute(route),
       emit: (event) => this.#emit(event),

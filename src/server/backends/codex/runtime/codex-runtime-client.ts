@@ -48,10 +48,11 @@ export class CodexRuntimeClient {
   #generation = 0;
   #providerGeneration = 0;
   readonly #generationOffset: number;
+  readonly #nativeOwnership: "owned" | "external";
   #attached = false;
   #retry: ReturnType<typeof setInterval> | undefined;
 
-  constructor(input: { connection: CodexRuntimeConnection; authority: CodexRuntimeAuthority; serverRequests?: CodexServerRequestRouter; generationOffset?: number; receipts: CodexRuntimeReceiptSink; onRuntimeVersionAssessment?: (assessment: VerifiedCodexRuntimeVersion) => void; onAttachmentFailure?: (failure: CodexRuntimeAttachmentFailure) => void; onIdleReleaseError?: (error: unknown) => void }) {
+  constructor(input: { connection: CodexRuntimeConnection; authority: CodexRuntimeAuthority; serverRequests?: CodexServerRequestRouter; generationOffset?: number; nativeOwnership?: "owned" | "external"; receipts: CodexRuntimeReceiptSink; onRuntimeVersionAssessment?: (assessment: VerifiedCodexRuntimeVersion) => void; onAttachmentFailure?: (failure: CodexRuntimeAttachmentFailure) => void; onIdleReleaseError?: (error: unknown) => void }) {
     this.#connection = input.connection;
     this.#authority = input.authority;
     this.#receipts = input.receipts;
@@ -59,6 +60,7 @@ export class CodexRuntimeClient {
     this.#onAttachmentFailure = input.onAttachmentFailure ?? (() => {});
     this.#onIdleReleaseError = input.onIdleReleaseError ?? (() => {});
     this.#generationOffset = input.generationOffset ?? 0;
+    this.#nativeOwnership = input.nativeOwnership ?? "owned";
     this.serverRequests = input.serverRequests ?? new CodexServerRequestRouter();
     this.client = new CodexSharedClientFacade({
       persistentSessions: {
@@ -195,7 +197,7 @@ export class CodexRuntimeClient {
         this.#generation = event.lifecycle.generation + this.#generationOffset;
         this.#diagnostic("provider_lifecycle", { outcome: event.lifecycle.state, reason: event.lifecycle.unavailableReason });
         if (event.lifecycle.state === "ready") {
-          this.serverRequests.activateGeneration(this.#generation, {
+          this.serverRequests.activateGeneration(this.#generation, this.#nativeOwnership === "external" ? "external" : {
             runtimeId: this.#authority.runtimeId, generation: this.#providerGeneration,
           });
           this.#current = { generation: this.#generation, dispatchContinuity: JSON.stringify([this.#authority.runtimeId, this.#providerGeneration, this.#authority.controllerId]), request: (method, params, options) => this.#request(method, params, options).then(receipt => receipt.result), requestWithReceipt: (method, params, options) => this.#request(method, params, options) };

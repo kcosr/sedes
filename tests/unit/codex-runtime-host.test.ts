@@ -50,19 +50,23 @@ const sink: CodexRuntimeReceiptSink = { reserve: () => { throw new Error("not us
 
 describe("persistent Codex runtime ownership", () => {
   it("preserves an approval's wake identity across controller reconnect and distinguishes a fresh provider request", async () => {
-    async function observeRequest(runtimeId: string, generation: number, sequence: number, reconnect = false) {
+    async function observeRequest(runtimeId: string, generation: number, sequence: number, options: {
+      reconnect?: boolean; nativeOwnership?: "owned" | "external"; callId?: string; nativeNamespace?: string;
+      fileChanges?: Record<string, { type: "add"; content: string }>;
+    } = {}) {
       const { host, client } = fixture(runtimeId);
       client.updateLifecycle({ state: "ready", generation });
       const controller = new AbortController();
-      const method = "execCommandApproval";
+      const method = "applyPatchApproval";
       let nativeResponse: Promise<unknown> | undefined;
       async function observeOnCarrier(generationOffset: number) {
         const remote = new CodexRuntimeClient({
           connection: host, authority: { ...authority, runtimeId, controllerId: String(generationOffset) },
-          generationOffset, receipts: sink,
+          generationOffset, nativeOwnership: options.nativeOwnership ?? "owned", receipts: sink,
         });
         const bridge = new CodexInteractionBridge({
-          router: remote.serverRequests, nativeThreadId: "thread", ownsRoute: () => true, emit: () => {},
+          router: remote.serverRequests, nativeNamespace: options.nativeNamespace ?? "fixture-store",
+          nativeThreadId: "thread", ownsRoute: () => true, emit: () => {},
         });
         const unsubscribe = remote.client.subscribeLifecycle(lifecycle => {
           if (lifecycle.state === "ready") bridge.activate(lifecycle.generation);
@@ -74,8 +78,8 @@ describe("persistent Codex runtime ownership", () => {
           // same still-pending request from the native host's attach snapshot.
           nativeResponse ??= Promise.resolve(host.serverRequests.handlersForGeneration(generation)[method]!({
             generation, sequence, id: 1, method, signal: controller.signal,
-            params: decodeCodexServerRequestParams(method, { conversationId: "thread", callId: "call",
-              approvalId: "approval", command: ["pwd"], cwd: "/workspace", reason: null, parsedCmd: [] }),
+            params: decodeCodexServerRequestParams(method, { conversationId: "thread", callId: options.callId ?? "call",
+              fileChanges: options.fileChanges ?? {}, reason: null, grantRoot: null }),
           }));
           await vi.waitFor(() => expect(bridge.pendingCount()).toBe(1));
           return bridge.pendingInteractions()[0]!;
@@ -89,7 +93,7 @@ describe("persistent Codex runtime ownership", () => {
       try {
         const first = await observeOnCarrier(10);
         expect(first.requestIdentity).toBeDefined();
-        if (reconnect) {
+        if (options.reconnect) {
           const replay = await observeOnCarrier(30);
           expect(replay.backendInteractionId).not.toBe(first.backendInteractionId);
           expect(replay.requestIdentity).toBe(first.requestIdentity);
@@ -101,10 +105,19 @@ describe("persistent Codex runtime ownership", () => {
         host.dispose();
       }
     }
-    const original = await observeRequest("runtime", 1, 5, true);
+    const original = await observeRequest("runtime", 1, 5, { reconnect: true });
     expect(await observeRequest("new-runtime", 1, 5)).not.toBe(original);
     expect(await observeRequest("runtime", 2, 5)).not.toBe(original);
     expect(await observeRequest("runtime", 1, 6)).not.toBe(original);
+    const external = { nativeOwnership: "external" } as const;
+    const pending = await observeRequest("runtime", 1, 5, external);
+    expect(await observeRequest("replacement", 2, 6, external)).toBe(pending);
+    expect(await observeRequest("replacement", 2, 6, { ...external, callId: "new-call" })).not.toBe(pending);
+    expect(await observeRequest("replacement", 2, 6, { ...external, nativeNamespace: "other-endpoint" })).not.toBe(pending);
+    const add = { type: "add", content: "hello" } as const;
+    const paths = await observeRequest("runtime", 1, 5, { ...external, fileChanges: { z: add, ["__proto__"]: add } });
+    expect(await observeRequest("replacement", 2, 6, { ...external, fileChanges: { ["__proto__"]: add, z: add } })).toBe(paths);
+    expect(await observeRequest("replacement", 2, 6, { ...external, fileChanges: { z: add } })).not.toBe(paths);
   });
 
   it.each([1, 2, 3])("rejects retained protocol %s without current session configuration guarantees", async protocolVersion => {
