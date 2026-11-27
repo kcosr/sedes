@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { CodexRuntimeHost } from "../../src/server/backends/codex/runtime/codex-runtime-host.js";
 import { CodexRuntimeSessions } from "../../src/server/backends/codex/runtime/codex-runtime-sessions.js";
 import { CodexRuntimeClient } from "../../src/server/backends/codex/runtime/codex-runtime-client.js";
+import { CodexInteractionBridge } from "../../src/server/backends/codex/codex-interaction-bridge.js";
 import { CodexSharedClientFacade } from "../../src/server/backends/codex/codex-client-facade.js";
 import { codexRuntimeMethod, type CodexRuntimeAuthority, type CodexRuntimeEvent } from "../../src/server/backends/codex/runtime/codex-runtime-protocol.js";
 import type { CodexRpcRequestReceipt } from "../../src/server/backends/codex/rpc/codex-rpc-client.js";
@@ -31,7 +32,7 @@ function resumed(): OfficialCodexClientRequestResult<"thread/resume"> {
     multiAgentMode: "explicitRequestOnly", initialTurnsPage: null, turnsBackwardsCursor: null, itemsBackwardsCursor: null,
   }) as OfficialCodexClientRequestResult<"thread/resume">;
 }
-function fixture() {
+function fixture(runtimeId = authority.runtimeId) {
   let settle!: (value: CodexRpcRequestReceipt<unknown>) => void;
   const promise = new Promise<CodexRpcRequestReceipt<unknown>>(resolve => { settle = resolve; });
   const dispatch = vi.fn(async () => await promise);
@@ -40,14 +41,72 @@ function fixture() {
     latestGeneration: () => 1, retireGeneration: async () => undefined,
   });
   client.updateLifecycle({ state: "ready", generation: 1 });
-  const host = new CodexRuntimeHost({ scope, runtimeId: "runtime" });
+  const host = new CodexRuntimeHost({ scope, runtimeId });
   host.bind(client);
   const events: CodexRuntimeEvent[] = [];
-  return { host, client, dispatch, events, settle, connect: () => host.attach(authority, event => events.push(event)) };
+  return { host, client, dispatch, events, settle, connect: () => host.attach({ ...authority, runtimeId }, event => events.push(event)) };
 }
 const sink: CodexRuntimeReceiptSink = { reserve: () => { throw new Error("not used"); }, recordOutcome: () => "untracked", pending: () => [], reconcileRecordedApplicationState: () => 0, releaseRejected: () => false, compactRetiredRuntime: () => 0 };
 
 describe("persistent Codex runtime ownership", () => {
+  it("preserves an approval's wake identity across controller reconnect and distinguishes a fresh provider request", async () => {
+    async function observeRequest(runtimeId: string, generation: number, sequence: number, reconnect = false) {
+      const { host, client } = fixture(runtimeId);
+      client.updateLifecycle({ state: "ready", generation });
+      const controller = new AbortController();
+      const method = "execCommandApproval";
+      let nativeResponse: Promise<unknown> | undefined;
+      async function observeOnCarrier(generationOffset: number) {
+        const remote = new CodexRuntimeClient({
+          connection: host, authority: { ...authority, runtimeId, controllerId: String(generationOffset) },
+          generationOffset, receipts: sink,
+        });
+        const bridge = new CodexInteractionBridge({
+          router: remote.serverRequests, nativeThreadId: "thread", ownsRoute: () => true, emit: () => {},
+        });
+        const unsubscribe = remote.client.subscribeLifecycle(lifecycle => {
+          if (lifecycle.state === "ready") bridge.activate(lifecycle.generation);
+          else bridge.deactivate();
+        });
+        try {
+          await remote.start();
+          // First controller receives a live event. Its successor receives the
+          // same still-pending request from the native host's attach snapshot.
+          nativeResponse ??= Promise.resolve(host.serverRequests.handlersForGeneration(generation)[method]!({
+            generation, sequence, id: 1, method, signal: controller.signal,
+            params: decodeCodexServerRequestParams(method, { conversationId: "thread", callId: "call",
+              approvalId: "approval", command: ["pwd"], cwd: "/workspace", reason: null, parsedCmd: [] }),
+          }));
+          await vi.waitFor(() => expect(bridge.pendingCount()).toBe(1));
+          return bridge.pendingInteractions()[0]!;
+        } finally {
+          remote.disconnected();
+          unsubscribe();
+          bridge.close();
+          await remote.close();
+        }
+      }
+      try {
+        const first = await observeOnCarrier(10);
+        expect(first.requestIdentity).toBeDefined();
+        if (reconnect) {
+          const replay = await observeOnCarrier(30);
+          expect(replay.backendInteractionId).not.toBe(first.backendInteractionId);
+          expect(replay.requestIdentity).toBe(first.requestIdentity);
+        }
+        return first.requestIdentity;
+      } finally {
+        controller.abort();
+        if (nativeResponse) await expect(nativeResponse).rejects.toThrow("request_expired");
+        host.dispose();
+      }
+    }
+    const original = await observeRequest("runtime", 1, 5, true);
+    expect(await observeRequest("new-runtime", 1, 5)).not.toBe(original);
+    expect(await observeRequest("runtime", 2, 5)).not.toBe(original);
+    expect(await observeRequest("runtime", 1, 6)).not.toBe(original);
+  });
+
   it.each([1, 2, 3])("rejects retained protocol %s without current session configuration guarantees", async protocolVersion => {
     const f = fixture();
     const snapshot = await f.connect();

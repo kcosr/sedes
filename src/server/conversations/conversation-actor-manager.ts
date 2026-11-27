@@ -1,4 +1,3 @@
-import { blockingRequestWakeIdentity } from "./interaction-broker.js";
 import { afterSubmissionAdmission, type EarlyReplySource, type EarlyReplyObservation } from "./early-reply-observation.js";
 import { ConversationNativeEffectFence } from "./conversation-native-effect-fence.js";
 import { randomUUID } from "node:crypto";
@@ -24,7 +23,7 @@ import { assertConversationRetentionMilliseconds } from "./conversation-retentio
 import { assertConversationRuntimeBudget } from "./conversation-runtime-budget-policy.js";
 import type { DeliveryInputSnapshotRepository } from "../db/repositories/delivery-input-snapshot-repository.js";
 import type { BoundedText } from "../../shared/protocol/payload.js";
-import type { BackendCapabilityDocument } from "../../shared/protocol/backend.js";
+import type { BackendCapabilityDocument, DriverInteraction } from "../../shared/protocol/backend.js";
 import type { ConversationItem, ThreadRunState } from "../../shared/protocol/conversation.js";
 import { recordVoiceDiagnostic } from "../diagnostics/voice-diagnostics.js";
 import type { ApplicationPublicationAnchor } from "../../shared/protocol/application-publications.js";
@@ -323,7 +322,7 @@ function isCompletedModelToolActivity(item: ConversationItem): boolean {
   }
 }
 
-type BlockingRequestObserver = (scope: ExecutionScope, threadId: string, requestIdentity: string) => void;
+type BlockingRequestObserver = (scope: ExecutionScope, threadId: string, interaction: DriverInteraction) => void;
 
 type HistoricalQuestionObserver = (
   scope: ExecutionScope,
@@ -1645,7 +1644,7 @@ export class ConversationActorManager {
           onStateChanged();
           if (event.type === "backend_event" && event.event.type === "interaction_opened" && !signal.aborted) {
             this.#onBlockingRequest?.(input.scope, input.binding.applicationThreadId,
-              blockingRequestWakeIdentity(event.event.interaction));
+              event.event.interaction);
           }
           const historyItems = event.type === "projection_replaced"
             ? Object.values(event.state.timeline.itemsById)

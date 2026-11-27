@@ -4,6 +4,8 @@ export const blockingRequestObservationsMigration: DatabaseMigration = {
   version: 176,
   name: "blocking_request_observations",
   sql: `
+-- Receipts contain only an opaque digest. Keep them until thread deletion because
+-- retained provider requests can replay after arbitrarily long disconnects.
 CREATE TABLE blocking_request_observations (
   tenant_id TEXT NOT NULL,
   principal_id TEXT NOT NULL,

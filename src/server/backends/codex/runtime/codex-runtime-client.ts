@@ -195,7 +195,9 @@ export class CodexRuntimeClient {
         this.#generation = event.lifecycle.generation + this.#generationOffset;
         this.#diagnostic("provider_lifecycle", { outcome: event.lifecycle.state, reason: event.lifecycle.unavailableReason });
         if (event.lifecycle.state === "ready") {
-          this.serverRequests.activateGeneration(this.#generation);
+          this.serverRequests.activateGeneration(this.#generation, {
+            runtimeId: this.#authority.runtimeId, generation: this.#providerGeneration,
+          });
           this.#current = { generation: this.#generation, dispatchContinuity: JSON.stringify([this.#authority.runtimeId, this.#providerGeneration, this.#authority.controllerId]), request: (method, params, options) => this.#request(method, params, options).then(receipt => receipt.result), requestWithReceipt: (method, params, options) => this.#request(method, params, options) };
         } else this.#current = undefined;
         this.client.updateLifecycle({ ...event.lifecycle, generation: this.#generation });

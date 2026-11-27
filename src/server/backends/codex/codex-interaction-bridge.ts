@@ -1,5 +1,5 @@
 import { normalizeCodexElicitationForm } from "./codex-elicitation-form.js";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { boundValue } from "../../conversations/payload-policy.js";
 import {
   driverInteractionSchema,
@@ -491,8 +491,7 @@ function presentRequest(
 } {
   const base = {
     backendInteractionId,
-    // JSON-RPC request IDs and transport generation numbers can recur in a new process.
-    requestIdentity: `codex:${randomUUID()}`,
+    requestIdentity: request.requestIdentity,
     sourceLabel: display("Codex"),
     openedAt: openedAt(request, now),
     secret: false,

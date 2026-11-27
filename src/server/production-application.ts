@@ -101,6 +101,7 @@ import {
   DatabaseThreadApplicationInventoryReader,
   DatabaseThreadApplicationPresentationReader,
 } from "./conversations/database-thread-application-readers.js";
+import { BlockingRequestInventory } from "./conversations/blocking-request-inventory.js";
 import { InteractionBroker } from "./conversations/interaction-broker.js";
 import { RuntimeBackedQueuedInputConversationGateway } from "./conversations/queued-input-conversation-gateway.js";
 import { QueuedInputDispatcher } from "./conversations/queued-input-dispatcher.js";
@@ -1240,11 +1241,9 @@ export async function startProductionApplication(
       { mode: "ownership_critical" },
     );
     let questions: QuestionRequestService | undefined;
-    function observeBlockingRequest(eventScope: RequestScope, threadId: string, requestIdentity: string): void {
-      const now = Date.now();
-      const state = inventoryRepository.observeBlockingRequest(eventScope, threadId, requestIdentity, now);
-      if (state) threadRuntimeFollowUp.defer(() => inventory.publishCommitted(eventScope, [state], now));
-    }
+    const blockingRequests = new BlockingRequestInventory(inventoryRepository, (eventScope, state) => {
+      threadRuntimeFollowUp.defer(() => inventory.publishCommitted(eventScope, [state], state.stateChangedAt));
+    });
     let observeAuthoritativeCompletion:
       AuthoritativeCompletionObserver | undefined;
     const pageRepository = new PageRepository(database);
@@ -1281,13 +1280,8 @@ export async function startProductionApplication(
       deliveryInputSnapshots,
       retentionMilliseconds: config.conversationRetentionMilliseconds,
       runtimeBudget: config.conversationRuntimeBudget,
-      onBlockingRequest(eventScope, threadId, requestIdentity) {
-        // An attached broker owns admission (including capacity and cancellation).
-        // Actors without a thread viewer still need to surface their requests.
-        if (!interactions?.hasBindingForThread(eventScope, threadId)) {
-          observeBlockingRequest(eventScope, threadId, requestIdentity);
-        }
-      },
+      onBlockingRequest: (eventScope, threadId, interaction) =>
+        blockingRequests.observeUnbound(interactions, eventScope, threadId, interaction),
       onHistoricalQuestion: (eventScope, threadId, sourceItemId) =>
         questions?.remember(eventScope, threadId, sourceItemId),
       onNonblockingQuestions: (eventScope, threadId, sourceItemId, payload) =>
@@ -1403,7 +1397,7 @@ export async function startProductionApplication(
     interactions = new InteractionBroker({
       onOpened(eventScope, interaction, requestIdentity) {
         try {
-          observeBlockingRequest(eventScope, interaction.threadId, requestIdentity);
+          blockingRequests.observe(eventScope, interaction.threadId, requestIdentity);
         } finally {
           notificationLifecycle.interactionOpened(eventScope, interaction);
         }

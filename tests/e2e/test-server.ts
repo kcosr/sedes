@@ -136,6 +136,7 @@ import {
   directThreadExecutionWorkspaceReader,
   type ThreadBackendPresentationProvider,
 } from "../../src/server/conversations/database-thread-application-readers.js";
+import { BlockingRequestInventory } from "../../src/server/conversations/blocking-request-inventory.js";
 import { InteractionBroker } from "../../src/server/conversations/interaction-broker.js";
 import { RuntimeBackedQueuedInputConversationGateway } from "../../src/server/conversations/queued-input-conversation-gateway.js";
 import { QueuedInputDispatcher } from "../../src/server/conversations/queued-input-dispatcher.js";
@@ -4648,11 +4649,9 @@ async function main(): Promise<void> {
   const actorTargets = new DatabaseActorTargetResolver(targets);
   const lifecycleTargets = new DatabaseLifecycleTargetResolver(targets);
   let questions: QuestionRequestService | undefined;
-  function observeBlockingRequest(eventScope: RequestScope, threadId: string, requestIdentity: string): void {
-    const now = Date.now();
-    const state = inventoryRepository.observeBlockingRequest(eventScope, threadId, requestIdentity, now);
-    if (state) authoritativeCompletionFollowUp.defer(() => inventory.publishCommitted(eventScope, [state], now));
-  }
+  const blockingRequests = new BlockingRequestInventory(inventoryRepository, (eventScope, state) => {
+    authoritativeCompletionFollowUp.defer(() => inventory.publishCommitted(eventScope, [state], state.stateChangedAt));
+  });
   let mutationsForSubmissions: ThreadMutationGateway | undefined;
   let automaticModelRetries: AutomaticModelRetryService | undefined;
   let observeAuthoritativeCompletion:
@@ -4687,13 +4686,8 @@ async function main(): Promise<void> {
     deliveryInputSnapshots,
     retentionMilliseconds: config.conversationRetentionMilliseconds,
     runtimeBudget: config.conversationRuntimeBudget,
-    onBlockingRequest(eventScope, threadId, requestIdentity) {
-      // An attached broker owns admission (including capacity and cancellation).
-      // Actors without a thread viewer still need to surface their requests.
-      if (!interactions.hasBindingForThread(eventScope, threadId)) {
-        observeBlockingRequest(eventScope, threadId, requestIdentity);
-      }
-    },
+    onBlockingRequest: (eventScope, threadId, interaction) =>
+      blockingRequests.observeUnbound(interactions, eventScope, threadId, interaction),
     onHistoricalQuestion: (eventScope, threadId, sourceItemId) =>
       questions?.remember(eventScope, threadId, sourceItemId),
     onNonblockingQuestions: (eventScope, threadId, sourceItemId, payload) =>
@@ -4775,7 +4769,7 @@ async function main(): Promise<void> {
   const interactions = new InteractionBroker({
     onOpened(eventScope, interaction, requestIdentity) {
       try {
-        observeBlockingRequest(eventScope, interaction.threadId, requestIdentity);
+        blockingRequests.observe(eventScope, interaction.threadId, requestIdentity);
       } finally {
         notificationLifecycle.interactionOpened(eventScope, interaction);
       }

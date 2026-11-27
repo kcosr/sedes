@@ -1,3 +1,4 @@
+import { createHash, randomUUID } from "node:crypto";
 import {
   refineCodexC2ServerRequest,
   encodeCodexC2RoutedServerResponse,
@@ -36,6 +37,7 @@ export type CodexRoutedServerRequest = {
     readonly generation: number;
     readonly sequence: number;
     readonly requestId: string | number;
+    readonly requestIdentity: string;
     readonly method: Method;
     readonly params: Extract<
       CodexC2ServerRequest,
@@ -64,6 +66,7 @@ export interface CodexServerRequestOwnershipLease {
 
 type ActiveGeneration = {
   readonly generation: number;
+  readonly provider: { readonly runtimeId: string; readonly generation: number };
   readonly controller: AbortController;
 };
 
@@ -99,7 +102,7 @@ export class CodexServerRequestRouter {
   #active: ActiveGeneration | undefined;
   #latestGeneration = 0;
 
-  activateGeneration(generation: number): void {
+  activateGeneration(generation: number, provider?: ActiveGeneration["provider"]): void {
     assertGeneration(generation);
     if (this.#active?.generation === generation) return;
     if (generation <= this.#latestGeneration) {
@@ -110,6 +113,9 @@ export class CodexServerRequestRouter {
     this.#abortActive("codex_server_request_generation_replaced");
     this.#active = {
       generation,
+      // Direct RPC requests belong to this transport lifetime. A retained
+      // runtime supplies the same native generation after a carrier reconnect.
+      provider: provider ?? { runtimeId: randomUUID(), generation },
       controller: new AbortController(),
     };
     this.#latestGeneration = generation;
@@ -283,6 +289,9 @@ export class CodexServerRequestRouter {
       generation,
       sequence: request.sequence,
       requestId: request.id,
+      requestIdentity: `codex:${createHash("sha256").update(JSON.stringify([
+        active.provider.runtimeId, active.provider.generation, request.sequence, request.method, request.id,
+      ])).digest("base64url")}`,
       method: decoded.method,
       params: decoded.params,
       route,
