@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { threadReferenceProviderParts } from "../../shared/thread-references.js";
 import type {
   BoundedText,
   TruncationInfo,
@@ -226,13 +227,14 @@ function rawMessage(item: ConversationItem): RawMessage | undefined {
     };
   }
   if (item.kind !== "user_message") return undefined;
-  const textParts = item.content.filter(
-    (part): part is Extract<(typeof item.content)[number], { kind: "text" }> =>
-      part.kind === "text",
-  );
-  const omittedPart = item.content.find((part) => part.kind !== "text");
+  const textParts = item.content.flatMap((part) => {
+    if (part.kind === "text") return [part.text.text];
+    if (part.kind === "thread_reference_body") return [threadReferenceProviderParts(part.parts)];
+    return [];
+  });
+  const omittedPart = item.content.find((part) => part.kind !== "text" && part.kind !== "thread_reference_body");
   if (textParts.length === 0 && !omittedPart) return undefined;
-  const text = textParts.map((part) => part.text.text).join("\n\n");
+  const text = textParts.join("\n\n");
   const omission: TruncationInfo | undefined = omittedPart
     ? {
         truncated: true,

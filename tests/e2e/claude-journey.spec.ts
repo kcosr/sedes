@@ -458,10 +458,10 @@ test("compiled Claude backend streams, settles, and reloads through normalized U
   await expect(stopPending.getByRole("listitem").filter({ hasText: unstarted[1]! })).toContainText("Not sent");
   await stopPending.getByRole("button", { name: `Restore queued input to composer: ${unstarted[1]}` }).click();
   await expect(stopPending.getByRole("listitem")).toHaveCount(0);
-  await expect(input).toHaveValue(unstarted[1]!);
+  await expect(input).toHaveText(unstarted[1]!);
   await page.reload();
   // Restore returned the text to the durable draft; nothing was sent.
-  await expect(input).toHaveValue(unstarted[1]!);
+  await expect(input).toHaveText(unstarted[1]!);
   await expect(page.getByRole("button", { name: "Send message" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Stop", exact: true })).toHaveCount(0);
   await expect(page.getByText("[Request interrupted by user for tool use]", { exact: true })).toHaveCount(0);

@@ -170,7 +170,7 @@ test("Antigravity production connection streams, stops, requests permission and 
   await expect(pendingSteer).toBeHidden();
   await expect(page.getByText("Steer unconfirmed", { exact: true })).toBeHidden();
   await expect(composer).toBeEnabled();
-  await expect(composer).toHaveValue(steerText);
+  await expect(composer).toHaveText(steerText);
   await sendCurrentDraft(page);
   await expect(page.getByText("Fixture response.", { exact: true })).toBeVisible();
   await expect.poll(async () => {

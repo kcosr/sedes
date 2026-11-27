@@ -19,6 +19,7 @@ import {
 import { DurableAttachmentCard } from "../../../attachments/AttachmentCards.js";
 import { MessageTaskCard } from "./MessageTaskCard.js";
 import { splitThreadReferenceText } from "../../../../shared/thread-references.js";
+import { InlineThreadReference } from "../../thread/InlineThreadReference.js";
 import { ThreadReferenceChips } from "../../thread/ThreadReferenceChips.js";
 import "../page-response.css";
 
@@ -157,6 +158,13 @@ export function UserMessagePresentation({
         part.kind === "skill" ||
         part.kind === "context_excerpt" ? null : part.kind === "text" ? (
           <ReferencedUserText key={index} text={part.text.text} parseReferences={origin === undefined} />
+        ) : part.kind === "thread_reference_body" ? (
+          <div className="streaming-text" key={index}>
+            <span {...conversationMessageSelectableTextProps}>
+              {part.parts.map((run, runIndex) => typeof run === "string" ? run :
+                <InlineThreadReference key={runIndex} reference={run} />)}
+            </span>
+          </div>
         ) : part.kind === "attachment" ? (
           <DurableAttachmentCard
             key={index}

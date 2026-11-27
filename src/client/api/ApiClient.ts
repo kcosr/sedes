@@ -137,6 +137,8 @@ import {
   composerSkillCatalogSchema,
   normalizedApplicationSessionSchema,
   normalizedApplicationThreadSummarySchema,
+  mentionCandidatePageSchema,
+  type ListMentionCandidatesQuery,
   normalizedThreadDescendantsPageSchema,
   normalizedThreadLineagePlacementSchema,
   normalizedDraftSchema,
@@ -1850,6 +1852,17 @@ export class ApiClient {
     const summary = await this.#request(`/api/threads/${encodeURIComponent(threadId)}/summary`, { signal }, normalizedApplicationThreadSummarySchema);
     if (summary.id !== threadId) throw new Error("The returned summary did not match the requested thread.");
     return summary;
+  }
+
+  listMentionCandidates(threadId: string, input: ListMentionCandidatesQuery, signal?: AbortSignal) {
+    const parameters = new URLSearchParams({ scope: input.scope });
+    if (input.query) parameters.set("query", input.query);
+    if (input.cursor) parameters.set("cursor", input.cursor);
+    return this.#request(
+      `/api/threads/${encodeURIComponent(threadId)}/mention-candidates?${parameters}`,
+      { signal, cache: "no-store" },
+      mentionCandidatePageSchema,
+    );
   }
 
   listThreadDescendants(

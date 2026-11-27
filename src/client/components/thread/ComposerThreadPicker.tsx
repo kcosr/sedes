@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, type RefObject } from "react";
-import { Folder, Server } from "lucide-react";
-import type { NormalizedApplicationThreadSummary } from "../../../shared/index.js";
+import { ChevronLeft, ChevronRight, Folder, List, Server } from "lucide-react";
+import type { ThreadMentionPickerMenu } from "./useThreadMentionPicker.js";
 import { Popover, PopoverAnchor, PopoverContent } from "@client/components/ui/popover";
-import { menuEmptyClass, menuRowClass } from "@client/components/ui/floating";
+import { menuEmptyClass, menuRowClass, menuLabelClass } from "@client/components/ui/floating";
 import { BackendBrandIcon } from "../brand-icons.js";
 import { flatRowGlyphIcon, flatRowGlyphKind, flatRowGlyphLabel } from "./FlatThreadRow.js";
 
@@ -11,18 +11,16 @@ export interface ThreadReferenceLocation {
   readonly environment: string | undefined;
 }
 
-export function ComposerThreadPicker({ open, onOpenChange, threads, locations, backgroundWorkCurrent, onSelect, anchor, listId, selectedIndex, onSelectedIndexChange }: {
+export function ComposerThreadPicker({ open, onOpenChange, menu, locations, backgroundWorkCurrent, anchor, listId }: {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
-  readonly threads: readonly NormalizedApplicationThreadSummary[];
+  readonly menu: ThreadMentionPickerMenu;
   readonly locations: ReadonlyMap<string, ThreadReferenceLocation>;
   readonly backgroundWorkCurrent: boolean;
-  readonly onSelect: (thread: NormalizedApplicationThreadSummary) => void;
-  readonly anchor: RefObject<HTMLTextAreaElement | null>;
+  readonly anchor: RefObject<HTMLElement | null>;
   readonly listId: string;
-  readonly selectedIndex: number;
-  readonly onSelectedIndexChange: (index: number) => void;
 }): React.JSX.Element {
+  const { selectedIndex } = menu;
   const list = useRef<HTMLDivElement>(null);
   const restoreComposerFocus = useRef(false);
   const virtualAnchor = useMemo(() => ({ current: {
@@ -33,10 +31,6 @@ export function ComposerThreadPicker({ open, onOpenChange, threads, locations, b
   useEffect(() => {
     if (open) rows()[selectedIndex]?.scrollIntoView?.({ block: "nearest" });
   }, [open, selectedIndex]);
-  const chooseThread = (thread: NormalizedApplicationThreadSummary) => {
-    restoreComposerFocus.current = true;
-    onSelect(thread);
-  };
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverAnchor virtualRef={virtualAnchor} />
@@ -45,25 +39,48 @@ export function ComposerThreadPicker({ open, onOpenChange, threads, locations, b
         onOpenAutoFocus={(event) => { restoreComposerFocus.current = false; event.preventDefault(); }}
         onEscapeKeyDown={() => { restoreComposerFocus.current = true; }}
         onInteractOutside={(event) => {
-          if (event.target === anchor.current || event.detail.originalEvent.target === anchor.current) event.preventDefault();
+          if (anchor.current?.contains(event.target as Node) || anchor.current?.contains(event.detail.originalEvent.target as Node)) event.preventDefault();
           else restoreComposerFocus.current = false;
         }}
         onCloseAutoFocus={(event) => { event.preventDefault(); if (restoreComposerFocus.current) anchor.current?.focus({ preventScroll: true }); }}>
-        <div ref={list} id={listId} role="listbox" aria-label="Matching threads" className="composer-thread-picker-list flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain p-(--menu-panel-padding)">
-          {threads.map((thread, index) => {
+        <div className={`${menuLabelClass} flex items-center gap-1`}>
+          {menu.scope === "all" && <button type="button" aria-label="Back to current project" title="Back to current project"
+            className="inline-flex size-6 items-center justify-center rounded hover:bg-accent"
+            onMouseDown={event => event.preventDefault()} onClick={() => { menu.back(); anchor.current?.focus({ preventScroll: true }); }}>
+            <ChevronLeft size={15} aria-hidden="true" />
+          </button>}
+          {menu.scope === "all" ? "All threads" : "Current project"}
+        </div>
+        <div ref={list} id={listId} role="listbox" aria-label="Matching threads" aria-busy={menu.status === "loading"} className="composer-thread-picker-list flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain p-(--menu-panel-padding)">
+          {!menu.rows.some(row => row.kind === "thread") && <p className={menuEmptyClass} role="status">
+            {menu.status === "loading" ? "Searching threads…" : menu.status === "failed" ? "Couldn't load threads" : "No matching active threads"}
+          </p>}
+          {menu.rows.map((row, index) => {
+            const selectProps = {
+              id: `${listId}-${index}`, role: "option", "aria-selected": index === selectedIndex,
+              type: "button" as const, tabIndex: -1,
+              onMouseDown: (event: React.MouseEvent) => event.preventDefault(),
+              onPointerMove: (event: React.PointerEvent) => { if (event.pointerType === "mouse") menu.setSelectedIndex(index); },
+              onClick: () => { restoreComposerFocus.current = true; menu.choose(index); },
+            };
+            if (row.kind !== "thread") {
+              const label = row.kind === "all" ? "All threads…" : row.kind === "more" ? "More threads…" : "Retry search";
+              return <button key={row.kind} {...selectProps} className={`${menuRowClass} ${index === selectedIndex ? "bg-accent" : ""}`}>
+                {row.kind === "all" && <List size={15} aria-hidden="true" />} {label}
+                {row.kind === "all" && <ChevronRight size={15} className="ml-auto" aria-hidden="true" />}
+              </button>;
+            }
+            const { thread } = row;
             const glyphKind = flatRowGlyphKind(thread, backgroundWorkCurrent);
             const glyphLabel = glyphKind === "idle" ? undefined : flatRowGlyphLabel(thread, backgroundWorkCurrent);
             const title = thread.title.text.trim() || "Untitled thread";
             const location = locations.get(thread.workspaceId);
             const description = [glyphLabel, location?.project && `Project: ${location.project}`, location?.environment && `Environment: ${location.environment}`].filter(Boolean).join(". ");
             const descriptionId = `${listId}-${index}-description`;
-            return <button key={thread.id} id={`${listId}-${index}`} role="option" aria-selected={index === selectedIndex} type="button" tabIndex={-1}
+            return <button key={thread.id} {...selectProps}
               aria-label={title} aria-describedby={description ? descriptionId : undefined}
               title={[title, location?.project, location?.environment].filter(Boolean).join(" · ")}
-              className={`${menuRowClass} composer-thread-picker-row ${index === selectedIndex ? "bg-accent" : ""}`}
-              onMouseDown={(event) => event.preventDefault()}
-              onPointerMove={(event) => { if (event.pointerType === "mouse") onSelectedIndexChange(index); }}
-              onClick={() => chooseThread(thread)}>
+              className={`${menuRowClass} composer-thread-picker-row ${index === selectedIndex ? "bg-accent" : ""}`}>
               <span className="flat-row-glyph" data-glyph={glyphLabel ? glyphKind : undefined} aria-hidden="true" title={glyphLabel}>
                 {glyphLabel ? flatRowGlyphIcon(glyphKind) : null}
               </span>
@@ -80,7 +97,6 @@ export function ComposerThreadPicker({ open, onOpenChange, threads, locations, b
               {description && <span id={descriptionId} className="sr-only">{description}</span>}
             </button>;
           })}
-          {threads.length === 0 && <p className={menuEmptyClass} role="status">No matching active threads</p>}
         </div>
       </PopoverContent>
     </Popover>

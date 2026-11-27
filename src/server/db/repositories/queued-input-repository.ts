@@ -1,3 +1,4 @@
+import { formatInlineThreadReferenceText, hasInlineThreadReferenceBody } from "../../../shared/thread-references.js";
 import { assertAutomationDispatchClaim } from "./automation-dispatch-claim.js";
 import { z } from "zod";
 import { AutomationDeferredError } from "../../domain/automation-deferred.js";
@@ -9,7 +10,7 @@ import type { ConversationSubmissionSource } from "../../backends/contracts.js";
 import { prepareCached } from "../prepared-statements.js";
 import { DomainError } from "../../domain/errors.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
-import { MAXIMUM_THREAD_INPUT_BYTES, type ContextExcerpt } from "../../../shared/protocol/context-excerpts.js";
+import { composerInputUtf8Bytes, MAXIMUM_THREAD_INPUT_BYTES, type ContextExcerpt } from "../../../shared/protocol/context-excerpts.js";
 import { PAGE_RESPONSE_MAX_BYTES, pageResponseOriginSchema } from "../../../shared/protocol/pages.js";
 import type { ComposerAttachmentDescriptor } from "../../../shared/protocol/composer-attachments.js";
 import {
@@ -70,6 +71,7 @@ export type QueuedInputRecord = {
   readonly resolvedDeliveryMode: "submit" | "queue" | "steer";
   readonly resolvedSteerTarget: SteerTarget | null;
   readonly requestedThreadRevision: number | null;
+  readonly hasThreadReferenceBody?: 0 | 1;
   readonly requestedDraftRevision: number | null;
   readonly triggerKind: "user" | "automation";
   readonly sourceAutomationId: string | null;
@@ -180,6 +182,7 @@ const columns = `
   resolved_delivery_mode AS resolvedDeliveryMode,
   resolved_steer_target_json AS resolvedSteerTargetJson,
   requested_thread_revision AS requestedThreadRevision,
+  has_thread_reference_body AS hasThreadReferenceBody,
   requested_draft_revision AS requestedDraftRevision,
   trigger_kind AS triggerKind,
   source_automation_id AS sourceAutomationId,
@@ -229,6 +232,7 @@ const qualifiedColumns = `
   q.resolved_delivery_mode AS resolvedDeliveryMode,
   q.resolved_steer_target_json AS resolvedSteerTargetJson,
   q.requested_thread_revision AS requestedThreadRevision,
+  q.has_thread_reference_body AS hasThreadReferenceBody,
   q.requested_draft_revision AS requestedDraftRevision,
   q.trigger_kind AS triggerKind,
   q.source_automation_id AS sourceAutomationId,
@@ -774,9 +778,9 @@ export class QueuedInputRepository {
               resolved_delivery_mode, resolved_steer_target_json,
               requested_thread_revision, requested_draft_revision,
               state, created_at
-              , is_user_input
+              , is_user_input, has_thread_reference_body
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
           `,
         )
         .run(
@@ -845,6 +849,7 @@ export class QueuedInputRepository {
             : null,
           input.now,
           isUserInput ? 1 : 0,
+          input.source.kind === "composer" && hasInlineThreadReferenceBody(input.text) ? 1 : 0,
         );
       if (isUserInput) new UserInputRevisionRepository(this.database).advance(scope, applicationThreadId);
       new DirectInputRepository(this.database).recordOrigin(scope, applicationThreadId, input.mutationId, input.origin);
@@ -1441,6 +1446,16 @@ export class QueuedInputRepository {
             "The composer must be empty before a queued input can be restored.",
           );
         }
+        // A raw/direct submission may literally equal a serialized composer body.
+        // Preserve that distinction when moving it into the draft's text field.
+        const draftText = !item.hasThreadReferenceBody && hasInlineThreadReferenceBody(item.text)
+          ? formatInlineThreadReferenceText([item.text])
+          : item.text;
+        if (draftText !== item.text && composerInputUtf8Bytes({
+          text: draftText, contextExcerpts: item.contextExcerpts, taskContexts: item.taskContexts,
+        }) > MAXIMUM_THREAD_INPUT_BYTES) {
+          throw new DomainError("invalid_transition", "This queued input exceeds the composer size limit when restored as literal text.");
+        }
         this.#attachments.replaceOwnerLinks(
           scope,
           { kind: "draft", threadId: applicationThreadId },
@@ -1460,7 +1475,7 @@ export class QueuedInputRepository {
           `,
           )
           .run(
-            item.text,
+            draftText,
             item.selectedSkillId,
             serializeContextExcerpts(item.contextExcerpts),
             serializeTaskReferences(taskReferences),
@@ -2139,9 +2154,9 @@ export class QueuedInputRepository {
               source_automation_id, source_automation_run_id,
               initiating_agent_thread_id, initiating_tool_client_id,
               input_origin_json,
-              resolved_delivery_mode, state, retry_of_id, created_at, is_user_input
+              resolved_delivery_mode, state, retry_of_id, created_at, is_user_input, has_thread_reference_body
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)
           `,
         )
         .run(
@@ -2171,6 +2186,7 @@ export class QueuedInputRepository {
           failed.id,
           input.now,
           failed.isUserInput,
+          failed.hasThreadReferenceBody ?? 0,
         );
       this.#touchThread(scope, applicationThreadId, input.now, false);
       return {

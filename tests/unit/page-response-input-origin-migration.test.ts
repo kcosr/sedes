@@ -36,11 +36,12 @@ describe("page response input origin migration", () => {
       })).toThrow("migration_rollback");
       expect(database.prepare("SELECT * FROM queued_inputs").get()).toEqual(before);
       expect(database.prepare("SELECT 1 FROM schema_migrations WHERE version = 145").get()).toBeUndefined();
-      applyDatabaseMigrations(database, backendNormalizedMigrations);
+      applyDatabaseMigrations(database, backendNormalizedMigrations.filter(migration => migration.version <= 145));
       const { question_response_origin_json: retainedOrigin, ...rest } = before;
       expect(database.prepare("SELECT * FROM queued_inputs").get()).toEqual({ ...rest, input_origin_json: retainedOrigin });
       expect(() => database.prepare("SELECT question_response_origin_json FROM queued_inputs")).toThrow("no such column");
       expect(triggerOrder()).toEqual(beforeTriggers);
+      applyDatabaseMigrations(database, backendNormalizedMigrations);
       expect(new QueuedInputRepository(database).get(scope, thread.id, "question-input"))
         .toMatchObject({ text: "Exact old reply", inputOrigin: origin, isUserInput: 1 });
       expect(database.pragma("foreign_key_check")).toEqual([]);

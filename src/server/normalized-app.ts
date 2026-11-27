@@ -88,6 +88,7 @@ import {
   listAutomationsQuerySchema,
   listComposerSkillsQuerySchema,
   listThreadDescendantsQuerySchema,
+  listMentionCandidatesQuerySchema,
   previewAutomationScheduleRequestSchema,
   putComposerAttachmentQuerySchema,
   putComposerAttachmentResultSchema,
@@ -1842,6 +1843,14 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
         activityDetail,
       ),
     );
+  });
+
+  routes.get("/api/threads/:threadId/mention-candidates", async (request, response) => {
+    const requestScope = await scope(request);
+    const { threadId } = threadRouteParametersSchema.parse(request.params);
+    const query = listMentionCandidatesQuerySchema.parse(request.query);
+    response.setHeader("Cache-Control", "no-store");
+    response.json(await dependencies.applicationSnapshots.snapshots.listMentionCandidates(requestScope, threadId, query));
   });
 
   routes.get("/api/threads/:threadId/summary", async (request, response) => {

@@ -126,7 +126,7 @@ for (const timing of ["before handoff", "during claim", "back during claim", "ba
       await page.getByTestId("desktop-sidebar").locator(`[data-thread-id="${otherId}"]`).getByTestId("thread-row-link").click();
       await expect(page).toHaveURL(otherPath);
       const otherComposer = page.getByRole("textbox", { name: "Message Scripted agent", exact: true });
-      await expect(otherComposer).toHaveValue(otherText);
+      await expect(otherComposer).toHaveText(otherText);
       await flushEntered.promise;
       if (claimHeld && !roundTrip) {
         await page.evaluate(() => window.__voiceFixture.settleComposerClaim());
@@ -139,7 +139,7 @@ for (const timing of ["before handoff", "during claim", "back during claim", "ba
       expect(await page.evaluate(handoffId => window.__voiceFixture.calls.filter(call =>
         call.method === "completeComposerHandoff" && call.args.handoffId === handoffId), handoff.handoffId)).toEqual([]);
       expect((await (await page.request.get(`/api/threads/${originalId}?activityDetail=full`)).json()).draft.text).toBe(before.draft.text);
-      await expect(otherComposer).toHaveValue(otherText);
+      await expect(otherComposer).toHaveText(otherText);
       if (roundTrip) {
         const departed = page.waitForResponse(response => response.request().method() === "PUT" &&
           response.url().endsWith(`/threads/${originalId}/draft`) && response.ok() && response.request().postDataJSON().text === dirtyText);
@@ -166,7 +166,7 @@ for (const timing of ["before handoff", "during claim", "back during claim", "ba
             visible: true, threadId: originalId, composerAvailable: true,
           });
         } else {
-          await expect(composer).toHaveValue(dirtyText);
+          await expect.poll(() => composer.innerText()).toBe(dirtyText);
           await composer.fill(latestText);
           // The newly mounted composer is current even while native still reports
           // the other thread. Its latest local edit must win over a detached read.
@@ -188,12 +188,12 @@ for (const timing of ["before handoff", "during claim", "back during claim", "ba
       resumeGate.release();
       await expect.poll(() => page.evaluate(handoffId => window.__voiceFixture.calls.filter(call =>
         call.method === "settleComposerSubmission" && call.args.handoffId === handoffId).length, handoff.handoffId)).toBe(1);
-      if (!roundTrip) await expect(otherComposer).toHaveValue(otherText);
+      if (!roundTrip) await expect(otherComposer).toHaveText(otherText);
       expect((await (await page.request.get(`/api/threads/${otherId}?activityDetail=full`)).json()).draft.text).toBe(otherText);
       expect(await page.evaluate(() => window.__voiceFixture.state.recordingRecovery)).toBeNull();
       await expect(page.getByRole("button", { name: "Saved dictation", exact: true })).toHaveCount(0);
       await page.getByTestId("desktop-sidebar").locator(`[data-thread-id="${originalId}"]`).getByTestId("thread-row-link").click();
-      await expect(composer).toHaveValue("");
+      await expect(composer).toHaveText("");
       await expect(page.locator('[data-item-kind="user_message"]')).toHaveCount(1);
       await expect(page.locator('[data-item-kind="user_message"]')).toContainText(speech);
       await expect(page.locator('[data-item-kind="user_message"]')).toContainText(latestText);

@@ -663,6 +663,11 @@ New root submissions retain the speech revision for playback checks after
 reconnect. Previously parked threads keep their manual Park. Rebuild packaged
 clients for the updated voice notification and input-context wire contracts.
 
+Migration 175 records which first sends, queued inputs and delivery snapshots
+contain a structured composer body. This preserves inline mention positions
+through a retry or conversation fork. Existing snapshot fingerprints remain
+valid.
+
 Before an upgrade:
 
 1. Settle active work and resolve or explicitly review uncertain creation,

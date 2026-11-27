@@ -3,7 +3,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "@playwright/test";
 import { normalizedThreadSnapshotSchema } from "../../src/shared/index.js";
-import { formatThreadReferenceText } from "../../src/shared/thread-references.js";
+import { formatInlineThreadReferenceText, formatThreadReferenceText } from "../../src/shared/thread-references.js";
 import type { NativeVoiceComposerHandoff } from "../../src/client/voice/native-voice-plugin.js";
 import { expect, test } from "./fixtures.js";
 import { capture, createDraftThread, fillAndPersistDraft, openWorkspaceDirectory, selectCustomNewThreadTarget, sendCurrentDraft,
@@ -112,7 +112,7 @@ for (const scenario of [
     const task = (await created.json()).task;
     const taskId = task.id as string;
     const composer = page.getByTestId("composer");
-    const textarea = composer.locator("textarea");
+    const messageEditor = composer.getByRole("textbox", { includeHidden: true });
     if (scenario.draftText) await fillAndPersistDraft(page, scenario.draftText, "Message Codex TCP");
     const originalComposer = await composer.elementHandle();
     const recordingId = randomUUID();
@@ -200,7 +200,7 @@ for (const scenario of [
       expect((await sent).request().postDataJSON()).toMatchObject({ kind: "deliver", mode: "submit" });
       await expectSubmissionSettled(page, event);
       await expect(composer.getByLabel("Attached tasks")).toHaveCount(0);
-      await expect(textarea).toHaveValue("");
+      await expect(messageEditor).toHaveText("");
       await expect(composer).toBeHidden();
       await expect(tasks).toBeVisible();
       expect(await originalComposer!.evaluate(element => element.isConnected)).toBe(true);
@@ -297,21 +297,23 @@ test("foreground dictation sends the live full draft as one composer input witho
   const source = Object.values(snapshot.itemsById).find(item => item.kind === "user_message")!;
   const excerpt = { id: randomUUID(), excerpt: sourceText, note: "Check this quotation with the snippet.",
     source: { kind: "conversation_message" as const, itemId: source.id, itemRevision: source.revision }, locator: { kind: "text_quote" as const } };
-  const references = [{ threadId: referenceId, title: "Supplemental reference thread" }];
+  const reference = { threadId: referenceId, title: "Supplemental reference thread" };
+  const oldText = "Older saved text.";
   const seeded = await page.request.put(`/api/threads/${threadId}/draft`, { headers, data: {
-    text: formatThreadReferenceText("Older saved text.", references), selectedSkillId, contextExcerpts: [excerpt],
+    text: formatThreadReferenceText(oldText, [reference]), selectedSkillId, contextExcerpts: [excerpt],
     attachmentIds: snapshot.draft.attachments.map(attachment => attachment.id), taskReferenceIds: [taskId], expectedRevision: snapshot.draft.revision,
   } });
   expect(seeded.ok()).toBe(true);
   await page.reload();
-  await expect(composer).toHaveValue("Older saved text.");
+  await expect(composer).toContainText(oldText);
+  await expect(composer.locator(`[data-thread-reference-id="${referenceId}"]`)).toBeVisible();
   await expect(page.getByTestId("selected-skill")).toContainText("Review Changes");
   await expect(page.getByTestId("composer").getByLabel("Context excerpts")).toContainText(excerpt.note);
   await expect(page.getByTestId("composer").getByLabel("Attached tasks")).toContainText("Review supplemental snippet");
   await expectVoiceComposer(page, threadId);
   const speech = "Please inspect this supplemental information.";
   const snippet = "function supplemental() {\n    return 'keep this indentation';\n}\n";
-  const combined = formatThreadReferenceText(`${speech}\n\n${snippet}`, references);
+  const combined = formatInlineThreadReferenceText([`${speech}\n\n`, reference, ` ${snippet}`]);
   const saveEntered = gate(), saveGate = gate(), sendEntered = gate(), sendGate = gate();
   const draftPattern = `**/api/threads/${threadId}/draft`;
   const sendPattern = `**/api/threads/${threadId}/operations`;
@@ -335,13 +337,15 @@ test("foreground dictation sends the live full draft as one composer input witho
   expect((await page.request.post("/__e2e/codex/turn-completion/arm")).status()).toBe(204);
   try {
     // Offer before the two-second autosave debounce; focus is on a voice control.
-    await composer.fill(snippet);
+    await composer.press("Control+End");
+    for (const _ of oldText) await composer.press("Shift+ArrowLeft");
+    await page.keyboard.insertText(snippet);
     await page.getByRole("button", { name: "Open voice controls", exact: true }).focus();
     await expect(composer).not.toBeFocused();
     const event = await offerSpeech(page, threadId, speech);
     await expectHandoff(page, event, "accepted");
     await saveEntered.promise;
-    await expect(composer).toHaveValue("");
+    await expect(composer).toHaveText("");
     await expect(page.locator('[data-item-kind="user_message"]').last()).toContainText(speech);
     await expect(page.locator('[data-item-kind="user_message"]').last()).toContainText("voice-supplement.txt");
     expect(await page.evaluate(() => window.__voiceFixture.state.recordingRecovery)).toBeNull();
@@ -351,12 +355,12 @@ test("foreground dictation sends the live full draft as one composer input witho
     expect((await saved).request().postDataJSON()).toMatchObject({ text: combined, selectedSkillId,
       contextExcerpts: [excerpt], attachmentIds: snapshot.draft.attachments.map(attachment => attachment.id), taskReferenceIds: [taskId] });
     await sendEntered.promise;
-    await expect(composer).toHaveValue("");
+    await expect(composer).toHaveText("");
     expect(await submissionSettlements(page, event)).toEqual([]);
     sendGate.release();
     expect((await sent).request().postDataJSON()).toMatchObject({ kind: "deliver", mode: "submit" });
     await expectSubmissionSettled(page, event);
-    await expect(composer).toHaveValue("");
+    await expect(composer).toHaveText("");
     await expect(page.getByTestId("composer").getByLabel("Attachments")).toHaveCount(0);
     await expect(page.getByTestId("composer").getByLabel("Context excerpts")).toHaveCount(0);
     await expect(page.getByTestId("composer").getByLabel("Attached tasks")).toHaveCount(0);
@@ -408,7 +412,7 @@ test("voice uses an empty visible composer and declines offers for a hidden app"
   await expect.poll(() => page.evaluate(() => window.__voiceFixture.state.foreground.visible)).toBe(false);
   const hidden = await offerSpeech(page, viewedId, "Hidden speech must stay native.");
   await expectHandoff(page, hidden, "declined");
-  await expect(composer).toHaveValue("Keep the viewed draft.");
+  await expect(composer).toHaveText("Keep the viewed draft.");
   await page.evaluate(() => {
     Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
     document.dispatchEvent(new Event("visibilitychange"));
@@ -420,7 +424,7 @@ test("voice uses an empty visible composer and declines offers for a hidden app"
   const empty = await offerSpeech(page, viewedId, "Speech alone still belongs to the composer.");
   await expectHandoff(page, empty, "accepted");
   await sent;
-  await expect(composer).toHaveValue("");
+  await expect(composer).toHaveText("");
   await expect(page.locator('[data-item-kind="user_message"]')).toHaveCount(1);
   await expect(page.locator('[data-item-kind="user_message"]')).toContainText(empty.text);
   expect(await page.evaluate(() => window.__voiceFixture.state.recordingRecovery)).toBeNull();
@@ -450,11 +454,11 @@ test("a rejected voice composer send restores the full contribution alongside la
     const event = await offerSpeech(page, threadId, "Please examine this snippet.");
     await expectHandoff(page, event, "accepted");
     await entered;
-    await expect(composer).toHaveValue("");
+    await expect(composer).toHaveText("");
     expect(await submissionSettlements(page, event)).toEqual([]);
     await composer.fill("New typing while the send is pending.");
     release();
-    await expect(composer).toHaveValue("Please examine this snippet.\n\nOriginal pasted context.\n\nNew typing while the send is pending.");
+    await expect(composer).toHaveText("Please examine this snippet.\n\nOriginal pasted context.\n\nNew typing while the send is pending.", { useInnerText: true });
     await expectSubmissionSettled(page, event);
     await expect(page.getByTestId("composer").getByLabel("Attachments")).toContainText("voice-recovery.txt");
     expect(await page.evaluate(() => window.__voiceFixture.state.recordingRecovery)).toBeNull();
@@ -467,7 +471,7 @@ test("a rejected voice composer send restores the full contribution alongside la
   const sent = deliveredTo(page, threadId);
   await page.getByRole("button", { name: "Send message", exact: true }).click();
   await sent;
-  await expect(composer).toHaveValue("");
+  await expect(composer).toHaveText("");
   await expect(page.locator('[data-item-kind="user_message"]')).toHaveCount(1);
 });
 
@@ -501,7 +505,7 @@ test("voice holds a pending attachment in the composer until the user sends the 
     await entered;
     const event = await offerSpeech(page, threadId, "Read the uploaded supplement.");
     await expectHandoff(page, event, "accepted", false);
-    await expect(composer).toHaveValue("Read the uploaded supplement.\n\nPasted upload context.");
+    await expect(composer).toHaveText("Read the uploaded supplement.\n\nPasted upload context.", { useInnerText: true });
     await expect(page.getByTestId("composer")).toContainText("Wait for attachment uploads to finish, then press Send.");
     await expect(page.getByTestId("composer").getByLabel("Attachments").locator("[data-upload-id]")).toHaveCount(1);
     expect(deliveries).toEqual([]);
@@ -517,7 +521,7 @@ test("voice holds a pending attachment in the composer until the user sends the 
   expect(deliveries).toEqual([]);
   await sendCurrentDraft(page);
   expect(deliveries).toHaveLength(1);
-  await expect(composer).toHaveValue("");
+  await expect(composer).toHaveText("");
   await expect(page.locator('[data-item-kind="user_message"]')).toHaveCount(1);
   await expect(page.locator(".conversation-turn").last()).toContainText("uploading-voice-context.txt");
 });

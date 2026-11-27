@@ -1,3 +1,4 @@
+import { formatInlineThreadReferenceText } from "../../src/shared/thread-references.js";
 import { projectAntigravityHistory } from "../../src/server/backends/antigravity/history.js";
 import { antigravityCapabilities } from "../../src/server/backends/antigravity/catalog.js";
 import { buildAntigravityPrompt } from "../../src/server/backends/antigravity/submission.js";
@@ -4503,6 +4504,28 @@ describe("QueuedInputDispatcher", () => {
     } finally {
       fixture.database.close();
     }
+  });
+
+  it("retains authored mention provenance across queue retries and excludes identical automation input", async () => {
+    const fixture = createFixture();
+    try {
+      const repository = new QueuedInputRepository(fixture.database);
+      const [threadId, target] = fixture.threadIds;
+      const text = formatInlineThreadReferenceText(["Compare ", { threadId: target, title: "Target" }]);
+      enqueueUser(fixture, repository, threadId, "mentions", 500, text);
+      enqueue(fixture, repository, threadId, "literal", 510, undefined, text);
+      expect(repository.get(fixture.scope, threadId, "literal").hasThreadReferenceBody).toBe(0);
+      const gateway = new FakeGateway();
+      gateway.submitBehaviors.push(new BackendError({ category: "rejected", retryable: false,
+        crossedSubmissionBoundary: false, safeMessage: "Request rejected." }));
+      const { dispatcher } = createDispatcher(repository, gateway, { now: { value: 600 } });
+      await dispatcher.recover(fixture.scope);
+      expect(repository.get(fixture.scope, threadId, "mentions")).toMatchObject({ hasThreadReferenceBody: 1, state: "failed" });
+      expect(gateway.submitted[0]).toMatchObject({ text, hasThreadReferenceBody: true });
+      await dispatcher.retryFailed(fixture.scope, threadId, "mentions", { id: "retry-mentions", mutationId: "retry", now: 620 });
+      expect(repository.get(fixture.scope, threadId, "retry-mentions")).toMatchObject({ text, hasThreadReferenceBody: 1 });
+      await dispatcher.close();
+    } finally { fixture.database.close(); }
   });
 
   it("distinguishes clean terminal failure and supports acknowledge, explicit retry, and cancellation", async () => {

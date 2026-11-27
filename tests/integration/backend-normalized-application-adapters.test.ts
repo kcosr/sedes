@@ -819,6 +819,8 @@ describe("backend-normalized application adapters", () => {
           is_user_input: 1,
           // Migration 145 preserves provenance under the general input-origin column.
           input_origin_json: question_response_origin_json,
+          // Only new composer captures have a trusted ordered reference body.
+          has_thread_reference_body: 0,
         };
       });
       const beforeCompletion = current.database.prepare("SELECT * FROM submission_completion_observations").all();

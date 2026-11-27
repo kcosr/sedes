@@ -22,7 +22,7 @@ for (const profile of [
     const threadId = threadPath.split("/").at(-1)!;
     await expect(page.getByTestId("composer")).toBeVisible();
     const initialComposer = page.getByTestId("composer").getByRole("textbox").first();
-    if (await initialComposer.inputValue()) {
+    if (await initialComposer.textContent()) {
       const saved = page.waitForResponse((response) => response.request().method() === "PUT" && response.url().endsWith("/draft") && response.ok());
       await initialComposer.fill("");
       await saved;
@@ -120,7 +120,7 @@ for (const profile of [
     before = await metrics(); started = performance.now();
     const composer = page.getByTestId("composer").getByRole("textbox").first();
     await composer.fill("Measure interaction after a long conversation");
-    await expect(composer).toHaveValue("Measure interaction after a long conversation");
+    await expect(composer).toHaveText("Measure interaction after a long conversation");
     await page.mouse.move(profile.width / 2, profile.height / 2);
     await page.mouse.wheel(0, -2000);
     await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));

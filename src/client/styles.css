@@ -427,7 +427,7 @@ html {
 
 /* The inherited default is 13px — the ramp's UI/controls/rows step — not the
    14.5px chat-body step: what inherits from <body> is chrome, and chat body
-   is set explicitly where it lives (`.message-body`, `.composer textarea`).
+   is set explicitly where it lives (`.message-body`, `.composer-editor`).
    14px was on no step at all, so anything that forgot to size itself landed
    off the ramp by default. Measured before changing: across the welcome,
    sidebar, thread, transcript, actions menu, settings dialog, automation
@@ -8437,31 +8437,6 @@ tr.diff-hunk td {
   opacity: 0.72;
 }
 
-.composer textarea {
-  display: block;
-  width: 100%;
-  min-height: 46px;
-  max-height: 220px;
-  resize: none;
-  overflow-y: auto;
-  padding: 13px 15px 4px;
-  border: 0;
-  outline: none;
-  background: transparent;
-  color: var(--foreground);
-  font-size: 14.5px;
-  line-height: 1.55;
-  /* Composer sizes the textarea by setting height 0 and reading scrollHeight.
-     Any height transition, including the 0.01ms one the reduced-motion rule
-     gives every element, holds the old height during that read, so the
-     textarea could grow but never shrink back. */
-  transition: none;
-}
-
-.composer textarea::placeholder {
-  color: var(--muted-foreground-2);
-}
-
 .composer-skill-chip {
   display: inline-flex;
   max-width: calc(100% - 30px);
@@ -8611,8 +8586,8 @@ tr.diff-hunk td {
   font-size: 11.5px;
 }
 
-.composer-task-list + textarea,
-.composer-task-error + textarea {
+.composer-task-list + .composer-editor,
+.composer-task-error + .composer-editor {
   min-height: 38px;
   padding-top: 8px;
 }
@@ -8710,13 +8685,13 @@ tr.diff-hunk td {
   overflow-y: auto;
 }
 
-.composer > .context-excerpt-list + textarea {
+.composer > .context-excerpt-list + .composer-editor {
   min-height: 38px;
   padding-top: 8px;
 }
 
-.composer-attachment-list + textarea,
-.composer-attachment-error + textarea {
+.composer-attachment-list + .composer-editor,
+.composer-attachment-error + .composer-editor {
   min-height: 38px;
   padding-top: 8px;
 }

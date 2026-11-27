@@ -1,3 +1,4 @@
+import { restoreStashedComposerText } from "./stored-composer-text.js";
 import type { RequestScope } from "../identity/identity-provider.js";
 import type { InteractionBroker } from "../conversations/interaction-broker.js";
 import type { ContextExcerpt } from "../../shared/protocol/context-excerpts.js";
@@ -177,8 +178,7 @@ export class InventoryService {
       .listStashes(scope, applicationThreadId)
       .find(({ id }) => id === stashId);
     if (stash) {
-      const restored =
-        draft.text.length === 0 ? stash.text : `${draft.text}\n\n${stash.text}`;
+      const restored = restoreStashedComposerText(draft.text, stash.text);
       const contextExcerpts = [
         ...draft.contextExcerpts,
         ...stash.contextExcerpts,

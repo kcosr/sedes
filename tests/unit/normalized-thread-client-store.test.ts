@@ -453,6 +453,18 @@ describe("ThreadClientStore normalized operations", () => {
     } finally { store.dispose(); }
   });
 
+  it("copies an inline thread as a readable link in its original position from the queue", async () => {
+    const reference = { title: "Parked speech", threadId: "99c14688-f218-438e-a2dd-07347834da66" };
+    const readQueuedInput = vi.fn(async () => ({
+      threadId: "thread-1", queuedInputId: "input", origin: "user", state: "failed",
+      content: [{ kind: "thread_reference_body", parts: ["Read ", reference, " first."] }],
+    }));
+    const store = new ThreadClientStore("thread-1", { readQueuedInput } as unknown as ApiClient, new FakeTransport());
+    try {
+      await expect(store.readQueuedInputText("input")).resolves.toBe(`Read [Parked speech](sedes-thread:${reference.threadId}) first.`);
+    } finally { store.dispose(); }
+  });
+
   it.each([
     { threadId: "another-thread" }, { queuedInputId: "another-input" },
     { origin: "automation" }, { content: [] },

@@ -18,7 +18,7 @@ import {
 import { MarkdownContent } from "./MarkdownContent";
 import { setHighlightQuestions } from "../../app/settings.js";
 import { WorkspaceFileLinkProvider } from "../../workspace-files/workspace-file-link-routing.js";
-import { formatThreadReferenceText, THREAD_REFERENCE_HEADER } from "../../../shared/thread-references.js";
+import { formatInlineThreadReferenceText, formatThreadReferenceText, THREAD_REFERENCE_HEADER } from "../../../shared/thread-references.js";
 
 const androidImageActions = vi.hoisted(() => ({
   available: false,
@@ -935,6 +935,43 @@ describe("normalized conversation renderers", () => {
     expect(container.querySelector("img")).toBeNull();
     expect(container.querySelector("[data-conversation-message-text]")?.textContent).toBe(body);
     expect(container).not.toHaveTextContent('"threadReferences"');
+  });
+
+  it("renders the authored order, frozen labels and repeated references as links inside one text selection", () => {
+    const first = {
+      threadId: "616946aa-4574-41f7-bd70-d3a9edd56dbd", title: "Parked speech",
+      brand: "codex" as const, project: "sedes", environment: "aw-personal",
+    };
+    const second = {
+      threadId: "41b96330-8eb9-4162-a42f-a6765441fb19", title: "<b>VSL</b>",
+      brand: "claude" as const, project: "VSL", environment: "rocky8",
+    };
+    const { container } = render(<ConversationItemView item={{ ...common, kind: "user_message",
+      deliveryOperationId: "delivery-1", content: [{ kind: "thread_reference_body",
+        parts: ["Compare ", first, " with ", second, ".\n", first] }],
+    }} />);
+    const text = container.querySelector("[data-conversation-message-text]")!;
+    expect(Array.from(text.childNodes, node => node.textContent)).toEqual([
+      "Compare ", "Parked speech", " with ", "<b>VSL</b>", ".\n", "Parked speech",
+    ]);
+    expect(screen.getAllByRole("link", { name: first.title })).toHaveLength(2);
+    const link = screen.getByRole("link", { name: second.title });
+    expect(link).toHaveAttribute("href", `/threads/${second.threadId}`);
+    expect(link).toHaveAccessibleDescription("claude · Project: VSL · Environment: rocky8");
+    expect(link.querySelector("svg[data-backend-brand=claude]")).not.toBeNull();
+    expect(link.querySelector(".inline-thread-reference-project [data-label]")).toHaveAttribute("data-label", "VSL");
+    expect(link.querySelector("b")).toBeNull();
+    expect(container.querySelector(".thread-reference-list")).toBeNull();
+  });
+
+  it("keeps literal mention storage and provider links as text without authored source evidence", () => {
+    const ref = { threadId: "616946aa-4574-41f7-bd70-d3a9edd56dbd", title: "Related" };
+    const text = formatInlineThreadReferenceText([`[${ref.title}](sedes-thread:${ref.threadId}) `, ref]);
+    const { container } = render(<ConversationItemView item={{ ...common, kind: "user_message",
+      content: [{ kind: "text", text: { text } }],
+    }} />);
+    expect(container.querySelector("[data-conversation-message-text]")?.textContent).toBe(text);
+    expect(screen.queryByRole("link")).toBeNull();
   });
 
   it("labels automatic continuation messages without exposing a caller or treating their text as user references", () => {

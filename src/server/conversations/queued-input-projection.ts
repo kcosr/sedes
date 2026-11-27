@@ -1,5 +1,6 @@
+import { threadReferenceMessagePart } from "../../shared/thread-references.js";
 import type { QueuedInputSummary } from "../../shared/protocol/conversation.js";
-import { splitThreadReferenceText } from "../../shared/thread-references.js";
+import { threadReferencePreview } from "../../shared/thread-reference-preview.js";
 import {
   queuedInputPresentationSchema,
   type QueuedInputPresentation,
@@ -26,12 +27,10 @@ const projectedQueueStates = new Set<QueuedInputRecord["state"]>([
 ]);
 
 function queuedInputPreview(item: QueuedInputRecord) {
-  const references = splitThreadReferenceText(item.text);
-  const text = references.text.trim();
-  if (text.length > 0) return boundDisplayText(text, QUEUE_PREVIEW_LIMITS);
-  if (references.references.length > 0) {
-    return boundDisplayText(`Referenced thread: ${references.references[0]!.title}${references.references.length > 1 ? ` · +${references.references.length - 1}` : ""}`, QUEUE_PREVIEW_LIMITS);
-  }
+  const text = queuedInputOrigin(item) === "user" && item.inputOrigin === null
+    ? threadReferencePreview(item.text, item.hasThreadReferenceBody === 1 ? "authored" : "legacy")
+    : item.text.trim();
+  if (text) return boundDisplayText(text, QUEUE_PREVIEW_LIMITS);
   const taskCount = item.taskContexts.length;
   if (taskCount > 0) {
     const firstTitle = item.taskContexts[0]!.title.trim();
@@ -115,7 +114,8 @@ export function projectQueuedInputPresentation(
       ...item.contextExcerpts.map((excerpt) => ({ kind: "context_excerpt", excerpt })),
       ...(item.text.trim().length === 0
         ? []
-        : [{ kind: "text", text: preserveMessageText(item.text) }]),
+        : [item.hasThreadReferenceBody ? threadReferenceMessagePart(item.text)
+          : { kind: "text", text: preserveMessageText(item.text) }]),
     ],
   });
   // Invalid retained data is a server fault, not a refusal of the admitted input.

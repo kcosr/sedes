@@ -1,3 +1,4 @@
+import { threadReferenceMessagePart, threadReferenceProviderText } from "../../shared/thread-references.js";
 import type { BackendItem } from "../../shared/protocol/backend.js";
 import type {
   DeliveryInputOrigin,
@@ -22,9 +23,11 @@ export type DeliveryInputSnapshotResolver = (
 /** Application-only metadata is persisted before provider submission. */
 export type ApplicationSubmitTurnInput = SubmitTurnInput & {
   readonly inputOrigin?: DeliveryInputOrigin;
+  readonly hasThreadReferenceBody?: true;
 };
 export type ApplicationSteerTurnInput = SteerTurnInput & {
   readonly inputOrigin?: DeliveryInputOrigin;
+  readonly hasThreadReferenceBody?: true;
 };
 
 /**
@@ -55,14 +58,14 @@ export function backendDeliveryInput(
 export function backendDeliveryInput(
   input: ApplicationSubmitTurnInput | ApplicationSteerTurnInput,
 ): SubmitTurnInput | SteerTurnInput {
-  const { inputOrigin, ...providerInput } =
+  const { inputOrigin, hasThreadReferenceBody, ...providerInput } =
     input as ApplicationSubmitTurnInput;
   const provenanceText =
     inputOrigin?.kind === "agent_message"
       ? `Agent message from ${inputOrigin.sourceThreadLabel.text}:\n\n${providerInput.text}`
       : inputOrigin?.kind === "page_response"
         ? `Page response from ${inputOrigin.title} (revision ${inputOrigin.revision}):\n\n${providerInput.text}`
-        : providerInput.text;
+        : hasThreadReferenceBody && !inputOrigin ? threadReferenceProviderText(providerInput.text) : providerInput.text;
   if (providerInput.taskContexts.length === 0) {
     return provenanceText === providerInput.text
       ? providerInput
@@ -93,11 +96,18 @@ export function canonicalUserMessageContent(input: {
   const providerSkill = input.snapshot.origin?.kind === "page_response"
     ? undefined
     : input.providerContent.find(({ kind }) => kind === "skill");
+  const body = input.snapshot.hasThreadReferenceBody
+    ? threadReferenceMessagePart(input.snapshot.text)
+    : { kind: "text" as const, text: { text: input.snapshot.text } };
+  // A typed atom is never part of a slash command. Preserve the rest of the
+  // captured body when the provider reports a skill invocation.
+  const leading = body.kind === "text" ? body.text.text : body.parts[0];
   const directSkillArguments =
-    providerSkill?.kind === "skill" && !input.snapshot.selectedSkillId
+    providerSkill?.kind === "skill" && !input.snapshot.selectedSkillId && typeof leading === "string"
       ? directSkillInvocationArguments(
-          input.snapshot.text.trimStart(),
+          leading.trimStart(),
           providerSkill.name.text,
+          body.kind === "thread_reference_body" && body.parts.length > 1,
         )
       : undefined;
   const skill =
@@ -105,10 +115,13 @@ export function canonicalUserMessageContent(input: {
     (input.snapshot.selectedSkillId || directSkillArguments !== undefined)
       ? providerSkill
       : undefined;
-  const canonicalText =
-    skill && !input.snapshot.selectedSkillId
-      ? directSkillArguments!
-      : input.snapshot.text;
+  let canonicalBody = body;
+  if (skill && !input.snapshot.selectedSkillId) {
+    const args = directSkillArguments!;
+    canonicalBody = body.kind === "text"
+      ? { kind: "text", text: { text: args } }
+      : { kind: "thread_reference_body", parts: [...(args ? [args] : []), ...body.parts.slice(1)] };
+  }
   return [
     ...(skill ? [skill] : []),
     ...input.snapshot.attachments.map(({ descriptor: attachment }) => ({
@@ -123,18 +136,18 @@ export function canonicalUserMessageContent(input: {
       kind: "context_excerpt" as const,
       excerpt,
     })),
-    ...(canonicalText.trim().length > 0
-      ? [{ kind: "text" as const, text: { text: canonicalText } }]
-      : []),
+    ...((canonicalBody.kind === "text" ? canonicalBody.text.text.trim().length : canonicalBody.parts.length)
+      ? [canonicalBody] : []),
   ];
 }
 
 function directSkillInvocationArguments(
   text: string,
   skillName: string,
+  followedByAtom: boolean,
 ): string | undefined {
   const invocation = `/${skillName}`;
-  if (text === invocation) return "";
+  if (text === invocation) return followedByAtom ? undefined : "";
   if (
     !text.startsWith(invocation) ||
     !/^\s/u.test(text.slice(invocation.length))

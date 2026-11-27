@@ -47,7 +47,7 @@ import type { RequestScope } from "../../src/server/identity/identity-provider.j
 import { SingleUserIdentityProvider } from "../../src/server/identity/identity-provider.js";
 import { presentTask } from "../../src/server/application/task-presentation.js";
 import { materializeTaskContext } from "../../src/server/domain/materialized-task-contexts.js";
-import { formatThreadReferenceText, splitThreadReferenceText } from "../../src/shared/thread-references.js";
+import { formatInlineThreadReferenceText, formatThreadReferenceText, readThreadReferenceBody, splitThreadReferenceText } from "../../src/shared/thread-references.js";
 import {
   composerInputUtf8Bytes,
   MAXIMUM_THREAD_INPUT_BYTES,
@@ -1752,6 +1752,46 @@ describe("inactive schema-10 repositories", () => {
       snapshots.prepare(scope, secondThreadId, {...input("new-root"), rootSubmit: true});
       expect(proof("new-root", secondThreadId)).toBeUndefined();
     } finally { database.close(); }
+  });
+
+  it("quotes only exact pre-upgrade authoring-envelope look-alikes in drafts and stashes without changing revisions", () => {
+    const fixture = createFixture(174);
+    try {
+      const inventory = new InventoryRepository(fixture.database);
+      const raw = formatInlineThreadReferenceText(["compare ", { threadId: fixture.threadId, title: "target" }]);
+      const save = (text: string) => inventory.saveDraft(fixture.scope, fixture.threadId, { text,
+        contextExcerpts: [], taskReferenceIds: [], attachmentIds: [],
+        expectedRevision: inventory.getDraft(fixture.scope, fixture.threadId).revision, now: 700 });
+      const stashed = save(raw);
+      inventory.stashDraft(fixture.scope, fixture.threadId, { mutationId: "old-stash", expectedDraftRevision: stashed.revision,
+        maximumStashes: 4, now: 701 });
+      const draft = save(raw);
+      const otherRaw = "Sedes inline thread reference body:\njust a note";
+      const other = inventory.saveDraft(fixture.scope, fixture.secondThreadId, { text: otherRaw,
+        contextExcerpts: [], taskReferenceIds: [], attachmentIds: [],
+        expectedRevision: inventory.getDraft(fixture.scope, fixture.secondThreadId).revision, now: 700 });
+      applyDatabaseMigrations(fixture.database, backendNormalizedMigrations);
+      const current = inventory.getDraft(fixture.scope, fixture.threadId);
+      expect(current.revision).toBe(draft.revision);
+      expect(readThreadReferenceBody(current.text).parts).toEqual([raw]);
+      expect(readThreadReferenceBody(inventory.listStashes(fixture.scope, fixture.threadId)[0]!.text).parts).toEqual([raw]);
+      expect(inventory.getDraft(fixture.scope, fixture.secondThreadId)).toEqual(other);
+    } finally { fixture.database.close(); }
+  });
+
+  it("binds authored inline-body provenance in the immutable snapshot and retains it through forks", () => {
+    const fixture = createFixture();
+    try {
+      const repository = new DeliveryInputSnapshotRepository(fixture.database);
+      const text = formatInlineThreadReferenceText(["compare ", { threadId: fixture.secondThreadId, title: "target" }]);
+      const input = { applicationOperationId: "mention", text, contextExcerpts: [], taskContexts: [], attachments: [], createdAt: 601 };
+      const typed = { ...input, hasThreadReferenceBody: true as const };
+      const expected = { text, hasThreadReferenceBody: true };
+      expect(repository.prepare(fixture.scope, fixture.threadId, typed)).toMatchObject(expected);
+      expect(() => repository.prepare(fixture.scope, fixture.threadId, input)).toThrow(/different prepared input/);
+      repository.copyThread(fixture.scope, fixture.threadId, fixture.secondThreadId);
+      expect(repository.find(fixture.scope, fixture.secondThreadId, "mention")).toMatchObject(expected);
+    } finally { fixture.database.close(); }
   });
 
   it("persists immutable scoped delivery input snapshots with exact replay semantics", () => {
@@ -5522,6 +5562,47 @@ describe("inactive schema-10 repositories", () => {
       expect(restore()).toMatchObject({ replayed: true, draft: { text } });
     } finally { fixture.database.close(); }
   });
+
+  it.each(["direct_input", "composer", "at_byte_limit"] as const)(
+    "preserves the source of an inline-body look-alike on queue restoration (%s)", source => {
+      const fixture = createFixture();
+      try {
+        bindDiscovered(fixture);
+        const queue = new QueuedInputRepository(fixture.database);
+        const drafts = new ConversationDraftRepository(fixture.database);
+        const ref = { threadId: fixture.threadId, title: "Related work" };
+        const overhead = Buffer.byteLength(formatInlineThreadReferenceText([ref, "x"])) - 1;
+        const suffix = source === "at_byte_limit" ? "x".repeat(MAXIMUM_THREAD_INPUT_BYTES - overhead) : " here";
+        const parts = [ref, suffix];
+        const text = formatInlineThreadReferenceText(parts);
+        const initial = new InventoryRepository(fixture.database).saveDraft(fixture.scope, fixture.threadId, {
+          text: source === "composer" ? text : "", contextExcerpts: [], attachmentIds: [], taskReferenceIds: [],
+          expectedRevision: drafts.get(fixture.scope, fixture.threadId).revision, now: 590,
+        });
+        const queued = queue.enqueue(fixture.scope, fixture.threadId, {
+          mutationId: randomUUID(), text, contextExcerpts: [], attachmentIds: [], taskReferences: [],
+          source: source === "composer"
+            ? { kind: "composer", requestedDeliveryMode: "queue", resolvedDeliveryMode: "queue",
+                expectedThreadRevision: threadRevision(fixture), expectedDraftRevision: initial.revision }
+            : { kind: "direct_input", resolvedDeliveryMode: "queue", expectedThreadRevision: threadRevision(fixture) },
+          now: 600,
+        }).item;
+        const request = { mutationId: randomUUID(), expectedThreadRevision: threadRevision(fixture),
+          expectedDraftRevision: drafts.get(fixture.scope, fixture.threadId).revision, now: 610 };
+        const restore = () => queue.restoreIdempotently(fixture.scope, fixture.threadId, queued.id, request);
+        if (source === "at_byte_limit") {
+          expect(Buffer.byteLength(text)).toBe(MAXIMUM_THREAD_INPUT_BYTES);
+          expect(restore).toThrow(/exceeds the composer size limit/);
+          expect(drafts.get(fixture.scope, fixture.threadId).text).toBe("");
+          expect(queue.get(fixture.scope, fixture.threadId, queued.id).state).toBe("pending");
+        } else {
+          const restored = restore();
+          expect(readThreadReferenceBody(restored.draft.text).parts).toEqual(source === "composer" ? parts : [text]);
+          expect(restore()).toMatchObject({ replayed: true, draft: restored.draft });
+        }
+      } finally { fixture.database.close(); }
+    },
+  );
 
   it("atomically restores the complete queued composer payload and replays its receipt", () => {
     const fixture = createFixture();

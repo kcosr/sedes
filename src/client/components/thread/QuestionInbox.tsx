@@ -280,7 +280,7 @@ function QuestionPanel({ store }: { store: ThreadClientStore }) {
     if (request && inbox.open) panel.current?.focus();
     else if (!request) {
       composerRoot.current
-        ?.querySelector<HTMLTextAreaElement>(".composer textarea")
+        ?.querySelector<HTMLElement>('.composer-editor[role="textbox"]')
         ?.focus();
       focusWasInPanel.current = false;
     }

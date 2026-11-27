@@ -1,5 +1,5 @@
 import type { ConversationItem, UserMessageItem } from "../../../shared/index.js";
-import { splitThreadReferenceText } from "../../../shared/thread-references.js";
+import { splitThreadReferenceText, threadReferenceDisplayText } from "../../../shared/thread-references.js";
 
 const userPreviewLimit = 220;
 export const assistantPreviewLimit = 480;
@@ -35,6 +35,7 @@ export function userMessagePreview(item: UserMessageItem): string {
           .join(" · ")
       : item.content
       .map((part) => {
+        if (part.kind === "thread_reference_body") return threadReferenceDisplayText(part.parts);
         if (part.kind === "text") {
           if (item.origin) return part.text.text;
           const { text, references } = splitThreadReferenceText(part.text.text);

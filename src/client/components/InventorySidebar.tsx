@@ -385,11 +385,7 @@ function keyboardEventTargetBlocksSidebarNavigation(
     'input, textarea, select, [role="textbox"], [contenteditable]:not([contenteditable="false"])',
   );
   if (editable === null) return false;
-  return !(
-    editable instanceof HTMLTextAreaElement &&
-    editable.dataset.sidebarNavigationWhenEmpty === "true" &&
-    editable.value.length === 0
-  );
+  return !editable.matches('[data-sidebar-navigation-when-empty="true"]');
 }
 
 /**

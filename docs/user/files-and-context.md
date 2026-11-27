@@ -80,28 +80,30 @@ worktree also clears the stale preference and Files falls back to Primary.
 
 ## Reference another thread
 
-Drag an individual sidebar thread into the message composer, or type **@** and
-choose an active thread. Each selection appears as a removable
-chip above the message; up to 16 threads can be referenced in one prompt.
-Long chip lists scroll above the message box. Their IDs and titles count toward
-the shared 256 KiB input budget.
-The picker includes the active threads currently loaded in your inventory.
-It shows the same status indicator as the sidebar, followed by each thread's
-provider icon and title, with project and environment names together after the
-title when the popup is wide and on a compact second line when it is narrow. Long
-names truncate independently; hover to see their full names. Project labels
-include folder hints when needed to distinguish locations, as in the sidebar.
-Type after **@** to filter by thread title, provider, project, or environment.
-Focus stays in the composer on desktop and
-mobile. Arrow keys move between results, Enter selects, and Escape closes
-the picker while retaining the typed text.
+Type **@** in Chat to choose an existing thread. The picker opens on the
+current project. Choose **All threads…** to search across projects and
+execution environments. Type a title, provider, project or environment to
+filter the results. Use Up and Down to move, Enter or Tab to choose, and
+Escape to close the picker. Left goes back from All threads. If you press
+Enter or Tab while a search is running, the picker selects its first match
+when it arrives.
 
-The agent receives the selected Sedes thread IDs and quoted titles followed by
-your message. Referencing a thread does not copy its messages or grant access:
-the agent still needs the appropriate Sedes tools and permission to read or
-interact with it. References remain in saved drafts, stashes, queued inputs,
-and retries. In a sent message, click a reference to open that thread.
-Switch from TUI to Chat to send references.
+The mention appears where you typed **@**. You can also drag a sidebar thread
+onto the text. The insertion caret shows where it will land. Dropping on the
+surrounding composer uses the last caret position, or the end of the draft
+if you haven't placed the caret. Edit the surrounding words normally, or
+delete the mention as one item.
+
+The sent message keeps the mention in the sentence. Click it to open the
+thread. When available, the provider icon, project and environment help
+distinguish threads with the same title. Older messages retain their leading
+reference badges because they recorded only the selected threads.
+
+The agent receives the thread's Sedes ID and title in context. Reading or
+messaging that thread requires the corresponding Sedes tool and resource
+access. References persist through draft save, stash, queue and retry.
+A prompt can contain up to 16 thread references within the shared 256 KiB
+input budget. Use Chat to send a thread reference.
 
 ## Read, preview, and download
 

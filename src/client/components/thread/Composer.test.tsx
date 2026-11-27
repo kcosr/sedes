@@ -27,6 +27,7 @@ import type {
 } from "../../stores/ThreadClientStore.js";
 import { DeliveryRecoveryRequiredError } from "../../stores/ThreadClientStore.js";
 import { Composer } from "./Composer.js";
+import { composerText, replaceComposerText, setComposerCaret } from "./composer-test-dom.js";
 import { NativeVoiceStore } from "../../voice/NativeVoiceStore.js";
 import { fakeVoicePlugin, recordingRecovery, voiceComposerHandoffSnapshot, voiceSnapshot, VOICE_CONNECTION } from "../../voice/native-voice-test-fixture.js";
 const voiceForTests = vi.hoisted(() => ({ current: null as NativeVoiceStore | null }));
@@ -60,7 +61,7 @@ import {
 import type { NormalizedApplicationSnapshot } from "../../../shared/index.js";
 import type { NormalizedApplicationThreadSummary } from "../../../shared/index.js";
 import { ThreadDragProvider, useThreadDrag } from "../../threads/thread-drag.js";
-import { formatThreadReferenceText, splitThreadReferenceText } from "../../../shared/thread-references.js";
+import { formatInlineThreadReferenceText, readThreadReferenceBody } from "../../../shared/thread-references.js";
 
 import {
   clearDiagnostics,
@@ -365,8 +366,8 @@ class FakeComposerStore {
   }
 }
 
-function type(text: string): void {
-  fireEvent.change(screen.getByRole("textbox"), { target: { value: text } });
+function type(text: string): Promise<void> {
+  return replaceComposerText(screen.getByRole("textbox"), text);
 }
 
 function snapshot(
@@ -566,6 +567,8 @@ function TaskReferenceFixture() {
   );
 }
 
+const emptyThreadCatalog = { projects: [], environments: [], workspaces: [], threads: [] };
+
 function applicationStore(
   tasks: readonly Record<string, unknown>[],
   authoritative = true,
@@ -576,7 +579,7 @@ function applicationStore(
     authoritative,
     search: "",
     visibleThreads: [],
-    snapshot: { tasks, executionTargets: [], accountUsages: [] },
+    snapshot: { ...emptyThreadCatalog, tasks, executionTargets: [], accountUsages: [] },
   };
   return {
     subscribe: () => () => undefined,
@@ -592,7 +595,7 @@ function applicationStoreWithPrompts(): ApplicationClientStore {
     authoritative: true,
     search: "",
     visibleThreads: [],
-    snapshot: { tasks: [], executionTargets: [], accountUsages: [] },
+    snapshot: { ...emptyThreadCatalog, tasks: [], executionTargets: [], accountUsages: [] },
   };
   const promptState = {
     status: "ready" as const,
@@ -638,10 +641,10 @@ function refreshableApplicationStore(
     authoritative: true,
     search: "",
     visibleThreads: [],
-    snapshot: { tasks: initialTasks, executionTargets: [], accountUsages: [] },
+    snapshot: { ...emptyThreadCatalog, tasks: initialTasks, executionTargets: [], accountUsages: [] },
   };
   const refresh = vi.fn(async () => {
-    state = { ...state, snapshot: { tasks: refreshedTasks, executionTargets: [], accountUsages: [] } };
+    state = { ...state, snapshot: { ...state.snapshot, tasks: refreshedTasks } };
     for (const listener of listeners) listener();
   });
   return {
@@ -738,18 +741,34 @@ const referenceCatalog = {
 };
 const referenceLocationDescription = "Project: Sedes. Environment: Local";
 
-function referenceApplication(threads = [referencedThread], descendants: readonly NormalizedApplicationThreadSummary[] = [], catalog = referenceCatalog) {
+function referenceApplication(threads = [referencedThread], descendants: readonly NormalizedApplicationThreadSummary[] = [], catalog = referenceCatalog, unloaded: readonly NormalizedApplicationThreadSummary[] = []) {
   const snapshot = { threads, groups: [], tasks: [], executionTargets: [], accountUsages: [], ...catalog } as unknown as NormalizedApplicationSnapshot;
   const state = { status: "ready", connection: "connected", authoritative: true, search: "", visibleThreads: [], snapshot, descendantPages: { loaded: { descendants: descendants.map((thread) => ({ thread })) } } };
-  return { snapshot, store: { getSnapshot: () => state, subscribe: () => () => undefined } as unknown as ApplicationClientStore };
+  const api = { listMentionCandidates: vi.fn(async (_sourceId: string, { scope, query, cursor }: { scope: "project" | "all"; query?: string; cursor?: string }) => {
+    const candidates = [...new Map([...descendants, ...threads, ...unloaded].map(thread => [thread.id, thread])).values()].filter(thread => {
+      const location = catalog.workspaces.find(workspace => workspace.id === thread.workspaceId);
+      const project = catalog.projects.find(item => item.id === location?.projectId);
+      const environment = catalog.environments.find(item => item.id === location?.environmentId);
+      return thread.inventoryState !== "archived" && (scope === "all" || location?.projectId === "reference-project") &&
+        [thread.title.text, thread.backend.brand, project?.name, location?.label.text, environment?.label.text]
+          .some(value => value?.toLowerCase().includes(query?.toLowerCase() ?? ""));
+    });
+    const start = Number(cursor ?? 0);
+    return { threads: candidates.slice(start, start + 30), nextCursor: start + 30 < candidates.length ? String(start + 30) : undefined };
+  }) };
+  return { snapshot, api, store: { api, getSnapshot: () => state, subscribe: () => () => undefined } as unknown as ApplicationClientStore };
 }
 
 async function openReferenceSuggestions(query = "") {
-  const input = screen.getByRole("textbox") as HTMLTextAreaElement;
-  input.focus();
-  input.setSelectionRange(0, 0);
+  const input = screen.getByRole("textbox");
+  setComposerCaret(input, 0);
   await userEvent.keyboard(`@${query}`);
+  await waitFor(() => expect(screen.queryByText("Searching threads…")).not.toBeInTheDocument());
   return input;
+}
+
+function inlineReferenceNodes() {
+  return Array.from(screen.getByRole("textbox").querySelectorAll("[data-thread-reference-id]"));
 }
 
 function ThreadDragTestSource() {
@@ -795,8 +814,11 @@ describe("thread references", () => {
       workspaces: [...referenceCatalog.workspaces, { id: "speech-workspace", projectId: "speech-project", environmentId: "speech-environment", label: { text: "Speech" }, displayPath: { text: "/work/speech" }, available: true }],
     };
     const store = new FakeComposerStore(snapshot(), "Ask");
-    render(<Composer store={store as unknown as ThreadClientStore} applicationStore={referenceApplication([first, second], [], catalog).store} />);
+    render(<Composer store={store as unknown as ThreadClientStore} applicationStore={referenceApplication([first], [], catalog, [second]).store} />);
     const input = await openReferenceSuggestions();
+    expect(screen.getAllByRole("option", { name: "Speech next" })).toHaveLength(1);
+    await userEvent.keyboard("{ArrowUp}{ArrowRight}");
+    await waitFor(() => expect(screen.getAllByRole("option", { name: "Speech next" })).toHaveLength(2));
     const options = screen.getAllByRole("option", { name: "Speech next" });
     expect(options[0]).toHaveAccessibleDescription(referenceLocationDescription);
     expect(options[1]).toHaveAccessibleDescription("Project: Speech. Environment: aw-personal");
@@ -804,13 +826,28 @@ describe("thread references", () => {
     expect(within(options[1]!).getByText("Speech")).toBeVisible();
     expect(within(options[1]!).getByText("aw-personal")).toBeVisible();
     await userEvent.keyboard("{ArrowDown}{Enter}");
-    await waitFor(() => expect(screen.getByRole("list", { name: "Referenced threads" })).toBeVisible());
+    await waitFor(() => expect(inlineReferenceNodes()).toHaveLength(1));
     expect(input).toHaveFocus();
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
     await waitFor(() => expect(store.deliver).toHaveBeenCalled());
-    expect(splitThreadReferenceText(store.deliver.mock.calls[0]![1].text).references).toEqual([
-      { threadId: second.id, title: "Speech next" },
+    expect(readThreadReferenceBody(store.deliver.mock.calls[0]![1].text).parts).toEqual([
+      { threadId: second.id, title: "Speech next", brand: "claude", project: "Speech", environment: "aw-personal" }, "Ask",
     ]);
+  });
+
+  it("restores the project query and highlighted All threads action after editing the global query", async () => {
+    const application = referenceApplication();
+    render(<Composer store={new FakeComposerStore(snapshot(), "Ask") as unknown as ThreadClientStore} applicationStore={application.store} />);
+    const input = await openReferenceSuggestions("Other");
+    await userEvent.keyboard("{ArrowUp}{Enter}");
+    expect(await screen.findByRole("button", { name: "Back to current project" })).toBeVisible();
+    await userEvent.keyboard("X");
+    expect(await screen.findByText("No matching active threads")).toBeVisible();
+    await userEvent.keyboard("{ArrowLeft}");
+    expect(await screen.findByRole("option", { name: "Other thread" })).toBeVisible();
+    expect(composerText(input)).toBe("@OtherAsk");
+    expect(screen.getByRole("option", { name: "All threads…" })).toHaveAttribute("aria-selected", "true");
+    expect(input).toHaveFocus();
   });
 
   it.each(["sEdEs", "LOCAL"])("filters @ suggestions by the displayed project or environment: %s", async (query) => {
@@ -823,17 +860,17 @@ describe("thread references", () => {
   it("reopens suggestions for a fresh @ after deleting an active mention at the same position", async () => {
     render(<Composer store={new FakeComposerStore(snapshot(), "Ask") as unknown as ThreadClientStore} applicationStore={referenceApplication().store} />);
     const input = await openReferenceSuggestions("Local");
-    expect(screen.getByRole("option", { name: "Other thread" })).toBeVisible();
+    expect(await screen.findByRole("option", { name: "Other thread" })).toBeVisible();
     await userEvent.keyboard("{Backspace>6}");
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Reference a thread" })).not.toBeInTheDocument());
-    expect(input).toHaveValue("Ask");
+    expect(composerText(input)).toBe("Ask");
     await userEvent.keyboard("@Sedes");
     expect(input).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByRole("option", { name: "Other thread" })).toBeVisible();
+    expect(await screen.findByRole("option", { name: "Other thread" })).toBeVisible();
     expect(input).toHaveFocus();
     await userEvent.keyboard("{Enter}");
-    expect(screen.getByRole("list", { name: "Referenced threads" })).toHaveTextContent("Other thread");
-    expect(input).toHaveValue("Ask");
+    expect(inlineReferenceNodes()[0]).toHaveTextContent("Other thread");
+    expect(composerText(input)).toMatch(/Other thread.*Ask$/u);
   });
 
   it("uses sidebar folder hints and updates labels and matching after the catalog changes", async () => {
@@ -851,9 +888,9 @@ describe("thread references", () => {
       projects: [{ ...catalog.projects[0]!, name: "Renamed project" }],
       environments: [{ ...catalog.environments[0]!, label: { text: "Renamed environment" } }],
     }).store} />);
-    expect(screen.getByRole("option", { name: "Other thread" })).toHaveAccessibleDescription("Project: Renamed project › sedes-context. Environment: Renamed environment");
+    expect(await screen.findByRole("option", { name: "Other thread" })).toHaveAccessibleDescription("Project: Renamed project › sedes-context. Environment: Renamed environment");
     await userEvent.keyboard("{Backspace>13}Renamed");
-    expect(screen.getByRole("option", { name: "Other thread" })).toBeVisible();
+    expect(await screen.findByRole("option", { name: "Other thread" })).toBeVisible();
   });
 
   it("updates the sidebar status indicator before the provider icon using the shared priority", async () => {
@@ -865,34 +902,34 @@ describe("thread references", () => {
     const active = { ...referencedThread, runState: "running" as const, backgroundWork, attention, automations };
     const view = render(<Composer store={store as unknown as ThreadClientStore} applicationStore={referenceApplication([active]).store} />);
     const input = await openReferenceSuggestions();
-    const assertStatus = (kind: string, label: string) => {
-      const option = screen.getByRole("option", { name: "Other thread" });
+    const assertStatus = async (kind: string, label: string) => {
+      const option = await screen.findByRole("option", { name: "Other thread" });
       expect(option.firstElementChild).toHaveAttribute("data-glyph", kind);
       expect(option.children[1]).toHaveAttribute("data-backend-brand", "claude");
       expect(option).toHaveAccessibleDescription(`${label}. ${referenceLocationDescription}`);
       expect(input).toHaveFocus();
-      expect(input).toHaveValue("@Keep this text");
+      expect(composerText(input)).toBe("@Keep this text");
     };
     const update = (thread: NormalizedApplicationThreadSummary) => view.rerender(
       <Composer store={store as unknown as ThreadClientStore} applicationStore={referenceApplication([thread]).store} />,
     );
-    assertStatus("running", "Running");
+    await assertStatus("running", "Running");
     update({ ...active, runState: "failed" });
-    assertStatus("failed", "Failed");
+    await assertStatus("failed", "Failed");
     update({ ...active, runState: "waiting_for_approval" });
-    assertStatus("waiting", "Waiting for approval");
+    await assertStatus("waiting", "Waiting for approval");
     const completed = { ...active, runState: "idle" as const };
     update(completed);
-    assertStatus("unseen", "Finished while you were away · 1 subagent, 1 command still running");
+    await assertStatus("unseen", "Finished while you were away · 1 subagent, 1 command still running");
     const acknowledged = { ...completed, attention: referencedThread.attention };
     update(acknowledged);
-    assertStatus("background-agents", "Background work · 1 subagent, 1 command");
+    await assertStatus("background-agents", "Background work · 1 subagent, 1 command");
     update({ ...acknowledged, backgroundWork: { agents: 0, commands: 1, other: 0 } });
-    assertStatus("background-commands", "Background command running");
+    await assertStatus("background-commands", "Background command running");
     update({ ...acknowledged, backgroundWork: { agents: 0, commands: 0, other: 0 } });
-    assertStatus("automation", "Automation");
+    await assertStatus("automation", "Automation");
     update({ ...acknowledged, backgroundWork: { agents: 0, commands: 0, other: 0 }, automations: { ...automations, enabledCount: 0, pausedCount: 1 } });
-    assertStatus("automation-paused", "Automation 1 paused");
+    await assertStatus("automation-paused", "Automation 1 paused");
   });
 
   it.each([
@@ -914,7 +951,7 @@ describe("thread references", () => {
     view.rerender(<Composer store={store as unknown as ThreadClientStore} applicationStore={application({
       ...background, attention: { ...background.attention, unseenCompletion: true },
     })} />);
-    expect(screen.getByRole("option", { name: "Other thread" })).toHaveAccessibleDescription(`Finished while you were away. ${referenceLocationDescription}`);
+    expect(await screen.findByRole("option", { name: "Other thread" })).toHaveAccessibleDescription(`Finished while you were away. ${referenceLocationDescription}`);
     expect(screen.getByRole("option", { name: "Other thread" }).firstElementChild).toHaveAttribute("data-glyph", "unseen");
     expect(input).toHaveFocus();
   });
@@ -944,18 +981,18 @@ describe("thread references", () => {
     const choice = within(dialog).getByRole("option", { name: "Second thread" });
     expect(choice).toHaveAttribute("aria-selected", "true");
     expect(input).toHaveAttribute("aria-activedescendant", choice.id);
-    await userEvent.keyboard("{ArrowDown}{ArrowDown}");
+    await userEvent.keyboard("{ArrowDown}{ArrowDown}{ArrowDown}");
     expect(first).toHaveAttribute("aria-selected", "true");
     expect(input).toHaveAttribute("aria-activedescendant", first.id);
-    await userEvent.keyboard("{ArrowUp}");
+    await userEvent.keyboard("{ArrowUp}{ArrowUp}");
     expect(last).toHaveAttribute("aria-selected", "true");
     expect(input).toHaveAttribute("aria-activedescendant", last.id);
     expect(input).toHaveFocus();
     await userEvent.keyboard("{ArrowUp}");
     await userEvent.keyboard("{Enter}");
     await waitFor(() => expect(dialog).not.toBeInTheDocument());
-    expect(screen.getByRole("list", { name: "Referenced threads" })).toHaveTextContent("Second thread");
-    expect(screen.getByRole("textbox")).toHaveValue("Keep this text");
+    expect(inlineReferenceNodes()[0]).toHaveTextContent("Second thread");
+    expect(composerText(input)).toMatch(/Second thread.*Keep this text$/u);
   });
 
   it("keeps mouse hover and keyboard selection on the same row", async () => {
@@ -969,8 +1006,8 @@ describe("thread references", () => {
     expect(input).toHaveAttribute("aria-activedescendant", choice.id);
     expect(choice).toHaveAttribute("aria-selected", "true");
     await userEvent.keyboard("{Enter}");
-    expect(screen.getByRole("list", { name: "Referenced threads" })).toHaveTextContent("Hovered thread");
-    expect(screen.getByRole("textbox")).toHaveValue("Keep this text");
+    expect(inlineReferenceNodes()[0]).toHaveTextContent("Hovered thread");
+    expect(composerText(input)).toBe("Hovered threadKeep this text");
   });
 
   it("filters numeric mentions against visible thread details", async () => {
@@ -991,29 +1028,31 @@ describe("thread references", () => {
     render(<Composer store={new FakeComposerStore(snapshot(), "Ask") as unknown as ThreadClientStore} applicationStore={referenceApplication(threads).store} />);
     await openReferenceSuggestions();
     const dialog = screen.getByRole("dialog", { name: "Reference a thread" });
-    expect(within(dialog).getAllByRole("option")).toHaveLength(30);
+    expect(within(dialog).getAllByRole("option")).toHaveLength(32);
     expect(within(dialog).queryByRole("option", { name: "Rare migration" })).not.toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("option", { name: "More threads…" }));
+    expect(await within(dialog).findByRole("option", { name: "Rare migration" })).toBeVisible();
     await userEvent.keyboard("rare");
-    expect(within(dialog).getAllByRole("option").map((option) => option.textContent)).toEqual([
-      expect.stringContaining("Rare migration"),
-    ]);
+    await waitFor(() => expect(within(dialog).getAllByRole("option").map((option) => option.textContent)).toEqual([
+      expect.stringContaining("Rare migration"), expect.stringContaining("All threads…"),
+    ]));
   });
 
   it("keeps mobile filtering and focus in the composer", async () => {
     render(<Composer store={new FakeComposerStore(snapshot(), "Ask ") as unknown as ThreadClientStore} applicationStore={referenceApplication().store} />);
-    const input = screen.getByRole("textbox") as HTMLTextAreaElement;
+    const input = screen.getByRole("textbox");
     input.focus();
-    input.setSelectionRange(4, 4);
+    setComposerCaret(input, 4);
     await userEvent.keyboard("@missing");
     expect(input).toHaveFocus();
     expect(screen.queryByRole("searchbox", { name: "Search threads" })).not.toBeInTheDocument();
-    expect(screen.getByText("No matching active threads")).toBeVisible();
+    expect(await screen.findByText("No matching active threads")).toBeVisible();
     await userEvent.keyboard("{Backspace>7}CLAUDE");
-    expect(screen.getByRole("option", { name: "Other thread" })).toBeVisible();
+    expect(await screen.findByRole("option", { name: "Other thread" })).toBeVisible();
     await userEvent.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Reference a thread" })).not.toBeInTheDocument());
     expect(input).toHaveFocus();
-    expect(input).toHaveValue("Ask @CLAUDE");
+    expect(composerText(input)).toBe("Ask @CLAUDE");
   });
 
   it("preserves an outside input's focus when dismissing the reference picker", async () => {
@@ -1042,50 +1081,52 @@ describe("thread references", () => {
     render(<Composer store={store as unknown as ThreadClientStore} applicationStore={referenceApplication([{ ...referencedThread, title: { text: title } }]).store} />);
     await openReferenceSuggestions();
     const dialog = await screen.findByRole("dialog", { name: "Reference a thread" });
-    fireEvent.click(within(dialog).getByRole("option"));
+    fireEvent.click(within(dialog).getByRole("option", {name: title || "Untitled thread"}));
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
     await waitFor(() => expect(store.deliver).toHaveBeenCalled());
-    expect(splitThreadReferenceText(store.deliver.mock.calls[0]![1].text).references[0]!.title).toBe(title ? title.slice(0, 512) : "Untitled thread");
+    expect(readThreadReferenceBody(store.deliver.mock.calls[0]![1].text).parts[0]).toMatchObject({ title: title ? title.slice(0, 512) : "Untitled thread" });
   });
-  it("restores chips and edits only the body while delivering the exact reference text", async () => {
-    const value = formatThreadReferenceText("Original body", [selectedThreadReference]);
+  it("restores inline references and delivers text edits in their original positions", async () => {
+    const value = formatInlineThreadReferenceText(["Before ", selectedThreadReference, " after"]);
     const store = new FakeComposerStore(snapshot(), value);
     render(<Composer store={store as unknown as ThreadClientStore} applicationStore={referenceApplication().store} />);
-    expect(screen.getByRole("textbox")).toHaveValue("Original body");
-    expect(screen.getByRole("list", { name: "Referenced threads" })).toHaveTextContent("Other thread");
-    fireEvent.change(screen.getByRole("textbox"), { target: { value: "Changed body" } });
+    const input = screen.getByRole("textbox");
+    expect(inlineReferenceNodes()[0]).toHaveTextContent("Other thread");
+    setComposerCaret(input, 0);
+    await userEvent.keyboard("Read ");
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
     await waitFor(() => expect(store.deliver).toHaveBeenCalled());
-    expect(store.deliver.mock.calls[0]![1].text).toBe(formatThreadReferenceText("Changed body", [selectedThreadReference]));
+    expect(readThreadReferenceBody(store.deliver.mock.calls[0]![1].text).parts).toEqual(["Read Before ", selectedThreadReference, " after"]);
   });
 
-  it("permits a reference-only prompt and removes the last chip without leaving hidden content", () => {
-    const store = new FakeComposerStore(snapshot(), formatThreadReferenceText("", [selectedThreadReference]));
+  it("permits a reference-only prompt and deletes its atom in one keystroke", async () => {
+    const store = new FakeComposerStore(snapshot(), formatInlineThreadReferenceText([selectedThreadReference]));
     render(<Composer store={store as unknown as ThreadClientStore} applicationStore={referenceApplication().store} />);
     expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
-    fireEvent.click(screen.getByRole("button", { name: "Remove thread: Other thread" }));
-    expect(screen.queryByRole("list", { name: "Referenced threads" })).not.toBeInTheDocument();
-    expect(screen.getByRole("textbox")).toHaveValue("");
+    screen.getByRole("textbox").focus();
+    await userEvent.keyboard("{Backspace}");
+    expect(inlineReferenceNodes()).toHaveLength(0);
+    expect(composerText(screen.getByRole("textbox"))).toBe("");
     expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
   });
 
   it("selects an @ reference by keyboard and preserves the text after the caret", async () => {
     const store = new FakeComposerStore(snapshot(), "Compare  and keep this");
     render(<Composer store={store as unknown as ThreadClientStore} applicationStore={referenceApplication().store} />);
-    const input = screen.getByRole("textbox") as HTMLTextAreaElement;
+    const input = screen.getByRole("textbox");
     input.focus();
-    input.setSelectionRange(8, 8);
+    setComposerCaret(input, 8);
     await userEvent.keyboard("@Other");
     expect(await screen.findByRole("option", { name: /Other thread/ })).toBeVisible();
     expect(input).toHaveFocus();
     expect(screen.queryByRole("searchbox", { name: "Search threads" })).not.toBeInTheDocument();
     await userEvent.keyboard("{Enter}");
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Reference a thread" })).not.toBeInTheDocument());
-    expect(input).toHaveValue("Compare  and keep this");
-    expect(screen.getByRole("list", { name: "Referenced threads" })).toHaveTextContent("Other thread");
+    expect(composerText(input)).toMatch(/^Compare Other thread.* and keep this$/u);
+    expect(inlineReferenceNodes()[0]).toHaveTextContent("Other thread");
     await waitFor(() => {
       expect(input).toHaveFocus();
-      expect(input.selectionStart).toBe(8);
+      expect(input.contains(document.getSelection()?.focusNode ?? null)).toBe(true);
     });
   });
 
@@ -1093,16 +1134,16 @@ describe("thread references", () => {
     const store = new FakeComposerStore(snapshot(), "");
     render(<Composer store={store as unknown as ThreadClientStore} applicationStore={referenceApplication().store} />);
     const input = screen.getByRole("textbox");
-    fireEvent.change(input, { target: { value: "user@example.com" } });
+    await replaceComposerText(input, "user@example.com");
     expect(screen.queryByRole("dialog", { name: "Reference a thread" })).not.toBeInTheDocument();
-    fireEvent.change(input, { target: { value: "" } });
+    await replaceComposerText(input, "");
     input.focus();
     await userEvent.keyboard("Ask @Other");
     expect(await screen.findByRole("option", { name: /Other thread/ })).toBeVisible();
     await userEvent.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Reference a thread" })).not.toBeInTheDocument());
-    expect(input).toHaveValue("Ask @Other");
-    expect(screen.queryByRole("list", { name: "Referenced threads" })).not.toBeInTheDocument();
+    expect(composerText(input)).toBe("Ask @Other");
+    expect(inlineReferenceNodes()).toHaveLength(0);
   });
 
   it("keeps character-by-character package names intact and dismissal sticks for that token", async () => {
@@ -1111,10 +1152,10 @@ describe("thread references", () => {
     const input = screen.getByRole("textbox");
     input.focus();
     await userEvent.keyboard("npm i @types/node");
-    expect(input).toHaveValue("npm i @types/node");
+    expect(composerText(input)).toBe("npm i @types/node");
     expect(input).toHaveFocus();
     await userEvent.keyboard("{Escape}More");
-    expect(input).toHaveValue("npm i @types/nodeMore");
+    expect(composerText(input)).toBe("npm i @types/nodeMore");
     expect(input).toHaveFocus();
     expect(screen.queryByRole("dialog", { name: "Reference a thread" })).not.toBeInTheDocument();
     await userEvent.keyboard("{Enter}");
@@ -1122,11 +1163,63 @@ describe("thread references", () => {
     expect(store.deliver.mock.calls[0]![1].text).toBe("npm i @types/nodeMore");
   });
 
-  it("submits an unmatched @ token normally without converting it into a reference", async () => {
+  it.each(["Enter", "Tab"])("confirms a pending search with %s without submitting the raw query", async (key) => {
+    const store = new FakeComposerStore(snapshot(), "");
+    const application = referenceApplication();
+    let finish!: () => void;
+    const pending = new Promise<void>(resolve => { finish = resolve; });
+    application.api.listMentionCandidates.mockImplementation(async () => {
+      await pending;
+      return { threads: [referencedThread], nextCursor: undefined };
+    });
+    render(<Composer store={store as unknown as ThreadClientStore} applicationStore={application.store} />);
+    const input = screen.getByRole("textbox");
+    input.focus();
+    await userEvent.keyboard(`Compare @Other{${key}}`);
+    expect(store.deliver).not.toHaveBeenCalled();
+    expect(input).toHaveFocus();
+    await act(async () => { finish(); });
+    await waitFor(() => expect(inlineReferenceNodes()).toHaveLength(1));
+    expect(composerText(input)).toBe("Compare Other thread");
+    expect(store.deliver).not.toHaveBeenCalled();
+  });
+
+  it("discards an early confirmation when the user changes the query", async () => {
+    const store = new FakeComposerStore(snapshot(), "");
+    const application = referenceApplication();
+    render(<Composer store={store as unknown as ThreadClientStore} applicationStore={application.store} />);
+    const input = screen.getByRole("textbox");
+    input.focus();
+    await userEvent.keyboard("@O{Enter}ther");
+    expect(await screen.findByRole("option", { name: "Other thread" })).toBeVisible();
+    expect(inlineReferenceNodes()).toHaveLength(0);
+    expect(composerText(input)).toBe("@Other");
+    expect(store.deliver).not.toHaveBeenCalled();
+  });
+
+  it("retries a failed search on Enter and keeps the draft in the composer", async () => {
+    const store = new FakeComposerStore(snapshot(), "");
+    const application = referenceApplication();
+    application.api.listMentionCandidates.mockRejectedValue(new Error("Unavailable"));
+    render(<Composer store={store as unknown as ThreadClientStore} applicationStore={application.store} />);
+    const input = screen.getByRole("textbox");
+    input.focus();
+    await userEvent.keyboard("Compare @Other");
+    expect(await screen.findByRole("option", { name: "Retry search" })).toHaveAttribute("aria-selected", "true");
+    application.api.listMentionCandidates.mockResolvedValue({ threads: [referencedThread], nextCursor: undefined });
+    await userEvent.keyboard("{Enter}");
+    expect(await screen.findByRole("option", { name: "Other thread" })).toBeVisible();
+    expect(store.deliver).not.toHaveBeenCalled();
+    expect(composerText(input)).toBe("Compare @Other");
+  });
+
+  it("submits a settled unmatched @ token normally without converting it into a reference", async () => {
     const store = new FakeComposerStore(snapshot(), "");
     render(<Composer store={store as unknown as ThreadClientStore} applicationStore={referenceApplication().store} />);
     screen.getByRole("textbox").focus();
-    await userEvent.keyboard("npm i @types/node{Enter}");
+    await userEvent.keyboard("npm i @types/node");
+    expect(await screen.findByText("No matching active threads")).toBeVisible();
+    await userEvent.keyboard("{Enter}");
     await waitFor(() => expect(store.deliver).toHaveBeenCalled());
     expect(store.deliver.mock.calls[0]![1].text).toBe("npm i @types/node");
     expect(screen.queryByRole("dialog", { name: "Reference a thread" })).not.toBeInTheDocument();
@@ -1136,7 +1229,7 @@ describe("thread references", () => {
     const store = new FakeComposerStore(snapshot(), "");
     const view = render(<Composer store={store as unknown as ThreadClientStore} applicationStore={referenceApplication().store} />);
     const input = screen.getByRole("textbox");
-    fireEvent.change(input, { target: { value: "Paste @Other" } });
+    await replaceComposerText(input, "Paste @Other", { inputType: "insertFromPaste" });
     expect(screen.queryByRole("dialog", { name: "Reference a thread" })).not.toBeInTheDocument();
     view.unmount();
     render(<CodexTuiTerminalControlContext.Provider value={tuiControl()}>
@@ -1144,7 +1237,7 @@ describe("thread references", () => {
     </CodexTuiTerminalControlContext.Provider>);
     screen.getByRole("textbox").focus();
     await userEvent.keyboard("npm i @types/node");
-    expect(screen.getByRole("textbox")).toHaveValue("npm i @types/node");
+    expect(composerText(screen.getByRole("textbox"))).toBe("npm i @types/node");
     expect(screen.queryByRole("dialog", { name: "Reference a thread" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Reference a thread" })).not.toBeInTheDocument();
   });
@@ -1163,14 +1256,13 @@ describe("thread references", () => {
     fireEvent.dragEnter(composer, { dataTransfer: transfer });
     expect(composer).toHaveClass("thread-drag-active");
     fireEvent.drop(composer, { dataTransfer: transfer });
-    expect(screen.getByRole("list", { name: "Referenced threads" })).toHaveTextContent("Other thread");
-    expect(screen.getByRole("textbox")).toHaveValue("Keep body");
+    expect(inlineReferenceNodes()[0]).toHaveTextContent("Other thread");
+    expect(composerText(screen.getByRole("textbox"))).toContain("Keep body");
     expect(store.deliver).not.toHaveBeenCalled();
   });
 
-  it.each(["duplicate", "removed"] as const)("keeps a rejected %s reference drop error inside the composer", (reason) => {
-    const initialText = reason === "duplicate" ? formatThreadReferenceText("Keep body", [selectedThreadReference]) : "Keep body";
-    const store = new FakeComposerStore(snapshot(), initialText);
+  it("keeps a removed reference drop error inside the composer", () => {
+    const store = new FakeComposerStore(snapshot(), "Keep body");
     const application = referenceApplication();
     render(<ThreadDragProvider store={application.store} snapshot={application.snapshot}>
       <ThreadDragTestSource /><Composer store={store as unknown as ThreadClientStore} applicationStore={application.store} />
@@ -1179,38 +1271,36 @@ describe("thread references", () => {
     const types: string[] = [];
     const transfer = { types, items: [], files: [], setData: (type: string, value: string) => { types.push(type); values.set(type, value); }, getData: (type: string) => values.get(type) ?? "" } as unknown as DataTransfer;
     fireEvent.dragStart(screen.getByRole("button", { name: "Drag thread" }), { dataTransfer: transfer });
-    if (reason === "removed") {
-      const state = application.store.getSnapshot();
-      vi.spyOn(application.store, "getSnapshot").mockReturnValue({ ...state, snapshot: { ...application.snapshot, threads: [] } });
-    }
+    const state = application.store.getSnapshot();
+    vi.spyOn(application.store, "getSnapshot").mockReturnValue({ ...state, snapshot: { ...application.snapshot, threads: [] } });
     const composer = screen.getByTestId("composer");
     fireEvent.drop(composer, { dataTransfer: transfer });
-    const message = reason === "duplicate" ? "That thread is already referenced." : "That thread is no longer available to reference.";
+    const message = "That thread is no longer available to reference.";
     expect(within(composer).getByRole("alert")).toHaveTextContent(message);
     expect(screen.queryByRole("alert", { name: "Thread drop failed" })).not.toBeInTheDocument();
     expect(screen.getAllByRole("alert")).toHaveLength(1);
-    expect(screen.getAllByRole("status").some((status) => status.textContent?.includes(reason === "duplicate" ? "The thread could not be added to this prompt." : message))).toBe(true);
-    expect(screen.getByRole("textbox")).toHaveValue("Keep body");
+    expect(screen.getAllByRole("status").some((status) => status.textContent?.includes(message))).toBe(true);
+    expect(composerText(screen.getByRole("textbox"))).toBe("Keep body");
     expect(store.deliver).not.toHaveBeenCalled();
   });
 
   it("retains reference bytes when stashing and restores their chips", async () => {
-    const value = formatThreadReferenceText("Saved body", [selectedThreadReference]);
+    const value = formatInlineThreadReferenceText(["Saved body", selectedThreadReference]);
     const store = new FakeComposerStore(snapshot(), value);
     render(<Composer store={store as unknown as ThreadClientStore} applicationStore={referenceApplication().store} />);
     fireEvent.click(screen.getByRole("button", { name: "Stash prompt" }));
     await waitFor(() => expect(store.stash).toHaveBeenCalledOnce());
     expect(store.stash.mock.calls[0]![0].text).toBe(value);
-    expect(screen.queryByRole("list", { name: "Referenced threads" })).not.toBeInTheDocument();
+    expect(inlineReferenceNodes()).toHaveLength(0);
     act(() => store.replaceDraft({ text: value, revision: 3 }));
-    await waitFor(() => expect(screen.getByRole("list", { name: "Referenced threads" })).toHaveTextContent("Other thread"));
-    expect(screen.getByRole("textbox")).toHaveValue("Saved body");
+    await waitFor(() => expect(inlineReferenceNodes()[0]).toHaveTextContent("Other thread"));
+    expect(composerText(screen.getByRole("textbox"))).toMatch(/^Saved bodyOther thread/u);
   });
 
   it("retains reference bytes in an active-turn Queue submission", async () => {
     const active = snapshot("running");
     active.capabilities.deliveryModes = [{ id: "queue", steerTarget: null, label: { text: "Queue" }, available: true }];
-    const value = formatThreadReferenceText("Queue body", [selectedThreadReference]);
+    const value = formatInlineThreadReferenceText(["Queue body", selectedThreadReference]);
     const store = new FakeComposerStore(active, value);
     render(<Composer store={store as unknown as ThreadClientStore} applicationStore={referenceApplication().store} />);
     fireEvent.click(screen.getByRole("button", { name: "Queue" }));
@@ -1220,21 +1310,21 @@ describe("thread references", () => {
   });
 
   it("uses visible body indexes when adding a saved prompt at the caret", async () => {
-    const value = formatThreadReferenceText("BeforeAfter", [selectedThreadReference]);
+    const value = formatInlineThreadReferenceText(["BeforeAfter", selectedThreadReference]);
     const store = new FakeComposerStore(snapshot(), value);
     render(<Composer store={store as unknown as ThreadClientStore} applicationStore={applicationStoreWithPrompts()} />);
-    const input = screen.getByRole("textbox") as HTMLTextAreaElement;
-    input.setSelectionRange(6, 6);
+    const input = screen.getByRole("textbox");
+    setComposerCaret(input, 6);
     fireEvent.click(screen.getByRole("button", { name: "Open saved prompts" }));
     fireEvent.click(await screen.findByRole("button", { name: "Add prompt to composer: Review changes" }));
-    expect(input).toHaveValue("Before\n\nReview the current changes.\n\nAfter");
+    expect(composerText(input)).toContain("Before\n\nReview the current changes.\n\nAfter");
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
     await waitFor(() => expect(store.deliver).toHaveBeenCalled());
-    expect(splitThreadReferenceText(store.deliver.mock.calls[0]![1].text).references).toEqual([selectedThreadReference]);
+    expect(readThreadReferenceBody(store.deliver.mock.calls[0]![1].text).parts).toEqual(["Before\n\nReview the current changes.\n\nAfter", selectedThreadReference]);
   });
 
   it("requires Chat for thread references instead of dropping them in TUI", () => {
-    const store = new FakeComposerStore(snapshot(), formatThreadReferenceText("Ask", [selectedThreadReference]));
+    const store = new FakeComposerStore(snapshot(), formatInlineThreadReferenceText(["Ask", selectedThreadReference]));
     render(<CodexTuiTerminalControlContext.Provider value={tuiControl()}>
       <Composer store={store as unknown as ThreadClientStore} />
     </CodexTuiTerminalControlContext.Provider>);
@@ -1269,7 +1359,7 @@ describe("task references", () => {
     renderTaskComposer(store, [...existing, task]);
     fireEvent.click(screen.getByRole("button", { name: "Attach task fixture" }));
     expect(within(screen.getByRole("list", { name: "Attached tasks" })).getAllByRole("listitem")).toHaveLength(16);
-    expect(screen.getByRole("textbox")).toHaveValue("Keep this text");
+    expect(composerText(screen.getByRole("textbox"))).toBe("Keep this text");
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
     await waitFor(() => expect(store.deliver).toHaveBeenCalled());
     expect(store.deliver.mock.calls[0]![1].taskReferences).toEqual(count === 15
@@ -1326,7 +1416,7 @@ describe("task references", () => {
     expect(screen.getByLabelText("Attached tasks")).toHaveTextContent(
       "Current task title",
     );
-    expect(screen.getByRole("textbox")).toHaveValue("keep this text");
+    expect(composerText(screen.getByRole("textbox"))).toBe("keep this text");
     expect(taskStore.moveTask).toBeUndefined();
   });
 
@@ -1389,7 +1479,7 @@ describe("task references", () => {
       screen.getByRole("button", { name: "Attach task fixture" }),
     );
 
-    expect(screen.getByRole("textbox")).toHaveValue("");
+    expect(composerText(screen.getByRole("textbox"))).toBe("");
     expect(screen.getByText("Current task title")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
@@ -1597,96 +1687,6 @@ describe("task references", () => {
   );
 });
 
-describe("Composer textarea sizing", () => {
-  it("remeasures wrapped text on width changes without looping on height changes", () => {
-    const observers: Array<{
-      callback: ResizeObserverCallback;
-      targets: Set<Element>;
-    }> = [];
-    vi.stubGlobal(
-      "ResizeObserver",
-      class {
-        readonly entry: (typeof observers)[number];
-        constructor(callback: ResizeObserverCallback) {
-          this.entry = { callback, targets: new Set() };
-          observers.push(this.entry);
-        }
-        observe(target: Element): void {
-          this.entry.targets.add(target);
-        }
-        unobserve(target: Element): void {
-          this.entry.targets.delete(target);
-        }
-        disconnect(): void {
-          this.entry.targets.clear();
-        }
-      },
-    );
-    render(
-      <Composer
-        store={
-          new FakeComposerStore(
-            snapshot(),
-            "A multiline draft that wraps as the panel narrows",
-          ) as unknown as ThreadClientStore
-        }
-      />,
-    );
-    const input = screen.getByRole("textbox") as HTMLTextAreaElement;
-    let measuredScrollHeight = 80;
-    const scrollHeight = vi.fn(() => measuredScrollHeight);
-    Object.defineProperty(input, "scrollHeight", {
-      configurable: true,
-      get: scrollHeight,
-    });
-    const observer = observers.find(({ targets }) => targets.has(input));
-    expect(observer).toBeDefined();
-
-    act(() => {
-      observer!.callback(
-        [
-          {
-            target: input,
-            contentRect: { width: 320 },
-          } as unknown as ResizeObserverEntry,
-        ],
-        {} as ResizeObserver,
-      );
-    });
-    expect(input.style.height).toBe("80px");
-    expect(scrollHeight).toHaveBeenCalledTimes(1);
-
-    measuredScrollHeight = 140;
-    act(() => {
-      observer!.callback(
-        [
-          {
-            target: input,
-            contentRect: { width: 320 },
-          } as unknown as ResizeObserverEntry,
-        ],
-        {} as ResizeObserver,
-      );
-    });
-    expect(input.style.height).toBe("80px");
-    expect(scrollHeight).toHaveBeenCalledTimes(1);
-
-    act(() => {
-      observer!.callback(
-        [
-          {
-            target: input,
-            contentRect: { width: 220 },
-          } as unknown as ResizeObserverEntry,
-        ],
-        {} as ResizeObserver,
-      );
-    });
-    expect(input.style.height).toBe("140px");
-    expect(scrollHeight).toHaveBeenCalledTimes(2);
-  });
-});
-
 describe("Composer delivery guards", () => {
   it.each(["click", "Enter"] as const)("sends through %s during a retry delay without changing the busy delivery preference", async action => {
     localStorage.setItem("sedes-composer-delivery-mode", "queue");
@@ -1723,7 +1723,7 @@ describe("Composer delivery guards", () => {
         "queue",
       );
       expect(store.deliver).not.toHaveBeenCalled();
-      expect(screen.getByRole("textbox", { name: "Message Pi" })).toHaveValue(
+      expect(composerText(screen.getByRole("textbox", { name: "Message Pi" }))).toBe(
         text,
       );
       if (text) {
@@ -1968,7 +1968,7 @@ describe("Composer delivery guards", () => {
     expect(screen.getByRole("button", { name: "Steer" })).toBeEnabled();
   });
 
-  it("preserves local typing and activity while run-state action capabilities catch up", () => {
+  it("preserves local typing and activity while run-state action capabilities catch up", async () => {
     const active = snapshot("running");
     active.capabilities.deliveryModes = [{ id: "steer", steerTarget: "turn" as const, label: { text: "Steer" }, available: true }];
     const store = Object.assign(new FakeComposerStore(active, "draft"), { awaitingRunStateCapabilities: false });
@@ -1979,12 +1979,12 @@ describe("Composer delivery guards", () => {
       store.awaitingRunStateCapabilities = true;
       store.replace({ authoritative: false });
     });
-    expect(input).toBeEnabled();
+    expect(input).toHaveAttribute("contenteditable", "true");
     expect(input).toHaveFocus();
     expect(container.querySelector(".input-activity-bar")).toHaveClass("visible");
     expect(screen.getByRole("button", { name: "Steer" })).toBeDisabled();
-    fireEvent.change(input, { target: { value: "kept typing" } });
-    expect(input).toHaveValue("kept typing");
+    await replaceComposerText(input, "kept typing");
+    expect(composerText(input)).toBe("kept typing");
     fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
     act(() => {
       store.awaitingRunStateCapabilities = false;
@@ -2084,7 +2084,7 @@ describe("Composer delivery guards", () => {
 
   it("persists an empty dirty draft, blocks same-tab edits, and installs a structured queued input", async () => {
     // A focus attempt made inside the restoration promise would run against a
-    // disabled textarea and be lost before React commits the unlocked state.
+    // disabled editor and be lost before React commits the unlocked state.
     vi.stubGlobal(
       "requestAnimationFrame",
       vi.fn((callback: FrameRequestCallback) => {
@@ -2119,7 +2119,7 @@ describe("Composer delivery guards", () => {
         }),
     );
     render(<Composer store={store as unknown as ThreadClientStore} />);
-    type("");
+    await type("");
 
     fireEvent.click(
       screen.getByRole("button", {
@@ -2142,9 +2142,12 @@ describe("Composer delivery guards", () => {
       expect.objectContaining({ text: "", revision: 1 }),
     );
     const textbox = screen.getByRole("textbox");
-    expect(textbox).toBeDisabled();
-    fireEvent.change(textbox, { target: { value: "must not be lost" } });
-    expect(textbox).toHaveValue("");
+    expect(textbox).toHaveAttribute("contenteditable", "false");
+    await userEvent.type(textbox, "must not be lost");
+    expect(composerText(textbox)).toBe("");
+    // jsdom permits a click to focus contenteditable="false". Begin the
+    // restore outside the editor to check when automatic focus returns.
+    textbox.blur();
 
     act(() => store.replace({ authoritative: false }));
     await act(async () =>
@@ -2166,8 +2169,8 @@ describe("Composer delivery guards", () => {
       }),
     );
 
-    expect(textbox).toHaveValue("restored with structure");
-    expect(textbox).toBeDisabled();
+    expect(composerText(textbox)).toBe("restored with structure");
+    expect(textbox).toHaveAttribute("contenteditable", "false");
     expect(textbox).not.toHaveFocus();
     expect(screen.getByTestId("selected-skill")).toHaveTextContent(
       "Review Changes",
@@ -2175,7 +2178,7 @@ describe("Composer delivery guards", () => {
     expect(screen.getByText("answer.ts")).toBeInTheDocument();
     expect(screen.getByText("diagram.png")).toBeInTheDocument();
     act(() => store.replace({ authoritative: true }));
-    expect(textbox).toBeEnabled();
+    expect(textbox).toHaveAttribute("contenteditable", "true");
     await waitFor(() => expect(textbox).toHaveFocus());
   });
 
@@ -2240,7 +2243,7 @@ describe("Composer delivery guards", () => {
 
     render(<Composer store={store as unknown as ThreadClientStore} />);
 
-    expect(screen.getByRole("textbox")).toHaveValue("");
+    expect(composerText(screen.getByRole("textbox"))).toBe("");
     const restore = screen.getByRole("button", {
       name: "Restore queued input to composer: Restore this prompt",
     });
@@ -2395,7 +2398,7 @@ describe("Composer delivery guards", () => {
     });
     await screen.findByText("dropped.bin");
 
-    expect(input).toHaveValue("keep this text");
+    expect(composerText(input)).toBe("keep this text");
     expect(store.uploadComposerAttachment).toHaveBeenCalledTimes(2);
   });
 
@@ -2420,15 +2423,15 @@ describe("Composer delivery guards", () => {
     await waitFor(() =>
       expect(store.uploadComposerAttachment).toHaveBeenCalledOnce(),
     );
-    expect(input).toHaveValue("keep this text");
+    expect(composerText(input)).toBe("keep this text");
   });
 
-  it("keeps the browser's text paste when the clipboard carries more than file names", async () => {
+  it("inserts accompanying clipboard text when pasting a file", async () => {
     const store = new FakeComposerStore(snapshot(), "");
     render(<Composer store={store as unknown as ThreadClientStore} />);
     const input = screen.getByRole("textbox");
 
-    const pasted = fireEvent.paste(input, {
+    fireEvent.paste(input, {
       clipboardData: {
         files: [new File(["png"], "cells.png", { type: "image/png" })],
         getData: (type: string) =>
@@ -2436,7 +2439,7 @@ describe("Composer delivery guards", () => {
       },
     });
 
-    expect(pasted).toBe(true);
+    expect(composerText(input)).toBe("Region\tRevenue\nNorth\t42");
     await waitFor(() =>
       expect(store.uploadComposerAttachment).toHaveBeenCalledOnce(),
     );
@@ -2498,7 +2501,7 @@ describe("Composer delivery guards", () => {
       name: /restore later/u,
     });
     expect(restoreButton).toBeEnabled();
-    type("send after removal");
+    await type("send after removal");
     fireEvent.change(container.querySelector('input[type="file"]')!, {
       target: { files: [new File(["data"], "pending.bin")] },
     });
@@ -2538,7 +2541,7 @@ describe("Composer delivery guards", () => {
     expect(screen.getByText("answer.ts")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
 
-    type("Please explain this");
+    await type("Please explain this");
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
     await waitFor(() =>
       expect(store.saveDraft).toHaveBeenCalledWith({
@@ -2600,7 +2603,7 @@ describe("Composer delivery guards", () => {
     expect(screen.queryByText("answer.ts")).not.toBeInTheDocument();
   });
 
-  it("keeps the context-excerpt consumer registered while typing", () => {
+  it("keeps the context-excerpt consumer registered while typing", async () => {
     const registerConsumer = vi.spyOn(
       ComposerDraftCoordinator.prototype,
       "registerConsumer",
@@ -2609,7 +2612,7 @@ describe("Composer delivery guards", () => {
     renderComposerWithContext(store);
 
     expect(registerConsumer).toHaveBeenCalledOnce();
-    type("Keep this registration stable");
+    await type("Keep this registration stable");
     expect(registerConsumer).toHaveBeenCalledOnce();
   });
 
@@ -2638,7 +2641,7 @@ describe("Composer delivery guards", () => {
     );
     expect(store.deliver).not.toHaveBeenCalled();
     expect(screen.queryByText("answer.ts")).not.toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: "Message Pi" })).toHaveValue(
+    expect(composerText(screen.getByRole("textbox", { name: "Message Pi" }))).toBe(
       "Keep this draft",
     );
   });
@@ -2698,16 +2701,16 @@ describe("Composer delivery guards", () => {
     );
     render(<Composer store={store as unknown as ThreadClientStore} />);
 
-    type("Steer while the tool runs");
+    await type("Steer while the tool runs");
     fireEvent.click(screen.getByRole("button", { name: "Steer" }));
     expect(screen.getByText("Sending steer")).toBeVisible();
-    expect(screen.getByRole("textbox")).toHaveValue("");
+    expect(composerText(screen.getByRole("textbox"))).toBe("");
     expect(store.deliver).not.toHaveBeenCalled();
 
     await waitFor(() => expect(store.saveDraft).toHaveBeenCalledOnce());
     await act(async () => releaseSave());
     await waitFor(() => expect(screen.getByText("Steering")).toBeVisible());
-    expect(screen.getByRole("textbox")).toHaveValue("");
+    expect(composerText(screen.getByRole("textbox"))).toBe("");
   });
 
   it("stages idle Send with one operation ID and clears before draft persistence", async () => {
@@ -2732,11 +2735,11 @@ describe("Composer delivery guards", () => {
       />,
     );
 
-    type("instant message");
+    await type("instant message");
 
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
 
-    expect(screen.getByRole("textbox")).toHaveValue("");
+    expect(composerText(screen.getByRole("textbox"))).toBe("");
     expect(store.stageComposerTransfer).toHaveBeenCalledOnce();
     expect(store.state.pendingComposerTransfers[0]?.captured.text).toBe(
       "instant message",
@@ -2766,17 +2769,16 @@ describe("Composer delivery guards", () => {
     const send = screen.getByRole("button", { name: "Send message" });
     fireEvent.pointerDown(send);
     fireEvent.click(send);
-    expect(input).toHaveValue("");
+    expect(composerText(input)).toBe("");
     expect(input).toHaveFocus();
     fireEvent.compositionEnd(input, { data: "private late sentence" });
-    fireEvent.input(input, {
-      target: { value: "private late sentence" },
+    await replaceComposerText(input, "private late sentence", {
       data: "private late sentence",
       inputType: "insertCompositionText",
       isComposing: true,
     });
     await waitFor(() => expect(store.deliver).toHaveBeenCalledOnce());
-    expect(input).toHaveValue("");
+    expect(composerText(input)).toBe("");
     expect(input).toHaveFocus();
     const events = readDiagnostics().map(({ event }) => event);
     expect(events).toEqual(
@@ -2803,7 +2805,7 @@ describe("Composer delivery guards", () => {
     expect(exportDiagnostics()).not.toContain("private");
     setDiagnosticCategoryEnabled("composer_input", false);
     const count = readDiagnostics().length;
-    fireEvent.input(input, { target: { value: "another message" } });
+    await replaceComposerText(input, "another message");
     expect(readDiagnostics()).toHaveLength(count);
   });
 
@@ -2815,31 +2817,27 @@ describe("Composer delivery guards", () => {
       render(<Composer store={store as unknown as ThreadClientStore} />);
       const input = screen.getByRole("textbox");
       fireEvent.click(screen.getByRole("button", { name: "Send message" }));
-      fireEvent.input(input, {
-        target: { value: "new" },
+      await replaceComposerText(input, "new", {
         inputType: "insertText",
       });
-      fireEvent.input(input, {
-        target: { value: "new paste" },
+      await replaceComposerText(input, "new paste", {
         inputType: "insertFromPaste",
       });
       now += 249;
-      fireEvent.input(input, {
-        target: { value: "stale correction" },
+      await replaceComposerText(input, "stale correction", {
         inputType: "insertCompositionText",
         isComposing: true,
       });
-      expect(input).toHaveValue("new paste");
+      expect(composerText(input)).toBe("new paste");
       expect(input).toHaveFocus();
       now += 1;
-      fireEvent.input(input, {
-        target: { value: "new dictation" },
+      await replaceComposerText(input, "new dictation", {
         inputType: "insertCompositionText",
         isComposing: true,
       });
-      expect(input).toHaveValue("new dictation");
+      expect(composerText(input)).toBe("new dictation");
       await waitFor(() => expect(store.deliver).toHaveBeenCalledOnce());
-      expect(input).toHaveValue("new dictation");
+      expect(composerText(input)).toBe("new dictation");
     } finally {
       clock.mockRestore();
     }
@@ -2934,10 +2932,10 @@ describe("Composer delivery guards", () => {
     );
     render(<Composer store={store as unknown as ThreadClientStore} />);
 
-    type("queue immediately");
+    await type("queue immediately");
     fireEvent.click(screen.getByRole("button", { name: "Queue" }));
 
-    expect(screen.getByRole("textbox")).toHaveValue("");
+    expect(composerText(screen.getByRole("textbox"))).toBe("");
     expect(screen.getByText("queue immediately")).toBeVisible();
     expect(store.stageComposerTransfer).toHaveBeenCalledWith(
       expect.any(String),
@@ -2962,15 +2960,15 @@ describe("Composer delivery guards", () => {
     );
     render(<Composer store={store as unknown as ThreadClientStore} />);
 
-    type("submitted\n");
+    await type("submitted\n");
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
-    expect(screen.getByRole("textbox")).toHaveValue("");
-    type("next");
+    expect(composerText(screen.getByRole("textbox"))).toBe("");
+    await type("next");
     await waitFor(() => expect(store.saveDraft).toHaveBeenCalledOnce());
     await act(async () => rejectSave());
 
     await waitFor(() =>
-      expect(screen.getByRole("textbox")).toHaveValue("submitted\n\n\nnext"),
+      expect(composerText(screen.getByRole("textbox"))).toBe("submitted\n\n\nnext"),
     );
     expect(store.abandonComposerTransfer).toHaveBeenCalledOnce();
     expect(store.deliver).not.toHaveBeenCalled();
@@ -3045,7 +3043,7 @@ describe("Composer delivery guards", () => {
     await waitFor(() =>
       expect(screen.getByText("Steer unconfirmed")).toBeVisible(),
     );
-    type("draft created after clear");
+    await type("draft created after clear");
     first.unmount();
 
     act(() => {
@@ -3053,7 +3051,7 @@ describe("Composer delivery guards", () => {
     });
     render(<Composer store={store as unknown as ThreadClientStore} />);
 
-    expect(screen.getByRole("textbox")).toHaveValue(
+    expect(composerText(screen.getByRole("textbox"))).toBe(
       "draft created after clear",
     );
     await waitFor(() =>
@@ -3086,7 +3084,7 @@ describe("Composer delivery guards", () => {
     await waitFor(() => expect(store.deliver).toHaveBeenCalledOnce());
     await act(async () => rejectDelivery());
     await waitFor(() =>
-      expect(screen.getByRole("textbox")).toHaveValue("restore after failure"),
+      expect(composerText(screen.getByRole("textbox"))).toBe("restore after failure"),
     );
     const operationId = store.state.pendingComposerTransfers[0]!.operationId;
 
@@ -3095,7 +3093,7 @@ describe("Composer delivery guards", () => {
     });
 
     await waitFor(() =>
-      expect(screen.getByRole("textbox")).toHaveValue("restore after failure"),
+      expect(composerText(screen.getByRole("textbox"))).toBe("restore after failure"),
     );
     expect(screen.getByRole("alert")).toHaveTextContent(
       "This draft changed in another client",
@@ -3107,11 +3105,11 @@ describe("Composer delivery guards", () => {
       });
     });
 
-    await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue(""));
+    await waitFor(() => expect(composerText(screen.getByRole("textbox"))).toBe(""));
     await waitFor(() =>
       expect(screen.queryByRole("alert")).not.toBeInTheDocument(),
     );
-    type("can deliver after reconciliation");
+    await type("can deliver after reconciliation");
     expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
     expect(
       store.acknowledgeLateComposerTransferReconciliation,
@@ -3143,7 +3141,7 @@ describe("Composer delivery guards", () => {
     await waitFor(() => expect(store.deliver).toHaveBeenCalledOnce());
     await act(async () => rejectDelivery());
     await waitFor(() =>
-      expect(screen.getByRole("textbox")).toHaveValue("restore after remount"),
+      expect(composerText(screen.getByRole("textbox"))).toBe("restore after remount"),
     );
     const operationId = store.state.pendingComposerTransfers[0]!.operationId;
     first.unmount();
@@ -3152,7 +3150,7 @@ describe("Composer delivery guards", () => {
     });
     render(<Composer store={store as unknown as ThreadClientStore} />);
 
-    expect(screen.getByRole("textbox")).toHaveValue("restore after remount");
+    expect(composerText(screen.getByRole("textbox"))).toBe("restore after remount");
     await waitFor(() =>
       expect(screen.getByRole("alert")).toHaveTextContent(
         "This draft changed in another client",
@@ -3165,11 +3163,11 @@ describe("Composer delivery guards", () => {
       });
     });
 
-    await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue(""));
+    await waitFor(() => expect(composerText(screen.getByRole("textbox"))).toBe(""));
     await waitFor(() =>
       expect(screen.queryByRole("alert")).not.toBeInTheDocument(),
     );
-    type("can deliver after remount reconciliation");
+    await type("can deliver after remount reconciliation");
     expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
     expect(
       store.acknowledgeLateComposerTransferReconciliation,
@@ -3198,10 +3196,10 @@ describe("Composer delivery guards", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
     await waitFor(() =>
-      expect(screen.getByRole("textbox")).toHaveValue("clean rejection"),
+      expect(composerText(screen.getByRole("textbox"))).toBe("clean rejection"),
     );
     expect(store.state.pendingComposerTransfers).toEqual([]);
-    type("ordinary draft after rejection");
+    await type("ordinary draft after rejection");
     first.unmount();
 
     act(() => {
@@ -3209,7 +3207,7 @@ describe("Composer delivery guards", () => {
     });
     render(<Composer store={store as unknown as ThreadClientStore} />);
 
-    expect(screen.getByRole("textbox")).toHaveValue("new server authority");
+    expect(composerText(screen.getByRole("textbox"))).toBe("new server authority");
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
@@ -3243,12 +3241,12 @@ describe("Composer delivery guards", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
     await waitFor(() => expect(store.deliver).toHaveBeenCalledOnce());
-    type("next draft");
+    await type("next draft");
     first.unmount();
     await act(async () => rejectDelivery());
 
     render(<Composer store={store as unknown as ThreadClientStore} />);
-    expect(screen.getByRole("textbox")).toHaveValue(
+    expect(composerText(screen.getByRole("textbox"))).toBe(
       "pending clean rejection\n\nnext draft",
     );
   });
@@ -3276,12 +3274,12 @@ describe("Composer delivery guards", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
     await waitFor(() => expect(store.deliver).toHaveBeenCalledOnce());
-    type("next draft");
+    await type("next draft");
     first.unmount();
     await act(async () => rejectDelivery());
 
     render(<Composer store={store as unknown as ThreadClientStore} />);
-    expect(screen.getByRole("textbox")).toHaveValue(
+    expect(composerText(screen.getByRole("textbox"))).toBe(
       "possibly accepted\n\nnext draft",
     );
     const operationId = store.state.pendingComposerTransfers[0]!.operationId;
@@ -3293,7 +3291,7 @@ describe("Composer delivery guards", () => {
     });
 
     await waitFor(() =>
-      expect(screen.getByRole("textbox")).toHaveValue("next draft"),
+      expect(composerText(screen.getByRole("textbox"))).toBe("next draft"),
     );
   });
 
@@ -3325,12 +3323,12 @@ describe("Composer delivery guards", () => {
         await Promise.resolve();
       });
       expect(screen.getByText("Steer unconfirmed")).toBeVisible();
-      expect(screen.getByRole("textbox")).toHaveValue("");
+      expect(composerText(screen.getByRole("textbox"))).toBe("");
 
-      type("new draft while uncertain");
+      await type("new draft while uncertain");
       await act(async () => vi.advanceTimersByTimeAsync(2_000));
       expect(store.saveDraft).not.toHaveBeenCalled();
-      expect(screen.getByRole("textbox")).toHaveValue(
+      expect(composerText(screen.getByRole("textbox"))).toBe(
         "new draft while uncertain",
       );
       expect(screen.queryByDisplayValue(/uncertain steer/u)).toBeNull();
@@ -3338,7 +3336,7 @@ describe("Composer delivery guards", () => {
       const operationId = store.state.pendingComposerTransfers[0]!.operationId;
       first.unmount();
       render(<Composer store={store as unknown as ThreadClientStore} />);
-      expect(screen.getByRole("textbox")).toHaveValue(
+      expect(composerText(screen.getByRole("textbox"))).toBe(
         "new draft while uncertain",
       );
       expect(store.saveDraft).not.toHaveBeenCalled();
@@ -3353,7 +3351,7 @@ describe("Composer delivery guards", () => {
         await Promise.resolve();
         await Promise.resolve();
       });
-      expect(screen.getByRole("textbox")).toHaveValue(
+      expect(composerText(screen.getByRole("textbox"))).toBe(
         "uncertain steer\n\nnew draft while uncertain",
       );
       await act(async () => vi.advanceTimersByTimeAsync(2_000));
@@ -3394,12 +3392,12 @@ describe("Composer delivery guards", () => {
         await act(async () => rejectDelivery());
         expect(screen.getByText("Steer unconfirmed")).toBeVisible();
       }
-      type("Only the new draft");
+      await type("Only the new draft");
       act(() => store.abandonComposerTransfer(operationId));
       if (race === "late recovery response") await act(async () => rejectDelivery());
       await act(async () => vi.advanceTimersByTimeAsync(2_000));
       expect(screen.queryByText("Steer unconfirmed")).toBeNull();
-      expect(screen.getByRole("textbox")).toHaveValue("Only the new draft");
+      expect(composerText(screen.getByRole("textbox"))).toBe("Only the new draft");
       expect(store.saveDraft).toHaveBeenLastCalledWith(expect.objectContaining({ text: "Only the new draft" }));
       expect(store.deliver).toHaveBeenCalledOnce();
     } finally { vi.useRealTimers(); }
@@ -3420,13 +3418,13 @@ describe("Composer delivery guards", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Steer" }));
-    await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue(""));
+    await waitFor(() => expect(composerText(screen.getByRole("textbox"))).toBe(""));
     expect(store.state.snapshot?.draft.text).toBe("Retained by Pi");
     const savesBeforeRemount = store.saveDraft.mock.calls.length;
 
     first.unmount();
     render(<Composer store={store as unknown as ThreadClientStore} />);
-    expect(screen.getByRole("textbox")).toHaveValue("");
+    expect(composerText(screen.getByRole("textbox"))).toBe("");
     expect(store.saveDraft).toHaveBeenCalledTimes(savesBeforeRemount);
 
     store.replace({
@@ -3437,10 +3435,10 @@ describe("Composer delivery guards", () => {
         }),
       ),
     });
-    expect(screen.getByRole("textbox")).toHaveValue("");
+    expect(composerText(screen.getByRole("textbox"))).toBe("");
 
-    type("The next draft remains editable");
-    expect(screen.getByRole("textbox")).toHaveValue(
+    await type("The next draft remains editable");
+    expect(composerText(screen.getByRole("textbox"))).toBe(
       "The next draft remains editable",
     );
     expect(screen.getByRole("button", { name: "Steer" })).toBeDisabled();
@@ -3669,7 +3667,7 @@ describe("Composer delivery guards", () => {
     expect(settings).toHaveFocus();
     view.rerender(content(true));
     expect(screen.getByRole("textbox", { name: "Message Pi" })).toBe(draft);
-    expect(draft).toHaveValue("retained draft");
+    expect(composerText(draft)).toBe("retained draft");
     dispatchWindowKeyDown({ key: "Alt", code: "AltRight" });
     expect(draft).toHaveFocus();
   });
@@ -3751,7 +3749,7 @@ describe("Composer delivery guards", () => {
     });
 
     expect(other).toHaveFocus();
-    expect(screen.getByRole("textbox", { name: "Message Pi" })).toBeDisabled();
+    expect(screen.getByRole("textbox", { name: "Message Pi" })).toHaveAttribute("contenteditable", "false");
     expect(event.defaultPrevented).toBe(false);
   });
 
@@ -3787,7 +3785,7 @@ describe("Composer delivery guards", () => {
       "Review Changes",
     );
     expect(screen.queryByText("$review")).not.toBeInTheDocument();
-    type("please inspect");
+    await type("please inspect");
     pressEnter(store);
 
     await waitFor(() =>
@@ -3816,10 +3814,10 @@ describe("Composer delivery guards", () => {
   it("finds an alias in the skill picker and submits the canonical selection", async () => {
     const store = new FakeComposerStore(snapshot(), "");
     render(<Composer store={store as unknown as ThreadClientStore} />);
-    type("/skill OLD-DIRECTORY");
+    await type("/skill OLD-DIRECTORY");
     fireEvent.click(await screen.findByRole("button", { name: /Review Changes/u }));
     expect(screen.getByTestId("selected-skill")).toHaveTextContent("Review Changes");
-    type("please inspect");
+    await type("please inspect");
     pressEnter(store);
     await waitFor(() => expect(store.deliver).toHaveBeenCalledWith(
       "submit", expect.objectContaining({ text: "please inspect", selectedSkillId: "skill-review" }), expect.any(String),
@@ -3913,7 +3911,7 @@ describe("Composer delivery guards", () => {
       renderComposerWithContext(store, undefined, conversationContextExcerpt);
 
       fireEvent.click(screen.getByRole("button", { name: "Attach fixture" }));
-      type("Use the selected message");
+      await type("Use the selected message");
       fireEvent.click(
         await screen.findByRole("button", {
           name: mode === "steer" ? "Steer" : "Queue",
@@ -3940,7 +3938,7 @@ describe("Composer delivery guards", () => {
     const store = new FakeComposerStore(snapshot(), "");
     render(<Composer store={store as unknown as ThreadClientStore} />);
 
-    type("/skill rev");
+    await type("/skill rev");
 
     expect(
       await screen.findByRole("searchbox", { name: "Search skills" }),
@@ -4142,7 +4140,7 @@ describe("Composer delivery guards", () => {
     input.focus();
 
     fireEvent.compositionStart(input, { data: "にほ" });
-    type("日本語");
+    await type("日本語");
     fireEvent.compositionEnd(input, { data: "日本語" });
     // Safari reports the confirming Enter after compositionend, with
     // isComposing false and the IME's keyCode 229.
@@ -4151,13 +4149,13 @@ describe("Composer delivery guards", () => {
     ).toBe(true);
     await act(async () => undefined);
     expect(store.deliver).not.toHaveBeenCalled();
-    expect(input).toHaveValue("日本語");
+    expect(composerText(input)).toBe("日本語");
 
     fireEvent.keyDown(input, { key: "Enter", code: "Enter", keyCode: 13 });
     await waitFor(() => expect(store.deliver).toHaveBeenCalledOnce());
   });
 
-  it("leaves IME Enter and arrows to the composition while the command menu is open", () => {
+  it("leaves IME Enter and arrows to the composition while the command menu is open", async () => {
     const withCommands = snapshot();
     withCommands.composerCommands = [
       { invocation: "/review", source: "prompt" },
@@ -4167,7 +4165,7 @@ describe("Composer delivery guards", () => {
     render(<Composer store={store as unknown as ThreadClientStore} />);
     const input = screen.getByRole("textbox");
 
-    type("/re");
+    await type("/re");
     const [review, release] = within(
       screen.getByRole("listbox", { name: "Commands" }),
     ).getAllByRole("option");
@@ -4176,14 +4174,14 @@ describe("Composer delivery guards", () => {
     expect(release).not.toHaveAttribute("data-active");
     expect(fireEvent.keyDown(input, { key: "Enter", isComposing: true })).toBe(true);
     expect(fireEvent.keyDown(input, { key: "Tab", keyCode: 229 })).toBe(true);
-    expect(input).toHaveValue("/re");
+    expect(composerText(input)).toBe("/re");
     expect(screen.getByRole("listbox", { name: "Commands" })).toBeInTheDocument();
 
     fireEvent.keyDown(input, { key: "Enter" });
-    expect(input).toHaveValue("/review ");
+    expect(composerText(input)).toBe("/review ");
   });
 
-  it("lists slash commands as menu rows with one active wash", () => {
+  it("lists slash commands as menu rows with one active wash", async () => {
     const withCommands = snapshot();
     withCommands.composerCommands = [
       {
@@ -4197,7 +4195,7 @@ describe("Composer delivery guards", () => {
     const store = new FakeComposerStore(withCommands, "");
     render(<Composer store={store as unknown as ThreadClientStore} />);
 
-    type("/re");
+    await type("/re");
     const listbox = screen.getByRole("listbox", { name: "Commands" });
     const [review, release] = within(listbox).getAllByRole("option");
     expect(review).toHaveAttribute("aria-selected", "true");
@@ -4235,7 +4233,7 @@ describe("Composer delivery guards", () => {
     expect(store.deliver).not.toHaveBeenCalled();
     expect(onImmediateSend).not.toHaveBeenCalled();
 
-    type("eligible");
+    await type("eligible");
     act(() => store.replace({ actionPending: true }));
     pressEnter(store);
 
@@ -4344,7 +4342,7 @@ describe("Composer delivery guards", () => {
     const restoreButton = await screen.findByRole("button", {
       name: /restored/u,
     });
-    type("existing");
+    await type("existing");
     fireEvent.click(restoreButton);
     fireEvent.click(restoreButton);
 
@@ -4356,7 +4354,7 @@ describe("Composer delivery guards", () => {
     );
     expect(store.restoreStash).toHaveBeenCalledOnce();
 
-    type("next idea");
+    await type("next idea");
     act(() =>
       store.replaceDraft({ text: "existing\n\nrestored", revision: 4 }),
     );
@@ -4371,7 +4369,7 @@ describe("Composer delivery guards", () => {
         revision: 3,
       }),
     );
-    expect(screen.getByRole("textbox")).toHaveValue("next idea");
+    expect(composerText(screen.getByRole("textbox"))).toBe("next idea");
 
     view.unmount();
     expect(store.saveDraft).toHaveBeenCalledWith({
@@ -4445,8 +4443,8 @@ describe("Composer delivery guards", () => {
       const notify = vi.fn();
       store.subscribe(notify);
 
-      type("hello");
-      type("hello world");
+      await type("hello");
+      await type("hello world");
 
       // Typing is composer-local: no store writes, no subscriber churn, no
       // immediate persistence.
@@ -4476,13 +4474,13 @@ describe("Composer delivery guards", () => {
     }
   });
 
-  it("flushes the typed draft on unmount instead of waiting for the debounce", () => {
+  it("flushes the typed draft on unmount instead of waiting for the debounce", async () => {
     const store = new FakeComposerStore(snapshot(), "");
     const view = render(
       <Composer store={store as unknown as ThreadClientStore} />,
     );
 
-    type("unsent thought");
+    await type("unsent thought");
     expect(store.saveDraft).not.toHaveBeenCalled();
 
     view.unmount();
@@ -4517,7 +4515,7 @@ describe("Composer delivery guards", () => {
         const store = new FakeComposerStore(snapshot(), "");
         render(<Composer store={store as unknown as ThreadClientStore} />);
 
-        type("closing the tab now");
+        await type("closing the tab now");
         hidePage();
         await act(async () => {
           await vi.advanceTimersByTimeAsync(0);
@@ -4549,7 +4547,7 @@ describe("Composer delivery guards", () => {
       const store = new FakeComposerStore(snapshot(), "");
       render(<Composer store={store as unknown as ThreadClientStore} />);
 
-      type("reloading");
+      await type("reloading");
       act(() => {
         window.dispatchEvent(new Event("pagehide"));
       });
@@ -4586,13 +4584,13 @@ describe("Composer delivery guards", () => {
         );
         render(<Composer store={store as unknown as ThreadClientStore} />);
 
-        type("first part");
+        await type("first part");
         await act(async () => {
           await vi.advanceTimersByTimeAsync(2_000);
         });
         expect(store.saveDraft).toHaveBeenCalledOnce();
 
-        type("first part, then more");
+        await type("first part, then more");
         act(() => {
           window.dispatchEvent(new Event("pagehide"));
         });
@@ -4641,7 +4639,7 @@ describe("Composer delivery guards", () => {
         store.saveDraft.mockRejectedValueOnce(new TypeError("Failed to fetch"));
         render(<Composer store={store as unknown as ThreadClientStore} />);
 
-        type("survive a network blip");
+        await type("survive a network blip");
         await act(async () => {
           await vi.advanceTimersByTimeAsync(2_000);
         });
@@ -4683,7 +4681,7 @@ describe("Composer delivery guards", () => {
           .mockRejectedValueOnce(new TypeError("Failed to fetch"));
         render(<Composer store={store as unknown as ThreadClientStore} />);
 
-        type("typed before the server restarted");
+        await type("typed before the server restarted");
         await act(async () => {
           await vi.advanceTimersByTimeAsync(2_000);
         });
@@ -4720,7 +4718,7 @@ describe("Composer delivery guards", () => {
         );
         render(<Composer store={store as unknown as ThreadClientStore} />);
 
-        type("rejected");
+        await type("rejected");
         await act(async () => {
           await vi.advanceTimersByTimeAsync(2_000);
         });
@@ -4737,12 +4735,12 @@ describe("Composer delivery guards", () => {
   it("adopts server draft changes while the composer is clean", async () => {
     const store = new FakeComposerStore(snapshot(), "original");
     render(<Composer store={store as unknown as ThreadClientStore} />);
-    expect(screen.getByRole("textbox")).toHaveValue("original");
+    expect(composerText(screen.getByRole("textbox"))).toBe("original");
 
     act(() => store.replaceDraft({ text: "remote edit", revision: 2 }));
 
     await waitFor(() =>
-      expect(screen.getByRole("textbox")).toHaveValue("remote edit"),
+      expect(composerText(screen.getByRole("textbox"))).toBe("remote edit"),
     );
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
@@ -4751,7 +4749,7 @@ describe("Composer delivery guards", () => {
     const store = new FakeComposerStore(snapshot(), "original");
     render(<Composer store={store as unknown as ThreadClientStore} />);
 
-    type("local work");
+    await type("local work");
     act(() => store.replaceDraft({ text: "remote edit", revision: 2 }));
 
     const banner = await screen.findByRole("alert");
@@ -4759,16 +4757,16 @@ describe("Composer delivery guards", () => {
       "This draft changed in another client. Your local draft is still here.",
     );
     // Local text is preserved while the banner is up.
-    expect(screen.getByRole("textbox")).toHaveValue("local work");
+    expect(composerText(screen.getByRole("textbox"))).toBe("local work");
 
     // Use latest: adopt the server's text and drop the local edit.
     fireEvent.click(screen.getByRole("button", { name: "Use latest" }));
-    expect(screen.getByRole("textbox")).toHaveValue("remote edit");
+    expect(composerText(screen.getByRole("textbox"))).toBe("remote edit");
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(store.saveDraft).not.toHaveBeenCalled();
 
     // Keep mine: persist the local text at the server's latest revision.
-    type("mine instead");
+    await type("mine instead");
     act(() => store.replaceDraft({ text: "remote v2", revision: 3 }));
     await screen.findByRole("alert");
     fireEvent.click(screen.getByRole("button", { name: "Keep mine" }));
@@ -4785,7 +4783,7 @@ describe("Composer delivery guards", () => {
     await waitFor(() =>
       expect(screen.queryByRole("alert")).not.toBeInTheDocument(),
     );
-    expect(screen.getByRole("textbox")).toHaveValue("mine instead");
+    expect(composerText(screen.getByRole("textbox"))).toBe("mine instead");
   });
 
   it("does not flag our own autosave echo as a conflict", async () => {
@@ -4794,7 +4792,7 @@ describe("Composer delivery guards", () => {
       const store = new FakeComposerStore(snapshot(), "original");
       render(<Composer store={store as unknown as ThreadClientStore} />);
 
-      type("local work");
+      await type("local work");
       await act(async () => {
         await vi.advanceTimersByTimeAsync(2_000);
       });
@@ -4808,11 +4806,11 @@ describe("Composer delivery guards", () => {
 
       // The reader keeps typing, then our own save's draft_changed echo
       // lands: it must advance the base revision silently.
-      type("local work plus more");
+      await type("local work plus more");
       act(() => store.replaceDraft({ text: "local work", revision: 2 }));
 
       expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-      expect(screen.getByRole("textbox")).toHaveValue("local work plus more");
+      expect(composerText(screen.getByRole("textbox"))).toBe("local work plus more");
     } finally {
       vi.useRealTimers();
     }
@@ -4838,7 +4836,7 @@ describe("Composer delivery guards", () => {
       );
       render(<Composer store={store as unknown as ThreadClientStore} />);
 
-      type("local work");
+      await type("local work");
       await act(async () => {
         await vi.advanceTimersByTimeAsync(2_000);
       });
@@ -4853,7 +4851,7 @@ describe("Composer delivery guards", () => {
       // The reader keeps typing while the PUT is in flight, then the
       // broadcast of our own save arrives BEFORE the PUT response: it must
       // read as ours, not as a remote change.
-      type("local work plus more");
+      await type("local work plus more");
       act(() => store.replaceDraft({ text: "local work", revision: 2 }));
       expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 
@@ -4868,7 +4866,7 @@ describe("Composer delivery guards", () => {
         });
       });
       expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-      expect(screen.getByRole("textbox")).toHaveValue("local work plus more");
+      expect(composerText(screen.getByRole("textbox"))).toBe("local work plus more");
     } finally {
       vi.useRealTimers();
     }
@@ -4900,19 +4898,19 @@ describe("Composer delivery guards", () => {
 
     // The reader starts the next message while the deliver round-trip is
     // still in flight.
-    type("next message");
+    await type("next message");
     await act(async () => {
       releaseDeliver();
     });
 
     // The in-flight text is not wiped, and it stays dirty so the autosave
     // (or an unmount flush) persists it.
-    expect(screen.getByRole("textbox")).toHaveValue("next message");
+    expect(composerText(screen.getByRole("textbox"))).toBe("next message");
 
     // The post-delivery empty-draft echo must not raise a spurious conflict.
     act(() => store.replaceDraft({ text: "", revision: 2 }));
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    expect(screen.getByRole("textbox")).toHaveValue("next message");
+    expect(composerText(screen.getByRole("textbox"))).toBe("next message");
 
     view.unmount();
     await waitFor(() =>
@@ -4949,7 +4947,7 @@ describe("Composer delivery guards", () => {
     await waitFor(() => expect(store.deliver).toHaveBeenCalledOnce());
 
     const oversizedNextMessage = "x".repeat(MAXIMUM_THREAD_INPUT_BYTES + 1);
-    type(oversizedNextMessage);
+    await type(oversizedNextMessage);
     await act(async () => releaseDeliver());
 
     const alert = screen.getByRole("alert");
@@ -4961,7 +4959,7 @@ describe("Composer delivery guards", () => {
     );
     expect(alert).not.toHaveTextContent("changed in another client");
     expect(
-      (screen.getByRole("textbox") as HTMLTextAreaElement).value.length,
+      composerText(screen.getByRole("textbox")).length,
     ).toBe(MAXIMUM_THREAD_INPUT_BYTES + 1);
   });
 
@@ -4987,14 +4985,14 @@ describe("Composer delivery guards", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
     await waitFor(() => expect(store.deliver).toHaveBeenCalledOnce());
-    type("x".repeat(MAXIMUM_THREAD_INPUT_BYTES + 1));
+    await type("x".repeat(MAXIMUM_THREAD_INPUT_BYTES + 1));
     await act(async () => releaseRecovery());
 
     const alert = screen.getByRole("alert");
     expect(alert).toHaveTextContent("Delivery could not be confirmed");
     expect(alert).not.toHaveTextContent("Your message was sent");
     expect(
-      (screen.getByRole("textbox") as HTMLTextAreaElement).value.length,
+      composerText(screen.getByRole("textbox")).length,
     ).toBe(MAXIMUM_THREAD_INPUT_BYTES + 1);
   });
 
@@ -5038,13 +5036,13 @@ describe("Composer delivery guards", () => {
       });
       render(<Composer store={store as unknown as ThreadClientStore} />);
 
-      type("first");
+      await type("first");
       await act(async () => vi.advanceTimersByTimeAsync(2_000));
       expect(store.saveDraft).toHaveBeenCalledOnce();
 
-      type("superseded");
+      await type("superseded");
       await act(async () => vi.advanceTimersByTimeAsync(2_000));
-      type("newest");
+      await type("newest");
       await act(async () => vi.advanceTimersByTimeAsync(2_000));
       expect(store.saveDraft).toHaveBeenCalledOnce();
 
@@ -5084,18 +5082,18 @@ describe("Composer delivery guards", () => {
       store.saveDraft.mockRejectedValue(conflict);
       render(<Composer store={store as unknown as ThreadClientStore} />);
 
-      type("local edit");
+      await type("local edit");
       await act(async () => vi.advanceTimersByTimeAsync(2_000));
       expect(store.saveDraft).toHaveBeenCalledOnce();
       expect(screen.getByRole("alert")).toHaveTextContent(
         "This draft changed in another client",
       );
 
-      type("local edit after conflict");
+      await type("local edit after conflict");
       await act(async () => vi.advanceTimersByTimeAsync(2_000));
       expect(store.saveDraft).toHaveBeenCalledOnce();
       expect(screen.getByRole("alert")).toBeInTheDocument();
-      expect(screen.getByRole("textbox")).toHaveValue(
+      expect(composerText(screen.getByRole("textbox"))).toBe(
         "local edit after conflict",
       );
     } finally {
@@ -5124,7 +5122,7 @@ describe("Composer delivery guards", () => {
       );
       render(<Composer store={store as unknown as ThreadClientStore} />);
 
-      type("first message");
+      await type("first message");
       pressEnter(store);
       await act(async () => Promise.resolve());
       expect(store.saveDraft).toHaveBeenCalledWith({
@@ -5137,7 +5135,7 @@ describe("Composer delivery guards", () => {
       await act(async () => Promise.resolve());
       expect(store.deliver).toHaveBeenCalledOnce();
 
-      type("next message");
+      await type("next message");
       await act(async () => vi.advanceTimersByTimeAsync(2_000));
       await act(async () => releaseDeliver());
       // The HTTP receipt advances the queue without depending on an SSE echo.
@@ -5180,7 +5178,7 @@ describe("Composer delivery guards", () => {
 
     // The reader starts the next message, and the server's empty-draft echo
     // wins the race against the deliver HTTP response.
-    type("next message");
+    await type("next message");
     act(() => store.replaceDraft({ text: "", revision: 2 }));
 
     // The early echo must read as our own clear — no spurious conflict —
@@ -5190,7 +5188,7 @@ describe("Composer delivery guards", () => {
       releaseDeliver();
     });
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    expect(screen.getByRole("textbox")).toHaveValue("next message");
+    expect(composerText(screen.getByRole("textbox"))).toBe("next message");
 
     view.unmount();
     expect(store.saveDraft).toHaveBeenCalledWith({
@@ -5241,7 +5239,7 @@ describe("Composer delivery guards", () => {
       act(() => store.replaceDraft({ text: "", revision: 2 }));
 
       expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-      expect(screen.getByRole("textbox")).toHaveValue("");
+      expect(composerText(screen.getByRole("textbox"))).toBe("");
       await act(async () => releaseDeliver());
       expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     },
@@ -5270,7 +5268,7 @@ describe("Composer delivery guards", () => {
             });
         }),
     );
-    type("second message");
+    await type("second message");
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
     await waitFor(() => expect(store.saveDraft).toHaveBeenCalledOnce());
 
@@ -5279,7 +5277,7 @@ describe("Composer delivery guards", () => {
     act(() => store.replaceDraft({ text: "second message", revision: 3 }));
 
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    expect(screen.getByRole("textbox")).toHaveValue("");
+    expect(composerText(screen.getByRole("textbox"))).toBe("");
     await act(async () => releaseSecondSave());
     await waitFor(() => expect(store.deliver).toHaveBeenCalledTimes(2));
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
@@ -5318,7 +5316,7 @@ describe("Composer delivery guards", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(
       "This draft changed in another client",
     );
-    expect(screen.getByRole("textbox")).toHaveValue("");
+    expect(composerText(screen.getByRole("textbox"))).toBe("");
     await act(async () => releaseDeliver());
   });
 
@@ -5347,13 +5345,13 @@ describe("Composer delivery guards", () => {
       releaseDeliver();
     });
 
-    expect(screen.getByRole("textbox")).toHaveValue("");
+    expect(composerText(screen.getByRole("textbox"))).toBe("");
 
     // The post-delivery echo reads as our own clear — no banner, and the
     // composer stays clean for the next remote edit.
     act(() => store.replaceDraft({ text: "", revision: 2 }));
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    expect(screen.getByRole("textbox")).toHaveValue("");
+    expect(composerText(screen.getByRole("textbox"))).toBe("");
   });
 
   it("preserves text typed while a stash is in flight", async () => {
@@ -5372,7 +5370,7 @@ describe("Composer delivery guards", () => {
     fireEvent.click(screen.getByRole("button", { name: "Stash prompt" }));
     await waitFor(() => expect(store.stash).toHaveBeenCalledOnce());
 
-    type("new idea");
+    await type("new idea");
     await act(async () => {
       releaseStash({
         text: "",
@@ -5386,7 +5384,7 @@ describe("Composer delivery guards", () => {
     // The stash cleared the server draft, but the newer in-flight typing is
     // kept — and still dirty, so the unmount flush persists it against the
     // post-stash revision.
-    expect(screen.getByRole("textbox")).toHaveValue("new idea");
+    expect(composerText(screen.getByRole("textbox"))).toBe("new idea");
     view.unmount();
     expect(store.saveDraft).toHaveBeenCalledWith({
       text: "new idea",
@@ -5818,7 +5816,7 @@ describe("saved prompt composer integration", () => {
       }),
     );
 
-    expect(screen.getByRole("textbox", { name: "Message Pi" })).toHaveValue(
+    expect(composerText(screen.getByRole("textbox", { name: "Message Pi" }))).toBe(
       "Review the current changes.",
     );
     expect(store.deliver).not.toHaveBeenCalled();
@@ -5834,7 +5832,7 @@ describe("saved prompt composer integration", () => {
     );
     const composer = screen.getByRole("textbox", { name: "Message Pi" });
     composer.focus();
-    (composer as HTMLTextAreaElement).setSelectionRange(7, 7);
+    setComposerCaret(composer, 7);
 
     fireEvent.click(screen.getByRole("button", { name: "Open saved prompts" }));
     fireEvent.click(
@@ -5843,7 +5841,7 @@ describe("saved prompt composer integration", () => {
       }),
     );
 
-    expect(composer).toHaveValue(
+    expect(composerText(composer)).toBe(
       "before \n\nReview the current changes.\n\nafter",
     );
     expect(store.deliver).not.toHaveBeenCalled();
@@ -5864,7 +5862,7 @@ describe("saved prompt composer integration", () => {
     );
     const composer = screen.getByRole("textbox", { name: "Message Pi" });
     composer.focus();
-    (composer as HTMLTextAreaElement).setSelectionRange(7, 7);
+    setComposerCaret(composer, 7);
 
     fireEvent.click(screen.getByRole("button", { name: "Open saved prompts" }));
     fireEvent.click(
@@ -5880,7 +5878,7 @@ describe("saved prompt composer integration", () => {
     expect(store.deliver.mock.calls[0]?.[1].contextExcerpts).toEqual([
       contextExcerpt,
     ]);
-    expect(composer).toHaveValue("");
+    expect(composerText(composer)).toBe("");
   });
 
   it("follows the one client-local visibility toggle", () => {
@@ -5936,7 +5934,7 @@ describe("terminal key bar", () => {
     );
 
     expect(screen.getByTestId("composer")).toBeVisible();
-    expect(screen.getByRole("textbox", { name: "Send to TUI" })).toHaveValue(
+    expect(composerText(screen.getByRole("textbox", { name: "Send to TUI" }))).toBe(
       "draft for both views",
     );
     expect(
@@ -5953,7 +5951,7 @@ describe("terminal key bar", () => {
     );
 
     expect(screen.getByTestId("composer")).toBeVisible();
-    expect(screen.getByRole("textbox", { name: "Message Pi" })).toHaveValue(
+    expect(composerText(screen.getByRole("textbox", { name: "Message Pi" }))).toBe(
       "draft for both views",
     );
     expect(screen.queryByTestId("terminal-key-bar")).toBeNull();
@@ -5969,7 +5967,7 @@ describe("terminal key bar", () => {
       </CodexTuiTerminalControlContext.Provider>,
     );
 
-    expect(screen.getByRole("textbox", { name: "Send to TUI" })).toBeEnabled();
+    expect(screen.getByRole("textbox", { name: "Send to TUI" })).toHaveAttribute("contenteditable", "true");
     expect(
       screen.getByRole("button", { name: "Send draft to TUI" }),
     ).toBeDisabled();
@@ -6146,7 +6144,7 @@ describe("terminal key bar", () => {
     expect(sendKey).toHaveBeenCalledWith(
       "\u001b[200~inspect this prompt\u001b[201~",
     );
-    expect(screen.getByRole("textbox", { name: "Send to TUI" })).toHaveValue(
+    expect(composerText(screen.getByRole("textbox", { name: "Send to TUI" }))).toBe(
       "",
     );
     await waitFor(() =>
@@ -6171,7 +6169,7 @@ describe("terminal key bar", () => {
     expect(sendKey).toHaveBeenCalledWith(
       "\u001b[200~explain the failure mode\u001b[201~\r",
     );
-    expect(screen.getByRole("textbox", { name: "Send to TUI" })).toHaveValue(
+    expect(composerText(screen.getByRole("textbox", { name: "Send to TUI" }))).toBe(
       "",
     );
     await waitFor(() =>
@@ -6232,7 +6230,7 @@ describe("terminal key bar", () => {
       screen.getByRole("button", { name: "Stage draft in terminal" }),
     ).toBeDisabled();
     expect(sendKey).not.toHaveBeenCalled();
-    expect(screen.getByRole("textbox", { name: "Send to TUI" })).toHaveValue(
+    expect(composerText(screen.getByRole("textbox", { name: "Send to TUI" }))).toBe(
       "x".repeat(64 * 1_024),
     );
   });
@@ -6251,7 +6249,7 @@ describe("terminal key bar", () => {
     expect(sendKey).toHaveBeenCalledWith(
       "\u001b[200~keep this command\u001b[201~\r",
     );
-    expect(screen.getByRole("textbox", { name: "Send to TUI" })).toHaveValue(
+    expect(composerText(screen.getByRole("textbox", { name: "Send to TUI" }))).toBe(
       "keep this command",
     );
     expect(store.saveDraft).not.toHaveBeenCalled();
@@ -6278,7 +6276,7 @@ describe("terminal key bar", () => {
       "\u001b[200~review this twice\u001b[201~\r",
     );
     await waitFor(() =>
-      expect(screen.getByRole("textbox", { name: "Send to TUI" })).toHaveValue(
+      expect(composerText(screen.getByRole("textbox", { name: "Send to TUI" }))).toBe(
         "review this twice",
       ),
     );
@@ -6352,20 +6350,24 @@ describe("foreground voice composer ownership", () => {
     const task = { taskId: "84f9a3b0-9c14-456d-b08d-58d325d869d0", titleSnapshot: "Review task" };
     const attachment = { id: "d0739b85-4f1b-4c40-b364-51e5093f128b", fileName: "notes.bin",
       kind: "file" as const, mediaType: "application/octet-stream" as const, byteSize: 128 };
-    store.replaceDraft({ text: formatThreadReferenceText("old saved text", [selectedThreadReference]),
+    store.replaceDraft({ text: formatInlineThreadReferenceText(["old saved text", selectedThreadReference]),
       selectedSkillId: "skill-review", contextExcerpts: [contextExcerpt], attachments: [attachment], taskReferences: [task], revision: 2 });
     render(<><button>Voice Send</button><Composer store={store as unknown as ThreadClientStore}
       applicationStore={applicationStore([{ id: task.taskId, title: "Review task" }])} /></>);
     const input = screen.getByRole("textbox", { name: "Message Pi" });
     const snippet = "```ts\n  const café = '你好';\n```\n";
-    fireEvent.change(input, { target: { value: snippet } });
+    input.focus();
+    const selection = document.getSelection()!;
+    selection.setBaseAndExtent(input.firstChild!, 0, input.firstChild!, "old saved text".length);
+    fireEvent(document, new Event("selectionchange"));
+    fireEvent.paste(input, { clipboardData: { files: [], getData: () => snippet } });
     screen.getByRole("button", { name: "Voice Send" }).focus();
     const recordingId = crypto.randomUUID();
     offer(fake, { recordingId });
     await accepted(fake);
     await waitFor(() => expect(store.deliver).toHaveBeenCalledOnce());
     const draft = store.deliver.mock.calls[0]![1];
-    expect(splitThreadReferenceText(draft.text)).toEqual({ text: `Explain this\n\n${snippet}`, references: [selectedThreadReference] });
+    expect(readThreadReferenceBody(draft.text).parts).toEqual([`Explain this\n\n${snippet}`, selectedThreadReference]);
     expect(draft).toMatchObject({ selectedSkillId: "skill-review", contextExcerpts: [contextExcerpt], attachments: [attachment], taskReferences: [task] });
     expect(readDiagnostics()).toEqual(expect.arrayContaining([
       expect.objectContaining({ event: "draft_captured", details: expect.objectContaining({ recordingId, source: "live", taskCount: 1, attachmentCount: 1, excerptCount: 1 }) }),
@@ -6374,7 +6376,7 @@ describe("foreground voice composer ownership", () => {
     ]));
     expect(JSON.stringify(readDiagnostics())).not.toContain("Review task");
     expect(JSON.stringify(readDiagnostics())).not.toContain(snippet);
-    expect(input).toHaveValue("");
+    expect(composerText(input)).toBe("");
     expect(screen.getByRole("button", { name: "Voice Send" })).toHaveFocus();
     expect(fake.plugin.sendRecording).not.toHaveBeenCalled();
   });
@@ -6410,7 +6412,7 @@ describe("foreground voice composer ownership", () => {
     }
     const view = render(panel(true));
     const input = screen.getByRole("textbox", { name: "Message Pi" });
-    type("latest local text");
+    await type("latest local text");
     register.mockClear();
     view.rerender(panel(false));
     view.rerender(panel(true));
@@ -6480,7 +6482,7 @@ describe("foreground voice composer ownership", () => {
     const saving = new Promise<void>(resolve => { save = resolve; });
     const saveDraft = store.saveDraft.getMockImplementation()!;
     store.saveDraft.mockImplementationOnce(async (...args) => { await saving; return saveDraft(...args); });
-    type("latest local draft");
+    await type("latest local draft");
     expect(notify).not.toHaveBeenCalled();
     act(() => store.replace({ connection: "reconnecting", authoritative: false }));
     expect(voice.hasSubmissionComposer("thread-1")).toBe(true);
@@ -6594,7 +6596,7 @@ describe("foreground voice composer ownership", () => {
       publish(threadId, flush, owner);
     });
     const view = render(<Composer store={store as unknown as ThreadClientStore} />);
-    type("last unsaved changes");
+    await type("last unsaved changes");
     offer(fake);
     view.unmount();
     expect(voice.hasSubmissionComposer("thread-1")).toBe(false);
@@ -6620,9 +6622,9 @@ describe("foreground voice composer ownership", () => {
     store.saveDraft.mockImplementationOnce(async (...args) => { await saving; return saveDraft(...args); });
     const published = vi.spyOn(voice, "publishComposerDraftFlush");
     const view = render(<Composer store={store as unknown as ThreadClientStore} />);
-    type("older unsaved text");
+    await type("older unsaved text");
     const olderSave = store.registerDraftFlush.mock.calls.at(-1)![0]();
-    type("newest unsaved text");
+    await type("newest unsaved text");
     view.unmount();
     const finalFlush = published.mock.calls[0]![1];
     expect(store.saveDraft).toHaveBeenCalledOnce();
@@ -6645,7 +6647,7 @@ describe("foreground voice composer ownership", () => {
       await waitFor(() => expect(store.uploadComposerAttachment).toHaveBeenCalledOnce());
       if (fence === "failed-upload") await screen.findByText("Upload failed");
     } else if (fence === "conflict") {
-      type("unsaved local text");
+      await type("unsaved local text");
       act(() => store.replaceDraft({ text: "remote text", revision: 2 }));
       await screen.findByRole("button", { name: "Use latest" });
     } else {
@@ -6690,7 +6692,7 @@ describe("foreground voice composer ownership", () => {
     expect(new TextEncoder().encode(original).byteLength + composerTaskInputUtf8Bytes([task])).toBeLessThan(MAXIMUM_THREAD_INPUT_BYTES);
     offer(fake, { text: "é" });
     await waitFor(() => expect(fake.plugin.completeComposerHandoff).toHaveBeenCalledWith(expect.objectContaining({ outcome: "declined" })));
-    expect(screen.getByRole("textbox")).toHaveValue(original);
+    expect(composerText(screen.getByRole("textbox"))).toBe(original);
     expect(store.saveDraft).not.toHaveBeenCalled();
     expect(store.stageComposerTransfer).not.toHaveBeenCalled();
     expect(store.deliver).not.toHaveBeenCalled();
@@ -6725,7 +6727,7 @@ describe("foreground voice composer ownership", () => {
     offer(fake, { mode: "steer" });
     await accepted(fake);
     await waitFor(() => expect(store.deliver).toHaveBeenCalledWith("queue", expect.objectContaining({ text: "Explain this\n\nsnippet" }), expect.any(String)));
-    expect(screen.getByRole("textbox")).toHaveValue("");
+    expect(composerText(screen.getByRole("textbox"))).toBe("");
     expect(screen.queryByText("Speech added to the draft. Resolve the current Send restriction, then press Send.")).toBeNull();
   });
 
@@ -6739,9 +6741,9 @@ describe("foreground voice composer ownership", () => {
     await accepted(fake);
     await waitFor(() => expect(store.deliver).toHaveBeenCalledOnce());
     expect(fake.plugin.settleComposerSubmission).not.toHaveBeenCalled();
-    type("new draft");
+    await type("new draft");
     await act(async () => reject(new Error("Delivery rejected")));
-    await waitFor(() => expect(screen.getByRole("textbox", { name: "Message Pi" })).toHaveValue("Explain this\n\nsnippet\n\nnew draft"));
+    await waitFor(() => expect(composerText(screen.getByRole("textbox", { name: "Message Pi" }))).toBe("Explain this\n\nsnippet\n\nnew draft"));
     expect(fake.plugin.completeComposerHandoff).toHaveBeenCalledOnce();
     await waitFor(() => expect(fake.plugin.settleComposerSubmission).toHaveBeenCalledOnce());
     expect(fake.plugin.sendRecoveredRecording).not.toHaveBeenCalled();
@@ -6755,7 +6757,7 @@ describe("foreground voice composer ownership", () => {
     render(<Composer store={store as unknown as ThreadClientStore} />);
     offer(fake);
     await accepted(fake);
-    await waitFor(() => expect(screen.getByRole("textbox", { name: "Message Pi" })).toHaveValue("Explain this\n\nsnippet"));
+    await waitFor(() => expect(composerText(screen.getByRole("textbox", { name: "Message Pi" }))).toBe("Explain this\n\nsnippet"));
     expect(store.deliver).not.toHaveBeenCalled();
     await waitFor(() => expect(fake.plugin.settleComposerSubmission).toHaveBeenCalledOnce());
     expect(fake.plugin.completeComposerHandoff).toHaveBeenCalledWith(expect.objectContaining({ outcome: "accepted", submissionPending: true }));
@@ -6773,7 +6775,7 @@ describe("foreground voice composer ownership", () => {
     await waitFor(() => expect(store.uploadComposerAttachment).toHaveBeenCalledOnce());
     offer(fake);
     await accepted(fake);
-    expect(screen.getByRole("textbox", { name: "Message Pi" })).toHaveValue("Explain this\n\nsnippet");
+    expect(composerText(screen.getByRole("textbox", { name: "Message Pi" }))).toBe("Explain this\n\nsnippet");
     expect(screen.getByText("Speech added to the draft. Wait for attachment uploads to finish, then press Send.")).toBeVisible();
     expect(store.deliver).not.toHaveBeenCalled();
     expect(fake.plugin.completeComposerHandoff).toHaveBeenCalledWith(expect.objectContaining({ submissionPending: false }));
@@ -6792,7 +6794,7 @@ describe("foreground voice composer ownership", () => {
     render(<Composer store={store as unknown as ThreadClientStore} />);
     offer(fake);
     await accepted(fake);
-    expect(screen.getByRole("textbox", { name: "Message Pi" })).toHaveValue("Explain this\n\nsnippet");
+    expect(composerText(screen.getByRole("textbox", { name: "Message Pi" }))).toBe("Explain this\n\nsnippet");
     expect(screen.getByText("Speech added to the draft. Resolve the current Send restriction, then press Send.")).toBeVisible();
     expect(store.deliver).not.toHaveBeenCalled();
     expect(fake.plugin.completeComposerHandoff).toHaveBeenCalledWith(expect.objectContaining({ submissionPending: false }));
@@ -6819,7 +6821,7 @@ describe("foreground voice composer ownership", () => {
       outcome: "declined", submissionPending: false,
       message: "Open this thread's Chat to resolve the current Send restriction, then retry the saved dictation.",
     })));
-    expect(screen.getByRole("textbox")).toHaveValue("keep draft");
+    expect(composerText(screen.getByRole("textbox"))).toBe("keep draft");
     expect(store.state.snapshot!.draft).toEqual(original);
     expect(store.saveDraft).not.toHaveBeenCalled();
     expect(store.stageComposerTransfer).not.toHaveBeenCalled();
@@ -6846,7 +6848,7 @@ describe("foreground voice composer ownership", () => {
     ]));
     offer(fake);
     await waitFor(() => expect(fake.plugin.completeComposerHandoff).toHaveBeenCalledWith(expect.objectContaining({ outcome: "declined" })));
-    expect(screen.getByRole("textbox")).toHaveValue("keep draft");
+    expect(composerText(screen.getByRole("textbox"))).toBe("keep draft");
     expect(store.deliver).not.toHaveBeenCalled();
   });
 
@@ -6856,19 +6858,19 @@ describe("foreground voice composer ownership", () => {
     render(<Composer disabled={fence === "disabled"} store={store as unknown as ThreadClientStore} />);
     expect(voice.hasSubmissionComposer("thread-1")).toBe(true);
     if (fence === "conflict") {
-      type("unsaved local text");
+      await type("unsaved local text");
       act(() => store.replaceDraft({ text: "remote text", revision: 2 }));
       await screen.findByRole("button", { name: "Use latest" });
     }
     if (fence === "mutation") {
-      type("unsaved draft");
+      await type("unsaved draft");
       store.saveDraft.mockImplementationOnce(() => new Promise(() => {}));
       pressEnter(store);
     }
-    const before = (screen.getByRole("textbox") as HTMLTextAreaElement).value;
+    const before = composerText(screen.getByRole("textbox"));
     offer(fake);
     await waitFor(() => expect(fake.plugin.completeComposerHandoff).toHaveBeenCalledWith(expect.objectContaining({ outcome: "declined" })));
-    expect(screen.getByRole("textbox")).toHaveValue(before);
+    expect(composerText(screen.getByRole("textbox"))).toBe(before);
     expect(store.deliver).not.toHaveBeenCalled();
   });
 });

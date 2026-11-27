@@ -1,0 +1,71 @@
+.inline-thread-reference {
+  /* Center the pill and icons on the visible lowercase letters. Its title
+     keeps the same typographic baseline as the sentence. */
+  --mention-optical-offset: 0.1em;
+  position: relative;
+  top: var(--mention-optical-offset);
+  display: inline-flex;
+  align-items: baseline;
+  vertical-align: baseline;
+  box-sizing: border-box;
+  max-width: 100%;
+  gap: 0.32em;
+  padding: 0.06em 0.44em;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: inherit;
+  font: inherit;
+  line-height: var(--leading-tight);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.inline-thread-reference > svg,
+.inline-thread-reference-project > svg,
+.inline-thread-reference-environment > svg {
+  flex: none;
+  align-self: center;
+  width: 1em;
+  height: 1em;
+}
+
+.inline-thread-reference-title,
+.inline-thread-reference-project > span,
+.inline-thread-reference-environment > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.inline-thread-reference-title {
+  position: relative;
+  top: calc(0px - var(--mention-optical-offset));
+  font-weight: var(--weight-medium);
+}
+
+.inline-thread-reference-project,
+.inline-thread-reference-environment {
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.24em;
+  min-width: 0;
+  max-width: 15ch;
+  font-size: var(--text-label);
+  color: var(--muted-foreground);
+}
+
+/* Keep location hints visible without inserting them into copied prose or excerpts. */
+.inline-thread-reference [data-label]::before {
+  content: attr(data-label);
+}
+
+a.inline-thread-reference:hover,
+a.inline-thread-reference:focus-visible {
+  background: var(--hover);
+}
+
+a.inline-thread-reference:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}

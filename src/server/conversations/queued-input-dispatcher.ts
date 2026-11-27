@@ -673,6 +673,7 @@ export class QueuedInputDispatcher {
                 reconciliationToken: started.reconciliationToken,
                 target,
                 text: prepared.reservation.item.text,
+                ...(prepared.reservation.item.hasThreadReferenceBody ? { hasThreadReferenceBody: true } : {}),
                 ...(started.selectedSkillId === null
                   ? {}
                   : { selectedSkillId: started.selectedSkillId }),
@@ -1425,6 +1426,7 @@ export class QueuedInputDispatcher {
                     },
               reconciliationToken: claimed.reconciliationToken!,
               text: claimed.text,
+              ...(claimed.hasThreadReferenceBody ? { hasThreadReferenceBody: true } : {}),
               ...(claimed.selectedSkillId === null
                 ? {}
                 : { selectedSkillId: claimed.selectedSkillId }),

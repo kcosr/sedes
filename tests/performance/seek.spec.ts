@@ -34,7 +34,7 @@ for (const profile of [
     await expect(page.getByTestId("composer")).toBeVisible();
     await selectRadixOption(page, page.getByTestId("composer").getByRole("combobox", { name: "Model" }), "GPT-5.6 Codex");
     const initialComposer = page.getByTestId("composer").getByRole("textbox").first();
-    if (await initialComposer.inputValue()) {
+    if (await initialComposer.textContent()) {
       const saved = page.waitForResponse((response) => response.request().method() === "PUT" && response.url().endsWith("/draft") && response.ok());
       await initialComposer.fill("");
       await saved;

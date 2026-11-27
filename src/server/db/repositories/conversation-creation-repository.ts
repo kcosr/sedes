@@ -1,3 +1,5 @@
+import { hasInlineThreadReferenceBody } from "../../../shared/thread-references.js";
+import { escapeHistoricalComposerText } from "../../domain/stored-composer-text.js";
 import type Database from "better-sqlite3";
 import { UserInputRevisionRepository } from "./user-input-revision-repository.js";
 import type { ClientOrigin } from "../../../shared/protocol/thread-input.js";
@@ -63,6 +65,7 @@ export type ConversationCreationAttemptRecord = {
   readonly initiatingAgentThreadId: string | null;
   readonly initiatingToolClientId: string | null;
   readonly initialInputText: string | null;
+  readonly hasThreadReferenceBody?: 0 | 1;
   readonly initialSkillId: string | null;
   readonly initialContextExcerpts: ContextExcerpt[];
   readonly initialAttachments: ComposerAttachmentDescriptor[];
@@ -107,6 +110,7 @@ const columns = `
   initiating_agent_thread_id AS initiatingAgentThreadId,
   initiating_tool_client_id AS initiatingToolClientId,
   initial_input_text AS initialInputText,
+  has_thread_reference_body AS hasThreadReferenceBody,
   initial_skill_id AS initialSkillId,
   initial_context_excerpts_json AS initialContextExcerptsJson,
   initial_task_contexts_json AS initialTaskContextsJson,
@@ -549,9 +553,9 @@ export class ConversationCreationRepository {
               initial_input_text, initial_skill_id, consumed_draft_revision,
               initial_context_excerpts_json, initial_task_contexts_json,
               backend_creation_correlation,
-              phase, prepared_at
+              phase, prepared_at, has_thread_reference_body
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'prepared', ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'prepared', ?, ?)
           `,
         )
         .run(
@@ -590,6 +594,7 @@ export class ConversationCreationRepository {
           serializeTaskContexts(initialTaskContexts),
           input.backendCreationCorrelation,
           input.now,
+          input.sourceKind === "composer" && hasInlineThreadReferenceBody(input.initialInputText) ? 1 : 0,
         );
       const changed = this.database
         .prepare(
@@ -1037,7 +1042,8 @@ export class ConversationCreationRepository {
             `,
           )
           .run(
-            attempt.initialInputText,
+            attempt.hasThreadReferenceBody ? attempt.initialInputText
+              : escapeHistoricalComposerText(attempt.initialInputText, attempt.initialContextExcerpts),
             attempt.initialSkillId,
             serializeContextExcerpts(attempt.initialContextExcerpts),
             serializeTaskReferences(

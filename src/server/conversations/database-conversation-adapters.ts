@@ -1,5 +1,5 @@
 import type Database from "better-sqlite3";
-import { splitThreadReferenceText } from "../../shared/thread-references.js";
+import { threadReferencePreview } from "../../shared/thread-reference-preview.js";
 import type {
   AgentBackendInstance,
   AgentConnectionProfile,
@@ -691,11 +691,8 @@ export class DatabaseThreadApplicationRecoveryReader implements ThreadApplicatio
             (await this.targets.resolve(scope, applicationThreadId)).connection,
           ).createReplay === "idempotent"
         : true;
-      const referencePreview = splitThreadReferenceText(attempt.initialInputText ?? "");
-      const promptPreview = referencePreview.text.trim() ||
-        (referencePreview.references.length > 0
-          ? `Referenced thread: ${referencePreview.references[0]!.title}${referencePreview.references.length > 1 ? ` · +${referencePreview.references.length - 1}` : ""}`
-          : referencePreview.text);
+      const text = attempt.initialInputText ?? "";
+      const promptPreview = attempt.sourceKind === "composer" ? threadReferencePreview(text, attempt.hasThreadReferenceBody ? "authored" : "legacy") : text;
       return {
         kind: "conversation_creation" as const,
         creationType: "first_input" as const,

@@ -719,7 +719,7 @@ test.describe.serial("managed Codex TUI browser journeys", () => {
         ),
       )
       .toEqual(["\u001b[200~staged mobile TUI draft\u001b[201~"]);
-    await expect(mobileComposer).toHaveValue("");
+    await expect(mobileComposer).toHaveText("");
 
     const beforeComposerSend = await readTuiFixtureState(mobilePage);
     await mobileComposer.fill("submitted mobile TUI draft");
@@ -733,7 +733,7 @@ test.describe.serial("managed Codex TUI browser journeys", () => {
       .toEqual([
         "\u001b[200~submitted mobile TUI draft\u001b[201~\r",
       ]);
-    await expect(mobileComposer).toHaveValue("");
+    await expect(mobileComposer).toHaveText("");
     await expectNoPageOverflow(mobilePage);
     await capture(mobilePage, testInfo, "codex-tui-running-mobile.png");
     await mobile.close();

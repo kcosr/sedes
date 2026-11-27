@@ -1,6 +1,6 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import type { Locator, Page, TestInfo } from "@playwright/test";
+import type { Locator, Page, PageScreenshotOptions, TestInfo } from "@playwright/test";
 import type { SettingsPage } from "../../src/client/app/settings-route.js";
 import { expect } from "./fixtures";
 import { loadE2ERunContext } from "./run-context.js";
@@ -216,7 +216,7 @@ export async function capture(
   page: Page,
   testInfo: TestInfo,
   name: string,
-  options: { readonly animations?: "allow" | "disabled" } = {},
+  options: Pick<PageScreenshotOptions, "animations" | "clip"> = {},
 ): Promise<void> {
   await mkdir(screenshotDirectory, { recursive: true });
   const screenshotPath = path.join(screenshotDirectory, name);
@@ -224,6 +224,7 @@ export async function capture(
     path: screenshotPath,
     fullPage: false,
     animations: options.animations ?? "disabled",
+    clip: options.clip,
   });
   await testInfo.attach(name, {
     path: screenshotPath,

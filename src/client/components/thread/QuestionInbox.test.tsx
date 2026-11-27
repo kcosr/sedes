@@ -119,10 +119,13 @@ function show(store = new FakeQuestionStore(), item?: AssistantMessageItem) {
     >
       <div className="composer-wrap">
         <div className="composer">
-          <textarea
+          <div
             aria-label="Message composer"
-            defaultValue="Unrelated draft"
-          />
+            className="composer-editor"
+            contentEditable
+            suppressContentEditableWarning
+            role="textbox"
+          >Unrelated draft</div>
         </div>
         <QuestionInboxNotice />
         <QuestionInboxButton />
@@ -395,7 +398,7 @@ describe("QuestionInbox", () => {
     expect(screen.getByText("one question 2?")).toBeInTheDocument();
     expect(
       screen.getByRole("textbox", { name: "Message composer" }),
-    ).toHaveValue("Unrelated draft");
+    ).toHaveTextContent("Unrelated draft");
     fireEvent.click(screen.getByRole("button", { name: "First suggestion" }));
     await waitFor(() =>
       expect(screen.getByText("two question 1?")).toBeInTheDocument(),

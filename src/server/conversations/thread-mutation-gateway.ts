@@ -1,3 +1,4 @@
+import { hasInlineThreadReferenceBody } from "../../shared/thread-references.js";
 import type { ConversationActorManager } from "./conversation-actor-manager.js";
 import type { SteerTarget } from "../../shared/protocol/conversation.js";
 import { randomUUID } from "node:crypto";
@@ -2478,6 +2479,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
         reconciliationToken: receipt.reconciliationToken,
         target: receipt.target!,
         text: draft.text,
+        ...(hasInlineThreadReferenceBody(draft.text) ? { hasThreadReferenceBody: true } : {}),
         ...(receipt.selectedSkillId === null
           ? {}
           : { selectedSkillId: receipt.selectedSkillId }),

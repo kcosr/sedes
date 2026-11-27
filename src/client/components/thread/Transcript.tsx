@@ -1,3 +1,4 @@
+import { threadReferenceMessagePart } from "../../../shared/thread-references.js";
 import { usePageResponseServices } from "../conversation/page-response-services.js";
 import { useOpenPage } from "../../pages/page-opening.js";
 import {
@@ -2344,7 +2345,7 @@ function optimisticUserContent(
     })),
   );
   if (transfer.captured.text.length > 0) {
-    content.push({ kind: "text", text: { text: transfer.captured.text } });
+    content.push(threadReferenceMessagePart(transfer.captured.text));
   }
   return content;
 }

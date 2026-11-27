@@ -2036,7 +2036,9 @@ describe("InventorySidebar view modes", () => {
       true,
       onSelectThread,
     );
-    const composer = document.createElement("textarea");
+    const composer = document.createElement("div");
+    composer.setAttribute("contenteditable", "true");
+    composer.setAttribute("role", "textbox");
     composer.dataset.sidebarNavigationWhenEmpty = "true";
     document.body.append(composer);
     composer.focus();
@@ -2051,7 +2053,7 @@ describe("InventorySidebar view modes", () => {
     expect(onSelectThread).toHaveBeenLastCalledWith("thread-2");
     expect(window.location.pathname).toBe("/threads/thread-2");
 
-    composer.value = "preserve this draft";
+    composer.textContent = "preserve this draft";
     delete composer.dataset.sidebarNavigationWhenEmpty;
     expect(
       fireEvent.keyDown(composer, {

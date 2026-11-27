@@ -37,6 +37,7 @@ import {
   hasDeliverableComposerInput,
   normalizedDraftSchema,
 } from "../../shared/index.js";
+import { threadReferenceProviderParts } from "../../shared/thread-references.js";
 import { ApiError, type ApiClient } from "../api/ApiClient.js";
 import {
   getDiagnosticCategoryEnabled,
@@ -1228,12 +1229,13 @@ export class ThreadClientStore {
 
   async readQueuedInputText(queuedInputId: string): Promise<string> {
     const input = await this.#api.readQueuedInput(this.threadId, queuedInputId);
-    const textParts = input.content.filter(part => part.kind === "text");
+    const textParts = input.content.filter(part => part.kind === "text" || part.kind === "thread_reference_body");
     if (input.threadId !== this.threadId || input.queuedInputId !== queuedInputId ||
         input.origin !== "user" || textParts.length !== 1) {
       throw new Error("The queued input did not return its full text.");
     }
-    return textParts[0]!.text.text;
+    const body = textParts[0]!;
+    return body.kind === "text" ? body.text.text : threadReferenceProviderParts(body.parts);
   }
 
   cancelQueuedInput(queuedInputId: string): Promise<void> {

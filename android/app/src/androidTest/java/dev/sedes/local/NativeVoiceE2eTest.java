@@ -205,7 +205,7 @@ public class NativeVoiceE2eTest {
             }
             // Route through the actual bundled application so navigation and draft preservation use the real UI.
             js("(()=>{history.pushState({},''," + JSONObject.quote("/threads/" + thread) + ");window.dispatchEvent(new PopStateEvent('popstate'));return true})()");
-            waitJs("document.querySelector('[data-testid=\"composer\"] textarea:not(:disabled)') !== null", 45000);
+            waitJs("document.querySelector('[data-testid=\"composer\"] [contenteditable=\"true\"]') !== null", 45000);
             if (scenario.equals("cycle")) js("localStorage.setItem('sedes-seek-on-submit', '" + mode.equals("input") + "')");
             if (scenario.equals("cycle")) command("updateSettings", NativeVoiceJson.object("expectedRevision", runtime.snapshot().getLong("settingsRevision"),
                 "patch", NativeVoiceJson.object("announceRecordingThread", true)));
@@ -229,11 +229,11 @@ public class NativeVoiceE2eTest {
                             "announceRecordingThread", true, "recognitionCues", true, "startupPreRollMs", 0)));
                     retainedPlaybackBaseline = runtimeAudio(runtime).playbackDrainsForTest();
                 }
-                input("[data-testid=\"composer\"] textarea", initial);
+                fillComposer(initial);
                 waitJs("!!document.querySelector('[aria-label=\"Send message\"]:not(:disabled)')", 15000); click("[aria-label=\"Send message\"]");
-                waitJs("document.querySelector('[data-testid=\"composer\"] textarea')?.value === ''", 15000);
+                waitJs("document.querySelector('[data-testid=\"composer\"] [role=textbox]')?.textContent === ''", 15000);
             }
-            input("[data-testid=\"composer\"] textarea", draft);
+            fillComposer(draft);
             if (!scenario.equals("background") && !scenario.equals("background-switch") && !scenario.equals("record") && !scenario.equals("next") && !scenario.equals("stop") && !playbackStop && !scenario.equals("retarget") && !scenario.equals("retained-target")) screenshot("active");
             if (scenario.equals("background") || scenario.equals("background-switch")) {
                 if (scenario.equals("background-switch")) {
@@ -428,7 +428,7 @@ public class NativeVoiceE2eTest {
                 await(() -> runtime.snapshot().optJSONObject("foreground").optBoolean("visible"), 15000, "native foreground visibility after return");
                 waitJs("document.visibilityState === 'visible'", 15000);
             }
-            waitJs("document.querySelector('[data-testid=\"composer\"] textarea')?.value === " + JSONObject.quote(visibleDraft), 15000);
+            waitJs("document.querySelector('[data-testid=\"composer\"] [role=textbox]')?.textContent === " + JSONObject.quote(visibleDraft), 15000);
             if (scenario.equals("background-switch")) {
                 assertEquals("One real background admission response", 1, backgroundReceipts.size());
                 JSONObject receipt = backgroundReceipts.get(0);
@@ -482,7 +482,7 @@ public class NativeVoiceE2eTest {
             }
             if (mode.equals("speak") && !scenario.equals("stop")) assertTrue("No actual AudioTrack playback phase", phases.contains("speaking"));
             // Report observations, not expectations; the host harness asserts them.
-            boolean composerDraft = "true".equals(js("document.querySelector('[data-testid=\"composer\"] textarea')?.value === " + JSONObject.quote(visibleDraft)));
+            boolean composerDraft = "true".equals(js("document.querySelector('[data-testid=\"composer\"] [role=textbox]')?.textContent === " + JSONObject.quote(visibleDraft)));
             boolean serverDraft = awaitServerDraft(server, thread, composerSubmission ? "" : draft, 15000);
             boolean speechPlayback = retainedTarget == null ? speechPlayed.get() : physicallyDrained(retainedTarget.getJSONObject("replyPlayback"));
             boolean audioTrackPlayback = retainedTarget == null ? trackPlayed.get() : speechPlayback;
@@ -718,8 +718,8 @@ public class NativeVoiceE2eTest {
         assertTrue(awaitServerDraft(server, source, required(args, "draftText"), 15000));
         js("(()=>{history.pushState({},''," + JSONObject.quote("/threads/" + viewed) + ");window.dispatchEvent(new PopStateEvent('popstate'));return true})()");
         await(() -> viewed.equals(runtime.snapshot().optJSONObject("foreground").optString("threadId")), 15000, "navigation reached the other native foreground thread");
-        waitJs("document.querySelector('[data-testid=\"composer\"] textarea:not(:disabled)')?.value === ''", 15000);
-        input("[data-testid=\"composer\"] textarea", viewedDraft);
+        waitJs("document.querySelector('[data-testid=\"composer\"] [contenteditable=\"true\"]')?.textContent === ''", 15000);
+        fillComposer(viewedDraft);
         assertTrue(awaitServerDraft(server, viewed, viewedDraft, 15000));
         waitJs("document.querySelector('.voice-card-title')?.textContent.trim() === " + JSONObject.quote(viewedTitle), 15000);
         JSONObject idleCardAfterNavigation = idleCardUi(), navigatedState = runtime.snapshot();
@@ -780,7 +780,7 @@ public class NativeVoiceE2eTest {
             true, supplied, () -> deliverNotificationControl(() -> viewedNotification.actions[0].actionIntent.send(), "viewed thread Start"));
         assertEquals(0, inputAttempts.get()); assertTrue(submittedInputs.isEmpty());
         assertEquals("Viewed thread is not a releasable fallback", "false", js("document.querySelector(" + JSONObject.quote(IDLE_CARD_TARGET_SELECTOR) + ") !== null"));
-        assertEquals("true", js("document.querySelector('[data-testid=\"composer\"] textarea')?.value === " + JSONObject.quote(viewedDraft)));
+        assertEquals("true", js("document.querySelector('[data-testid=\"composer\"] [role=textbox]')?.textContent === " + JSONObject.quote(viewedDraft)));
         // On a non-thread page the card falls back to retention, so Release voice target releases that actual start target.
         js("(()=>{history.pushState({},''," + JSONObject.quote(releasePath) + ");window.dispatchEvent(new PopStateEvent('popstate'));return true})()");
         await(() -> runtime.snapshot().optJSONObject("foreground").isNull("threadId"), 15000, "settings has no foreground thread");
@@ -789,7 +789,7 @@ public class NativeVoiceE2eTest {
         click("[aria-label=\"Release voice target\"]");
         JSONObject cardRelease = assertRetainedRelease(args, viewedNotificationCapture.getJSONObject("afterCancel"), "card", releasePath, null);
         js("(()=>{history.pushState({},''," + JSONObject.quote("/threads/" + viewed) + ");window.dispatchEvent(new PopStateEvent('popstate'));return true})()");
-        waitJs("document.querySelector('[data-testid=\"composer\"] textarea')?.value === " + JSONObject.quote(viewedDraft), 15000);
+        waitJs("document.querySelector('[data-testid=\"composer\"] [role=textbox]')?.textContent === " + JSONObject.quote(viewedDraft), 15000);
         assertEquals(0, inputAttempts.get()); assertTrue(submittedInputs.isEmpty());
         assertFalse(phases.contains("submitting"));
         assertNotEquals(notificationCapture.getString("recordingId"), viewedCapture.getString("recordingId"));
@@ -900,7 +900,7 @@ public class NativeVoiceE2eTest {
         JSONObject releasedCard = idleCardUi();
         assertEquals(expectedPath, releasedCard.getString("path"));
         assertFalse(releasedCard.getBoolean("cardTargetEnabled"));
-        if (expectedForeground != null) assertEquals("true", js("document.querySelector('[data-testid=\"composer\"] textarea')?.value === " + JSONObject.quote(viewedDraft)));
+        if (expectedForeground != null) assertEquals("true", js("document.querySelector('[data-testid=\"composer\"] [role=textbox]')?.textContent === " + JSONObject.quote(viewedDraft)));
         boolean viewedDraftPreserved = awaitServerDraft(server, viewed, viewedDraft, 15000);
         boolean sourceDraftPreserved = awaitServerDraft(server, required(args, "threadId"), required(args, "draftText"), 15000);
         assertTrue(viewedDraftPreserved); assertTrue(sourceDraftPreserved);
@@ -1146,6 +1146,13 @@ public class NativeVoiceE2eTest {
         waitJs(buttons + ".some(x=>x.textContent.trim()===" + JSONObject.quote(text) + "&&!x.disabled)", 15000);
         assertEquals("true", js("(()=>{const e=" + buttons + ".find(x=>x.textContent.trim()===" + JSONObject.quote(text) + "&&!x.disabled);if(!e)return false;e.click();return true})()"));
     }
+    private void fillComposer(String value) throws Exception {
+        assertEquals("true", js("(()=>{const editor=document.querySelector('[data-testid=composer] [contenteditable=true]');"
+            + "if(!editor)return false;editor.focus();const range=document.createRange();range.selectNodeContents(editor);"
+            + "const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);"
+            + "return document.execCommand('insertText',false," + JSONObject.quote(value) + ")})()"));
+    }
+
     private void input(String selector, String value) throws Exception {
         assertEquals("true", js("(()=>{const e=document.querySelector(" + JSONObject.quote(selector) + ");if(!e)return false;const p=e.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;Object.getOwnPropertyDescriptor(p,'value').set.call(e," + JSONObject.quote(value) + ");e.dispatchEvent(new Event('input',{bubbles:true}));return true})()"));
     }

@@ -1,10 +1,18 @@
-import { replaceThreadReferenceBody, splitThreadReferenceText } from "../../shared/thread-references.js";
+import {
+  appendThreadReferenceText, formatInlineThreadReferenceText, formatThreadReferenceText, readThreadReferenceBody,
+} from "../../shared/thread-references.js";
 
-/** Keep the encoded references and every non-text field of the original draft. */
+/** A recording is literal speech, even if its transcript resembles a saved mention. */
 export function prependVoiceToDraft<T extends { readonly text: string }>(draft: T, speech: string): T {
-  const body = splitThreadReferenceText(draft.text).text;
-  return {
-    ...draft,
-    text: replaceThreadReferenceBody(draft.text, body.length ? `${speech}\n\n${body}` : speech),
-  };
+  const spoken = formatInlineThreadReferenceText([speech]);
+  const { legacyReferences, parts } = readThreadReferenceBody(draft.text);
+  if (legacyReferences.length) {
+    const combined = [speech, ...parts].filter(Boolean).join("\n\n");
+    const literal = formatInlineThreadReferenceText([combined]);
+    const text = literal === combined
+      ? formatThreadReferenceText(combined, legacyReferences)
+      : formatInlineThreadReferenceText([...legacyReferences.flatMap((ref) => [ref, " "]), combined]);
+    return { ...draft, text };
+  }
+  return { ...draft, text: appendThreadReferenceText(spoken, draft.text) };
 }

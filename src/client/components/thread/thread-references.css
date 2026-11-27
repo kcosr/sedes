@@ -5,13 +5,6 @@
   margin: 8px 0;
 }
 
-.composer > .thread-reference-list {
-  margin: 10px 15px 0;
-  max-height: min(132px, 18dvh);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-
 .thread-reference-chip {
   display: inline-flex;
   align-items: center;
@@ -24,7 +17,6 @@
   font-size: var(--text-meta);
 }
 
-.thread-reference-chip > span,
 .thread-reference-chip > a {
   min-width: 0;
   overflow: hidden;
@@ -32,42 +24,13 @@
   white-space: nowrap;
 }
 
-.thread-reference-chip > svg,
-.thread-reference-chip > button {
+.thread-reference-chip > svg {
   flex-shrink: 0;
-}
-
-.thread-reference-chip > button {
-  display: grid;
-  place-items: center;
-  width: 20px;
-  height: 20px;
-  border-radius: 999px;
-}
-
-.thread-reference-chip > button:hover {
-  background: var(--hover);
 }
 
 .composer.thread-drag-active {
   border-color: var(--primary);
   box-shadow: 0 0 0 3px color-mix(in oklch, var(--primary) 18%, transparent);
-}
-
-.composer.thread-drag-active::after {
-  content: "Reference thread in prompt";
-  position: absolute;
-  inset: 6px;
-  z-index: calc(var(--z-sticky) + 3);
-  display: grid;
-  place-items: center;
-  border: 1px dashed var(--primary);
-  border-radius: calc(var(--radius-card) - 3px);
-  background: color-mix(in oklch, var(--card) 88%, transparent);
-  color: var(--foreground);
-  font-size: var(--text-meta);
-  font-weight: var(--weight-semibold);
-  pointer-events: none;
 }
 
 .skill-popover.composer-thread-picker {

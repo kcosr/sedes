@@ -35,3 +35,15 @@ it("preserves inaccessible/missing thread errors", async () => {
   } }, { status: 404 })));
   await expect(new ApiClient().readThreadSummary(thread.id)).rejects.toMatchObject({ status: 404, code: "not_found" });
 });
+
+it("requests authenticated mention candidates with bounded results and cancellation", async () => {
+  const fetch = vi.fn().mockResolvedValue(Response.json({ threads: [thread], nextCursor: "opaque" }));
+  vi.stubGlobal("fetch", fetch);
+  const controller = new AbortController();
+  await expect(new ApiClient().listMentionCandidates("thread/one", { scope: "all", query: "a & b", cursor: "next?" }, controller.signal))
+    .resolves.toEqual({ threads: [thread], nextCursor: "opaque" });
+  const url = new URL(fetch.mock.calls[0]![0], "http://sedes");
+  expect(url.pathname).toBe("/api/threads/thread%2Fone/mention-candidates");
+  expect(Object.fromEntries(url.searchParams)).toEqual({ scope: "all", query: "a & b", cursor: "next?" });
+  expect(fetch.mock.calls[0]![1].signal).toBe(controller.signal);
+});

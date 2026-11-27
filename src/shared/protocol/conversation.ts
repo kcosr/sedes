@@ -5,6 +5,7 @@ import { backgroundActivitySchema } from "./background-activity.js";
 import { questionRequestsResultSchema } from "./questions.js";
 import { nonblockingQuestionsPayloadSchema } from "./questions.js";
 import { z } from "zod";
+import { threadReferencePartsSchema } from "../thread-references.js";
 import { turnThroughputSchema } from "./turn-throughput.js";
 import {
   allowedImageMimeSchema,
@@ -38,6 +39,7 @@ import {
 } from "./provider-feature.js";
 import {
   applicationTurnIdSchema,
+  backendBrandSchema,
 } from "./domain.js";
 import { automationNameSchema, threadAutomationsSummarySchema } from "./automation.js";
 import {
@@ -241,6 +243,10 @@ export const messageContentPartSchema = z.discriminatedUnion("kind", [
     text: messageTextSchema,
   }),
   z.strictObject({
+    kind: z.literal("thread_reference_body"),
+    parts: threadReferencePartsSchema,
+  }),
+  z.strictObject({
     kind: z.literal("skill"),
     name: boundedDisplayTextSchema,
   }),
@@ -265,6 +271,22 @@ export const messageContentPartSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 export type MessageContentPart = z.infer<typeof messageContentPartSchema>;
+
+/** Only a captured human composer body can author inline thread references. */
+export function requireAuthoredThreadReferenceBody(
+  content: readonly MessageContentPart[],
+  authored: boolean,
+  context: z.RefinementCtx,
+): void {
+  const bodies = content.filter((part) => part.kind === "thread_reference_body");
+  if (bodies.length && (!authored || bodies.length !== 1 || content.some((part) => part.kind === "text"))) {
+    context.addIssue({
+      code: "custom",
+      path: ["content"],
+      message: "An inline thread reference body must be the sole text body of an authenticated composer submission.",
+    });
+  }
+}
 
 export const deliveryInputOriginSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("automatic_retry") }),
@@ -303,6 +325,7 @@ export const userMessageItemSchema = z
       .max(MAXIMUM_USER_MESSAGE_CONTENT_PARTS),
   })
   .superRefine((message, context) => {
+    requireAuthoredThreadReferenceBody(message.content, message.deliveryOperationId !== undefined && message.origin === undefined, context);
     requireValidContextExcerptContentParts(message.content, context);
     requireUniqueComposerAttachmentContentParts(message.content, context);
     requireUniqueTaskContextContentParts(message.content, context);
@@ -637,8 +660,7 @@ const descriptorAvailabilityShape = {
  * (fail-closed). Every member must have a brand icon registered client-side
  * and a `BackendKind` mapping server-side.
  */
-export const backendBrandSchema = z.enum(["pi", "codex", "claude", "grok", "opencode", "antigravity"]);
-export type BackendBrand = z.infer<typeof backendBrandSchema>;
+export { backendBrandSchema, type BackendBrand } from "./domain.js";
 
 export const backendPresentationSchema = z.strictObject({
   label: boundedDisplayTextSchema,

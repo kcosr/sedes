@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { applyDatabaseMigrations, backendNormalizedMigrations } from "../../src/server/db/migrate.js";
 import { ConversationBindingRepository } from "../../src/server/db/repositories/conversation-binding-repository.js";
-import { ConversationCreationRepository } from "../../src/server/db/repositories/conversation-creation-repository.js";
 import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
 import { MAXIMUM_THREAD_INPUT_BYTES } from "../../src/shared/protocol/context-excerpts.js";
 import { savedAgentDatabase, insertPreRootGrantWorkspace } from "../support/saved-agent-fixture.js";
@@ -27,15 +26,16 @@ describe("unified thread input limit migration", () => {
       const thread = new ConversationBindingRepository(database).createUnboundThread(scope, {
         workspaceId: workspace.id, connectionProfileId: profile.id, title: "Composer migration", now: 201,
       });
-      const draft = inventory.saveDraft(scope, thread.id, {
-        text: "Original draft", contextExcerpts: [], attachmentIds: [], taskReferenceIds: [], expectedRevision: 0, now: 202,
-      });
-      const attempt = new ConversationCreationRepository(database).prepare(scope, thread.id, {
-        attemptId: randomUUID(), mutationId: randomUUID(), expectedThreadRevision: 0,
-        creationKind: "first_input", sourceKind: "composer", initialInputText: draft.text,
-        initialContextExcerpts: [], initialAttachmentIds: [], initialTaskReferences: [],
-        expectedDraftRevision: draft.revision, backendCreationCorrelation: randomUUID(), now: 203,
-      });
+      // Seed a composer capture using the columns written by schema 143.
+      const attemptId = randomUUID();
+      database.prepare(`INSERT INTO conversation_creation_attempts (
+        tenant_id, owner_principal_id, application_thread_id, attempt_id, mutation_id, backend_instance_id,
+        connection_profile_id, execution_environment_id, creation_kind, source_kind, initial_input_text,
+        consumed_draft_revision, backend_creation_correlation, phase, prepared_at)
+        SELECT tenant_id, owner_principal_id, id, ?, ?, backend_instance_id, connection_profile_id,
+          environment_id, 'first_input', 'composer', 'Original draft', 2, ?, 'prepared', 203
+        FROM application_threads WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?`)
+        .run(attemptId, randomUUID(), randomUUID(), scope.tenantId, scope.principalId, thread.id);
       const rows = () => database.prepare("SELECT * FROM conversation_creation_attempts").all();
       const objects = () => database.prepare(`SELECT type, name, sql FROM sqlite_schema
         WHERE tbl_name = 'conversation_creation_attempts' AND type IN ('trigger', 'index')
@@ -48,7 +48,7 @@ describe("unified thread input limit migration", () => {
       const beforeForeignKeys = foreignKeys();
       const update = database.prepare("UPDATE conversation_creation_attempts SET initial_input_text = ? WHERE attempt_id = ?");
       const text = "é".repeat(MAXIMUM_THREAD_INPUT_BYTES / 2);
-      expect(() => update.run(text, attempt.attemptId)).toThrow(/CHECK constraint/u);
+      expect(() => update.run(text, attemptId)).toThrow(/CHECK constraint/u);
       expect(() => applyDatabaseMigrations(database, inputLimitMigrations, {
         verifyBeforeCommit: (_database, migration) => { if (migration.version === 144) throw new Error("test_rollback"); },
       })).toThrow("test_rollback");
@@ -62,8 +62,8 @@ describe("unified thread input limit migration", () => {
       expect(rows()).toEqual(beforeRows);
       expect(objects()).toEqual(beforeObjects);
       expect(foreignKeys()).toEqual(beforeForeignKeys);
-      expect(() => update.run(text, attempt.attemptId)).not.toThrow();
-      expect(() => update.run(text + "x", attempt.attemptId)).toThrow(/CHECK constraint/u);
+      expect(() => update.run(text, attemptId)).not.toThrow();
+      expect(() => update.run(text + "x", attemptId)).toThrow(/CHECK constraint/u);
       expect(database.pragma("foreign_key_check")).toEqual([]);
       expect(database.pragma("integrity_check", { simple: true })).toBe("ok");
     } finally { database.close(); }

@@ -45,14 +45,7 @@ export function focusInside(
       'button, input, textarea, select, [tabindex]:not([tabindex="-1"])',
     ) ??
     target;
-  if (
-    (focusTarget instanceof HTMLButtonElement ||
-      focusTarget instanceof HTMLInputElement ||
-      focusTarget instanceof HTMLSelectElement ||
-      focusTarget instanceof HTMLTextAreaElement) &&
-    focusTarget.disabled
-  )
-    return false;
+  if (focusTarget?.matches(':disabled, [aria-disabled="true"]')) return false;
   focusTarget?.focus();
   return focusTarget !== undefined && document.activeElement === focusTarget;
 }

@@ -2201,6 +2201,7 @@ export class ConversationActor {
         ...("source" in input ? {rootSubmit: true as const} : {}),
         applicationOperationId: input.applicationOperationId,
         text: input.text,
+        ...(input.hasThreadReferenceBody ? { hasThreadReferenceBody: true } : {}),
         selectedSkillId: input.selectedSkillId ?? null,
         contextExcerpts: input.contextExcerpts,
         taskContexts: input.taskContexts,
