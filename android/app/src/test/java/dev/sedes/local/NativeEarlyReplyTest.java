@@ -212,6 +212,30 @@ public class NativeEarlyReplyTest {
         assertNull(stream.reply.next(null));
         assertEquals("", stream.reply.terminal(terminal(opening + trailing, null, messages), messages, ID));
     }
+    @Test public void shortProgressKeepsItsOriginalParkRevisionThroughCloseAndSeal() {
+        NativeVoiceSettings both = settings("both");
+        String opening = "Yes.", body = "Yes. This is a test.";
+        NativeEarlyReply reply = new NativeEarlyReply(span("turn.progress", 0, 0, opening, false), 0);
+        reply.freeze("responsive", both, 4096);
+        NativeEarlyReply.Part header = reply.next(null);
+        assertNull(reply.next(header));
+        reply.accept(span(1, opening.length(), body.substring(opening.length()), false), 1);
+        finishLive(reply, 2);
+        assertEquals(body, reply.next(header).text);
+        NativeVoiceQueue queue = new NativeVoiceQueue();
+        assertTrue(queue.addOpening(new NativeVoiceQueue.Item(reply)));
+        NativeVoiceQueue.Item seal = progress(ID, "message", body, both);
+        assertTrue(reply.matchesNotice(seal));
+        seal.early = reply; assertTrue(queue.sealPending(seal));
+        JSONObject unparked = NativeVoiceJson.object("progressMuted", false, "progressParkRevision", 1);
+        assertFalse(seal.rebuild(both).progressPermitted(unparked));
+        queue.skipParkedProgress(THREAD, 1);
+        assertNull(queue.take());
+        JSONObject wrongRevision = NativeVoiceJson.copy(seal.envelope);
+        NativeVoiceJson.put(wrongRevision, "progressParkRevision", 1);
+        assertFalse(reply.matchesNotice(new NativeVoiceQueue.Item(wrongRevision, both)));
+        assertTrue(terminal(body, null, both).progressPermitted(unparked));
+    }
     @Test public void sealedBodyPreviewRequiresSourceAndPresentationAgreementAndOnlyDrainAdvancesIt() {
         NativeVoiceSettings both = settings("both");
         String body = "Yes. This is a test.";

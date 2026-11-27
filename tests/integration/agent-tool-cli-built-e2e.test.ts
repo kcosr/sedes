@@ -22,6 +22,8 @@ import { ApplicationSnapshotPublicationBoundary } from "../../src/server/applica
 import { WorkspaceApplicationService } from "../../src/server/application/workspace-application-service.js";
 import { DatabaseApplicationThreadSummaryReader } from "../../src/server/application/database-application-summary-reader.js";
 import { AgentManagementService } from "../../src/server/agent-tools/application/agent-management-service.js";
+import { ThreadGroupRepository } from "../../src/server/db/repositories/thread-group-repository.js";
+import { ThreadGroupService } from "../../src/server/domain/thread-group-service.js";
 import { AgentThreadInventoryControlService } from "../../src/server/agent-tools/application/agent-thread-inventory-control-service.js";
 import { DatabaseAgentToolApplicationReader } from "../../src/server/agent-tools/application/database-agent-tool-application-reader.js";
 import { DatabaseAgentToolSourceAuthority } from "../../src/server/agent-tools/application/database-agent-tool-source-authority.js";
@@ -360,12 +362,16 @@ describe("built Sedes agent-tool CLI", () => {
         threads: {} as never,
         inventory,
       });
+      const groupAssignments = new ThreadGroupRepository(database);
       const canonical = new CanonicalInlineAgentToolService({
         application,
         management,
         automations,
         threadControl: {
-          inventory: new AgentThreadInventoryControlService({ inventory, threads: inventory, lineage, archives, transitions }),
+          inventory: new AgentThreadInventoryControlService({
+            inventory, threads: inventory, lineage, archives, transitions, groupAssignments,
+            groups: new ThreadGroupService(groupAssignments, { publishAuthoritativeReplacement: vi.fn() }),
+          }),
           messages: { list: vi.fn() },
           send: { sendDirect: vi.fn() },
           forks: { forkAgent: vi.fn(), forkPrincipalClient: vi.fn() },

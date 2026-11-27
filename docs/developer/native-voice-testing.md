@@ -212,13 +212,14 @@ env -u NODE_ENV SEDES_RUN_REAL_OPENCODE=1 \
 ```
 
 Use `-t 'plays a held live Codex reply in the packaged Android background service'`
-to select the three device cases. Each pairs through the Sedes HTTP API, saves the
+to select the four device cases. Each pairs through the Sedes HTTP API, saves the
 credentials in the native keystores, enables early playback, and backgrounds
 the Activity. The host waits for the registered client's input to be accepted
-before it streams an answer. Each synthesis request supplies 24,000 PCM frames
-at 24 kHz with zero startup pre-roll.
+before it streams an answer. The fixture supplies 24 kHz PCM with zero startup pre-roll. Requests normally
+supply one second of audio. The Park case extends the progress body so playback
+can be interrupted after the device reports advancing frames.
 
-- All three cases select **Both**. The host supplies a short opening sentence and
+- All four cases select **Both**. The host supplies a short opening sentence and
   withholds further text until the notification type and thread title drain
   in the background. It checks that the preamble was the only synthesis request.
   For the final-answer and progress cases it then supplies enough words for the
@@ -234,6 +235,10 @@ at 24 kHz with zero startup pre-roll.
   second commentary item. The host sends its remaining text and a distinct final answer.
   It checks the synthesis inputs, six physical drains, and zero microphone
   captures in `android-early-progress.log`.
+- The Park case waits for the progress body's AudioTrack playback head to advance
+  before parking the running thread. It checks that the body stops before draining,
+  the suppressed progress never reaches synthesis again, and the final answer
+  drains as the thread returns to Active. See `android-early-park-progress.log`.
 
 An explicit serial is required. The harness verifies that it is an emulator,
 clears `dev.sedes.local` application data between scenarios, installs the

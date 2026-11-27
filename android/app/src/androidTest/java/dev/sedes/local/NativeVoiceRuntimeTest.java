@@ -2276,6 +2276,37 @@ public class NativeVoiceRuntimeTest {
         }
     }
 
+    @Test public void parkDuringTerminalPreflightRetiresTheSealedShortProgressSpool() throws Exception {
+        try (Fixture f = new Fixture(false, false)) {
+            f.readyEarlyVoice(); f.settings(NativeVoiceJson.object("speechContent", "both"));
+            f.policy(true, false, "speak", new JSONArray().put("final"), "turn.progress");
+            String id = "aafa".repeat(16), text = "Yes. This is a test.";
+            f.earlySpan(id, "turn.progress", "comment", 0, 0, "Yes.");
+            SpeechJob announcement = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(announcement);
+            assertEquals("Agent progress\n\nEarly", announcement.text);
+            f.earlySpan(id, "turn.progress", "comment", 1, 4, text.substring(4));
+            JSONObject closed = f.earlyFrame(id, "yield", 2);
+            NativeVoiceJson.put(closed, "itemId", "comment"); NativeVoiceJson.put(closed, "reason", "item_done");
+            f.wire(NativeVoiceSse.EARLY_REPLY, closed);
+            SpeechJob preview = f.stageNextWhilePlaying(); assertEquals(text, preview.text);
+            preview.listener.pcm(preview.id, 24000, new byte[9600]);
+            f.holdPlaybackValidation = true;
+            f.itemNotice("turn.progress", id, "comment", text);
+            announcement.listener.pcm(announcement.id, 24000, new byte[9600]); announcement.listener.completed(announcement.id);
+            NativeVoiceHttp.Result preflight = f.takeClientTarget(f.target);
+            Object active = field(f.runtime, "active");
+            assertNull(field(active, "ttsId")); assertEquals(preview.id, field(active, "stagedId"));
+            f.wire(NativeVoiceSse.PROGRESS_PARKED, NativeVoiceJson.object("threadId", f.target, "progressParkRevision", 1));
+            assertTrue(preview.cancelled);
+            preflight.done(200, Fixture.inputContext(f.target), null);
+            preview.listener.completed(preview.id); f.flush();
+            assertTrue(f.runtime.snapshot().isNull("active")); assertTrue(f.speech.speechRequests.isEmpty());
+            NativeVoiceAudio audio = (NativeVoiceAudio)field(f.runtime, "audio");
+            assertEquals(announcement.id, audio.playbackDrainForTest().requestId);
+            assertNull(audio.trackForTest());
+        }
+    }
+
     @Test public void progressChecksParkBeforeFirstAnnouncementAndAgainForAnOrdinaryItemAfterUnpark() throws Exception {
         try (Fixture f = new Fixture(false, false)) {
             f.readyEarlyVoice(); f.settings(NativeVoiceJson.object("speechContent", "both"));

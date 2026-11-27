@@ -22,6 +22,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
@@ -608,6 +609,10 @@ public class NativeVoiceE2eTest {
         JSONObject preamble = assertPlaybackDrain(newPlaybackDrains(audio, baseline).get(0), 24_000, 24_000);
         String firstId = runtime.snapshot().getJSONObject("active").getString("id");
         reportVoiceStage("voicePreamble", NativeVoiceJson.object("drain", preamble, "interactionId", firstId));
+        if ("park-progress".equals(earlyKind)) {
+            verifyParkedProgress(audio, baseline, preamble, firstId, supplied);
+            return;
+        }
         if ("short-handoff".equals(earlyKind)) {
             await(() -> idleVoice(runtime.snapshot()) && newPlaybackDrains(audio, baseline).size() == 2,
                 45000, "complete short body drained as a single request after the preamble");
@@ -657,6 +662,36 @@ public class NativeVoiceE2eTest {
         JSONObject second = playbackDrainJson(drains.get(openingDrains));
         assertNotEquals(first.getString("requestId"), second.getString("requestId"));
         reportVoiceStage("voiceResult", NativeVoiceJson.object("opening", first, "suffix", second, "physicalDrains", drains.size(),
+            "captureChunks", supplied.get(), "phases", new JSONArray(phases)));
+    }
+    /** Host parks through Sedes only after the first progress body advances the background AudioTrack. */
+    private void verifyParkedProgress(NativeVoiceAudio audio, List<NativeVoiceAudio.PlaybackDrain> baseline,
+        JSONObject preamble, String progressId, AtomicInteger supplied) throws Exception {
+        AtomicLong played = new AtomicLong();
+        await(() -> {
+            JSONObject state = runtime.snapshot(), active = state.optJSONObject("active");
+            if (active == null || !progressId.equals(active.optString("id")) ||
+                !"turn.progress".equals(active.optString("eventKind")) || !"speaking".equals(state.optString("phase"))) return false;
+            AudioTrack body = audio.trackForTest();
+            try {
+                if (body == null || body.getPlayState() != AudioTrack.PLAYSTATE_PLAYING) return false;
+                played.set(body.getPlaybackHeadPosition() & 0xffff_ffffL);
+                return played.get() > 0;
+            } catch (IllegalStateException released) { return false; }
+        }, 45000, "progress body reached the speaker after its preamble drained");
+        reportVoiceStage("voiceProgressAudible", NativeVoiceJson.object("interactionId", progressId, "playedFrames", played.get()));
+        await(() -> idleVoice(runtime.snapshot()) && audio.trackForTest() == null, 45000, "Park released the active progress track");
+        assertEquals("Only the preamble drained before Park interrupted the progress body", 1, newPlaybackDrains(audio, baseline).size());
+        reportVoiceStage("voiceParked", NativeVoiceJson.object("interactionId", progressId, "physicalDrains", 1));
+        await(() -> idleVoice(runtime.snapshot()) && newPlaybackDrains(audio, baseline).size() == 2, 45000, "final reply physically drained");
+        List<NativeVoiceAudio.PlaybackDrain> drains = newPlaybackDrains(audio, baseline);
+        JSONObject answer = assertPlaybackDrain(drains.get(1), 24_000, 24_000);
+        assertNotEquals(preamble.getString("requestId"), answer.getString("requestId"));
+        assertFalse(runtime.snapshot().getJSONObject("foreground").getBoolean("visible"));
+        assertFalse(phases.contains("listening"));
+        assertEquals(0, supplied.get());
+        assertEquals(0, runtime.snapshot().getJSONArray("errors").length());
+        reportVoiceStage("voiceResult", NativeVoiceJson.object("suffix", answer, "physicalDrains", drains.size(),
             "captureChunks", supplied.get(), "phases", new JSONArray(phases)));
     }
     private void reportVoiceStage(String name, JSONObject value) {

@@ -706,8 +706,9 @@ describe("native voice production pipeline with loopback providers", () => {
     }
   });
 
-  it.skipIf(!androidSerial).each(["final", "progress", "short-handoff"] as const)("plays a held live Codex reply in the packaged Android background service (%s)", async earlyKind => {
-    const progress = earlyKind === "progress";
+  it.skipIf(!androidSerial).each(["final", "progress", "short-handoff", "park-progress"] as const)("plays a held live Codex reply in the packaged Android background service (%s)", async earlyKind => {
+    const parkProgress = earlyKind === "park-progress";
+    const progress = earlyKind === "progress" || parkProgress;
     const title = "Early playback qualification";
     await adb(["shell", "pm", "clear", "dev.sedes.local"]);
     await speech.configure({ reset: true, ttsDurationSeconds: 1 });
@@ -739,7 +740,7 @@ describe("native voice production pipeline with loopback providers", () => {
         return context.sourceTurnId && context.steer.availability === "available";
       }, 180_000);
 
-      const waitForStage = async (stage: "voicePreamble" | "voiceOpening" | "voiceProgressSettled" | "voiceSkipped") => {
+      const waitForStage = async (stage: "voicePreamble" | "voiceOpening" | "voiceProgressSettled" | "voiceSkipped" | "voiceProgressAudible" | "voiceParked") => {
         const marker = new RegExp(`^INSTRUMENTATION_STATUS: ${stage}=(.+)$`, "mu");
         return JSON.parse(await waitForSpeech(() => {
           requireRunningDevice();
@@ -764,6 +765,43 @@ describe("native voice production pipeline with loopback providers", () => {
       const shortBody = "Yes. This is a test.";
       if (shortHandoff) {
         answer.complete("final_answer", shortBody);
+      } else if (parkProgress) {
+        const beforePark = await app.thread(threadId);
+        expect(beforePark.thread).toMatchObject({ inventoryState: "active", runState: "running" });
+        // Give the host time to park after the device reports advancing body PCM.
+        await speech.configure({ ttsDurationSeconds: 12 });
+        answer.append(sentence.slice(3) + " All");
+        const playing = await waitForStage("voiceProgressAudible");
+        expect(playing.interactionId).toBe(announced.interactionId);
+        expect(playing.playedFrames).toBeGreaterThan(0);
+        const parked = await app.request(`/api/threads/${threadId}/inventory`, "PATCH", {
+          action: "park", expectedRevision: beforePark.thread.inventoryRevision,
+          expectedStashedPromptCount: beforePark.stashes.length, mutationId: randomUUID(),
+        });
+        expect(parked.status).toBe(204);
+        expect(await waitForStage("voiceParked")).toEqual({ interactionId: playing.interactionId, physicalDrains: 1 });
+        expect((await app.thread(threadId)).thread).toMatchObject({ inventoryState: "parked", runState: "running" });
+
+        await speech.configure({ ttsDurationSeconds: 1 });
+        const interruptedSuffix = " remaining progress for this item should stay silent.";
+        answer.append(interruptedSuffix);
+        answer.complete();
+        const hiddenText = "A separate progress update started while the thread was parked and the remaining files are currently being checked.";
+        const hidden = codex.startAnswer("commentary");
+        hidden.append(hiddenText + " More");
+        // Hold the new eligible progress open, just as the audible item was,
+        // and wait for the same turn to project both messages in order.
+        await waitForSpeech(async () => {
+          const items = Object.values((await app.thread(threadId)).itemsById).filter(item => item.turnId === beforePark.activeTurnId);
+          return items.some(item => item.kind === "assistant_message" && item.status === "completed" && item.markdown.text.endsWith(interruptedSuffix)) &&
+            items.some(item => item.kind === "assistant_message" && item.status === "streaming" && item.markdown.text.includes(hiddenText));
+        });
+        expect(await spoken()).toEqual([preamble, opening]);
+        hidden.append(" files remain.");
+        hidden.complete();
+        const final = codex.startAnswer(null);
+        final.append(finalText);
+        final.complete("final_answer");
       } else {
         answer.append(sentence.slice(3) + " All");
         const evidence = await waitForStage("voiceOpening");
@@ -796,10 +834,17 @@ describe("native voice production pipeline with loopback providers", () => {
       expect(result.suffix.writtenFrames).toBe(24_000);
       expect(result.suffix.playedFrames).toBeGreaterThanOrEqual(24_000);
       expect(result.captureChunks).toBe(0);
-      expect(result.physicalDrains).toBe(shortHandoff ? 2 : progress ? 6 : 3);
-      expect(await spoken()).toEqual(progress
-        ? [preamble, opening, suffix, preamble, skippedOpening, `Agent finished\n\n${title}\n\n${finalText}`]
-        : shortHandoff ? [preamble, shortBody] : [preamble, opening, suffix]);
+      const finalSpeech = `Agent finished\n\n${title}\n\n${finalText}`;
+      if (parkProgress) {
+        expect(result.physicalDrains).toBe(2);
+        expect(await spoken()).toEqual([preamble, opening, finalSpeech]);
+        expect((await app.thread(threadId)).thread).toMatchObject({ inventoryState: "active", runState: "idle" });
+      } else {
+        expect(result.physicalDrains).toBe(shortHandoff ? 2 : progress ? 6 : 3);
+        expect(await spoken()).toEqual(progress
+          ? [preamble, opening, suffix, preamble, skippedOpening, finalSpeech]
+          : shortHandoff ? [preamble, shortBody] : [preamble, opening, suffix]);
+      }
     } finally {
       await adb(["shell", "am", "force-stop", "dev.sedes.local"]);
       await device?.catch(() => undefined);
