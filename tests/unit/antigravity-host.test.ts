@@ -798,6 +798,32 @@ describe("Antigravity execution host", () => {
     await f.host.acknowledgeOperation({ handleId, operationId: "cleanup" });
     expect(await f.host.request(input(0))).toMatchObject({ status: "completed" }); expect(configure).toHaveBeenCalledTimes(4096);
   });
+  it.each([1, 2])("recovers Stop and accepts Send after reattachment when a failed child's parent has termination reason %i", async terminationReason => {
+    const f = await fixture(25);
+    const identity = { cwd: f.cwd, sessionId: "4c8ece79-6741-451f-8aa5-e01d576ed055" };
+    const executionId = "parent-execution";
+    const steps: AntigravityHistory["native"]["steps"] = [
+      { index: 0, type: 14, status: 3, hasSubtrajectory: false, executionId, user: { text: "Run a subagent" } },
+      { index: 1, type: 132, status: 3, hasSubtrajectory: false, executionId,
+        tool: { id: "spawn", name: "invoke_subagent", argumentsJson: "{}" },
+        subagents: [{ sessionId: "8a54e222-1000-4000-8000-000000000002", state: "failed" }] },
+    ];
+    f.readHistory.mockResolvedValue({ ...identity, native: { revision: "a".repeat(64), steps, executions: [] } });
+    const { handleId } = await f.host.attach(identity);
+    await f.host.request({ handleId, operationId: "stop", command: { type: "cancel" } });
+    expect(await settled(f.host, handleId, "stop")).toMatchObject({ status: "failed", failure: { code: "antigravity_cancel_unproven" } });
+    await f.host.release({ handleId });
+
+    const revision = "b".repeat(64);
+    f.readHistory.mockResolvedValue({ ...identity, native: { revision, steps,
+      executions: [{ executionId, lastStepIndex: 1, terminationReason, proceededWithAutoContinue: false }] } });
+    const reattached = await f.host.attach(identity);
+    await f.host.readHistory(identity);
+    expect(await f.host.outcome({ handleId: reattached.handleId, operationId: "stop" })).toMatchObject({ status: "completed", result: { nativeRevision: revision } });
+    expect(f.host.snapshot().blockers).not.toContain("active_work");
+    await f.host.request({ handleId: reattached.handleId, operationId: "next", command: { type: "prompt", prompt: [{ type: "text", text: "Continue" }] } });
+    expect(await settled(f.host, reattached.handleId, "next")).toMatchObject({ status: "completed", result: { stopReason: "end_turn" } });
+  });
   it("recovers an uncertain Stop from later native quiescence and retains the exact refreshed receipts", async () => {
     const f = await fixture(20), identity = await f.host.create({ cwd: f.cwd, operationId: "creation" }); const { handleId } = await f.host.attach(identity);
     await f.host.request({ handleId, operationId: "primary", command: { type: "prompt", prompt: [{ type: "text", text: "wait" }] } });

@@ -206,9 +206,9 @@ receipt exists. The final execution governs a multi-execution turn; trailing
 native inputs proven unstarted do not advance the executed head. The same proof
 settles background continuations and retires retained ACP tools only when no
 newer activity invalidates it. A failed or cancelled tool step alone is
-insufficient. Capability 5 of `antigravity_runtime` carries the diagnostic
-classification and the child state derived on the execution host. Remote
-peers must negotiate this capability before opening a runtime.
+insufficient. Capability 6 of `antigravity_runtime` carries the diagnostic
+classification and the `failed` child state. Remote peers negotiate this
+capability before opening a runtime.
 
 Executor termination reasons have explicit dispositions. The same exact
 identity, frontier, terminal-step and no-auto-continue checks apply to every
@@ -234,9 +234,12 @@ and child history skip these notices when locating the executed head. If an exac
 notice with error text supplies the failure message. If neither source supplies
 text, Sedes displays a generic failure.
 
-Exact child-session reads apply the same executor proof before classifying a
-cancelled tool tail as a cancelled child or a failed tail as terminal. Missing,
-conflicting, or omitted proof keeps the child unknown and blocks quiescence. Embedded subtrajectories use
+A linked child has state `failed` when its final executed step has an exact
+failing executor receipt and its terminal planner evidence, if any, agrees.
+A terminal planner response alone retains the ordinary child completion path.
+A cancelled tool tail likewise requires exact executor proof to establish child
+cancellation. An unproven tool tail keeps the child unknown and blocks
+quiescence. Embedded subtrajectories use
 their own `Trajectory.executor_metadatas` (field 9), verified against the same
 qualified native descriptor. Their bytes are already bounded and hashed inside
 the enclosing step; the decoder's shared byte, field-count, and depth limits
@@ -251,7 +254,12 @@ of retained ACP tool work, so a tool-call response cannot bypass those fences.
 Typed system-message receipts can begin autonomous continuation turns without
 an application submission. They never consume a pending user operation merely
 because text or timing is similar. Native child linkage and terminal receipts
-govern background quiescence; finishing a child-launch tool is insufficient.
+govern background quiescence. A failed child can end without sending its parent
+a completion message. If that message is absent and an exact terminal executor
+receipt covers the launch in the same parent execution, the child no longer
+counts as active. A delivered message still requires evidence that the parent
+processed it. A successfully completed child still requires its completion
+message.
 
 Conversation-scoped steering uses concurrent ACP prompt requests. A native user
 row can be staged without consumption. Sedes requires native execution/start

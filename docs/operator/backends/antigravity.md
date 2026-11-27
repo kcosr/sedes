@@ -97,11 +97,15 @@ work, and subagents can outlive a prompt and produce new messages or permission
 requests. While the CLI still holds a prompt open for background work, Send
 remains unavailable even after the foreground reply finishes. A standalone
 quota notice after a proven executor failure leaves the turn failed, with the
-quota message visible when you reopen the thread. Pending work and undelivered
+quota message visible when you reopen the thread. If a subagent fails on quota
+without sending a completion message, Sedes stops counting it as active once
+the parent execution that launched it has a terminal failure or cancellation
+receipt. Stop can then finish and the thread can accept another message when
+all other work has settled. Pending work and undelivered
 outcomes block ordinary runtime retirement. A disconnected runtime is not evidence that work stopped.
 
 Remote instances require an execution sidecar advertising
-`antigravity_runtime` capability 5. Upgrade main and the sidecar together before
+`antigravity_runtime` capability 6. Upgrade main and the sidecar together before
 enabling this backend. There is no local fallback when a remote host is offline.
 Reconnect restores exact retained session authority; it does not replay an
 uncertain submission or silently create another session.

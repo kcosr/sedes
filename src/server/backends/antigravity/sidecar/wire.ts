@@ -72,7 +72,7 @@ export const antigravityHostCommandSchema = z.discriminatedUnion("action", [
 export type AntigravityHostCommand = z.infer<typeof antigravityHostCommandSchema>;
 export type AntigravityHostCommandInput = AntigravityHostCommand extends infer Command
   ? Command extends AntigravityHostCommand ? Omit<Command, "controllerEpoch" | "serviceIncarnation"> : never : never;
-const capability = { capabilityId: "antigravity_runtime", majorVersion: 5 } as const;
+const capability = { capabilityId: "antigravity_runtime", majorVersion: 6 } as const;
 export const antigravityExecuteOperation = { ...capability, operation: "runtime.execute", requestSchema: sidecarRuntimeBodySchema,
   responseSchema: sidecarRuntimeBodySchema, lane: "operation", maximumDeadlineMilliseconds: 120_000,
 } satisfies SidecarOperationDefinition<z.infer<typeof sidecarRuntimeBodySchema>, z.infer<typeof sidecarRuntimeBodySchema>>;

@@ -418,7 +418,7 @@ function projectStep(index: number, hasSubtrajectory: boolean, value: Message, s
           const receipt = projectExecutionReceipt(message(value)); return receipt ? [receipt] : [];
         });
         const state = childState({ steps: nested, executions, revision: "0".repeat(64) });
-        projected.subtrajectoryState = state === "cancelled" ? "terminal" : state;
+        projected.subtrajectoryState = state === "cancelled" || state === "failed" ? "terminal" : state;
       }
     }
   }
@@ -450,20 +450,22 @@ function childResults(value: Message): readonly ChildReference[] {
   return repeated(invocation.results).map(value => { const result = message(value); const sessionId = z.string().uuid().parse(string(result.conversation_id));
     return { sessionId, workspaceUris: repeated(result.workspace_uris).map(string) }; });
 }
-function childState(native: AntigravityNativeHistory): "active" | "terminal" | "cancelled" | "unknown" {
+function childState(native: AntigravityNativeHistory): NonNullable<AntigravityNativeStep["subagents"]>[number]["state"] {
   const { steps } = native;
-  const active = new Set([1, 2, 8, 9, 11]), terminal = new Set([3, 4, 5, 6, 7, 12]);
   const state = antigravityNativeActivity(native);
   if (state.active) return "active";
   if (state.unknown) return "unknown";
-  if (steps.some(step => active.has(step.status) || step.subtrajectoryState === "active" || step.subagents?.some(child => child.state === "active"))) return "active";
-  if (!steps.length || steps.some(step => !terminal.has(step.status) || (step.hasSubtrajectory && step.subtrajectoryState !== "terminal") || step.subagents?.some(child => child.state !== "terminal" && child.state !== "cancelled"))) return "unknown";
   const unstarted = antigravityUnstartedInputs(native);
   const final = steps.findLast(step => !isAntigravityStandaloneDiagnostic(step) && !unstarted.has(step.index));
   const outcome = antigravityNativeTerminalOutcome(final);
   if (outcome === "interrupted") return "cancelled";
-  if (outcome === "completed" || outcome === "failed") return "terminal";
+  if (outcome === "completed") return "terminal";
   const execution = final?.executionId ? antigravityTerminatedExecutionHeads(native).get(final.executionId) : undefined;
-  if (execution && execution.index === final?.index) return execution.outcome === "interrupted" ? "cancelled" : "terminal";
-  return "unknown";
+  // Only a proved executor failure allows the parent to retire a missing child
+  // message. A planner error on its own retains the ordinary callback expectation.
+  if (execution && execution.index === final?.index) {
+    if (execution.outcome === "failed") return "failed";
+    if (!outcome) return "cancelled";
+  }
+  return outcome === "failed" ? "terminal" : "unknown";
 }

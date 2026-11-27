@@ -27,7 +27,14 @@ export function antigravityNativeActivity(history: AntigravityNativeHistory): { 
     }
     return false;
   };
-  const receiptConsumed = (sender: string, afterIndex: number) => history.steps.some(step => step.index > afterIndex && step.continuation?.sender === sender && executionSettledAfter(step.index));
+  const wakes = history.steps.flatMap(step => step.continuation
+    ? [{ sender: step.continuation.sender, index: step.index, settled: executionSettledAfter(step.index) }]
+    : []);
+  if (wakes.some(wake => !wake.settled)) { pendingContinuations = true; foregroundActive = true; }
+  const awaitingContinuation = (sender: string, afterIndex: number, expectDelivery = true) => {
+    const delivered = wakes.filter(wake => wake.sender === sender && wake.index > afterIndex);
+    return delivered.length ? delivered.some(wake => !wake.settled) : expectDelivery;
+  };
   for (const step of history.steps) {
     if (activeStatuses.has(step.status)) active = true;
     else if (!terminalStatuses.has(step.status)) unknown = true;
@@ -38,16 +45,21 @@ export function antigravityNativeActivity(history: AntigravityNativeHistory): { 
     for (const child of step.subagents ?? []) {
       if (child.state === "active") { active = true; agents.add(child.sessionId); }
       else if (child.state === "unknown") { unknown = true; agents.add(child.sessionId); }
-      else if (child.state === "terminal" && !receiptConsumed(child.sessionId, step.index)) { pendingContinuations = true; agents.add(child.sessionId); }
+      else if (child.state === "terminal" || child.state === "failed") {
+        // A failed child may never notify its parent. Only the receipt for
+        // the execution that launched it can retire that missing notification.
+        const owner = step.executionId ? terminated.get(step.executionId) : undefined;
+        const expectDelivery = child.state !== "failed" || !owner || owner.index < step.index;
+        if (awaitingContinuation(child.sessionId, step.index, expectDelivery)) { pendingContinuations = true; agents.add(child.sessionId); }
+      }
     }
     let pendingTask = false;
     if (step.task) {
       if (step.task.daemon && activeStatuses.has(step.status) && !commandTerminals.has(step.task.id)) { active = true; pendingTask = true; }
-      if (step.status === 3 && step.schedule?.outcome !== "cancelled" && !receiptConsumed(step.task.id, step.index)) { pendingContinuations = true; pendingTask = true; }
+      if (step.status === 3 && step.schedule?.outcome !== "cancelled" && awaitingContinuation(step.task.id, step.index)) { pendingContinuations = true; pendingTask = true; }
       if (activeStatuses.has(step.status)) pendingTask = true;
       if (pendingTask) (step.command ? commands : other).add(step.task.id);
     }
-    if (step.continuation && !executionSettledAfter(step.index)) { pendingContinuations = true; foregroundActive = true; }
     if (step.command?.commandId && !commandTerminals.has(step.command.commandId) &&
         activeStatuses.has(step.status)) { active = true; commands.add(step.command.commandId); }
     if (activeStatuses.has(step.status) && !step.response && !step.task && !step.subagents?.length) {

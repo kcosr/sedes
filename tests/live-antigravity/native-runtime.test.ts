@@ -195,7 +195,7 @@ it.each(["command", "timer", "subagent"] as const)("qualifies native %s Stop evi
     expect(outcome.status).toBe("completed"); if (outcome.status !== "completed") throw new Error("LIVE_ANTIGRAVITY_BLOCKER: Stop did not complete");
     const result = outcome.result as { nativeRevision: string };
     expect(history.native.revision).toBe(result.nativeRevision); expect(quiescent(history)).toBe(true);
-    if (kind === "subagent") expect(history.native.steps.flatMap(step => step.subagents ?? []).every(child => child.state === "cancelled" || child.state === "terminal")).toBe(true);
+    if (kind === "subagent") expect(history.native.steps.flatMap(step => step.subagents ?? []).every(child => child.state === "cancelled" || child.state === "terminal" || child.state === "failed")).toBe(true);
     if (kind === "timer") expect(history.native.steps.some(step => step.schedule?.outcome === "cancelled")).toBe(true);
     await command(f.host, f.attachment.handleId, { type: "prompt", prompt: [{ type: "text", text: "Reply exactly STOP_REUSED. Use no tools." }] });
     expect((await readPortHistory(f.host, f.identity)).native.steps.some(step => step.response?.text.includes("STOP_REUSED"))).toBe(true);
