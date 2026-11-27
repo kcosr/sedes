@@ -1,5 +1,5 @@
 import { Fragment, Schema, type Node as EditorNode } from "prosemirror-model";
-import { EditorState, TextSelection, type Command } from "prosemirror-state";
+import { EditorState, TextSelection, type Command, type Transaction } from "prosemirror-state";
 import { closeHistory, history, redo, undo } from "prosemirror-history";
 import { keymap } from "prosemirror-keymap";
 import { EditorView } from "prosemirror-view";
@@ -46,6 +46,11 @@ function content(parts: readonly ThreadReferencePart[]) {
     });
   }
   return Fragment.fromArray(nodes);
+}
+
+function replaceWithPlainText(tr: Transaction, from: number, to: number, text: string): Transaction {
+  tr.replaceWith(from, to, content([text.replace(/\r\n?/g, "\n")]));
+  return tr.setSelection(TextSelection.create(tr.doc, tr.mapping.map(to))).scrollIntoView();
 }
 
 function documentParts(fragment: Fragment): ThreadReferencePart[] {
@@ -160,9 +165,8 @@ export function ComposerReferenceEditor(props: EditorProps) {
             const target = event.getTargetRanges?.()[0];
             const from = target ? view.posAtDOM(target.startContainer, target.startOffset) : view.state.selection.from;
             const to = target ? view.posAtDOM(target.endContainer, target.endOffset) : view.state.selection.to;
-            const tr = view.state.tr.replaceWith(from, to, content([text.replace(/\r\n?/g, "\n")]));
             event.preventDefault();
-            view.dispatch(tr.setSelection(TextSelection.create(tr.doc, tr.mapping.map(to))).scrollIntoView());
+            view.dispatch(replaceWithPlainText(view.state.tr, from, to, text));
             return true;
           }
           return false;
@@ -171,10 +175,25 @@ export function ComposerReferenceEditor(props: EditorProps) {
         paste: (view, event) => {
           if (!view.editable || !event.clipboardData) return false;
           event.preventDefault();
-          const plain = event.clipboardData.getData("text/plain").replace(/\r\n?/g, "\n");
-          if (plain) view.dispatch(closeHistory(view.state.tr).replaceWith(
-            view.state.selection.from, view.state.selection.to, content([plain]),
-          ).setMeta("paste", true).scrollIntoView());
+          const text = event.clipboardData.getData("text/plain");
+          const { from, to } = view.state.selection;
+          if (text) view.dispatch(replaceWithPlainText(closeHistory(view.state.tr), from, to, text).setMeta("paste", true));
+          return true;
+        },
+        drop: (view, event) => {
+          const transfer = event.dataTransfer;
+          // Internal editor moves carry a trusted slice. Sidebar and file
+          // drops have already been handled by the composer's capture handler.
+          if (!view.editable || view.dragging || !transfer || transfer.files.length) return false;
+          if (!transfer.types.includes("text/plain") && !transfer.types.includes("text/html")) return false;
+          event.preventDefault();
+          const text = transfer.getData("text/plain");
+          const hit = view.posAtCoords({ left: event.clientX, top: event.clientY });
+          if (text && hit) {
+            lastInput.current = undefined;
+            view.dispatch(replaceWithPlainText(closeHistory(view.state.tr), hit.pos, hit.pos, text).setMeta("uiEvent", "drop"));
+            view.focus();
+          }
           return true;
         },
       },

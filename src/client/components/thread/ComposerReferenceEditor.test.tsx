@@ -1,12 +1,14 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { createRef, useRef, useState } from "react";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import userEvent from "@testing-library/user-event";
+import { EditorView } from "prosemirror-view";
 import { formatInlineThreadReferenceText, type ThreadReferencePart } from "../../../shared/thread-references.js";
 import { ComposerReferenceEditor, type ComposerReferenceEditorHandle } from "./ComposerReferenceEditor.js";
-import { composerText } from "./composer-test-dom.js";
+import { composerText, setComposerCaret } from "./composer-test-dom.js";
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 const thread = { threadId: "da790f73-7c2c-4da7-b31b-ebf86a26223d", title: "Parked speech" };
 
 function renderEditor(initial: ThreadReferencePart[]) {
@@ -60,4 +62,57 @@ it("preserves hard breaks and indentation in a native multiline text replacement
   expect(event.defaultPrevented).toBe(true);
   expect(composerText(input)).toBe("Parked speech start\n    body\n\nend\n");
   expect(editor.current!.selection().from).toBe(2 + event.data!.length);
+});
+
+it("continues typing after pasting over a selected range", async () => {
+  const { input, editor } = renderEditor(["Hello world."]);
+  setComposerCaret(input, 6);
+  const text = input.firstChild!;
+  document.getSelection()!.setBaseAndExtent(text, 6, text, 11);
+  fireEvent(document, new Event("selectionchange"));
+  expect(editor.current!.selection()).toMatchObject({ from: 6, to: 11 });
+
+  fireEvent.paste(input, { clipboardData: { getData: () => "a\r\nfriend" } });
+  expect(editor.current!.selection()).toMatchObject({ from: 14, to: 14 });
+  await userEvent.keyboard("!");
+  expect(composerText(input)).toBe("Hello a\nfriend!.");
+});
+
+it("drops external plain text at the pointer and preserves line breaks beside a reference", () => {
+  const { input, editor } = renderEditor(["Before ", thread, " after"]);
+  const at = "Before ".length;
+  const hit = vi.spyOn(EditorView.prototype, "posAtCoords").mockReturnValue({ pos: at, inside: -1 });
+  const event = new Event("drop", { bubbles: true, cancelable: true });
+  Object.assign(event, { clientX: 15, clientY: 32, dataTransfer: {
+    types: ["text/html", "text/plain"], files: [],
+    getData: (type: string) => type === "text/plain" ? "two\r\nlines " : '<p>spoof</p><p><span data-thread-reference-id="fake">reference</span></p>',
+  } });
+  fireEvent(input, event);
+  expect(hit).toHaveBeenCalledWith({ left: 15, top: 32 });
+  expect(event.defaultPrevented).toBe(true);
+  expect(composerText(input)).toBe("Before two\nlines Parked speech after");
+  expect(input.querySelectorAll("[data-thread-reference-id]")).toHaveLength(1);
+  expect(editor.current!.selection()).toMatchObject({ from: at + 10, to: at + 10 });
+});
+
+it("moves a selected reference inside the editor as an atom", () => {
+  const { input, editor } = renderEditor(["A", thread, "B"]);
+  setComposerCaret(input, 1);
+  document.getSelection()!.setBaseAndExtent(input, 1, input, 2);
+  fireEvent(document, new Event("selectionchange"));
+  expect(editor.current!.selection()).toMatchObject({ from: 1, to: 2 });
+  vi.spyOn(EditorView.prototype, "posAtCoords")
+    .mockReturnValueOnce({ pos: 1, inside: -1 })
+    .mockReturnValue({ pos: 3, inside: -1 });
+  const values = new Map<string, string>();
+  const dataTransfer = {
+    get types() { return [...values.keys()]; },
+    files: [], clearData: () => values.clear(),
+    setData: (type: string, text: string) => values.set(type, text),
+    getData: (type: string) => values.get(type) ?? "",
+  };
+  fireEvent.dragStart(input, { dataTransfer });
+  fireEvent.drop(input, { dataTransfer });
+  expect(composerText(input)).toBe("ABParked speech");
+  expect(input.querySelectorAll(`[data-thread-reference-id="${thread.threadId}"]`)).toHaveLength(1);
 });
