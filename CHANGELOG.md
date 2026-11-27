@@ -56,7 +56,7 @@ User-facing changes are collected here before release. See the
   **184**. Rebuild Android and Electron clients for native voice snapshot **17**
   and the early reply subscription for progress updates and final answers. See
   [early reply playback](docs/operator/clients/voice.md#early-reply-playback).
-  ([#165](https://github.com/kcosr/sedes/pull/165))
+  ([#165](https://github.com/kcosr/sedes/pull/165), [#169](https://github.com/kcosr/sedes/pull/169))
   Thread inventory uses `parked` with `park` and `unpark` actions.
   Existing parked threads and saved sidebar visibility preferences carry over.
   Turn bookmarks may omit the user prompt for replies that continue
@@ -139,7 +139,7 @@ User-facing changes are collected here before release. See the
   Early playback defaults to Off.
   Skipping a progress update leaves later updates and the final answer eligible.
   [Voice settings](docs/operator/clients/voice.md#early-reply-playback).
-  ([#165](https://github.com/kcosr/sedes/pull/165))
+  ([#165](https://github.com/kcosr/sedes/pull/165), [#169](https://github.com/kcosr/sedes/pull/169))
 
 - Grant `thread.set_state` to let agents park, unpark, snooze, and wake threads
   within their tool scope. Thread status and list show the snooze deadline and
