@@ -162,6 +162,7 @@ function associatedThreadTask(
 
 function incrementalSnapshots(input: {
   readonly summaries: readonly ApplicationThreadDurableSummary[];
+  readonly currentParkTurn?: (scope: RequestScope, threadId: string) => string | undefined;
   readonly tasks?: readonly AssociatedTaskRecord[];
   readonly runState?: NormalizedApplicationThreadSummary["runState"];
   readonly terminalSummary?: NormalizedApplicationThreadSummary["terminalSummary"];
@@ -204,6 +205,7 @@ function incrementalSnapshots(input: {
   const service = capturedService(capture, {
     inventory: {
       isWorkspaceRemoved: () => false,
+      currentParkTurn: input.currentParkTurn,
     },
     summaries: {
       listByIds: vi.fn((_scope, ids: readonly string[]) =>
@@ -450,6 +452,44 @@ describe("ApplicationSnapshotPublicationBoundary", () => {
       ).toMatchObject([{ revision: 101 }, { revision: 102 }]);
     } finally {
       pending.resolve(snapshot(0));
+      await boundary.close();
+    }
+  });
+
+  it("publishes and clears the foreground park capability while a held prompt keeps the row running", async () => {
+    const id = "thread-1";
+    let foregroundTurn: string | undefined;
+    const service = incrementalSnapshots({
+      summaries: [durableSummary(id, 6)],
+      runState: "running",
+      currentParkTurn: (requested, requestedId) =>
+        requested.tenantId === scope.tenantId && requested.principalId === scope.principalId && requestedId === id
+          ? foregroundTurn : undefined,
+    });
+    const boundary = new ApplicationSnapshotPublicationBoundary(service, new ScopedApplicationEventHubs());
+    const hub = boundary.hub(scope);
+    const updates: NormalizedApplicationThreadSummary[] = [];
+    hub.subscribe(({ event }) => { if (event.type === "thread_upsert") updates.push(event.thread); });
+    try {
+      await boundary.checkpoint(scope, hub);
+      expect(hub.currentCheckpoint()?.event.snapshot.threads[0]).not.toHaveProperty("parkUntilTurnEnd");
+      foregroundTurn = "turn-1";
+      await boundary.publishThreadChange(scope, id);
+      await boundary.flush();
+      expect(updates).toHaveLength(1);
+      expect(updates[0]).toMatchObject({ id, runState: "running", parkUntilTurnEnd: true });
+      foregroundTurn = undefined;
+      await boundary.publishThreadChange(scope, id);
+      await boundary.flush();
+      const cleared = hub.currentCheckpoint()?.event.snapshot.threads[0];
+      expect(cleared).toMatchObject({ id, runState: "running" });
+      expect(cleared).not.toHaveProperty("parkUntilTurnEnd");
+      expect(updates).toHaveLength(2);
+      expect(updates[1]).toEqual(cleared);
+      await boundary.publishThreadChange(scope, id);
+      await boundary.flush();
+      expect(updates).toHaveLength(2);
+    } finally {
       await boundary.close();
     }
   });

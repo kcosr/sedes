@@ -171,6 +171,8 @@ export type NormalizedSidebarAttention = z.infer<
 >;
 
 export const normalizedApplicationThreadSummarySchema = z.strictObject({
+  /** The current foreground turn can be captured by Park until done. */
+  parkUntilTurnEnd: z.literal(true).optional(),
   ...normalizedThreadSummarySchema.shape,
   /** Opaque copy-only ID from the durable binding; absent before binding. */
   backendSessionId: z.string().min(1).max(128).optional(),

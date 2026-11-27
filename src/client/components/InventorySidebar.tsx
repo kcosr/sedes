@@ -3806,8 +3806,8 @@ function FlatRowItemContent(
         <button
           type="button"
           className={`thread-quick-action ${quickAction === "wake" ? "" : "thread-quick-action-icon"}`}
-          aria-label={`${inventoryActionLabel(quickAction, thread.runState)} ${thread.title.text}`}
-          title={inventoryActionLabel(quickAction, thread.runState)}
+          aria-label={`${inventoryActionLabel(quickAction, thread.parkUntilTurnEnd)} ${thread.title.text}`}
+          title={inventoryActionLabel(quickAction, thread.parkUntilTurnEnd)}
           disabled={pendingAction !== undefined}
           onClick={() => runQuickAction(quickAction)}
         >
@@ -4015,7 +4015,7 @@ function FlatRowItemContent(
       </ThreadContextMenu>
       <ParkImpactDialog
         open={parkChoicesOpen}
-        runState={thread.runState}
+        parkUntilTurnEnd={thread.parkUntilTurnEnd === true}
         onOpenChange={setParkChoicesOpen}
         impact={parkImpact}
         loadImpact={() => store.getThreadArchiveImpact(thread.id)}
@@ -4918,8 +4918,8 @@ function ThreadRow({
               <button
                 type="button"
                 className={`thread-quick-action ${quickAction === "wake" ? "" : "thread-quick-action-icon"}`}
-                aria-label={`${inventoryActionLabel(quickAction, thread.runState)} ${thread.title.text}`}
-                title={inventoryActionLabel(quickAction, thread.runState)}
+                aria-label={`${inventoryActionLabel(quickAction, thread.parkUntilTurnEnd)} ${thread.title.text}`}
+                title={inventoryActionLabel(quickAction, thread.parkUntilTurnEnd)}
                 onClick={() => {
                   if (!onQuickAction || inventoryActionPending.current) return;
                   inventoryActionPending.current = true;
@@ -5096,7 +5096,7 @@ function ThreadRow({
       </ThreadContextMenu>
       <ParkImpactDialog
         open={parkChoicesOpen}
-        runState={thread.runState}
+        parkUntilTurnEnd={thread.parkUntilTurnEnd === true}
         onOpenChange={setParkChoicesOpen}
         impact={parkImpact}
         loadImpact={() => store.getThreadArchiveImpact(thread.id)}

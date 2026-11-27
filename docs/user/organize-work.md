@@ -375,8 +375,9 @@ begun dispatching.
 
 ## Park quiet work
 
-Use **Park** to set an idle thread aside until its next input. During a run,
-choose **Park until done** from the thread header or the thread’s sidebar menu.
+Use **Park** to set a thread aside until its next input. When a turn is in
+progress, choose **Park until done** from the thread header or its sidebar menu.
+If only background work remains after a turn finishes, the sidebar offers **Park**.
 The turn keeps running. Its progress speech stops immediately, and the thread
 returns to Active when that turn completes, fails, or is interrupted. A confirmed
 outcome recovered after a disconnect also brings it back. **Unpark** brings it

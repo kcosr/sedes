@@ -17,7 +17,7 @@ import type {
   OpenTaskDisposition,
   ThreadArchiveImpact,
 } from "../../../shared/index.js";
-import { threadParkAction } from "../../../shared/thread-parking.js";
+import { parkUntilDone } from "../../../shared/thread-parking.js";
 import { DEFAULT_THREAD_TITLE } from "../../../shared/index.js";
 import {
   automationsPath,
@@ -267,18 +267,13 @@ export const ThreadHeader = memo(function ThreadHeader({
   const titleTrigger = useRef<HTMLButtonElement>(null);
   const restoreTitleFocus = useRef(false);
   const afterActionsClose = useRef<(() => void) | undefined>(undefined);
-  const disabled =
-    connection !== "connected" ||
-    !snapshot.thread.available ||
-    snapshot.runState === "disconnected" ||
-    snapshot.runState === "reconciling" ||
-    inventoryPending ||
-    actionPending;
-  const forceResetDisabled =
+  const applicationActionsDisabled =
     connection !== "connected" ||
     !snapshot.thread.available ||
     inventoryPending ||
     actionPending;
+  const disabled = applicationActionsDisabled ||
+    snapshot.runState === "disconnected" || snapshot.runState === "reconciling";
   // The short reason a row is disabled by the thread's state, not by its
   // own capability.
   const busyReason =
@@ -301,10 +296,11 @@ export const ThreadHeader = memo(function ThreadHeader({
   const moveDraft = snapshot.capabilities.operations.find(
     ({ id }) => id === "move_draft",
   );
-  const parkAction = threadParkAction(snapshot.runState);
-  const park = snapshot.capabilities.operations.find(
-    ({ id }) => id === "park",
-  );
+  const park = snapshot.capabilities.operations.find(({ id }) => id === "park");
+  const parkLabel = park?.label.text ?? "Park";
+  const parkUntilTurnEnd = parkLabel === parkUntilDone.label;
+  const parkDescription = parkUntilTurnEnd ? parkUntilDone.description : undefined;
+  const parkDisabled = applicationActionsDisabled || park?.available !== true;
   const snooze = snapshot.capabilities.operations.find(
     ({ id }) => id === "snooze",
   );
@@ -378,6 +374,7 @@ export const ThreadHeader = memo(function ThreadHeader({
   }, [applicationPin?.bookmarkRevision, store]);
   const applicationThreadSummary = {
     ...snapshot.thread,
+    ...(parkUntilTurnEnd ? { parkUntilTurnEnd: true as const } : {}),
     // A freshly created thread can render before its first application
     // upsert. Its principal-owned pin state starts at the durable defaults.
     pinned: applicationPin?.pinned ?? false,
@@ -915,31 +912,31 @@ export const ThreadHeader = memo(function ThreadHeader({
                   )}
                   {snapshot.thread.inventoryState === "parked" ? (
                     <DropdownMenuItem
-                      disabled={disabled}
+                      disabled={applicationActionsDisabled}
                       onSelect={keepOpen(() =>
                         void mutateInventory("unpark").catch(() => undefined),
                       )}
                     >
                       <ArrowUpFromDot aria-hidden="true" />
                       Unpark
-                      {disabled && <ReasonShortcut reason={busyReason} />}
+                      {applicationActionsDisabled && <ReasonShortcut reason={busyReason} />}
                     </DropdownMenuItem>
                   ) : (
                     <DropdownMenuItem
-                      disabled={disabled || park?.available !== true}
-                      aria-label={parkAction.label}
-                      aria-description={parkAction.description}
+                      disabled={parkDisabled}
+                      aria-label={parkLabel}
+                      aria-description={parkDescription}
                       title={park?.unavailableReason?.text}
                       onSelect={keepOpen(() => void requestPark())}
                     >
                       <ArrowDownToDot aria-hidden="true" />
                       <span className="min-w-0 flex-1">
-                        {parkAction.label}
-                        {parkAction.description && (
-                          <DropdownMenuItemDescription>{parkAction.description}</DropdownMenuItemDescription>
+                        {parkLabel}
+                        {parkDescription && (
+                          <DropdownMenuItemDescription>{parkDescription}</DropdownMenuItemDescription>
                         )}
                       </span>
-                      {(disabled || park?.available !== true) && (
+                      {parkDisabled && (
                         <ReasonShortcut reason={disabled ? busyReason : "Unavailable"} />
                       )}
                     </DropdownMenuItem>
@@ -1093,14 +1090,14 @@ export const ThreadHeader = memo(function ThreadHeader({
                   )}
                   <DropdownMenuItem
                     variant="destructive"
-                    disabled={forceResetDisabled}
+                    disabled={applicationActionsDisabled}
                     onSelect={() =>
                       closeActionsBefore(() => setForceResetOpen(true))
                     }
                   >
                     <RotateCcw aria-hidden="true" />
                     Force reset…
-                    {forceResetDisabled && <ReasonShortcut reason={busyReason} />}
+                    {applicationActionsDisabled && <ReasonShortcut reason={busyReason} />}
                   </DropdownMenuItem>
                   {inventoryError && <MenuNote>{inventoryError}</MenuNote>}
                 </DropdownMenuContent>
@@ -1221,7 +1218,7 @@ export const ThreadHeader = memo(function ThreadHeader({
       />
       <ParkImpactDialog
         open={active && parkChoicesOpen}
-        runState={snapshot.runState}
+        parkUntilTurnEnd={parkUntilTurnEnd}
         onOpenChange={setParkChoicesOpen}
         impact={parkImpact}
         loadImpact={() =>

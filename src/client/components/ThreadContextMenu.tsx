@@ -415,7 +415,7 @@ export function ThreadContextMenu({
     archiveAction.start();
   };
   const archived = thread.inventoryState === "archived";
-  const parkAction = threadParkAction(thread.runState);
+  const parkAction = threadParkAction(thread.parkUntilTurnEnd === true);
   const latestFork = latestTurnForkDecision(forkState);
   const forkUnavailableDescriptionId = `sidebar-fork-unavailable-${thread.id}`;
 
@@ -962,7 +962,7 @@ export function ThreadContextMenu({
       {parkDialogMounted && (
         <ParkImpactDialog
           open={parkChoicesOpen}
-          runState={thread.runState}
+          parkUntilTurnEnd={parkAction.untilDone}
           onOpenChange={setParkChoicesOpen}
           impact={parkImpact}
           loadImpact={() => store.getThreadArchiveImpact(thread.id)}

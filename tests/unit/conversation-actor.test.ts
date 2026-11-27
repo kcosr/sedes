@@ -428,6 +428,34 @@ function fixture(
   };
 }
 
+it("publishes sidebar park availability on owner transitions and skips streaming updates", async () => {
+  const { driver, handle, managerOptions } = fixture();
+  const updates = vi.fn();
+  const manager = new ConversationActorManager({ ...managerOptions, onParkAvailabilityChanged: updates });
+  handle.establishmentSnapshots[0] = snapshot("running");
+  const owner = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver }, { idleRelease: "retain" });
+  try {
+    expect(updates.mock.calls).toEqual([[scope, binding.applicationThreadId]]);
+    expect(manager.currentTurnForParking(scope, binding.applicationThreadId)).toBe(projectedTurnId);
+    for (let sequence = 0; sequence < 3; sequence++) {
+      handle.emit(0, { type: "item_updated", item: {
+        backendItemId: "item-1", backendTurnId: "turn-1", sourceOrder: 0, semanticKind: "assistant_message",
+        markdown: { text: "hello" + ".".repeat(sequence + 1) }, status: "streaming",
+      } }, sequence);
+      await owner.actor.captureSnapshotState();
+    }
+    expect(updates).toHaveBeenCalledTimes(1);
+    handle.emit(0, { type: "run_state_changed", state: "running" }, 3);
+    await owner.actor.captureSnapshotState();
+    expect(owner.actor.timeline.runState).toBe("running");
+    expect(manager.currentTurnForParking(scope, binding.applicationThreadId)).toBeUndefined();
+    expect(updates.mock.calls).toEqual([[scope, binding.applicationThreadId], [scope, binding.applicationThreadId]]);
+  } finally {
+    owner.release();
+    await manager.close();
+  }
+});
+
 describe("parked turn settlement", () => {
   it.each([
     ["turn_updated", "completed"], ["turn_completed", "completed"],
@@ -8272,6 +8300,7 @@ describe("actor-owned input observation", () => {
 
   it("invalidates an ended native control immediately while ignoring an obsolete control's abort", async () => {
     const { actorManager, manager, handle, driver } = fixture();
+    handle.establishmentSnapshots[0] = snapshot("running");
     const firstLifetime = new AbortController();
     const nextLifetime = new AbortController();
     let publishControl: Parameters<ConversationBackendDriver["attach"]>[0]["onControlReady"];
@@ -8283,6 +8312,11 @@ describe("actor-owned input observation", () => {
     });
     const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
     const observed: Array<boolean | undefined> = [];
+    const parkChanges: Array<string | undefined> = [];
+    const parkTarget = () => actorManager.currentTurnForParking(scope, binding.applicationThreadId);
+    const unsubscribePark = acquired.actor.subscribe(event => {
+      if (event.type === "backend_event" && event.event.type === "capabilities_changed") parkChanges.push(parkTarget());
+    });
     const unsubscribe = actorManager.subscribeInputActivity((observedScope, threadId) => {
       observed.push(actorManager.observeInputRuntime(observedScope, threadId)?.authoritative);
     });
@@ -8291,10 +8325,13 @@ describe("actor-owned input observation", () => {
         interrupt: handle.interrupt, reconcileInterrupt: handle.reconcileInterrupt });
       firstLifetime.abort();
       expect(actorManager.observeInputRuntime(scope, binding.applicationThreadId)?.authoritative).toBe(true);
+      expect(parkTarget()).toBe(projectedTurnId);
       nextLifetime.abort();
       expect(actorManager.observeInputRuntime(scope, binding.applicationThreadId)).toBeUndefined();
       expect(observed.at(-1)).toBeUndefined();
+      expect(parkTarget()).toBeUndefined();
+      expect(parkChanges).toEqual([undefined]);
       expect(handle.establishCount).toBe(1);
-    } finally { unsubscribe(); acquired.release(); await manager.close(); }
+    } finally { unsubscribePark(); unsubscribe(); acquired.release(); await manager.close(); }
   });
 });

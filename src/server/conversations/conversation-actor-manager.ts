@@ -365,6 +365,8 @@ export class ConversationActorManager {
   readonly #onModelFeedback?: ModelFeedbackObserver;
   readonly #entries = new Map<string, ActorEntry>();
   readonly #inputActivityListeners = new Set<InputActivityListener>();
+  readonly #onParkAvailabilityChanged?: InputActivityListener;
+  readonly #parkableThreads = new Set<string>();
   readonly #maintenance = new Map<string, ActorMaintenance>();
   #pressureReclaimer?: ConversationRuntimePressureReclaimer;
   #closing = false;
@@ -380,6 +382,7 @@ export class ConversationActorManager {
     readonly onAuthoritativeCompletion?: AuthoritativeCompletionObserver;
     readonly captureResponseVoiceContext?: (scope: ExecutionScope, threadId: string, backendCorrelations: readonly string[]) => CapturedResponseVoiceContext;
     readonly observeTurnSettlement?: TurnSettlementObserver;
+    readonly onParkAvailabilityChanged?: InputActivityListener;
     readonly onControlChanged?: (backendInstanceId: string, threadId: string) => void;
     readonly onAuthoritativeSubmission?: AuthoritativeSubmissionObserver;
     readonly captureEarlyReply?: CaptureEarlyReplyObserver;
@@ -407,6 +410,7 @@ export class ConversationActorManager {
     this.#onNonblockingQuestions = input.onNonblockingQuestions;
     this.#onHistoricalQuestion = input.onHistoricalQuestion;
     assertConversationRetentionMilliseconds(input.retentionMilliseconds);
+    this.#onParkAvailabilityChanged = input.onParkAvailabilityChanged;
     this.#retentionMilliseconds = input.retentionMilliseconds;
     assertConversationRuntimeBudget(input.runtimeBudget);
     this.#runtimeBudget = input.runtimeBudget;
@@ -465,9 +469,16 @@ export class ConversationActorManager {
 
   /** The normalized turn ID survives projection replacement and process restart. */
   currentTurnForParking(scope: Pick<ExecutionScope, "tenantId" | "principalId">, threadId: string): string | undefined {
-    const observed = this.observeInputRuntime(scope, threadId);
-    if ((!observed?.authoritative && !observed?.reestablishing) || observed.sourceTurnStatus !== "in_progress") return undefined;
-    return observed.activeTurnId;
+    return this.#observableExecutionEntry(scope, threadId)?.actor?.currentTurnForParking();
+  }
+
+  #observableExecutionEntry(scope: Pick<ExecutionScope, "tenantId" | "principalId">, applicationThreadId: string): ActorEntry | undefined {
+    const key = scopedActorKey(scope, applicationThreadId);
+    const entry = this.#entries.get(key);
+    if (this.#closing || this.#maintenance.has(key) || !entry || entry.access !== "execution" ||
+        entry.eviction || entry.poisoned || entry.controlEnded || entry.control?.lifetime.aborted ||
+        entry.creationAbort.signal.aborted) return undefined;
+    return entry;
   }
 
   /** Observe the exclusive owner even when no browser/coordinator lease exists. Never attaches. */
@@ -476,12 +487,9 @@ export class ConversationActorManager {
     applicationThreadId: string,
     sourceTurnId?: string,
   ): ConversationInputRuntimeObservation | undefined {
-    const key = scopedActorKey(scope, applicationThreadId);
-    const entry = this.#entries.get(key);
-    if (this.#closing || this.#maintenance.has(key) || !entry || entry.access !== "execution" ||
-        entry.eviction || entry.poisoned || entry.controlEnded || entry.creationAbort.signal.aborted) return undefined;
-    const observed = entry.actor?.peekInputState();
-    if (!observed) return undefined;
+    const entry = this.#observableExecutionEntry(scope, applicationThreadId);
+    const observed = entry?.actor?.peekInputState();
+    if (!entry || !observed) return undefined;
     const timeline = observed.state.timeline;
     const turnId = sourceTurnId ?? timeline.activeTurnId ?? timeline.orderedTurnIds.at(-1);
     const turn = turnId ? timeline.turnsById[turnId] : undefined;
@@ -521,6 +529,18 @@ export class ConversationActorManager {
   }
 
   #publishThreadInputActivity(scope: Pick<ExecutionScope, "tenantId" | "principalId">, applicationThreadId: string): void {
+    if (this.#onParkAvailabilityChanged) {
+      // The sidebar only consumes availability. Streaming updates and switching
+      // between two parkable turn identities need no additional publication.
+      const key = scopedActorKey(scope, applicationThreadId);
+      const parkable = this.currentTurnForParking(scope, applicationThreadId) !== undefined;
+      if (this.#parkableThreads.has(key) !== parkable) {
+        if (parkable) this.#parkableThreads.add(key);
+        else this.#parkableThreads.delete(key);
+        try { this.#onParkAvailabilityChanged(scope, applicationThreadId); }
+        catch { /* Sidebar publication cannot affect the conversation owner. */ }
+      }
+    }
     for (const listener of [...this.#inputActivityListeners]) {
       try { listener(scope, applicationThreadId); }
       catch { /* Input observation cannot affect actor ownership. */ }
@@ -1535,6 +1555,8 @@ export class ConversationActorManager {
         opaqueBindingDetail: input.opaqueBindingDetail,
         onControlReady: control => {
           if (signal.aborted || control.lifetime.aborted || !control.generation) return;
+          const restoresParkTarget = (entry.controlEnded || entry.control?.lifetime.aborted) &&
+            actor?.currentTurnForParking() !== undefined;
           if (entry.control !== control && !entry.controlEnded) {
             // An earlier abort listener can install the new control synchronously.
             if (entry.control?.lifetime.aborted) actor?.noteEarlyReplyObservationGap();
@@ -1543,6 +1565,7 @@ export class ConversationActorManager {
           entry.control = control;
           entry.controlEnded = false;
           this.#onControlChanged?.(input.binding.backendInstanceId, input.binding.applicationThreadId);
+          if (restoresParkTarget) actor?.publishOperationAvailabilityChanged();
           this.#publishInputActivity(entry);
           control.lifetime.addEventListener("abort", () => {
             if (entry.control === control) {
@@ -1550,6 +1573,7 @@ export class ConversationActorManager {
               entry.controlEnded = true;
               this.#onControlChanged?.(input.binding.backendInstanceId, input.binding.applicationThreadId);
               actor?.noteEarlyReplyObservationGap();
+              if (actor?.currentTurnForParking() !== undefined) actor.publishOperationAvailabilityChanged();
               this.#publishInputActivity(entry);
             }
           }, { once: true });

@@ -4652,7 +4652,11 @@ async function main(): Promise<void> {
   let automaticModelRetries: AutomaticModelRetryService | undefined;
   let observeAuthoritativeCompletion:
     AuthoritativeCompletionObserver | undefined;
+  let publishApplicationThread: ApplicationThreadChangePublisher | undefined;
   const actors = new ConversationActorManager({
+    onParkAvailabilityChanged: (eventScope, id) => {
+      void publishApplicationThread?.publish(eventScope, id).catch(() => undefined);
+    },
     observeTurnSettlement(scope, threadId, outcomeForTurn) {
       const now = Date.now();
       const state = inventoryRepository.unparkIfTurnEnded(scope, threadId, outcomeForTurn, now);
@@ -4836,7 +4840,6 @@ async function main(): Promise<void> {
   const history = new ThreadHistoryService({ usage, inventory: threadInventory });
   threads.bindHistory(history);
 
-  let publishApplicationThread: ApplicationThreadChangePublisher | undefined;
   let queue!: QueuedInputDispatcher;
   const runtimes = new ThreadRuntimeCoordinator({
     isAutomaticModelRetryPending: (eventScope, threadId) => automaticModelRetries?.isPending(eventScope, threadId) === true,

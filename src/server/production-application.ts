@@ -1245,7 +1245,11 @@ export async function startProductionApplication(
     const pageRepository = new PageRepository(database);
     const pendingParkChecks = new Set<string>();
     let checkParkedAfterControlChange: ((backendId: string, threadId: string) => void) | undefined;
+    let publishApplicationThread: ApplicationThreadChangePublisher | undefined;
     actors = new ConversationActorManager({
+      onParkAvailabilityChanged: (eventScope, id) => {
+        void publishApplicationThread?.publish(eventScope, id).catch(() => undefined);
+      },
       onControlChanged: (backendId, threadId) => checkParkedAfterControlChange?.(backendId, threadId),
       observeTurnSettlement(eventScope, threadId, outcomeForTurn) {
         // Commit before completion speech captures its input activity token.
@@ -1451,7 +1455,6 @@ export async function startProductionApplication(
       agentToolSources,
     );
 
-    let publishApplicationThread: ApplicationThreadChangePublisher | undefined;
     runtimes = new ThreadRuntimeCoordinator({
       isAutomaticModelRetryPending: (eventScope, threadId) => automaticModelRetries?.isPending(eventScope, threadId) === true,
       actors,

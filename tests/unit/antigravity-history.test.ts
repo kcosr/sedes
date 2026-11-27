@@ -50,7 +50,8 @@ describe("Antigravity native projection and exact delivery evidence", () => {
     await expect(buildAntigravityPrompt(scope, { ...input, attachments: [attachment], attachmentBytes: { read: async () => Buffer.from("wrong") } })).rejects.toThrow("integrity");
   });
   it("requires native terminal evidence, retaining incomplete and tool-continuation turns", () => {
-    expect(projectAntigravityHistory(native("user", 1), scope).snapshot.runState).toBe("reconciling");
+    expect(projectAntigravityHistory(native("user", 1), scope).snapshot).toMatchObject({ runState: "reconciling",
+      activeBackendTurnId: "input:0", turnsById: { "input:0": { status: "in_progress" } } });
     expect(projectAntigravityHistory(native("user", 10), scope).snapshot.turnsById["input:0"]?.status).toBe("in_progress");
     expect(projectAntigravityHistory(native("user", 16), scope).snapshot.turnsById["input:0"]?.status).toBe("interrupted");
     expect(projectAntigravityHistory(native("user", 13), scope).snapshot.turnsById["input:0"]?.status).toBe("failed");

@@ -465,8 +465,8 @@ Set a parked thread to `active` before snoozing it. The active transition
 unparks or wakes the thread according to its current lifecycle. A thread
 already in the requested state keeps its current state and
 snooze details. Parking through the tool or its CLI command, `sedes thread
-set-state`, mutes automatic progress speech. A running target returns to
-Active on confirmed completion, failure, or interruption, including an outcome
+set-state`, mutes automatic progress speech. A target with a turn in progress returns to
+Active on confirmed completion, failure, or interruption of that turn, including an outcome
 learned during recovery. When Sedes verifies that the calling agent is
 parking its own thread from that exact turn, success keeps the thread Parked.
 Failure or interruption still returns it to Active. Tool clients follow the

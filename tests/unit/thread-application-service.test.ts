@@ -171,6 +171,7 @@ const concurrentTuiAndQuietPreference = (
     : QUIET_THREAD_PROVIDER_FEATURE_CONCURRENCY;
 
 function createService(input?: {
+  parkTurnId?: string;
   isAutomaticModelRetryPending?: (eventScope: typeof scope, threadId: string) => boolean;
   state?: AuthorizedThreadApplicationState;
   disconnected?: boolean;
@@ -430,7 +431,7 @@ function createService(input?: {
     usage: { registerVisibleTurns: () => undefined },
     isAutomaticModelRetryPending: input?.isAutomaticModelRetryPending,
     inventory: { getAuthorized },
-    conversations: { capture },
+    conversations: { capture, currentTurnForParking: () => input?.parkTurnId },
     queue: { list, read: vi.fn(async () => { throw new Error("unexpected_queued_input_read"); }) },
     presentation: {
       read: readPresentation,
@@ -486,13 +487,15 @@ function createService(input?: {
 
 describe("ThreadApplicationService", () => {
   it.each([
-    ["idle", "Park", true],
-    ["starting", "Park", false],
-    ["running", "Park until done", true],
-    ["stopping", "Park until done", true],
-    ["reconciling", "Park", false],
-  ] as const)("offers the appropriate Park action while %s", async (runState, label, available) => {
-    const { service } = createService({ runState, includeInteraction: false });
+    ["idle", undefined, "Park", true],
+    ["starting", undefined, "Park", false],
+    ["running", "turn-1", "Park until done", true],
+    ["running", undefined, "Park", true],
+    ["stopping", "turn-1", "Park until done", true],
+    ["reconciling", undefined, "Park", false],
+    ["reconciling", "turn-1", "Park until done", true],
+  ] as const)("offers the appropriate Park action while %s with target %s", async (runState, parkTurnId, label, available) => {
+    const { service } = createService({ runState, parkTurnId, includeInteraction: false });
     const snapshot = await service.snapshot(scope, "thread-1");
     expect(snapshot.capabilities.operations.find(operation => operation.id === "park"))
       .toMatchObject({ label: { text: label }, available });

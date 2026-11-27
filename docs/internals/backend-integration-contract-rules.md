@@ -120,8 +120,11 @@ but cannot establish native non-consumption or discard a pending callback.
 Park during a run belongs to the principal's thread inventory. On Pi SDK,
 native Pi, Codex, Claude, Grok, OpenCode, and Antigravity, only confirmed
 terminal evidence for the turn captured at Park can unpark it, including
-evidence recovered from history. A successful outcome keeps the thread parked
-when Sedes verified that an agent parked its own thread from that exact turn.
+evidence recovered from history. Use the same in-progress turn evidence for
+the sidebar and header. Antigravity can keep its prompt open for background
+work after the foreground turn has already ended. A successful outcome keeps
+the thread parked when Sedes verified that an agent parked its own thread from
+that exact turn.
 Failure or interruption returns it to Active. On startup or after losing control, Sedes
 checks the saved turn in backend history, including provider-originated turns
 with no accepted Sedes submission. An unfinished transcript can carry a display

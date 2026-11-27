@@ -1073,17 +1073,41 @@ export class ConversationActor {
     return this.#snapshotState;
   }
 
+  #projectionAuthority(state: ConversationActorSnapshotState): "current" | "reestablishing" | undefined {
+    if (!this.#started || this.#closing || this.#closed || this.readOnly || this.#handleReplacementRequired ||
+        this.#projectionRecoveryRequired || state.timeline.runState === "disconnected") return undefined;
+    if (!this.#establishing && this.#unsubscribeProjection !== undefined &&
+        state.timeline.generation === this.#projector.generation) return "current";
+    // In-place projection replacement retains the original owner's foreground
+    // facts. A failed replacement or a reconciling cut has no such authority.
+    if (this.#replacingProjection && state.timeline.runState !== "reconciling") return "reestablishing";
+    return undefined;
+  }
+
+  currentTurnForParking(): string | undefined {
+    const state = this.#snapshotState;
+    const id = state?.timeline.activeTurnId;
+    if (!state || !id || state.timeline.turnsById[id]?.status !== "in_progress") return undefined;
+    // A confirmed foreground can be parked even when reconciliation blocks input.
+    return this.#projectionAuthority(state) ? id : undefined;
+  }
+
+  publishOperationAvailabilityChanged(): void {
+    const state = this.#snapshotState;
+    if (!this.#started || !state || this.#closing || this.#closed) return;
+    this.#publish({
+      type: "backend_event", generation: state.timeline.generation,
+      event: { type: "capabilities_changed", capabilities: state.backendCapabilities },
+    });
+  }
+
   /** Current local input facts; never queues work, repairs projection, or reads the provider. */
   peekInputState(): ConversationActorInputState | undefined {
     const state = this.#snapshotState;
     if (!this.#started || this.#closing || this.#closed || !state) return undefined;
-    const retained = !this.readOnly && !this.#handleReplacementRequired && !this.#projectionRecoveryRequired &&
-      state.timeline.runState !== "disconnected" && state.timeline.runState !== "reconciling";
-    const authoritative = retained && !this.#establishing && this.#unsubscribeProjection !== undefined &&
-      state.timeline.generation === this.#projector.generation;
-    // Recovery from a rejected event, coalescer overflow, or a backend window
-    // trim replaces the projection under the same owner. Failure clears it.
-    const reestablishing = retained && !authoritative && this.#replacingProjection;
+    const authority = state.timeline.runState === "reconciling" ? undefined : this.#projectionAuthority(state);
+    const authoritative = authority === "current";
+    const reestablishing = authority === "reestablishing";
     return {
       state,
       authoritative,
@@ -1919,12 +1943,14 @@ export class ConversationActor {
       const runStateChanged = application.events.some(
         (event) => event.type === "run_state",
       );
+      const hadParkTarget = this.currentTurnForParking() !== undefined;
       if (this.#snapshotState) {
         this.#snapshotState = {
           ...this.#snapshotState,
           timeline: this.#projector.timeline(),
         };
       }
+      const parkTargetChanged = hadParkTarget !== (this.currentTurnForParking() !== undefined);
       const outputs: ProjectionCoalescerOutput[] = [];
       this.#synchronousCoalescerOutputs = outputs;
       try {
@@ -1968,20 +1994,8 @@ export class ConversationActor {
       } else {
         for (const output of outputs) await this.#applyCoalescerOutput(output);
       }
-      if (runStateChanged && this.#snapshotState) {
-        // Application operation availability is composed from run state and
-        // backend capabilities. Follow the incremental run-state event with a
-        // capability refresh; the bridge composes the application capability
-        // document from this exact actor generation.
-        this.#publish({
-          type: "backend_event",
-          generation,
-          event: {
-            type: "capabilities_changed",
-            capabilities: this.#snapshotState.backendCapabilities,
-          },
-        });
-      }
+      // A held prompt can keep the run state running when its foreground settles.
+      if (runStateChanged || parkTargetChanged) this.publishOperationAvailabilityChanged();
       return;
     }
     if (application.event.type === "interaction_opened") {

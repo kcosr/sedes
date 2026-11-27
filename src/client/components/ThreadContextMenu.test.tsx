@@ -1765,10 +1765,12 @@ describe("ThreadContextMenu actions", () => {
   });
 
   it.each([
-    ["idle", "Park"],
-    ["running", "Park until done"],
-  ] as const)("offers the %s sidebar row its compact %s action", async (runState, label) => {
-    const thread = makeThread({ runState });
+    ["idle", false, "Park"],
+    ["running", false, "Park"],
+    ["running", true, "Park until done"],
+    ["reconciling", true, "Park until done"],
+  ] as const)("offers the %s sidebar row with until-done %s its compact %s action", async (runState, untilDone, label) => {
+    const thread = makeThread({ runState, ...(untilDone ? { parkUntilTurnEnd: true } : {}) });
     const { state, store } = sidebarFixture(thread);
     render(
       <InventorySidebar
@@ -1789,9 +1791,9 @@ describe("ThreadContextMenu actions", () => {
     });
   });
 
-  it("explains parking a running turn in the sidebar menu and stash confirmation", async () => {
+  it("explains parking a reconciling turn in the sidebar menu and stash confirmation", async () => {
     const store = makeStore();
-    const thread = makeThread({ runState: "running" });
+    const thread = makeThread({ runState: "reconciling", parkUntilTurnEnd: true });
     store.getThreadArchiveImpact.mockResolvedValueOnce({
       stashedPrompts: { root: 1, descendants: 0 },
     });

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { ArrowDownToDot } from "lucide-react";
 import { threadParkAction } from "../../../shared/thread-parking.js";
-import type { ThreadArchiveImpact, ThreadRunState } from "../../../shared/index.js";
+import type { ThreadArchiveImpact } from "../../../shared/index.js";
 import { Button } from "@client/components/ui/button";
 import {
   Dialog,
@@ -22,14 +22,14 @@ export function parkNeedsConfirmation(impact: ThreadArchiveImpact): boolean {
 export function ParkImpactDialog({
   open,
   onOpenChange,
-  runState,
+  parkUntilTurnEnd,
   impact,
   loadImpact,
   onPark,
   returnFocusRef,
 }: {
   readonly open: boolean;
-  readonly runState: ThreadRunState;
+  readonly parkUntilTurnEnd: boolean;
   readonly onOpenChange: (open: boolean) => void;
   readonly impact: ThreadArchiveImpact | undefined;
   readonly loadImpact: () => Promise<ThreadArchiveImpact>;
@@ -50,7 +50,7 @@ export function ParkImpactDialog({
     setError("");
   }, [impact, open]);
 
-  const parkAction = threadParkAction(runState);
+  const parkAction = threadParkAction(parkUntilTurnEnd);
   const stashedPromptCount = currentImpact?.stashedPrompts.root ?? 0;
 
   const park = () => {

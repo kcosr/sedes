@@ -321,6 +321,59 @@ describe("live completion notification provenance", { timeout: 30_000 }, () => {
     },
   );
 
+  it.each(["held prompt", "reconciling foreground"] as const)(
+    "offers and stores the same park target for a %s",
+    async scenario => {
+      const current = await fixture(false);
+      const { driver, scope, runtimes, actors, threads, inventoryRepository, database } = current.harness;
+      const responses = vi.spyOn(driver, "scheduleScriptedResponse").mockImplementation(() => {});
+      try {
+        const id = await current.start();
+        const runtime = await runtimes.acquire(scope, id);
+        try {
+          const foreground = (await runtime.actor.captureSnapshotState()).timeline.activeTurnId!;
+          const [record, turn] = responses.mock.calls[0]!;
+          const settled = { ...turn, status: "completed" as const, endedBy: "agent_settled" as const };
+          const held = scenario === "held prompt";
+          if (held) {
+            // The foreground finishes while the provider still holds Send.
+            const events: ConversationActorEvent[] = [];
+            const unsubscribe = runtime.actor.subscribe(event => events.push(event));
+            try {
+              record.snapshot.turnsById[turn.backendTurnId] = settled;
+              driver.emit(record, { type: "turn_completed", turn: settled });
+              await runtime.actor.captureSnapshotState();
+              expect(events).toContainEqual(expect.objectContaining({ type: "backend_event",
+                event: expect.objectContaining({ type: "capabilities_changed" }) }));
+              delete record.snapshot.activeBackendTurnId;
+            } finally { unsubscribe(); }
+          } else {
+            record.snapshot.runState = "reconciling";
+          }
+          driver.emit(record, { type: "resnapshot_required", reason: "history_changed" });
+          await runtime.actor.captureSnapshotState();
+          const snapshot = await threads.snapshot(scope, id);
+          expect(snapshot.runState).toBe(held ? "running" : "reconciling");
+          expect(snapshot.capabilities.operations.find(op => op.id === "park")).toMatchObject({
+            available: true, label: { text: held ? "Park" : "Park until done" },
+          });
+          expect(actors.currentTurnForParking(scope, id)).toBe(held ? undefined : foreground);
+          if (!held) expect(actors.observeInputRuntime(scope, id)?.authoritative).toBe(false);
+          inventoryRepository.parkThread(scope, id, { expectedRevision: snapshot.thread.inventoryRevision,
+            mutationId: randomUUID(), now: Date.now() });
+          expect(database.prepare("SELECT parked_until_turn_id AS target FROM thread_principal_state WHERE tenant_id=? AND principal_id=? AND thread_id=?")
+            .get(scope.tenantId, scope.principalId, id)).toEqual({ target: held ? null : foreground });
+          record.snapshot.turnsById[turn.backendTurnId] = settled;
+          record.snapshot.runState = "idle";
+          delete record.snapshot.activeBackendTurnId;
+          driver.emit(record, { type: "resnapshot_required", reason: "history_changed" });
+          await runtime.actor.captureSnapshotState();
+          expect(inventoryRepository.getInventory(scope, id).inventoryState).toBe(held ? "parked" : "active");
+        } finally { runtime.release(); }
+      } finally { await current.close(); }
+    },
+  );
+
   it("keeps an agent self-park admitted while the same owner refreshes its running turn", async () => {
     const current = await fixture();
     const { driver, scope, runtimes, actors, inventoryRepository, database } = current.harness;

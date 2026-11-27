@@ -102,6 +102,7 @@ export type ThreadConversationCapture =
     };
 
 export interface ThreadApplicationConversationReader {
+  currentTurnForParking(scope: RequestScope, applicationThreadId: string): string | undefined;
   capture(
     scope: RequestScope,
     applicationThreadId: string,
@@ -120,15 +121,19 @@ export interface ThreadApplicationActorTargetResolver {
  * single-writer actor only for the duration of a snapshot capture.
  */
 export class ActorBackedThreadApplicationConversationReader implements ThreadApplicationConversationReader {
-  readonly #actors: Pick<ConversationActorManager, "acquire">;
+  readonly #actors: Pick<ConversationActorManager, "acquire" | "currentTurnForParking">;
   readonly #targets: ThreadApplicationActorTargetResolver;
 
   constructor(input: {
-    readonly actors: Pick<ConversationActorManager, "acquire">;
+    readonly actors: Pick<ConversationActorManager, "acquire" | "currentTurnForParking">;
     readonly targets: ThreadApplicationActorTargetResolver;
   }) {
     this.#actors = input.actors;
     this.#targets = input.targets;
+  }
+
+  currentTurnForParking(scope: RequestScope, applicationThreadId: string): string | undefined {
+    return this.#actors.currentTurnForParking(scope, applicationThreadId);
   }
 
   async capture(
@@ -651,6 +656,7 @@ export class ThreadApplicationService {
       queue,
       runState,
       actualRunState,
+      parkUntilTurnEnd: actor !== undefined && this.#conversations.currentTurnForParking(scope, applicationThreadId) !== undefined,
       retryPending,
       ...(actor?.timeline.activeTurnId
         ? { activeTurnId: actor.timeline.activeTurnId }
@@ -978,6 +984,7 @@ function composeCapabilities(input: {
   readonly runState: ThreadRunState;
   /** Presentation may show a retry delay while the provider is already settled. */
   readonly actualRunState: ThreadRunState;
+  readonly parkUntilTurnEnd: boolean;
   readonly retryPending?: boolean;
   readonly activeTurnId?: string;
   readonly backendCapabilities: BackendCapabilityDocument;
@@ -1010,7 +1017,7 @@ function composeCapabilities(input: {
     inFlight ||
     input.actualRunState === "disconnected" ||
     input.actualRunState === "reconciling";
-  const parkAction = threadParkAction(input.actualRunState);
+  const parkAction = threadParkAction(input.parkUntilTurnEnd);
   const canSnooze =
     available &&
     input.inventory.thread.inventoryState === "active" &&
@@ -1193,8 +1200,8 @@ function composeCapabilities(input: {
     operation(
       "park",
       parkAction.label,
-      !archived && (!mutationBlocked || (parkAction.untilDone && input.activeTurnId !== undefined)),
-      "Park requires an unarchived thread that is idle or has a current turn.",
+      !archived && (!mutationBlocked || input.actualRunState === "running" || input.parkUntilTurnEnd),
+      "Park requires an unarchived thread that is idle, running, or has a current turn.",
     ),
     {
       id: "snooze",

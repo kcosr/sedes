@@ -51,7 +51,7 @@ describe("ParkImpactDialog", () => {
     const onOpenChange = vi.fn();
     render(
       <ParkImpactDialog
-        runState="idle"
+        parkUntilTurnEnd={false}
         open
         onOpenChange={onOpenChange}
         impact={impact({ stashes: 2 })}
@@ -84,7 +84,7 @@ describe("ParkImpactDialog", () => {
     const onOpenChange = vi.fn();
     render(
       <ParkImpactDialog
-        runState="idle"
+        parkUntilTurnEnd={false}
         open
         onOpenChange={onOpenChange}
         impact={impact({ stashes: 1 })}
@@ -103,7 +103,7 @@ describe("ParkImpactDialog", () => {
     const onPark = vi.fn().mockResolvedValue(undefined);
     render(
       <ParkImpactDialog
-        runState="idle"
+        parkUntilTurnEnd={false}
         open
         onOpenChange={vi.fn()}
         impact={impact({ stashes: 1, openTasks: 2 })}
@@ -130,7 +130,7 @@ describe("ParkImpactDialog", () => {
     const loadImpact = vi.fn().mockResolvedValue(impact({ stashes: 3 }));
     render(
       <ParkImpactDialog
-        runState="idle"
+        parkUntilTurnEnd={false}
         open
         onOpenChange={vi.fn()}
         impact={impact({ stashes: 1 })}

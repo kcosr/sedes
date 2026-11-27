@@ -68,6 +68,11 @@ afterEach(() => {
   window.history.replaceState(null, "", "/");
 });
 
+interface HeaderParkCapability {
+  readonly label: "Park" | "Park until done";
+  readonly available: boolean;
+}
+
 type HeaderAutomation = NonNullable<
   NormalizedThreadSnapshot["thread"]["automations"]
 >;
@@ -77,6 +82,7 @@ function makeSnapshot({
   brand,
   backingState = "bound",
   runState = "idle",
+  park = { label: "Park", available: true },
   available = true,
   environmentKind = "ssh",
   automations = false,
@@ -88,6 +94,7 @@ function makeSnapshot({
   readonly backingState?: "bound" | "unbound";
   readonly available?: boolean;
   readonly environmentKind?: "local" | "ssh";
+  readonly park?: HeaderParkCapability;
   readonly runState?:
     "idle" | "running" | "failed" | "reconciling" | "disconnected";
 } = {}): NormalizedThreadSnapshot {
@@ -162,7 +169,7 @@ function makeSnapshot({
       interactionMode: "interactive",
       runState,
       operations: [
-        { id: "park", label: { text: runState === "running" ? "Park until done" : "Park" }, available: true },
+        { id: "park", label: { text: park.label }, available: park.available },
         ...(renameAvailable
           ? [{ id: "rename", label: { text: "Rename" }, available: true }]
           : []),
@@ -414,6 +421,7 @@ function renderHeader({
   connection = "connected",
   brand,
   runState = "idle",
+  park,
   withPanelControls = false,
   available = true,
   forkOrigins,
@@ -444,6 +452,7 @@ function renderHeader({
     readonly childThreadId: string;
     readonly sourceThreadId: string;
   }[];
+  readonly park?: HeaderParkCapability;
   readonly runState?:
     "idle" | "running" | "failed" | "reconciling" | "disconnected";
 } = {}) {
@@ -473,6 +482,7 @@ function renderHeader({
         brand,
         backingState,
         runState,
+        park,
         available,
         environmentKind,
       })}
@@ -1430,12 +1440,16 @@ describe("ThreadHeader action menu", () => {
     expect(forkAction).toHaveTextContent("Unavailable");
   });
 
-  it("parks the running turn from the thread header", async () => {
-    const { applicationStore } = renderHeader({ runState: "running" });
+  it.each([
+    ["running", "Park"],
+    ["running", "Park until done"],
+    ["reconciling", "Park until done"],
+  ] as const)("uses the server's park action while %s (%s)", async (runState, label) => {
+    const { applicationStore } = renderHeader({ runState, park: { label, available: true } });
     const menu = await openThreadActions();
-    const park = within(menu).getByRole("menuitem", { name: "Park until done" });
+    const park = within(menu).getByRole("menuitem", { name: label });
     expect(park).not.toHaveAttribute("data-disabled");
-    expect(park).toHaveAccessibleDescription("Mutes progress speech. Returns to Active when this turn ends.");
+    expect(park).toHaveAccessibleDescription(label === "Park" ? "" : "Mutes progress speech. Returns to Active when this turn ends.");
     await userEvent.click(park);
     await waitFor(() => expect(applicationStore.mutateInventory).toHaveBeenCalledWith(
       expect.objectContaining({ id: "thread-1" }), "park", { expectedStashedPromptCount: 0 },
@@ -1532,7 +1546,7 @@ describe("ThreadHeader action menu", () => {
 
 describe("ThreadHeader force reset", () => {
   it("previews and submits reset from thread actions while reconciling", async () => {
-    const { applicationStore } = renderHeader({ runState: "reconciling" });
+    const { applicationStore } = renderHeader({ runState: "reconciling", park: { label: "Park", available: false } });
     const menu = await openThreadActions();
 
     const resetAction = within(menu).getByRole("menuitem", {
