@@ -128,6 +128,7 @@ User-facing changes are collected here before release. See the
   thread. Thread status and list include the Group ID and name, and thread
   list can filter to one Group or to ungrouped threads.
   [Sedes tools](docs/user/provider-features.md#let-an-agent-use-sedes-tools).
+  ([#166](https://github.com/kcosr/sedes/pull/166))
 
 - Android and Electron can read Codex final answers and enabled progress updates
   while the agent writes. Responsive groups ready sentences starting at six
