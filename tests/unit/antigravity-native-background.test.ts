@@ -508,6 +508,13 @@ describe("Antigravity native background authority", () => {
       expect(antigravityNativeActivity({ ...history, steps, executions: [], executorReceiptsOmitted: true }))
         .toMatchObject({ active: true, pendingContinuations: true, agents: 1 });
     });
+    it.each([1, 2])("keeps a completed planner head settled after exact termination receipt %i arrives", terminationReason => {
+      const steps = [launch, { ...message, executionId: "launch" }, finalResponse("launch", 2)];
+      const settled = { active: false, pendingContinuations: false, agents: 0 };
+      expect(antigravityNativeActivity({ ...history, steps, executions: [] })).toMatchObject(settled);
+      expect(antigravityNativeActivity({ ...history, steps, executions: [{ ...receipt, lastStepIndex: 2, terminationReason }] }))
+        .toMatchObject(settled);
+    });
     it("requires a settled planner head from the exact execution and rejects contradictory receipts", () => {
       const done = finalResponse("notification", 2);
       const noToolCall = { ...notificationReceipt, terminationReason: 4 };

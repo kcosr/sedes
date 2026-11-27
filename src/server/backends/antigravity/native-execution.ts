@@ -41,15 +41,13 @@ export function antigravityExecutionEvidence(native: ExecutionHistory) {
     if (unsettled.has(id) || receipt === null || (receipt && (receipt.proceededWithAutoContinue ||
         steps.get(receipt.lastStepIndex)?.executionId !== id || head.index > receipt.lastStepIndex))) continue;
     const outcome = receipt && executorOutcome(receipt.terminationReason);
-    if (receipt && outcome) terminated.set(id, { index: head.index, outcome, terminationReason: receipt.terminationReason });
-
-    // The launch and the delivered failure notice may finish through an ordinary
-    // planner response. Require it at this execution's head, and disqualify a
-    // contradictory receipt even if a receipt-only caller could use it.
-    if (antigravityNativeTerminalOutcome(head) === "completed") {
-      if (!native.executorReceiptsOmitted && (!receipt || receipt.terminationReason === 4 /* NO_TOOL_CALL */))
-        settledHeads.set(id, head.index);
-    } else if (outcome) settledHeads.set(id, head.index);
+    if (receipt && outcome) {
+      terminated.set(id, { index: head.index, outcome, terminationReason: receipt.terminationReason });
+      settledHeads.set(id, head.index);
+    } else if (!native.executorReceiptsOmitted && (!receipt || receipt.terminationReason === 4 /* NO_TOOL_CALL */) &&
+        antigravityNativeTerminalOutcome(head) === "completed") {
+      settledHeads.set(id, head.index);
+    }
   }
   return { terminated, settledHeads, unstarted: unconsumed };
 }
