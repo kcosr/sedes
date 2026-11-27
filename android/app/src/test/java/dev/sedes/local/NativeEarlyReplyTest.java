@@ -348,6 +348,8 @@ public class NativeEarlyReplyTest {
             NativeEarlyReply.Part preview = reply.next(header);
             assertTrue(preview.preambleEnd > header.preambleEnd);
             reply.drained(header);
+            assertTrue(reply.startsWithStaged(preview, notice, both, ID));
+            assertFalse(reply.startsWithStaged(preview, notice, both, "other"));
             String label = payload.optString("title");
             assertEquals(label.substring(6) + "\n\nProject\n\nOne. End.", reply.terminal(notice, both, ID));
             assertEquals(label + "\n\nRenamed\n\nOne. End.", reply.terminal(notice, both, "other"));
