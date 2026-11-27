@@ -13,6 +13,9 @@ function usage(overrides: Partial<BackendAccountUsage> = {}): BackendAccountUsag
     ...overrides,
   };
 }
+function claudeUsage(overrides: Partial<BackendAccountUsage> = {}): BackendAccountUsage {
+  return usage({ eligibleThreadIds: ["thread-1"], reportedBy: "Claude Code", ...overrides });
+}
 function weeklyModel(label: string, key: string | null, remainingPercent: number, resetsAt: number | null = null): BackendAccountUsage["windows"][number] {
   return { scope: { kind: "model", label, key }, remainingPercent, durationMinutes: 10_080, resetsAt };
 }
@@ -35,7 +38,7 @@ afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.resto
 describe("AccountUsageLine", () => {
   it("shows only reported windows and optional account details", () => {
     render(<AccountUsageLine backendLabel="Codex" usage={usage()} />);
-    expect(line()).toHaveAccessibleName("Codex included usage: Weekly, 28% remaining. Show usage details.");
+    expect(line()).toHaveAccessibleName("Codex included usage: 28% remaining. Show usage details.");
     expect(screen.queryByText(/Weekly/)).toBeNull();
     fireEvent.click(line());
     expect(popup()).toHaveTextContent("Included usage");
@@ -43,7 +46,7 @@ describe("AccountUsageLine", () => {
     expect(popup()).toHaveTextContent("Weekly28% left");
     expect(popup()).not.toHaveTextContent("5-hour");
     expect(popup()).not.toHaveTextContent(/workspace|email/i);
-    expect(popup()).toHaveTextContent("Reported by Codex");
+    expect(popup()).toHaveTextContent("Checked");
     expect(popup()?.querySelector('time[datetime="2026-11-14T12:00:00.000Z"]')).not.toBeNull();
     expect(screen.getByText("Account identifier")).toBeInTheDocument();
     expect(screen.getByText("account-one")).toBeInTheDocument();
@@ -58,13 +61,12 @@ describe("AccountUsageLine", () => {
     expect(line().style.getPropertyValue("--account-usage-remaining")).toBe("0%");
     expect(line().querySelector(".account-usage-track")).not.toBeNull();
     fireEvent.click(line());
-    expect(popup()).toHaveTextContent("5-hour62% left");
-    expect(popup()).toHaveTextContent("Weekly0% left");
+    expect(screen.getAllByText(/^(5-hour|Weekly)$/).map(node => node.textContent)).toEqual(["5-hour", "Weekly"]);
     expect(popup()).toHaveTextContent("Included usage is currently unavailable.");
   });
 
   it("shows the selected model first, even when a tighter account limit applies", () => {
-    const current = usage({ windows: [
+    const current = claudeUsage({ windows: [
       { scope: ACCOUNT, remainingPercent: 47, durationMinutes: 10_080, resetsAt: null },
       { scope: ACCOUNT, remainingPercent: 0, durationMinutes: 300, resetsAt: null },
       weeklyModel("Fable", "family", 35),
@@ -86,17 +88,28 @@ describe("AccountUsageLine", () => {
   });
 
   it("ignores an unrecognized or label-only model row when selecting the bar", () => {
-    const current = usage({ windows: [weeklyModel("Fable", null, 3), weeklyModel("Other version", "other", 5)] });
+    const current = claudeUsage({ windows: [weeklyModel("Fable", null, 3), weeklyModel("Other version", "other", 5)] });
     const view = render(<AccountUsageLine backendLabel="Claude" usage={current} modelKeys={["Fable"]} />);
     expect(screen.queryByRole("button")).toBeNull();
     view.rerender(<AccountUsageLine backendLabel="Claude" usage={current} modelKeys={["other"]} />);
     expect(line().style.getPropertyValue("--account-usage-remaining")).toBe("5%");
-    view.rerender(<AccountUsageLine backendLabel="Claude" usage={usage()} modelKeys={["Fable"]} />);
+    view.rerender(<AccountUsageLine backendLabel="Claude" usage={claudeUsage()} modelKeys={["Fable"]} />);
     expect(line()).toHaveAccessibleName(/Weekly · All models, 28% remaining/);
   });
 
+  it("keeps Claude's selected window first and attributes an account-only report", () => {
+    render(<AccountUsageLine backendLabel="Development Claude" usage={claudeUsage({ windows: [
+      { scope: ACCOUNT, remainingPercent: 62, durationMinutes: 300, resetsAt: null },
+      { scope: ACCOUNT, remainingPercent: 28, durationMinutes: 10_080, resetsAt: null },
+    ] })} />);
+    expect(line()).toHaveAccessibleName(/Weekly · All models, 28% remaining/);
+    fireEvent.click(line());
+    expect(screen.getAllByText(/· All models$/).map(node => node.textContent)).toEqual(["Weekly · All models", "5-hour · All models"]);
+    expect(screen.getByRole("dialog")).toHaveTextContent("Reported by Claude Code");
+  });
+
   it("switches to the account window when the selected model row expires", async () => {
-    render(<AccountUsageLine backendLabel="Claude" modelKeys={["family"]} usage={usage({ windows: [
+    render(<AccountUsageLine backendLabel="Claude" modelKeys={["family"]} usage={claudeUsage({ windows: [
       ...usage().windows, weeklyModel("Fable", "family", 0, NOW + 1_000),
     ] })} />);
     expect(line()).toHaveAttribute("data-level", "critical");
@@ -107,7 +120,7 @@ describe("AccountUsageLine", () => {
   });
 
   it("expires the account-wide reading together while a later Fable reading stays available", async () => {
-    render(<AccountUsageLine backendLabel="Claude" modelKeys={["family"]} usage={usage({ windows: [
+    render(<AccountUsageLine backendLabel="Claude" modelKeys={["family"]} usage={claudeUsage({ windows: [
       ...usage().windows,
       { scope: ACCOUNT, remainingPercent: 1, durationMinutes: 300, resetsAt: NOW + 100 },
       weeklyModel("Fable", "family", 35, NOW + 300),
@@ -291,9 +304,15 @@ describe("accountUsageForTarget", () => {
         { ...usage(), backendInstanceId: "backend-one", executionEnvironmentId: "local" }, expected,
       ],
     } as unknown as NormalizedApplicationSnapshot;
-    expect(accountUsageForTarget(application, "target")).toBe(expected);
-    expect(accountUsageForTarget(application, "stopped")).toBeUndefined();
-    expect(accountUsageForTarget(application, "missing")).toBeUndefined();
-    expect(accountUsageForTarget(undefined, "target")).toBeUndefined();
+    expect(accountUsageForTarget(application, "target", "thread-1")).toBe(expected);
+    expect(accountUsageForTarget(application, "stopped", "thread-1")).toBeUndefined();
+    expect(accountUsageForTarget(application, "missing", "thread-1")).toBeUndefined();
+    expect(accountUsageForTarget(undefined, "target", "thread-1")).toBeUndefined();
+    const scoped = { ...expected, eligibleThreadIds: ["thread-1"] };
+    application.accountUsages = [scoped];
+    expect(accountUsageForTarget(application, "target", "thread-1")).toBe(scoped);
+    expect(accountUsageForTarget(application, "target", "thread-2")).toBeUndefined();
+    application.accountUsages = [{ ...scoped, eligibleThreadIds: ["thread-2"] }];
+    expect(accountUsageForTarget(application, "target", "thread-1")).toBeUndefined();
   });
 });

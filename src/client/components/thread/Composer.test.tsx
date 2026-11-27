@@ -798,7 +798,7 @@ describe("composer account usage", () => {
       entry,
     ];
     render(<Composer store={store as unknown as ThreadClientStore} applicationStore={application.store} />);
-    expect(screen.getByRole("button", { name: /Codex included usage: Weekly, 0% remaining/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Codex included usage: 0% remaining/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
     expect(store.deliver).not.toHaveBeenCalled();
   });

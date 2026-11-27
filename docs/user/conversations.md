@@ -203,7 +203,8 @@ On a Claude thread set to use Fable, it shows the matching weekly Fable
 allowance when available. Other Claude threads and Codex threads show the
 lowest remaining percentage across the account-wide windows. For example,
 with 35% left for Fable and 47% left across all models, a Fable thread shows
-35% and a Sonnet thread shows 47%.
+35% and a Sonnet thread shows 47%. Claude shows the bar once it can verify
+that the thread uses the backend's subscription.
 
 Hover, focus, click, or tap the line for all reported windows and their reset
 times. Click to keep the card open and press Escape or click outside to close

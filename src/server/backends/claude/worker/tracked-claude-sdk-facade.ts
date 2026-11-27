@@ -1,13 +1,13 @@
 import type { Options, SpawnedProcess } from "@anthropic-ai/claude-agent-sdk";
 import path from "node:path";
 import {
+  parseClaudeCliAuthStatus,
   type ClaudeCliAuthStatus,
   type ClaudeQueryInput,
   type ClaudeSdkFacade,
 } from "../claude-sdk-facade.js";
 import type { ClaudeChildEnvironment } from "../claude-child-environment.js";
 import type { ClaudeChildProcessSupervisor } from "./claude-child-process-supervisor.js";
-import { isRecord } from "../../../../shared/json-guards.js";
 
 /** Processes launched for one SDK query, with the facade that launches them. */
 export interface ClaudeQueryProcessScope {
@@ -69,22 +69,7 @@ export class TrackedClaudeSdkFacade implements ClaudeSdkFacade {
       ...(cwd ? { cwd } : {}),
       ...(signal ? { signal } : {}),
     });
-    let decoded: unknown;
-    try {
-      decoded = JSON.parse(stdout);
-    } catch {
-      throw new Error("claude_cli_auth_status_output_invalid");
-    }
-    if (!isRecord(decoded) || typeof decoded.loggedIn !== "boolean") {
-      throw new Error("claude_cli_auth_status_output_invalid");
-    }
-    return Object.freeze({
-      loggedIn: decoded.loggedIn,
-      ...optionalAuthField(decoded, "authMethod"),
-      ...optionalAuthField(decoded, "apiProvider"),
-      ...optionalAuthField(decoded, "subscriptionType"),
-      ...optionalAuthField(decoded, "apiKeySource"),
-    });
+    return parseClaudeCliAuthStatus(stdout);
   }
 
   createQuery(input: ClaudeQueryInput) {
@@ -162,21 +147,4 @@ export class TrackedClaudeSdkFacade implements ClaudeSdkFacade {
   renameSession(...input: Parameters<ClaudeSdkFacade["renameSession"]>) {
     return this.#delegate.renameSession(...input);
   }
-}
-
-function optionalAuthField(
-  value: Readonly<Record<string, unknown>>,
-  field: "authMethod" | "apiProvider" | "subscriptionType" | "apiKeySource",
-): Partial<ClaudeCliAuthStatus> {
-  const candidate = value[field];
-  if (candidate === undefined || candidate === null) return {};
-  if (
-    typeof candidate !== "string" ||
-    candidate.length === 0 ||
-    candidate.length > 256 ||
-    /[\u0000-\u001f\u007f]/u.test(candidate)
-  ) {
-    throw new Error("claude_cli_auth_status_output_invalid");
-  }
-  return { [field]: candidate };
 }

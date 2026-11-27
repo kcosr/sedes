@@ -71,7 +71,7 @@ export class ClaudePersistentRuntimeClient implements ClaudeRuntimeClient {
       action: "account_usage", request: {}, runtimeId: attachment.runtimeId, controllerEpoch: attachment.lease.controllerEpoch,
     }, { signal, deadlineMilliseconds: worker.CLAUDE_ACCOUNT_USAGE_TIMEOUT_MS });
     if (this.#attachment !== attachment) return null;
-    return operation.responseSchema.parse(reply).usage;
+    return operation.responseSchema.parse(reply).observation;
   }
 
   async probe(input: ClaudeRuntimeProbeInput): Promise<ClaudeRuntimeProbeResult> {

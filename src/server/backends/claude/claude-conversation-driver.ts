@@ -519,12 +519,10 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
     this.#assertEnabled();
     const sessionId = input.binding.backendConversationId;
     const releaseAdmission = this.#acquireSession(sessionId);
-    let releaseAccountUsage: (() => void) | undefined;
     let released = false;
     const release = (): void => {
       if (released) return;
       released = true;
-      releaseAccountUsage?.();
       releaseAdmission();
     };
     try {
@@ -575,6 +573,7 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
       );
       handle = await ClaudeConversationHandle.create({
         usage: this.#usage,
+        accountUsage: this.#accountUsage,
         nativeNamespace: this.#nativeNamespace,
         binding: input.binding,
         canonicalWorkspacePath: input.workspace.canonicalPath,
@@ -660,10 +659,7 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
         },
         now: () => Date.parse(this.#now()),
       });
-      if (!released) {
-        this.#handles.add(handle);
-        releaseAccountUsage = this.#accountUsage?.retain();
-      }
+      if (!released) this.#handles.add(handle);
       return handle;
     } catch (error) {
       release();

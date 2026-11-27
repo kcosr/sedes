@@ -842,7 +842,7 @@ it("discards quota from a lost carrier and rejects extra reply fields", async ()
   try {
     await session.start();
     const connection = connectionState.instances[0]!;
-    connection.execute.mockResolvedValueOnce({ usage: null, privateBreakdown: [] });
+    connection.execute.mockResolvedValueOnce({ observation: null, privateBreakdown: [] });
     await expect(client.readAccountUsage(signal)).rejects.toThrow();
     const pending = deferred<unknown>();
     connection.execute.mockReturnValueOnce(pending.promise);
@@ -851,7 +851,7 @@ it("discards quota from a lost carrier and rejects extra reply fields", async ()
       { signal, deadlineMilliseconds: 10_000 });
     carriers[0]!.lost.resolve();
     await vi.advanceTimersByTimeAsync(0);
-    pending.resolve({ usage: { discarded: true } });
+    pending.resolve({ observation: { discarded: true } });
     await expect(result).resolves.toBeNull();
     await expect(client.readAccountUsage(signal)).resolves.toBeNull();
     expect(acquire).toHaveBeenCalledOnce();

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { CompositeAccountUsageReader } from "../../src/server/application/account-usage-reader.js";
 import { NO_BACKEND_ACCOUNT_USAGE, type BackendAccountUsageSource } from "../../src/server/backends/backend-account-usage.js";
 import type { BackendModuleRuntime } from "../../src/server/backends/module.js";
-import type { BackendAccountUsage } from "../../src/shared/protocol/account-usage.js";
+import { backendAccountUsageReportSchema, backendAccountUsageSchema, type BackendAccountUsage } from "../../src/shared/protocol/account-usage.js";
 
 const scope = { tenantId: "tenant", principalId: "principal" };
 const usage: BackendAccountUsage = {
@@ -28,6 +28,15 @@ function runtime(id: string, accountUsage: BackendAccountUsageSource): Pick<Back
 }
 
 describe("scoped account usage reader", () => {
+  it("accepts bounded, distinct thread membership only on the Sedes observation", () => {
+    const eligibleThreadIds = Array.from({ length: 32 }, (_, i) => `thread-${i}`);
+    const value = { ...usage, eligibleThreadIds };
+    expect(backendAccountUsageSchema.parse(value)).toEqual(value);
+    expect(backendAccountUsageReportSchema.safeParse(value).success).toBe(false);
+    for (const invalid of [[], ["same", "same"], [...eligibleThreadIds, "overflow"], [""]]) {
+      expect(backendAccountUsageSchema.safeParse({ ...usage, eligibleThreadIds: invalid }).success).toBe(false);
+    }
+  });
   it.each([0, 32, 64])("accepts 64 configured runtimes with %i supported quota sources", supportedCount => {
     const runtimes = new Map(Array.from({ length: 64 }, (_, index) => {
       const id = `backend-${index}`;

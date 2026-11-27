@@ -127,10 +127,8 @@ describe.sequential("real Claude Native Sedes MCP tools", () => {
     });
     assertLiveClaudeCatalog(preflight.models);
     expect(preflight.account.apiProvider).toBe("firstParty");
-    expect(sdk.authStatuses[0]).toMatchObject({
-      loggedIn: true,
-      authMethod: "claude.ai",
-    });
+    expect(sdk.authStatuses[0]?.loggedIn).toBe(true);
+    expect(sdk.authStatuses[0]?.authMethod).toBe("claude.ai");
 
     const listener = await startLiveAgentToolListener({
       root,

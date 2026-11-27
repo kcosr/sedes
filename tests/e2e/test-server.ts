@@ -287,8 +287,9 @@ import type {
   ClaudeQueryInput,
   ClaudeSdkFacade,
 } from "../../src/server/backends/claude/claude-sdk-facade.js";
-import { ClaudeSdkRuntimeAdapter } from "../../src/server/backends/claude/claude-runtime-client.js";
-import { readClaudeAccountUsage } from "../../src/server/backends/claude/claude-account-usage-probe.js";
+import { ClaudeSdkRuntimeAdapter, type ClaudeRuntimeSessionOptions } from "../../src/server/backends/claude/claude-runtime-client.js";
+import { ClaudeSdkSession } from "../../src/server/backends/claude/claude-sdk-session.js";
+import { readClaudeAccountUsage, selectClaudeAccountUsageObservation } from "../../src/server/backends/claude/claude-account-usage-probe.js";
 import { ClaudeThreadActionPersistence } from "../../src/server/backends/claude/claude-thread-action-persistence.js";
 import { ClaudeModelEffortCatalog } from "../../src/server/backends/claude/claude-model-effort-catalog.js";
 import { ClaudeThreadPresentationProvider } from "../../src/server/backends/claude/claude-thread-presentation-provider.js";
@@ -356,15 +357,32 @@ class ClaudeE2eMessageQueue implements AsyncIterable<ClaudeMessage> {
 
 /** Run the account query against the same offline SDK used to open the conversation. */
 class ClaudeE2eRuntime extends ClaudeSdkRuntimeAdapter {
+  readonly #sessions = new Map<string, { sessionId: string; launch: ClaudeRuntimeSessionOptions["launch"]; session: ClaudeSdkSession }>();
   constructor(private readonly fixture: ClaudeE2eSdk) { super(fixture); }
 
-  override readAccountUsage(signal: AbortSignal) {
-    return readClaudeAccountUsage({ sdk: this.fixture, executablePath: process.execPath, environment: {}, signal });
+  override createSession(options: ClaudeRuntimeSessionOptions) {
+    const session = super.createSession(options);
+    if (session instanceof ClaudeSdkSession) {
+      this.#sessions.set(options.sessionId, { sessionId: options.sessionId, launch: options.launch, session });
+    }
+    return session;
+  }
+
+  override async readAccountUsage(signal: AbortSignal) {
+    const account = await readClaudeAccountUsage({ sdk: this.fixture, executablePath: process.execPath, environment: {}, signal });
+    for (const { sessionId, session } of this.#sessions.values()) {
+      if (session.closed) this.#sessions.delete(sessionId);
+    }
+    return selectClaudeAccountUsageObservation(account, this.#sessions.values());
   }
 }
 
 /** Official-SDK-shaped Claude fixture; it never starts a provider process. */
 class ClaudeE2eSdk implements ClaudeSdkFacade {
+  readonly #quotaAccount = {
+    email: "browser-quota@example.test", organizationName: "Browser quota fixture",
+    organizationId: "c0b94d5f-c390-491f-b005-9ee1d0cb6821",
+  };
   readonly #sessions = new Map<string, ClaudeSessionMessage[]>();
   readonly #interruptions = new Map<string, () => void>();
   readonly #steerPrompts = new Map<string, string>();
@@ -424,6 +442,7 @@ class ClaudeE2eSdk implements ClaudeSdkFacade {
       authMethod: "claude.ai",
       apiProvider: "firstParty",
       subscriptionType: "Claude Max",
+      quotaAccount: this.#quotaAccount,
     } as const;
   }
 
@@ -478,6 +497,8 @@ class ClaudeE2eSdk implements ClaudeSdkFacade {
         apiProvider: "firstParty",
         subscriptionType: "Claude Max",
         tokenSource: "oauth",
+        email: this.#quotaAccount.email,
+        organization: this.#quotaAccount.organizationName,
       },
     } satisfies ClaudeInitialization;
     return Object.assign(queue, {

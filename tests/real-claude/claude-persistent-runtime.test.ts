@@ -152,6 +152,9 @@ describe.sequential("real Claude persistent runtime with a compressed local SSH 
       };
       const firstSession = firstClient.createSession(options);
       await firstSession.start();
+      const observation = await firstClient.readAccountUsage(AbortSignal.timeout(10_000));
+      expect(observation?.verifiedSessions).toEqual([{ sessionId, startupProbeUuid: firstSession.startupProbeUuid }]);
+      expect(observation?.usage.windows.some(row => row.scope.kind === "account")).toBe(true);
       const originalQuery = (await readAudit(auditPath)).filter(entry => entry.persistent);
       expect(originalQuery).toHaveLength(1);
       expect(originalQuery[0]).toMatchObject({ model: MODEL, effort: "low", permissionMode: "dontAsk", toolsDisabled: true });

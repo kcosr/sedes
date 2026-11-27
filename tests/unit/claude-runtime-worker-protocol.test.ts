@@ -7,7 +7,7 @@ import type {
   SessionMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { SidecarOperationRegistry } from "../../src/internal/sidecar-protocol/index.js";
@@ -43,6 +43,7 @@ import {
 } from "../../src/server/backends/claude/worker/claude-runtime-worker-host.js";
 
 const SESSION_ID = "11111111-1111-4111-8111-111111111111";
+const QUOTA_ACCOUNT = { email: "owner@example.test", organizationId: "7f1ca102-fab9-450f-a1e6-05ba2044ffd7", organizationName: "Example organization" };
 const QUERY_ID = "22222222-2222-4222-8222-222222222222";
 const OPERATION_ID = "33333333-3333-4333-8333-333333333333";
 const SUMMARY_ID = "44444444-4444-4444-8444-444444444444";
@@ -804,10 +805,26 @@ describe("ClaudeRuntimeWorkerHost", () => {
     const configDirectory = await mkdtemp("/tmp/sedes-claude-worker-test-");
     const conversation = queryFacade();
     const account = queryFacade();
+    const foreign = queryFacade();
+    const otherQuery = randomUUID();
+    const routedQuery = randomUUID();
+    const routed = queryFacade();
+    const project = path.join(configDirectory, "routed-project");
+    await mkdir(path.join(project, ".claude"), { recursive: true });
+    await writeFile(path.join(project, ".claude/settings.json"), JSON.stringify({
+      env: { ANTHROPIC_BASE_URL: "https://example.invalid" },
+    }));
+    // Same plan, email and organization display name. Separate Claude organization UUID.
+    vi.mocked(foreign.sdk.readCliAuthStatus).mockResolvedValue({
+      loggedIn: true, authMethod: "claude.ai", apiProvider: "firstParty", subscriptionType: "Claude Max",
+      quotaAccount: { ...QUOTA_ACCOUNT, organizationId: randomUUID() },
+    });
     const read = deferred<SDKControlGetUsageResponse>();
     const usage = vi.fn(async () => read.promise);
     const scopes = vi.fn()
       .mockReturnValueOnce({ sdk: conversation.sdk, settled: async () => {}, terminate: vi.fn() })
+      .mockReturnValueOnce({ sdk: foreign.sdk, settled: async () => {}, terminate: vi.fn() })
+      .mockReturnValueOnce({ sdk: routed.sdk, settled: async () => {}, terminate: vi.fn() })
       .mockReturnValueOnce({ sdk: {
         ...account.sdk,
         createQuery: (input: Parameters<ClaudeSdkFacade["createQuery"]>[0]) =>
@@ -820,16 +837,23 @@ describe("ClaudeRuntimeWorkerHost", () => {
         startupEnvironment: { ACCOUNT_SCOPE: "backend" },
       }, context());
       const check = async () => await host.handlers.accountUsage({}, context());
-      await expect(check()).resolves.toEqual({ usage: null });
+      await expect(check()).resolves.toEqual({ observation: null });
       expect(scopes).not.toHaveBeenCalled();
-      await host.handlers.openQuery({
+      const opened = await host.handlers.openQuery({
         queryId: QUERY_ID, sessionId: SESSION_ID, cwd: "/workspace", launch: "new", enableCanUseTool: false,
         executionEnvironment: { ACCOUNT_SCOPE: "project", THREAD_ONLY: "thread" }, environment: {},
       }, context());
+      await host.handlers.openQuery({
+        queryId: otherQuery, sessionId: randomUUID(), cwd: "/other", launch: "new", enableCanUseTool: false, environment: {},
+      }, context());
+      // The CLI and SDK can both say firstParty for a project using a custom endpoint.
+      await host.handlers.openQuery({
+        queryId: routedQuery, sessionId: randomUUID(), cwd: project, launch: "new", enableCanUseTool: false, environment: {},
+      }, context());
       const reading = check();
       await vi.waitFor(() => expect(usage).toHaveBeenCalledExactlyOnceWith({ skipBehaviors: true }));
-      await expect(check()).resolves.toEqual({ usage: null });
-      expect(scopes).toHaveBeenCalledTimes(2);
+      await expect(check()).resolves.toEqual({ observation: null });
+      expect(scopes).toHaveBeenCalledTimes(4);
       expect(conversation.options().env).toMatchObject({ ACCOUNT_SCOPE: "project", THREAD_ONLY: "thread" });
       expect(account.options()).toMatchObject({ cwd: "/", persistSession: false, env: { ACCOUNT_SCOPE: "backend" } });
       expect(account.options().env).not.toHaveProperty("THREAD_ONLY");
@@ -839,15 +863,17 @@ describe("ClaudeRuntimeWorkerHost", () => {
         session: { total_cost_usd: 0, total_api_duration_ms: 0, total_duration_ms: 0,
           total_lines_added: 0, total_lines_removed: 0, model_usage: {} },
       });
-      await expect(reading).resolves.toEqual({ usage: {
+      await expect(reading).resolves.toEqual({ observation: { verifiedSessions: [{ sessionId: SESSION_ID, startupProbeUuid: opened.startupProbeUuid }], usage: {
         capturedAt: expect.any(Number), accountId: null, plan: "Max", includedUsageAllowed: null,
         windows: [{ scope: { kind: "account" }, remainingPercent: 47, durationMinutes: 10_080, resetsAt: null }],
-      } });
+      } } });
       expect(account.close).toHaveBeenCalledOnce();
       expect(conversation.close).not.toHaveBeenCalled();
+      await host.handlers.closeQuery({ queryId: routedQuery }, context());
+      await host.handlers.closeQuery({ queryId: otherQuery }, context());
       await host.handlers.closeQuery({ queryId: QUERY_ID }, context());
-      await expect(check()).resolves.toEqual({ usage: null });
-      expect(scopes).toHaveBeenCalledTimes(2);
+      await expect(check()).resolves.toEqual({ observation: null });
+      expect(scopes).toHaveBeenCalledTimes(4);
     } finally {
       await host.close();
       if (previousConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR;
@@ -1427,7 +1453,7 @@ function queryFacade(
       loggedIn: true,
       authMethod: "claude.ai",
       apiProvider: "firstParty",
-      subscriptionType: "Claude Max",
+      subscriptionType: "Claude Max", quotaAccount: QUOTA_ACCOUNT,
     })),
     createQuery: vi.fn((input) => {
       options = input.options;
@@ -1498,7 +1524,7 @@ function queryInitialization(): SDKControlInitializeResponse {
     output_style: "default",
     available_output_styles: ["default"],
     models: [],
-    account: { apiProvider: "firstParty", subscriptionType: "Claude Max" },
+    account: { apiProvider: "firstParty", subscriptionType: "Claude Max", email: QUOTA_ACCOUNT.email, organization: QUOTA_ACCOUNT.organizationName },
   };
 }
 

@@ -216,8 +216,11 @@ opaque key. Each backend owns the mapping between its configured model and
 matching quota keys. The client selects the first available match in the
 backend's preferred order. Observations belong to the authenticated principal's
 backend instance and execution environment and enter the existing application
-snapshot/event projection. Reading that projection never initiates provider
-work, and quota metadata never authorizes or blocks a turn. Browser clients
+snapshot/event projection. When credentials can vary by thread, publish the
+reading together with the application thread IDs verified to use its account.
+Keep the identity comparison on the execution host. Reading that projection
+never initiates provider work, and quota metadata never authorizes or blocks a
+turn. Browser clients
 select the exact target's backend/environment pair rather than matching a
 provider label or account display name.
 Every source exposes idempotent `close()` cancellation. Explicit Stop closes

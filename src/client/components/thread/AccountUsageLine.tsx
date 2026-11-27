@@ -16,12 +16,14 @@ const POPOVER_WIDTH = 272;
 export function accountUsageForTarget(
   application: NormalizedApplicationSnapshot | undefined,
   targetId: string,
+  threadId: string,
 ): BackendAccountUsage | undefined {
   const target = application?.executionTargets.find(({ id }) => id === targetId);
   if (!target?.available) return undefined;
   return application?.accountUsages.find((entry) =>
     entry.backendInstanceId === target.backendInstanceId &&
-    entry.executionEnvironmentId === target.environmentId,
+    entry.executionEnvironmentId === target.environmentId &&
+    (entry.eligibleThreadIds === undefined || entry.eligibleThreadIds.includes(threadId)),
   );
 }
 
@@ -35,7 +37,7 @@ function currentWindows(usage: BackendAccountUsage, modelKeys: readonly string[]
   // account-wide percentage is unknown until the provider reports again.
   const accountExpired = usage.windows.some(({ scope, resetsAt }) =>
     scope.kind === "account" && resetsAt !== null && resetsAt <= now);
-  const distinguishScopes = modelKeys.length > 0 || usage.windows.some(({ scope }) => scope.kind === "model");
+  const scoped = usage.eligibleThreadIds !== undefined;
   const rows: LabeledWindow[] = [];
   let lowestAccount: LabeledWindow | undefined;
   let nextExpiry = staleAt;
@@ -45,7 +47,7 @@ function currentWindows(usage: BackendAccountUsage, modelKeys: readonly string[]
     if (resetsAt !== null) nextExpiry = Math.min(nextExpiry, resetsAt);
     const period = windowLabel(window.durationMinutes, index, usage.windows.length);
     const scopeLabel = scope.kind === "model" ? scope.label : "All models";
-    const label = distinguishScopes ? `${period} · ${scopeLabel}` : period;
+    const label = scoped ? `${period} · ${scopeLabel}` : period;
     const row = { window, label };
     rows.push(row);
     if (scope.kind === "account" && (!lowestAccount || window.remainingPercent < lowestAccount.window.remainingPercent)) {
@@ -61,7 +63,7 @@ function currentWindows(usage: BackendAccountUsage, modelKeys: readonly string[]
     }
   }
   if (!selected) return undefined;
-  return { selected, rows: [selected, ...rows.filter(row => row !== selected)], nextExpiry };
+  return { selected, rows: scoped ? [selected, ...rows.filter(row => row !== selected)] : rows, nextExpiry };
 }
 
 export function AccountUsageLine({ usage, backendLabel, modelKeys = [], visible = true }: {
@@ -101,6 +103,7 @@ function AvailableAccountUsageLine({ usage, windows, backendLabel }: {
   const contentId = useId();
   const open = mode !== "closed";
   const remaining = windows.selected.window.remainingPercent;
+  const scoped = usage.eligibleThreadIds !== undefined;
   const level = usageBand(remaining);
   const bounds = () => {
     const rect = trigger.current?.closest(".composer")?.getBoundingClientRect();
@@ -164,7 +167,7 @@ function AvailableAccountUsageLine({ usage, windows, backendLabel }: {
   return <Popover open={open} onOpenChange={(next) => { if (!next) dismiss(); }}>
     <PopoverAnchor virtualRef={virtualAnchor} />
     <button ref={trigger} type="button" className="account-usage-line" data-level={level}
-      aria-label={`${backendLabel} included usage: ${windows.selected.label}, ${formatPercent(remaining)} remaining. Show usage details.`}
+      aria-label={`${backendLabel} included usage: ${scoped ? windows.selected.label + ", " : ""}${formatPercent(remaining)} remaining. Show usage details.`}
       aria-expanded={open} aria-controls={open ? contentId : undefined} aria-haspopup="dialog"
       style={{ "--account-usage-remaining": `${remaining}%` } as CSSProperties}
       onPointerEnter={(event) => {
@@ -220,7 +223,7 @@ function AvailableAccountUsageLine({ usage, windows, backendLabel }: {
         </div>)}
       </div>
       {usage.includedUsageAllowed === false && <p className="account-usage-note">Included usage is currently unavailable.</p>}
-      <p className="account-usage-checked">Reported by {backendLabel} <time dateTime={new Date(usage.capturedAt).toISOString()}>{formatTime(usage.capturedAt)}</time></p>
+      <p className="account-usage-checked">{usage.reportedBy ? `Reported by ${usage.reportedBy}` : "Checked"} <time dateTime={new Date(usage.capturedAt).toISOString()}>{formatTime(usage.capturedAt)}</time></p>
       {usage.accountId && <details className="account-usage-account"><summary>Account identifier</summary><code>{usage.accountId}</code></details>}
     </PopoverContent>
   </Popover>;

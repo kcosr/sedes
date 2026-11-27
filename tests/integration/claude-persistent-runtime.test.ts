@@ -229,14 +229,18 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     await client.listSessions({}, {});
     expect(await client.readAccountUsage(signal)).toBeNull();
     expect(f.runtime.readAccountUsage).not.toHaveBeenCalled();
-    const session = client.createSession(sessionOptions(randomUUID()));
+    const sessionId = randomUUID();
+    const session = client.createSession(sessionOptions(sessionId));
     await session.start();
     const usage = {
       capturedAt: 123, accountId: null, plan: "Max", includedUsageAllowed: null,
       windows: [{ scope: { kind: "account" as const }, remainingPercent: 47, durationMinutes: 10_080, resetsAt: null }],
     };
-    f.runtime.readAccountUsage.mockResolvedValue(usage);
-    expect(await client.readAccountUsage(signal)).toEqual(usage);
+    const current = { sessionId, startupProbeUuid: session.startupProbeUuid! };
+    f.runtime.readAccountUsage.mockResolvedValue({ usage, verifiedSessions: [
+      { sessionId, startupProbeUuid: randomUUID() }, { sessionId: randomUUID(), startupProbeUuid: randomUUID() }, current,
+    ] });
+    expect(await client.readAccountUsage(signal)).toEqual({ usage, verifiedSessions: [current] });
     expect(f.runtime.readAccountUsage).toHaveBeenCalledExactlyOnceWith(expect.any(AbortSignal));
     f.runtime.readAccountUsage.mockRejectedValueOnce(new Error("quota_unavailable"));
     await expect(client.readAccountUsage(signal)).rejects.toThrow("sidecar_operation_failed");

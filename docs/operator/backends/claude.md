@@ -606,13 +606,16 @@ Hover, focus, click, or tap the bar to see the selected window first, followed
 by the other reported limits and reset times. A five-hour row appears only
 when the account reports one.
 
-The first attached thread starts a check. Attached threads share a five-minute
-refresh timer for the backend. The execution host uses its configured Claude
-subscription for a prompt-free SDK read. Sedes skips the local session activity
-breakdown.
-Claude Code may report cached values. The timestamp records when Sedes received
-its report. Missing or expired readings disappear, and an unavailable quota
-leaves the conversation usable.
+The first attached thread starts a prompt-free check of the backend's
+subscription. Attached threads share a five-minute refresh timer. A newly
+attached thread can display the bar once a check confirms it uses the same
+subscription. A thread using different credentials or an unverified login
+has no bar. Changing models on a verified thread updates the bar immediately.
+
+Sedes skips the local session activity breakdown. Claude Code may report
+cached values. The timestamp records when Sedes received its report. Missing
+or expired readings disappear, and an unavailable quota leaves the conversation
+usable.
 
 ## Recorded usage
 

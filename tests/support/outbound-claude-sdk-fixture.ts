@@ -12,9 +12,10 @@ import { randomUUID } from "node:crypto";
 import { appendFileSync } from "node:fs";
 import path from "node:path";
 import { ClaudeInputQueue } from "../../src/server/backends/claude/claude-input-queue.js";
-import type {
-  ClaudeQueryInput,
-  ClaudeSdkFacade,
+import {
+  parseClaudeCliAuthStatus,
+  type ClaudeQueryInput,
+  type ClaudeSdkFacade,
 } from "../../src/server/backends/claude/claude-sdk-facade.js";
 
 // The esbuild override must match ONLY worker-main's facade import. Re-exporting
@@ -24,6 +25,10 @@ export { FakeOutboundClaudeSdkFacade as OfficialClaudeSdkFacade };
 
 export const OUTBOUND_CLAUDE_FIXTURE_LOG = ".outbound-claude-events.jsonl";
 export const OUTBOUND_CLAUDE_PERMISSION_PROMPT = "[outbound-permission]";
+export const OUTBOUND_CLAUDE_AUTH_STATUS = {
+  loggedIn: true, authMethod: "claude.ai", apiProvider: "firstParty", subscriptionType: "Claude Max",
+  email: "outbound-quota@example.test", orgName: "Outbound quota fixture", orgId: "5503a3bf-8edf-4741-9659-5aaed621e042",
+};
 
 export interface OutboundClaudeFixtureEvent {
   readonly event: "query_open" | "startup_probe" | "send" | "permission_pending" |
@@ -42,9 +47,7 @@ export class FakeOutboundClaudeSdkFacade implements ClaudeSdkFacade {
   #queryCount = 0;
 
   async readCliRelease(): Promise<string> { return "2.1.287"; }
-  async readCliAuthStatus() {
-    return { loggedIn: true, authMethod: "claude.ai", apiProvider: "firstParty", subscriptionType: "Claude Max" };
-  }
+  async readCliAuthStatus() { return parseClaudeCliAuthStatus(JSON.stringify(OUTBOUND_CLAUDE_AUTH_STATUS)); }
   async listSessions() { return [...this.#sessions.values()].map((value) => value.info); }
   async getSessionInfo(sessionId: string) { return this.#sessions.get(sessionId)?.info; }
   async getSessionMessages(sessionId: string) { return [...(this.#sessions.get(sessionId)?.messages ?? [])]; }
@@ -210,7 +213,8 @@ function initialization(): SDKControlInitializeResponse {
     models: [{ value: "sonnet", resolvedModel: "claude-sonnet-5", displayName: "Claude Sonnet 5",
       description: "Offline deterministic fixture", supportsEffort: true,
       supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"] }],
-    account: { apiProvider: "firstParty", subscriptionType: "Claude Max", tokenSource: "oauth" },
+    account: { apiProvider: "firstParty", subscriptionType: "Claude Max", tokenSource: "oauth",
+      email: OUTBOUND_CLAUDE_AUTH_STATUS.email, organization: OUTBOUND_CLAUDE_AUTH_STATUS.orgName },
   };
 }
 

@@ -31,6 +31,20 @@ function weekly(remainingPercent = 28): BackendAccountUsage {
   };
 }
 
+async function createClaudeDraft(page: Page, title: string): Promise<string> {
+  const created = page.waitForResponse(response => response.request().method() === "POST"
+    && response.url().endsWith("/api/threads") && response.status() === 201);
+  await page.getByTestId("desktop-sidebar").getByTestId("new-thread-trigger").click();
+  await selectCustomNewThreadTarget(page, "Claude subscription · Claude");
+  await page.getByRole("textbox", { name: "Thread name" }).fill(title);
+  await page.getByRole("button", { name: "Create thread" }).click();
+  const { threadId } = await (await created).json() as { threadId: string };
+  const threadPath = `/threads/${threadId}`;
+  await expect(page).toHaveURL(url => url.pathname === threadPath);
+  await expect(page.getByRole("textbox", { name: "Message Claude" })).toBeVisible();
+  return threadPath;
+}
+
 test("account quota stays scoped, opens deliberately, and works by touch", async ({ page, browser }, testInfo) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   const directory = path.join(loadE2ERunContext().workspacesDirectory, "account-usage");
@@ -51,7 +65,7 @@ test("account quota stays scoped, opens deliberately, and works by touch", async
     await expect(line).toHaveCount(0);
 
     await publishUsage(page, weekly());
-    await expect(line).toHaveAccessibleName(/^Codex.* included usage: Weekly, 28% remaining\. Show usage details\.$/);
+    await expect(line).toHaveAccessibleName(/^Codex.* included usage: 28% remaining\. Show usage details\.$/);
     await fillAndPersistDraft(page, "Review the recent changes and suggest the next step.", "Message Codex");
     await capture(page, testInfo, "account-usage-desktop-line.png");
 
@@ -133,7 +147,7 @@ test("account quota stays scoped, opens deliberately, and works by touch", async
     await expect(mobileLine).toHaveCount(0);
     await expect(mobilePopover).toHaveCount(0);
     await publishUsage(page, { ...weekly(0), includedUsageAllowed: false });
-    await expect(mobileLine).toHaveAccessibleName(/^Codex.* included usage: Weekly, 0% remaining\. Show usage details\.$/);
+    await expect(mobileLine).toHaveAccessibleName(/^Codex.* included usage: 0% remaining\. Show usage details\.$/);
     await mobileLine.tap();
     await expect(mobilePopover.getByText("0% left", { exact: true })).toBeVisible();
     await expect(mobilePopover.getByText("Included usage is currently unavailable.", { exact: true })).toBeVisible();
@@ -161,12 +175,7 @@ test("Claude quota follows the model selected for the next turn", async ({ page,
   const directory = path.join(loadE2ERunContext().workspacesDirectory, "claude-account-usage");
   await mkdir(directory, { recursive: true });
   await openWorkspaceDirectory(page, directory);
-  await page.getByTestId("desktop-sidebar").getByTestId("new-thread-trigger").click();
-  await selectCustomNewThreadTarget(page, "Claude subscription · Claude");
-  await page.getByRole("textbox", { name: "Thread name" }).fill("Claude quota");
-  await page.getByRole("button", { name: "Create thread" }).click();
-  await expect(page).toHaveURL(/\/threads\/[0-9a-f-]+$/);
-  const threadPath = new URL(page.url()).pathname;
+  const threadPath = await createClaudeDraft(page, "Claude quota");
   const composer = page.getByTestId("composer");
   const model = composer.getByRole("combobox", { name: "Model" });
   await expect(model).toContainText("Claude Sonnet 5");
@@ -209,6 +218,10 @@ test("Claude quota follows the model selected for the next turn", async ({ page,
     await expect(mobileCard.getByText("47% left", { exact: true })).toBeVisible();
     await expectNoPageOverflow(mobile);
     await capture(mobile, testInfo, "account-usage-claude-fable-mobile.png");
+    // This draft targets the same backend but has no verified conversation.
+    await createClaudeDraft(page, "Unbound Claude draft");
+    await expect(page.locator(".account-usage-line")).toHaveCount(0);
+    await expect(mobileCard.getByText("35% left", { exact: true })).toBeVisible();
   } finally {
     await mobile.close();
   }

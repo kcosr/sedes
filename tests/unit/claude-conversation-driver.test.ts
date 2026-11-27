@@ -1015,6 +1015,9 @@ describe("ClaudeConversationBackendDriver", () => {
     expect(accountUsage.retain).not.toHaveBeenCalled();
     const handle = await driver.attach(input);
     expect(accountUsage.retain).toHaveBeenCalledOnce();
+    expect(accountUsage.retain).toHaveBeenCalledWith({
+      applicationThreadId: input.binding.applicationThreadId, sessionId, startupProbeUuid: expect.any(String),
+    });
     await handle.close();
     await driver.close();
     expect(release).toHaveBeenCalledOnce();
@@ -2434,7 +2437,7 @@ function createDriver(
   sdk: ReturnType<typeof fakeSdk>,
   options: {
     readonly acquireSession?: (sessionId: string) => () => void;
-    readonly accountUsage?: { retain(): () => void };
+    readonly accountUsage?: ConstructorParameters<typeof ClaudeConversationBackendDriver>[0]["accountUsage"];
     readonly importedSettings?: boolean;
     readonly confirmSettings?: boolean;
     readonly onAdoptPermissionMode?: (mode: string) => void;

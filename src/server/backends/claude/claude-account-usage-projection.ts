@@ -3,10 +3,10 @@ import { z } from "zod";
 import {
   MAXIMUM_ACCOUNT_USAGE_MODEL_LABEL_LENGTH,
   MAXIMUM_ACCOUNT_USAGE_WINDOWS,
-  type BackendAccountUsage,
+  type BackendAccountUsageReport,
 } from "../../../shared/protocol/account-usage.js";
 
-type UsageWindow = BackendAccountUsage["windows"][number];
+type UsageWindow = BackendAccountUsageReport["windows"][number];
 type Limits = NonNullable<SDKControlGetUsageResponse["rate_limits"]>;
 const WEEK = 7 * 24 * 60;
 const resetTimestamp = z.iso.datetime({ offset: true });
@@ -49,7 +49,7 @@ function projectWindow(
 export function projectClaudeAccountUsage(
   result: SDKControlGetUsageResponse,
   capturedAt: number,
-): BackendAccountUsage | null {
+): BackendAccountUsageReport | null {
   if (result.behaviors !== null || result.rate_limits_available !== true || !result.rate_limits) return null;
   const limits = result.rate_limits;
   const account = { kind: "account" } as const;

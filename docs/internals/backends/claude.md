@@ -260,10 +260,13 @@ The application stream publishes the observations independently of turn events.
 
 The usage control's reply carries no account identity. The worker reads it
 through a separate zero-input SDK query under the backend's configured login
-and neutral working directory. Thread environments and project settings cannot
-select a different account for the shared observation. The worker uses
-`skipBehaviors: true` to skip the local transcript scan and projects only
-included quota. The private remote operation requires a resident runtime.
+and neutral working directory. The execution host compares the subscription
+identity of each admitted primary query with that of the quota query. The
+account evidence stays on the host. The application snapshot pairs the reading
+with the Sedes thread IDs whose current queries matched. Releasing a query
+removes its eligibility. The worker uses `skipBehaviors: true` to skip the local
+transcript scan and projects only included quota. The private remote operation
+requires a resident runtime.
 
 The Claude adapter projects the next-turn model's ordered match keys. For
 Fable the composer prefers the matching version-specific weekly window, then

@@ -18,7 +18,7 @@ import { SidecarProtocolDeliveryError } from "../../../../internal/sidecar-proto
 import { claudeConfigDirectory, type ClaudeChildEnvironment } from "../claude-child-environment.js";
 import { snapshotBoundedJson } from "../../../provider-protocol/json/bounded-json-snapshot.js";
 import type { ClaudeSdkFacade } from "../claude-sdk-facade.js";
-import { readClaudeAccountUsage } from "../claude-account-usage-probe.js";
+import { readClaudeAccountUsage, selectClaudeAccountUsageObservation } from "../claude-account-usage-probe.js";
 import { probeClaudeSdkDirect } from "../claude-sdk-probe.js";
 import { ClaudeSdkSession } from "../claude-sdk-session.js";
 import { ClaudeRuntimeCompactError } from "../claude-compact-operation.js";
@@ -131,7 +131,7 @@ export class ClaudeRuntimeWorkerHost {
     const handlers: ClaudeRuntimeV4WorkerHandlers = {
       initialize: async (request, context) =>
         await this.#initialize(request, context.signal),
-      accountUsage: async (_request, context) => ({ usage: await this.#readAccountUsage(context.signal) }),
+      accountUsage: async (_request, context) => ({ observation: await this.#readAccountUsage(context.signal) }),
       probe: async ({ cwd }, context) => await this.#probe(cwd, context.signal),
       listSessions: async (request) => await this.#listSessions(request),
       getSessionInfo: async (request) => await this.#getSessionInfo(request),
@@ -227,7 +227,7 @@ export class ClaudeRuntimeWorkerHost {
       sdk: processes.sdk, executablePath: configuration.executablePath, environment: configuration.environment,
       signal: AbortSignal.any([signal, this.#closeController.signal]),
     }).finally(() => processes.terminate());
-    try { return await this.#accountRead; }
+    try { return await selectClaudeAccountUsageObservation(await this.#accountRead, this.#queries.values()); }
     finally { this.#accountRead = undefined; }
   }
 

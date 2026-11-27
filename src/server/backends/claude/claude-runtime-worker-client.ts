@@ -150,8 +150,8 @@ export class ClaudeRuntimeWorkerClient implements ClaudeOwnedRuntimeClient {
   async readAccountUsage(signal: AbortSignal) {
     signal.throwIfAborted();
     this.#assertOpen();
-    const { usage } = await this.#peer.call(claudeRuntimeAccountUsageOperation, {}, { signal });
-    return usage;
+    const { observation } = await this.#peer.call(claudeRuntimeAccountUsageOperation, {}, { signal });
+    return observation;
   }
 
   async probe(

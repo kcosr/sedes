@@ -14,7 +14,7 @@ import { LIVE_CLAUDE_MODEL } from "../support/live-claude-model.js";
 import { buildToolDisabledWorker } from "../support/live-claude-worker.js";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { OutboundClaudeFixtureEvent } from "../support/outbound-claude-sdk-fixture.js";
+import { OUTBOUND_CLAUDE_AUTH_STATUS, type OutboundClaudeFixtureEvent } from "../support/outbound-claude-sdk-fixture.js";
 import { normalizedThreadSnapshotSchema, threadEventEnvelopeSchema } from "../../src/shared/protocol/conversation.js";
 import { OutboundCodexFixture } from "../support/outbound-codex-fixture.js";
 import { decodeCodexModelSetting } from "../../src/server/backends/codex/codex-setting-values.js";
@@ -307,7 +307,7 @@ describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")("
       const backendId = (await fixture.snapshot()).executionTargets.find(target => target.id === newTarget)!.backendInstanceId;
       await fixture.waitFor(async () => (await fixture.snapshot()).accountUsages.some(usage => usage.backendInstanceId === backendId));
       expect((await fixture.snapshot()).accountUsages.find(usage => usage.backendInstanceId === backendId)).toMatchObject({
-        executionEnvironmentId: fixture.environmentId, windows: [
+        executionEnvironmentId: fixture.environmentId, eligibleThreadIds: [claudeThread], windows: [
           { scope: { kind: "account" }, remainingPercent: 47 },
           { scope: { kind: "model", label: "Fable" }, remainingPercent: 35 },
         ],
@@ -699,7 +699,7 @@ class OutboundFixture {
       // Only the documented version/auth commands are supplied by this executable.
       await writeFile(executablePath, `#!${process.execPath}
 if (process.argv.slice(2).join(" ") === "--version") console.log("2.1.287 (Claude Code)");
-else if (process.argv.slice(2).join(" ") === "auth status --json") console.log(JSON.stringify({ loggedIn: true, authMethod: "claude.ai", apiProvider: "firstParty", subscriptionType: "Claude Max" }));
+else if (process.argv.slice(2).join(" ") === "auth status --json") console.log(JSON.stringify(${JSON.stringify(OUTBOUND_CLAUDE_AUTH_STATUS)}));
 else process.exit(64);
 `, { mode: 0o700 });
     }

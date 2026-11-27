@@ -186,11 +186,9 @@ describe.sequential("real Claude subscription driver", () => {
     ).not.toThrow();
     expect(preflight.account.apiProvider).toBe("firstParty");
     expect(preflight.account.subscriptionType).toBeTruthy();
-    expect(sdk.authStatuses[0]).toMatchObject({
-      loggedIn: true,
-      authMethod: "claude.ai",
-      apiProvider: "firstParty",
-    });
+    expect(sdk.authStatuses[0]?.loggedIn).toBe(true);
+    expect(sdk.authStatuses[0]?.authMethod).toBe("claude.ai");
+    expect(sdk.authStatuses[0]?.apiProvider).toBe("firstParty");
     expect(sdk.authStatuses[0]?.subscriptionType).toBeTruthy();
     expect(sdk.authStatuses[0]?.apiKeySource).toBeUndefined();
 

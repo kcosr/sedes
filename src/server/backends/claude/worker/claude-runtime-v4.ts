@@ -1,4 +1,4 @@
-import { backendAccountUsageSchema } from "../../../../shared/protocol/account-usage.js";
+import { backendAccountUsageReportSchema } from "../../../../shared/protocol/account-usage.js";
 import { environmentVariableOverridesSchema } from "../../../../shared/protocol/environment-variables.js";
 import { resolvedEnvironmentVariablesSchema } from "../../../../internal/sidecar-protocol/environment-variables-v1.js";
 import { normalizedAbsolutePath } from "../../../../shared/absolute-path.js";
@@ -534,10 +534,16 @@ function operation<Request, Response>(input: {
   });
 }
 
+export const claudeAccountUsageObservationSchema = z.strictObject({
+  usage: backendAccountUsageReportSchema,
+  verifiedSessions: z.array(z.strictObject({ sessionId: uuidSchema, startupProbeUuid: uuidSchema })).min(1).max(CLAUDE_RUNTIME_MAXIMUM_QUERIES),
+});
+export type ClaudeAccountUsageObservation = z.infer<typeof claudeAccountUsageObservationSchema>;
+
 export const claudeRuntimeAccountUsageOperation = operation({
   operation: "runtime.account_usage",
   requestSchema: z.strictObject({}),
-  responseSchema: z.strictObject({ usage: backendAccountUsageSchema.nullable() }),
+  responseSchema: z.strictObject({ observation: claudeAccountUsageObservationSchema.nullable() }),
   maximumDeadlineMilliseconds: CLAUDE_ACCOUNT_USAGE_TIMEOUT_MS,
   lane: "operation",
 });

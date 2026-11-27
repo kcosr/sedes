@@ -30,7 +30,7 @@ const FAKE_CLAUDE = `#!${process.execPath}
 const args = process.argv.slice(2);
 if (args[0] === "--version") { process.stdout.write("2.1.287 (Claude Code)\\n"); process.exit(0); }
 if (args[0] === "auth") {
-  process.stdout.write(JSON.stringify({ loggedIn: true, authMethod: "claude.ai", apiProvider: "firstParty", subscriptionType: "Claude Max" }));
+  process.stdout.write(JSON.stringify({ loggedIn: true, authMethod: "claude.ai", apiProvider: "firstParty", subscriptionType: "Claude Max", email: "owner@example.test", orgName: "Example", orgId: "7f1ca102-fab9-450f-a1e6-05ba2044ffd7" }));
   process.exit(0);
 }
 // A stuck telemetry process resists graceful shutdown and requires escalation.
@@ -283,7 +283,7 @@ function queryDelegate(
       return Object.assign(stream, {
         initializationResult: async (): Promise<SDKControlInitializeResponse> => ({
           commands: [], agents: [], output_style: "default", available_output_styles: ["default"], models: [],
-          account: { apiProvider: "firstParty", subscriptionType: "Claude Max" },
+          account: { apiProvider: "firstParty", subscriptionType: "Claude Max", email: "owner@example.test", organization: "Example" },
         }),
         usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: () => new Promise(() => {}),
         interrupt: async () => ({ still_queued: [] }),
