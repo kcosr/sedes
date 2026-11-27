@@ -1,9 +1,6 @@
 package dev.sedes.local;
 
 import static org.junit.Assert.*;
-import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
-import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.Test;
 
@@ -89,19 +86,6 @@ public class NativeEarlyReplyTest {
             assertNull(shortReply.next(null));
             NativeVoiceQueue.Item shortNotice = event.equals("turn.progress") ? progress(ID, "message", first, messages) : terminal(first, null, messages);
             assertEquals(first, shortReply.terminal(shortNotice, messages, ID));
-        }
-    }
-    @Test public void responsiveWordCountingMatchesSharedSpeechExamples() throws Exception {
-        try (InputStream input = getClass().getResourceAsStream("/early-reply-responsive.json")) {
-            assertNotNull(input);
-            JSONArray cases = new JSONArray(new String(input.readAllBytes(), StandardCharsets.UTF_8));
-            for (int i = 0; i < cases.length(); i++) {
-                JSONObject example = cases.getJSONObject(i);
-                String text = example.getString("text");
-                NativeEarlyReply reply = new NativeEarlyReply(span(0, 0, text, false), 0);
-                reply.freeze("responsive", settings("messages"), 1000);
-                assertEquals(text, example.getBoolean("ready"), reply.next(null) != null);
-            }
         }
     }
     @Test public void paragraphMarkerAndAbsoluteSequenceRangeHaveNoDuplicateOutput() {

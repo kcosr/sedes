@@ -14,10 +14,12 @@ const wordSegmenter = new Intl.Segmenter("und", { granularity: "word" });
 function responsiveWordCount(text: string): number {
   let count = 0;
   let previousEnd = -1;
-  for (const { segment, index, isWordLike } of wordSegmenter.segment(text)) {
-    if (!isWordLike || !/[\p{L}\p{N}]/u.test(segment)) continue;
-    // ICU can split a hyphenated compound or contraction into multiple words.
-    if (previousEnd < 0 || !/^['‘’‐‑-]$/u.test(text.slice(previousEnd, index))) {
+  for (const { segment, index } of wordSegmenter.segment(text)) {
+    if (!/[\p{L}\p{N}]/u.test(segment)) continue;
+    // ICU can separate compounds, contractions and numeric suffixes such as the ² in m².
+    const joinedWord = previousEnd >= 0 && /^['‘’‐‑-]$/u.test(text.slice(previousEnd, index));
+    const numericSuffix = index === previousEnd && /^\p{No}+$/u.test(segment);
+    if (!joinedWord && !numericSuffix) {
       count++;
       if (count === responsiveMinimumWords) break;
     }

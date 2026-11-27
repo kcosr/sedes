@@ -10,6 +10,9 @@
   {"text": "— … !", "ready": false},
   {"text": "Café costs 12.", "ready": true},
   {"text": "🦦 42.4 days.", "ready": false},
+  {"text": "Add ½ cup.", "ready": true},
+  {"text": "Ten m².", "ready": false},
+  {"text": "3½ days.", "ready": false},
   {"text": "¡Todo está listo!", "ready": true},
   {"text": "私は猫です。", "ready": true}
 ]

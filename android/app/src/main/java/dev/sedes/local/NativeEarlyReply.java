@@ -19,6 +19,7 @@ final class NativeEarlyReply {
     static final long MAX_LIFETIME = 600_000, MAX_WAIT = 60_000, URGENT_WAIT = 2000;
     private static final int MIN_RESPONSIVE_WORDS = 3;
     private static final Pattern WORD_CHARACTER = Pattern.compile("[\\p{L}\\p{N}]");
+    private static final Pattern OTHER_NUMBERS = Pattern.compile("\\p{No}+");
     static final class Frame {
         final String kind, id, event, thread, turn, item, title, origin, text, reason;
         final long generation, inputRevision;
@@ -55,12 +56,14 @@ final class NativeEarlyReply {
             BreakIterator bounds = BreakIterator.getWordInstance(Locale.ROOT);
             bounds.setText(text);
             Matcher lettersOrNumbers = WORD_CHARACTER.matcher(text);
+            Matcher otherNumbers = OTHER_NUMBERS.matcher(text);
             int count = 0, previousEnd = -1;
             for (int from = bounds.first(), to = bounds.next(); to != BreakIterator.DONE; from = to, to = bounds.next()) {
                 if (!lettersOrNumbers.region(from, to).find()) continue;
-                // Some word iterators split compounds at an apostrophe or hyphen.
-                boolean joined = previousEnd >= 0 && from == previousEnd + 1 && joinsWords(text.charAt(previousEnd));
-                if (!joined && ++count == MIN_RESPONSIVE_WORDS) break;
+                // A standalone fraction counts as a word. An adjacent suffix such as m² stays with its unit.
+                boolean numericSuffix = previousEnd == from && otherNumbers.region(from, to).matches();
+                boolean joinedWord = previousEnd >= 0 && from == previousEnd + 1 && joinsWords(text.charAt(previousEnd));
+                if (!numericSuffix && !joinedWord && ++count == MIN_RESPONSIVE_WORDS) break;
                 previousEnd = to;
             }
             return words = count;
