@@ -1001,6 +1001,25 @@ describe("ClaudeConversationBackendDriver", () => {
     await handle.close();
   });
 
+  it("retains the account meter only after a successful live attachment and releases it on close", async () => {
+    const sdk = fakeSdk();
+    const release = vi.fn();
+    const accountUsage = { retain: vi.fn(() => release) };
+    const driver = createDriver(sdk, { accountUsage });
+    const input = { scope, workspace, binding: binding(), opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }) };
+    sdk.getSessionInfo.mockResolvedValueOnce(session(1));
+    await expect(driver.attach(input)).rejects.toMatchObject({ backendCode: "claude_session_identity_mismatch" });
+    sdk.getSessionInfo.mockResolvedValue({ ...session(1), sessionId });
+    exposeSessionMessages(sdk, []);
+    await readConversationHistory(driver, input);
+    expect(accountUsage.retain).not.toHaveBeenCalled();
+    const handle = await driver.attach(input);
+    expect(accountUsage.retain).toHaveBeenCalledOnce();
+    await handle.close();
+    await driver.close();
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it("reads and attaches valid history beyond the former cumulative turn ceiling", async () => {
     const sdk = fakeSdk();
     sdk.getSessionInfo.mockResolvedValue({ ...session(1), sessionId });
@@ -2415,6 +2434,7 @@ function createDriver(
   sdk: ReturnType<typeof fakeSdk>,
   options: {
     readonly acquireSession?: (sessionId: string) => () => void;
+    readonly accountUsage?: { retain(): () => void };
     readonly importedSettings?: boolean;
     readonly confirmSettings?: boolean;
     readonly onAdoptPermissionMode?: (mode: string) => void;
@@ -2456,6 +2476,7 @@ function createDriver(
   };
   return new ClaudeConversationBackendDriver({
       usage: NO_USAGE_SINK,
+      accountUsage: options.accountUsage,
       nativeNamespace: "claude-test-native",
     instance,
     connection,

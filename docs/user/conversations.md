@@ -198,18 +198,19 @@ evidence is complete. Codex, Claude, Grok, OpenCode, and Antigravity do not.
 
 ## Account quota
 
-When Codex supplies account quota, a thin line at the bottom of the composer
-shows the lowest remaining percentage of its included-usage windows. Hover for
-half a second, click, or tap to see the reported windows, reset times, last-check
-time, and optional account details. Click to keep the pop-out open; click outside
-or press Escape to close it. Keyboard focus opens the details immediately.
+The thin line at the bottom of the composer shows remaining included quota.
+On a Claude thread set to use Fable, it shows the matching weekly Fable
+allowance when available. Other Claude threads and Codex threads show the
+lowest remaining percentage across the account-wide windows. For example,
+with 35% left for Fable and 47% left across all models, a Fable thread shows
+35% and a Sonnet thread shows 47%.
 
-The reading is shared across threads and refreshes every 30 seconds while the
-backend is enabled, including when no client is connected. Missing windows are
-omitted, and failed or expired readings hide the line. It is separate from the
-thread's context meter and does not include extra credits or model-specific quotas.
-See [Codex account quota](../operator/backends/codex.md#account-quota) for refresh
-and availability details.
+Hover, focus, click, or tap the line for all reported windows and their reset
+times. Click to keep the card open and press Escape or click outside to close
+it. A five-hour row appears only when the account reports one. See
+[Claude account quota](../operator/backends/claude.md#account-quota) and
+[Codex account quota](../operator/backends/codex.md#account-quota) for
+refresh and availability details.
 
 ## Context and Session stats
 

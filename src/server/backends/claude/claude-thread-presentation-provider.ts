@@ -17,6 +17,7 @@ import {
   type ClaudePermissionsStateV1,
 } from "./claude-permissions-feature.js";
 import type { ClaudeModelEffortCatalog } from "./claude-model-effort-catalog.js";
+import { claudeAccountUsageModelKeys } from "./claude-account-usage-projection.js";
 import type { ClaudeThreadRepository } from "./claude-thread-repository.js";
 import type { CompiledBackendModelPolicy } from "../model-policy.js";
 
@@ -87,6 +88,7 @@ export class ClaudeThreadPresentationProvider implements ThreadBackendPresentati
       );
     }
     const desiredModel = catalogModels.find(({ id }) => id === settings.model);
+    const accountUsageModelKeys = claudeAccountUsageModelKeys(settings.model);
     const effectiveModelId =
       settings.effectiveModelState === "confirmed"
         ? settings.effectiveModel
@@ -251,6 +253,7 @@ export class ClaudeThreadPresentationProvider implements ThreadBackendPresentati
       backend: {
         label: boundDisplayText(input.backend.label),
         brand: BACKEND_BRANDS.claude_agent_sdk,
+        ...(accountUsageModelKeys ? { accountUsageModelKeys } : {}),
         ...(effectiveDescriptor || desiredModel
           ? {
               modelLabel: boundDisplayText(

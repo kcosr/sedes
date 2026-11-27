@@ -4,13 +4,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BackendAccountUsage, NormalizedApplicationSnapshot } from "../../../shared/index.js";
 import { AccountUsageLine, accountUsageForTarget } from "./AccountUsageLine.js";
 
+const ACCOUNT = { kind: "account" } as const;
 const NOW = Date.parse("2026-11-14T12:00:00Z");
 function usage(overrides: Partial<BackendAccountUsage> = {}): BackendAccountUsage {
   return {
     capturedAt: NOW, accountId: "account-one", plan: "Pro Max", includedUsageAllowed: true,
-    windows: [{ remainingPercent: 28, durationMinutes: 10_080, resetsAt: NOW + 86_400_000 }],
+    windows: [{ scope: ACCOUNT, remainingPercent: 28, durationMinutes: 10_080, resetsAt: NOW + 86_400_000 }],
     ...overrides,
   };
+}
+function weeklyModel(label: string, key: string | null, remainingPercent: number, resetsAt: number | null = null): BackendAccountUsage["windows"][number] {
+  return { scope: { kind: "model", label, key }, remainingPercent, durationMinutes: 10_080, resetsAt };
 }
 function pointer(target: Element, type: string, pointerType = "mouse", clientX = 250) {
   const event = new MouseEvent(type, { bubbles: true, clientX });
@@ -31,7 +35,7 @@ afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.resto
 describe("AccountUsageLine", () => {
   it("shows only reported windows and optional account details", () => {
     render(<AccountUsageLine backendLabel="Codex" usage={usage()} />);
-    expect(line()).toHaveAccessibleName("Codex included usage: 28% remaining. Show usage details.");
+    expect(line()).toHaveAccessibleName("Codex included usage: Weekly, 28% remaining. Show usage details.");
     expect(screen.queryByText(/Weekly/)).toBeNull();
     fireEvent.click(line());
     expect(popup()).toHaveTextContent("Included usage");
@@ -39,7 +43,7 @@ describe("AccountUsageLine", () => {
     expect(popup()).toHaveTextContent("Weekly28% left");
     expect(popup()).not.toHaveTextContent("5-hour");
     expect(popup()).not.toHaveTextContent(/workspace|email/i);
-    expect(popup()).toHaveTextContent("Checked");
+    expect(popup()).toHaveTextContent("Reported by Codex");
     expect(popup()?.querySelector('time[datetime="2026-11-14T12:00:00.000Z"]')).not.toBeNull();
     expect(screen.getByText("Account identifier")).toBeInTheDocument();
     expect(screen.getByText("account-one")).toBeInTheDocument();
@@ -47,8 +51,8 @@ describe("AccountUsageLine", () => {
 
   it("uses the lowest reported remaining percentage and preserves an exhausted target", () => {
     render(<AccountUsageLine backendLabel="Codex" usage={usage({ windows: [
-      { remainingPercent: 62, durationMinutes: 300, resetsAt: null },
-      { remainingPercent: 0, durationMinutes: 10_080, resetsAt: null },
+      { scope: ACCOUNT, remainingPercent: 62, durationMinutes: 300, resetsAt: null },
+      { scope: ACCOUNT, remainingPercent: 0, durationMinutes: 10_080, resetsAt: null },
     ], includedUsageAllowed: false })} />);
     expect(line()).toHaveAttribute("data-level", "critical");
     expect(line().style.getPropertyValue("--account-usage-remaining")).toBe("0%");
@@ -59,9 +63,68 @@ describe("AccountUsageLine", () => {
     expect(popup()).toHaveTextContent("Included usage is currently unavailable.");
   });
 
+  it("shows the selected model first, even when a tighter account limit applies", () => {
+    const current = usage({ windows: [
+      { scope: ACCOUNT, remainingPercent: 47, durationMinutes: 10_080, resetsAt: null },
+      { scope: ACCOUNT, remainingPercent: 0, durationMinutes: 300, resetsAt: null },
+      weeklyModel("Fable", "family", 35),
+      weeklyModel("Fable 5.2", "specific", 20),
+    ] });
+    const view = render(<AccountUsageLine backendLabel="Claude" usage={current} modelKeys={["specific", "family"]} />);
+    expect(line()).toHaveAccessibleName("Claude included usage: Weekly · Fable 5.2, 20% remaining. Show usage details.");
+    expect(line().style.getPropertyValue("--account-usage-remaining")).toBe("20%");
+    expect(line().textContent).toBe("");
+    fireEvent.click(line());
+    const headings = () => Array.from(screen.getByRole("dialog").querySelectorAll(".account-usage-window-heading"), node => node.textContent);
+    expect(headings()).toEqual(["Weekly · Fable 5.220% left", "Weekly · All models47% left", "5-hour · All models0% left", "Weekly · Fable35% left"]);
+    view.rerender(<AccountUsageLine backendLabel="Claude" usage={current} modelKeys={["other-version", "family"]} />);
+    expect(headings()[0]).toBe("Weekly · Fable35% left");
+    expect(line().style.getPropertyValue("--account-usage-remaining")).toBe("35%");
+    view.rerender(<AccountUsageLine backendLabel="Claude" usage={current} />);
+    expect(headings()[0]).toBe("5-hour · All models0% left");
+    expect(line().style.getPropertyValue("--account-usage-remaining")).toBe("0%");
+  });
+
+  it("ignores an unrecognized or label-only model row when selecting the bar", () => {
+    const current = usage({ windows: [weeklyModel("Fable", null, 3), weeklyModel("Other version", "other", 5)] });
+    const view = render(<AccountUsageLine backendLabel="Claude" usage={current} modelKeys={["Fable"]} />);
+    expect(screen.queryByRole("button")).toBeNull();
+    view.rerender(<AccountUsageLine backendLabel="Claude" usage={current} modelKeys={["other"]} />);
+    expect(line().style.getPropertyValue("--account-usage-remaining")).toBe("5%");
+    view.rerender(<AccountUsageLine backendLabel="Claude" usage={usage()} modelKeys={["Fable"]} />);
+    expect(line()).toHaveAccessibleName(/Weekly · All models, 28% remaining/);
+  });
+
+  it("switches to the account window when the selected model row expires", async () => {
+    render(<AccountUsageLine backendLabel="Claude" modelKeys={["family"]} usage={usage({ windows: [
+      ...usage().windows, weeklyModel("Fable", "family", 0, NOW + 1_000),
+    ] })} />);
+    expect(line()).toHaveAttribute("data-level", "critical");
+    act(() => line().focus());
+    await advance(1_000);
+    expect(line()).toHaveAccessibleName(/Weekly · All models, 28% remaining/);
+    expect(screen.getByRole("dialog")).not.toHaveTextContent("Fable");
+  });
+
+  it("expires the account-wide reading together while a later Fable reading stays available", async () => {
+    render(<AccountUsageLine backendLabel="Claude" modelKeys={["family"]} usage={usage({ windows: [
+      ...usage().windows,
+      { scope: ACCOUNT, remainingPercent: 1, durationMinutes: 300, resetsAt: NOW + 100 },
+      weeklyModel("Fable", "family", 35, NOW + 300),
+    ] })} />);
+    fireEvent.click(line());
+    await advance(100);
+    expect(line()).toHaveAccessibleName(/Weekly · Fable, 35% remaining/);
+    expect(screen.getByRole("dialog")).toHaveTextContent("Weekly · All models28% left");
+    expect(screen.getByRole("dialog")).not.toHaveTextContent("5-hour");
+    await advance(200);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+
   it("does not invent missing durations, reset times, plan, or identity", () => {
     render(<AccountUsageLine backendLabel="Codex" usage={usage({ accountId: null, plan: null,
-      windows: [{ remainingPercent: 15, durationMinutes: null, resetsAt: null }],
+      windows: [{ scope: ACCOUNT, remainingPercent: 15, durationMinutes: null, resetsAt: null }],
     })} />);
     fireEvent.click(line());
     expect(popup()).toHaveTextContent("Usage window15% left");
@@ -73,14 +136,14 @@ describe("AccountUsageLine", () => {
     expect(screen.queryByRole("button")).toBeNull();
     view.rerender(<AccountUsageLine backendLabel="Codex" usage={usage({ capturedAt: NOW - 600_000 })} />);
     expect(screen.queryByRole("button")).toBeNull();
-    view.rerender(<AccountUsageLine backendLabel="Codex" usage={usage({ windows: [{ remainingPercent: 90, durationMinutes: 300, resetsAt: NOW }] })} />);
+    view.rerender(<AccountUsageLine backendLabel="Codex" usage={usage({ windows: [{ scope: ACCOUNT, remainingPercent: 90, durationMinutes: 300, resetsAt: NOW }] })} />);
     expect(screen.queryByRole("button")).toBeNull();
     view.rerender(<AccountUsageLine backendLabel="Codex" usage={usage()} visible={false} />);
     expect(screen.queryByRole("button")).toBeNull();
   });
 
   it("expires on the next reset and closes the popover without a new snapshot", async () => {
-    const current = usage({ windows: [{ remainingPercent: 4, durationMinutes: 300, resetsAt: NOW + 1_000 }] });
+    const current = usage({ windows: [{ scope: ACCOUNT, remainingPercent: 4, durationMinutes: 300, resetsAt: NOW + 1_000 }] });
     const view = render(<AccountUsageLine backendLabel="Codex" usage={current} />);
     fireEvent.click(line());
     expect(popup()).not.toBeNull();
@@ -101,7 +164,7 @@ describe("AccountUsageLine", () => {
 
   it("rechecks expiry when the wall clock moves backward before the timeout fires", async () => {
     render(<AccountUsageLine backendLabel="Codex" usage={usage({
-      windows: [{ remainingPercent: 28, durationMinutes: 300, resetsAt: NOW + 1_000 }],
+      windows: [{ scope: ACCOUNT, remainingPercent: 28, durationMinutes: 300, resetsAt: NOW + 1_000 }],
     })} />);
     expect(vi.getTimerCount()).toBe(1);
     // Moving wall time does not postpone the already scheduled elapsed-time callback.
@@ -183,6 +246,27 @@ describe("AccountUsageLine", () => {
     await advance(1);
     expect(popup()).toBeNull();
     expect(line()).toHaveFocus();
+  });
+
+  it("reopens on deliberate keyboard focus after dismissing a hover preview", async () => {
+    render(<><input aria-label="Message" /><AccountUsageLine backendLabel="Codex" usage={usage()} /></>);
+    const message = screen.getByRole("textbox");
+    act(() => message.focus());
+    pointer(line(), "pointerover");
+    await advance(500);
+    expect(popup()).not.toBeNull();
+    expect(message).toHaveFocus();
+    fireEvent.keyDown(message, { key: "Escape" });
+    await advance(1);
+    expect(popup()).toBeNull();
+    act(() => line().focus());
+    expect(popup()).not.toBeNull();
+    const close = screen.getByRole("button", { name: "Close usage details" });
+    act(() => close.focus());
+    fireEvent.click(close);
+    await advance(1);
+    expect(line()).toHaveFocus();
+    expect(popup()).toBeNull();
   });
 
   it("clears a pinned popover when account identity changes", () => {

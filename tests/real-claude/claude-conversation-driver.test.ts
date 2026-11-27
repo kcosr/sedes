@@ -1,3 +1,4 @@
+import { createLiveClaudeQuery, LIVE_CLAUDE_MODEL as REQUIRED_MODEL, LIVE_CLAUDE_EFFORT as REQUIRED_EFFORT } from "../support/live-claude-model.js";
 import { type UsageObservation } from "../../src/server/usage/contracts.js";
 import { createInMemoryOutputArtifactPublisher } from "../helpers/output-artifact-publisher.js";
 import { claudeTurnFailureDetailsMigration } from "../../src/server/db/migrations/109-claude-turn-failure-details.js";
@@ -41,8 +42,6 @@ import { createFakeAgentToolSourceCapabilities } from "../helpers/fake-agent-too
 import { claudeSkillInvocationsMigration } from "../../src/server/db/migrations/072-claude-skill-invocations.js";
 import type { BackendAgentToolFacade } from "../../src/server/agent-tools/adapters/backend-facade.js";
 
-const REQUIRED_MODEL = "claude-sonnet-5-5";
-const REQUIRED_EFFORT = "low";
 const MODEL_TURN_TIMEOUT_MS = 240_000;
 const DEFAULT_EXECUTABLE = "claude";
 const temporaryRoots: string[] = [];
@@ -133,7 +132,7 @@ class ToolDisabledOfficialClaudeSdkFacade extends OfficialClaudeSdkFacade {
     if (options.persistSession !== false) {
       this.persistentQueryOptions.push(options);
     }
-    return observeQuery(super.createQuery({ ...input, options }), (message) => {
+    return observeQuery(createLiveClaudeQuery({ ...input, options }, guarded => super.createQuery(guarded)), (message) => {
       if (options.persistSession !== false) this.observedMessages.push(message);
       if (message.type === "result") this.resultMessages.push(message);
     });
@@ -141,7 +140,7 @@ class ToolDisabledOfficialClaudeSdkFacade extends OfficialClaudeSdkFacade {
 }
 
 describe.sequential("real Claude subscription driver", () => {
-  it("streams, persists, projects usage, and reopens one disposable Sonnet 5.5 low-effort session", async () => {
+  it("streams, persists, projects usage, and reopens one disposable Haiku 5.5 low-effort session", async () => {
     const root = await mkdtemp(
       path.join(os.tmpdir(), "sedes-real-claude-driver-"),
     );

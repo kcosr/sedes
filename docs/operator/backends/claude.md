@@ -19,6 +19,7 @@ input in Sedes. Compare it with the other integrations in the
 - [Topology and ownership](#topology-and-ownership)
 - [Permissions and security](#permissions-and-security)
 - [Capabilities](#capabilities)
+- [Account quota](#account-quota)
 - [Manual compaction](#manual-compaction)
 - [Current limits](#current-limits)
 - [Safe verification](#safe-verification)
@@ -160,10 +161,9 @@ package bundles Claude Code 2.1.319; Sedes never runs it, removes it at
 install, and always uses the operator-installed executable.
 
 Upgrade local worker artifacts and persistent sidecars with this server:
-Claude requires `claude_runtime@4` and `claude_persistent_runtime@6` for its
-catalog, history, and manual-compaction behavior. Upgrade local workers and
-remote sidecars together with the server. Client protocol 132 also requires a
-matching browser or packaged-client build for skill alias search.
+Claude requires `claude_runtime@4` and `claude_persistent_runtime@7` for its
+worker and remote operations, including the account-quota read. Client
+protocol 187 requires a matching browser or packaged-client build.
 
 For the most predictable deployment, pin the reviewed baseline. Before adopting
 a newer admitted runtime, deliberately run the opt-in live gate described
@@ -566,7 +566,8 @@ approved:
 env -u NODE_ENV npm run test:real-claude
 ```
 
-The gate uses its reviewed model, effort, and no-tools profile to verify basic
+The gate uses `claude-haiku-5-5` at low effort and checks the model before
+sending a prompt. Its no-tools profile verifies basic
 streaming, persistence, usage, and reopen behavior. Its native-history case
 also reads a resumed transcript that has parallel tool calls, and reopens a
 thread that was never sent to, then twice more after its first reply, checking
@@ -592,8 +593,26 @@ an estimate against Claude's effective auto-compaction window. Read failures or
 query/model/compaction changes clear old estimates without interrupting work.
 Rebuild local workers and upgrade remote Claude sidecars with this server:
 the worker requires `query.context_usage`, and the persistent runtime requires
-`claude_persistent_runtime@6`. Context telemetry itself needs no browser
+`claude_persistent_runtime@7`. Context telemetry itself needs no browser
 protocol or database migration; follow the current upgrade requirements above.
+
+## Account quota
+
+The thin composer bar shows the configured backend account's remaining included
+quota. On a thread set to use Fable, the bar shows its matching weekly allowance,
+even when another limit is lower. For other models or when Claude supplies no
+matching Fable window, the bar shows the lowest remaining account-wide window.
+Hover, focus, click, or tap the bar to see the selected window first, followed
+by the other reported limits and reset times. A five-hour row appears only
+when the account reports one.
+
+The first attached thread starts a check. Attached threads share a five-minute
+refresh timer for the backend. The execution host uses its configured Claude
+subscription for a prompt-free SDK read. Sedes skips the local session activity
+breakdown.
+Claude Code may report cached values. The timestamp records when Sedes received
+its report. Missing or expired readings disappear, and an unavailable quota
+leaves the conversation usable.
 
 ## Recorded usage
 

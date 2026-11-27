@@ -4133,6 +4133,7 @@ export function Composer({
                   key={snapshot.thread.targetId}
                   usage={accountUsageForTarget(application.snapshot, snapshot.thread.targetId)}
                   backendLabel={snapshot.capabilities.backend.label.text}
+                  modelKeys={snapshot.capabilities.backend.accountUsageModelKeys}
                   visible={active && chatViewVisible}
                 />
               </div>

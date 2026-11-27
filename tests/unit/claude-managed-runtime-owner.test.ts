@@ -149,6 +149,14 @@ describe("ClaudeManagedRuntimeOwner", () => {
     expect(f.backgroundErrors).toEqual([]);
   });
 
+  it("leaves a cold worker untouched for account quota", async () => {
+    const f = runtimeHarness();
+    const owner = f.owner();
+    expect(await owner.readAccountUsage(new AbortController().signal)).toBeNull();
+    expect(f.open).not.toHaveBeenCalled();
+    await owner.close();
+  });
+
   it("releases the shared worker only after the last query lease closes and can restart it", async () => {
     const f = runtimeHarness();
     const owner = f.owner();
@@ -573,6 +581,7 @@ function lifecycleHandlers(): ClaudeRuntimeV4WorkerHandlers {
     }),
     listSessions: () => ({ sessions: [] }),
     probe: unused,
+    accountUsage: unused,
     getSessionInfo: unused,
     getSessionMessages: unused,
     hasSessionTranscript: unused,

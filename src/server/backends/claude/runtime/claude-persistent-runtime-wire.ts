@@ -19,6 +19,7 @@ export const claudePersistentOpenRequestSchema = worker.claudeRuntimeQueryOpenRe
   request => request.launch !== "fork", "A persistent session never adopts a fork launch.");
 export const claudePersistentCommandSchema = z.discriminatedUnion("action", [
   command("probe", worker.claudeRuntimeProbeRequestSchema),
+  command("account_usage", worker.claudeRuntimeAccountUsageOperation.requestSchema),
   command("list", worker.claudeRuntimeSessionListRequestSchema),
   command("info", worker.claudeRuntimeSessionInfoRequestSchema),
   command("messages", worker.claudeRuntimeSessionMessagesRequestSchema),

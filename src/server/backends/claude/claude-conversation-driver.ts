@@ -1,4 +1,5 @@
 import type { UsageSink } from "../../usage/contracts.js";
+import type { ClaudeAccountUsageSource } from "./claude-account-usage-source.js";
 import type { ThreadEnvironmentResolver } from "../../environment-variables/runtime-environment.js";
 import { normalizedAbsolutePath } from "../../../shared/absolute-path.js";
 import { createHash } from "node:crypto";
@@ -145,6 +146,7 @@ const branchCheckpointSchema = z
 
 export interface ClaudeConversationDriverInput {
   readonly usage: UsageSink;
+  readonly accountUsage?: Pick<ClaudeAccountUsageSource, "retain">;
   readonly nativeNamespace: string;
   readonly resolveThreadEnvironment?: ThreadEnvironmentResolver;
   readonly instance: AgentBackendInstance;
@@ -177,6 +179,7 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
   readonly instance: AgentBackendInstance;
   readonly connection: AgentConnectionProfile;
   readonly #usage: UsageSink;
+  readonly #accountUsage: ClaudeConversationDriverInput["accountUsage"];
   readonly #nativeNamespace: string;
   readonly #resolveThreadEnvironment: ThreadEnvironmentResolver;
   readonly #runtimeClient: ClaudeRuntimeClient;
@@ -208,6 +211,7 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
 
   constructor(input: ClaudeConversationDriverInput) {
     this.#usage = input.usage;
+    this.#accountUsage = input.accountUsage;
     this.#nativeNamespace = input.nativeNamespace;
     this.#resolveThreadEnvironment = input.resolveThreadEnvironment ?? (async () => Object.freeze({}));
     this.instance = input.instance;
@@ -515,10 +519,12 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
     this.#assertEnabled();
     const sessionId = input.binding.backendConversationId;
     const releaseAdmission = this.#acquireSession(sessionId);
+    let releaseAccountUsage: (() => void) | undefined;
     let released = false;
     const release = (): void => {
       if (released) return;
       released = true;
+      releaseAccountUsage?.();
       releaseAdmission();
     };
     try {
@@ -654,7 +660,10 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
         },
         now: () => Date.parse(this.#now()),
       });
-      this.#handles.add(handle);
+      if (!released) {
+        this.#handles.add(handle);
+        releaseAccountUsage = this.#accountUsage?.retain();
+      }
       return handle;
     } catch (error) {
       release();

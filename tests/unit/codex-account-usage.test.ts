@@ -54,7 +54,7 @@ describe("Codex account usage polling", () => {
     expect(f.encoded).toEqual([{ excludeResetCreditDetails: true }]);
     expect(f.source.snapshot()).toEqual({
       capturedAt: Date.now(), accountId: "account-1", plan: "Pro Max", includedUsageAllowed: true,
-      windows: [{ remainingPercent: 28, durationMinutes: 10_080, resetsAt: 1_800_000_000_000 }],
+      windows: [{ scope: { kind: "account" }, remainingPercent: 28, durationMinutes: 10_080, resetsAt: 1_800_000_000_000 }],
     });
     f.source.start();
     f.client.updateLifecycle({ state: "idle", generation: 1 });
@@ -149,7 +149,7 @@ describe("Codex account usage polling", () => {
     await vi.advanceTimersByTimeAsync(INTERVAL);
     expect(f.source.snapshot()).toEqual({
       capturedAt: Date.now(), accountId: "account-2", plan: "Plus", includedUsageAllowed: true,
-      windows: [{ remainingPercent: 60, durationMinutes: 300, resetsAt: null }],
+      windows: [{ scope: { kind: "account" }, remainingPercent: 60, durationMinutes: 300, resetsAt: null }],
     });
   });
 
@@ -170,7 +170,7 @@ describe("Codex account usage polling", () => {
     await vi.advanceTimersByTimeAsync(INTERVAL);
     expect(f.source.snapshot()).toEqual({
       capturedAt: Date.now(), accountId: null, plan: null, includedUsageAllowed: false,
-      windows: [{ remainingPercent: 0, durationMinutes: null, resetsAt: null }],
+      windows: [{ scope: { kind: "account" }, remainingPercent: 0, durationMinutes: null, resetsAt: null }],
     });
     next.rateLimitsByLimitId = null;
     f.read.mockResolvedValueOnce(next);

@@ -7,7 +7,7 @@ import type { BackendAccountUsage } from "../../src/shared/protocol/account-usag
 const scope = { tenantId: "tenant", principalId: "principal" };
 const usage: BackendAccountUsage = {
   capturedAt: 1_000, accountId: "account", plan: "Pro", includedUsageAllowed: true,
-  windows: [{ remainingPercent: 25, durationMinutes: 10_080, resetsAt: 10_000 }],
+  windows: [{ scope: { kind: "account" }, remainingPercent: 25, durationMinutes: 10_080, resetsAt: 10_000 }],
 };
 function source() {
   let current: BackendAccountUsage | null = usage;
@@ -48,7 +48,7 @@ describe("scoped account usage reader", () => {
 
   it("keeps backend and environment ownership separate and omits unavailable or unsupported sources", () => {
     const first = source(), second = source();
-    second.replace({ ...usage, accountId: "another-account", windows: [{ remainingPercent: 0, durationMinutes: null, resetsAt: null }] });
+    second.replace({ ...usage, accountId: "another-account", windows: [{ scope: { kind: "account" }, remainingPercent: 0, durationMinutes: null, resetsAt: null }] });
     const reader = new CompositeAccountUsageReader({
       scope, runtimes: new Map([["one", runtime("one", first)], ["two", runtime("two", second)], ["unsupported", runtime("unsupported", NO_BACKEND_ACCOUNT_USAGE)]]),
       environmentId: id => `${id}-host`,

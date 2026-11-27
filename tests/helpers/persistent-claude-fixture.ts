@@ -55,6 +55,7 @@ export function createFakePersistentClaudeRuntime() {
   });
   const runtime = {
     createSession,
+    readAccountUsage: vi.fn<ClaudeRuntimeClient["readAccountUsage"]>(async () => null),
     // The production one-shot launch over the fake sessions above.
     forkSession: vi.fn<ClaudeRuntimeClient["forkSession"]>(async (options) =>
       await runClaudeForkLaunch(createSession, options)),

@@ -104,6 +104,7 @@ function normalizeAccountUsage(
     const duration = window.windowDurationMins;
     const reset = window.resetsAt === null ? null : window.resetsAt * 1_000;
     return [{
+      scope: { kind: "account" as const },
       remainingPercent: 100 - Math.max(0, Math.min(100, window.usedPercent)),
       durationMinutes: duration !== null && Number.isSafeInteger(duration) && duration > 0 ? duration : null,
       resetsAt: reset !== null && Number.isSafeInteger(reset) && reset >= 0 && reset <= 8_640_000_000_000_000 ? reset : null,

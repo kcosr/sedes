@@ -219,6 +219,35 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     await carrier.close();
   });
 
+  it("reads quota only for an attached conversation and never reconnects for telemetry", async () => {
+    const f = await fixture();
+    const client = f.client();
+    const signal = new AbortController().signal;
+    expect(await client.readAccountUsage(signal)).toBeNull();
+    expect(f.createRuntime).not.toHaveBeenCalled();
+    const carrier = await f.attach();
+    await client.listSessions({}, {});
+    expect(await client.readAccountUsage(signal)).toBeNull();
+    expect(f.runtime.readAccountUsage).not.toHaveBeenCalled();
+    const session = client.createSession(sessionOptions(randomUUID()));
+    await session.start();
+    const usage = {
+      capturedAt: 123, accountId: null, plan: "Max", includedUsageAllowed: null,
+      windows: [{ scope: { kind: "account" as const }, remainingPercent: 47, durationMinutes: 10_080, resetsAt: null }],
+    };
+    f.runtime.readAccountUsage.mockResolvedValue(usage);
+    expect(await client.readAccountUsage(signal)).toEqual(usage);
+    expect(f.runtime.readAccountUsage).toHaveBeenCalledExactlyOnceWith(expect.any(AbortSignal));
+    f.runtime.readAccountUsage.mockRejectedValueOnce(new Error("quota_unavailable"));
+    await expect(client.readAccountUsage(signal)).rejects.toThrow("sidecar_operation_failed");
+    expect(f.sessions[0]!.closed).toBe(false);
+    await session.close();
+    expect(await client.readAccountUsage(signal)).toBeNull();
+    await carrier.close();
+    expect(await client.readAccountUsage(signal)).toBeNull();
+    expect(f.runtime.readAccountUsage).toHaveBeenCalledTimes(2);
+  });
+
   it("round-trips bounded context telemetry and refuses a stale query generation", async () => {
     const f = await fixture(); const carrier = await f.attach(); const client = f.client();
     const id = randomUUID(); const session = client.createSession(sessionOptions(id));

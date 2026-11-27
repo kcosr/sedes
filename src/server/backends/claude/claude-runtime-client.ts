@@ -1,3 +1,4 @@
+import type { BackendAccountUsage } from "../../../shared/protocol/account-usage.js";
 import type { InterruptConversationInput } from "../contracts.js";
 import type { ClaudeRuntimeCompactDisposition, ClaudeRuntimeCompactInput, ClaudeRuntimeCompactResult } from "./claude-compact-operation.js";
 export { ClaudeRuntimeCompactError, type ClaudeRuntimeCompactDisposition, type ClaudeRuntimeCompactInput, type ClaudeRuntimeCompactResult, type ClaudeCompactUsageReceipt } from "./claude-compact-operation.js";
@@ -190,6 +191,8 @@ export interface ClaudeOwnedRuntimeSession extends ClaudeRuntimeSession {
  * not cross this interface.
  */
 export interface ClaudeRuntimeClient {
+  /** Read the backend login on a resident worker. No caller-supplied account or environment. */
+  readAccountUsage(signal: AbortSignal): Promise<BackendAccountUsage | null>;
   startupEnvironmentState?(): Promise<"not_started" | "started" | "unknown">;
   submissionDisposition?(input: {
     readonly sessionId: string;
@@ -263,6 +266,11 @@ export class ClaudeSdkRuntimeAdapter implements ClaudeRuntimeClient {
 
   constructor(sdk: ClaudeSdkFacade) {
     this.#sdk = sdk;
+  }
+
+  async readAccountUsage(_signal: AbortSignal): Promise<BackendAccountUsage | null> {
+    // The direct adapter has no configured backend worker or startup environment.
+    return null;
   }
 
   async probe(

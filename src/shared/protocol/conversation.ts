@@ -1,4 +1,5 @@
 import { usageIntegerSchema } from "./usage-accounting.js";
+import { accountUsageModelKeySchema } from "./account-usage.js";
 import { formFieldsSchema, formAnswersSchema } from "./interactions.js";
 import { questionResponseOriginSchema } from "./questions.js";
 import { backgroundActivitySchema } from "./background-activity.js";
@@ -665,6 +666,8 @@ export { backendBrandSchema, type BackendBrand } from "./domain.js";
 export const backendPresentationSchema = z.strictObject({
   label: boundedDisplayTextSchema,
   modelLabel: boundedDisplayTextSchema.optional(),
+  /** Most specific first, scoped to the thread's selected backend and environment. */
+  accountUsageModelKeys: z.array(accountUsageModelKeySchema).min(1).max(2).optional(),
   /**
    * Optional normalized brand mark the browser may render next to the
    * thread title. Backends that have no registered mark omit it and the

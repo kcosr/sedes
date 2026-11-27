@@ -1,6 +1,7 @@
 import type {
   Options,
   Query,
+  SDKControlGetUsageResponse,
   SDKControlInitializeResponse,
   SDKMessage,
   SessionMessage,
@@ -141,6 +142,7 @@ describe("claude_runtime@4 protocol", () => {
       cancelQueryInput: noHandler,
       setQueryModel: noHandler,
       contextUsage: noHandler,
+      accountUsage: noHandler,
       setQueryEffort: noHandler,
       setQueryPermissionMode: noHandler,
       closeQuery: noHandler,
@@ -162,6 +164,7 @@ describe("claude_runtime@4 protocol", () => {
           "query.set_effort",
           "query.set_model",
           "query.set_permission_mode",
+          "runtime.account_usage",
           "runtime.initialize",
           "runtime.probe",
           "session.info",
@@ -172,7 +175,7 @@ describe("claude_runtime@4 protocol", () => {
         ],
       },
     ]);
-    expect(claudeRuntimeWorkerOperations).toHaveLength(19);
+    expect(claudeRuntimeWorkerOperations).toHaveLength(20);
     expect(claudeRuntimeQueryContextUsageOperation.maximumDeadlineMilliseconds).toBe(5_000);
     expect(claudeRuntimeQueryContextUsageOperation.responseSchema.safeParse({ usedTokens: 1, windowTokens: 100, percent: 1, categories: [] }).success).toBe(false);
 
@@ -788,6 +791,63 @@ describe("ClaudeRuntimeWorkerHost", () => {
         queryId: QUERY_ID, sessionId: SESSION_ID, cwd: "/workspace", launch: "new", enableCanUseTool: false, environment: {},
       }, context()));
       expect(opened.initialization.commands).toEqual(commands);
+    } finally {
+      await host.close();
+      if (previousConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = previousConfig;
+      await rm(configDirectory, { recursive: true });
+    }
+  });
+
+  it("admits one backend-account probe only with a resident query and keeps thread settings out of it", async () => {
+    const previousConfig = process.env.CLAUDE_CONFIG_DIR;
+    const configDirectory = await mkdtemp("/tmp/sedes-claude-worker-test-");
+    const conversation = queryFacade();
+    const account = queryFacade();
+    const read = deferred<SDKControlGetUsageResponse>();
+    const usage = vi.fn(async () => read.promise);
+    const scopes = vi.fn()
+      .mockReturnValueOnce({ sdk: conversation.sdk, settled: async () => {}, terminate: vi.fn() })
+      .mockReturnValueOnce({ sdk: {
+        ...account.sdk,
+        createQuery: (input: Parameters<ClaudeSdkFacade["createQuery"]>[0]) =>
+          Object.assign(account.sdk.createQuery(input), { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: usage }),
+      }, settled: async () => {}, terminate: vi.fn() });
+    const host = new ClaudeRuntimeWorkerHost({ sdk: conversation.sdk, queryProcessScope: scopes, peer: inertPeer() });
+    try {
+      await host.handlers.initialize({ executablePath: process.execPath, configDirectory, initializationTimeoutMs: 1_000,
+        startupEnvironmentVariables: { ACCOUNT_SCOPE: { kind: "literal", value: "backend" } },
+        startupEnvironment: { ACCOUNT_SCOPE: "backend" },
+      }, context());
+      const check = async () => await host.handlers.accountUsage({}, context());
+      await expect(check()).resolves.toEqual({ usage: null });
+      expect(scopes).not.toHaveBeenCalled();
+      await host.handlers.openQuery({
+        queryId: QUERY_ID, sessionId: SESSION_ID, cwd: "/workspace", launch: "new", enableCanUseTool: false,
+        executionEnvironment: { ACCOUNT_SCOPE: "project", THREAD_ONLY: "thread" }, environment: {},
+      }, context());
+      const reading = check();
+      await vi.waitFor(() => expect(usage).toHaveBeenCalledExactlyOnceWith({ skipBehaviors: true }));
+      await expect(check()).resolves.toEqual({ usage: null });
+      expect(scopes).toHaveBeenCalledTimes(2);
+      expect(conversation.options().env).toMatchObject({ ACCOUNT_SCOPE: "project", THREAD_ONLY: "thread" });
+      expect(account.options()).toMatchObject({ cwd: "/", persistSession: false, env: { ACCOUNT_SCOPE: "backend" } });
+      expect(account.options().env).not.toHaveProperty("THREAD_ONLY");
+      read.resolve({
+        subscription_type: "max", rate_limits_available: true, behaviors: null,
+        rate_limits: { seven_day: { utilization: 53, resets_at: null } },
+        session: { total_cost_usd: 0, total_api_duration_ms: 0, total_duration_ms: 0,
+          total_lines_added: 0, total_lines_removed: 0, model_usage: {} },
+      });
+      await expect(reading).resolves.toEqual({ usage: {
+        capturedAt: expect.any(Number), accountId: null, plan: "Max", includedUsageAllowed: null,
+        windows: [{ scope: { kind: "account" }, remainingPercent: 47, durationMinutes: 10_080, resetsAt: null }],
+      } });
+      expect(account.close).toHaveBeenCalledOnce();
+      expect(conversation.close).not.toHaveBeenCalled();
+      await host.handlers.closeQuery({ queryId: QUERY_ID }, context());
+      await expect(check()).resolves.toEqual({ usage: null });
+      expect(scopes).toHaveBeenCalledTimes(2);
     } finally {
       await host.close();
       if (previousConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR;

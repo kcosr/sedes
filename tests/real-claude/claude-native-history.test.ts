@@ -1,3 +1,4 @@
+import { createLiveClaudeQuery, LIVE_CLAUDE_MODEL as REQUIRED_MODEL, LIVE_CLAUDE_EFFORT as REQUIRED_EFFORT } from "../support/live-claude-model.js";
 import { readConversationHistory } from "../helpers/read-conversation-history.js";
 import { randomUUID } from "node:crypto";
 import { createInMemoryOutputArtifactPublisher } from "../helpers/output-artifact-publisher.js";
@@ -30,8 +31,6 @@ import { NO_USAGE_SINK } from "../../src/server/usage/contracts.js";
 import type { BackendItem } from "../../src/shared/protocol/backend.js";
 import { createFakeAgentToolSourceCapabilities } from "../helpers/fake-agent-tool-source-capabilities.js";
 
-const REQUIRED_MODEL = "claude-sonnet-5-5";
-const REQUIRED_EFFORT = "low";
 const MODEL_TURN_TIMEOUT_MS = 240_000;
 const scope = { tenantId: "real-claude-tenant", principalId: "real-claude-principal" };
 const instance: AgentBackendInstance = {
@@ -72,7 +71,7 @@ class RestrictedOfficialClaudeSdkFacade extends OfficialClaudeSdkFacade {
     const options = { ...input.options, tools: [...this.tools], allowedTools: [...this.allowedTools],
       strictMcpConfig: true, mcpServers: {} } satisfies ClaudeQueryInput["options"];
     if (options.persistSession !== false) this.persistentQueryOptions.push(options);
-    return observeQuery(super.createQuery({ ...input, options }), (message) => {
+    return observeQuery(createLiveClaudeQuery({ ...input, options }, guarded => super.createQuery(guarded)), (message) => {
       if (message.type === "result") this.resultMessages.push(message);
     });
   }

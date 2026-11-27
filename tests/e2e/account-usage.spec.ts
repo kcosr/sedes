@@ -10,6 +10,7 @@ import {
   expectNoPageOverflow,
   fillAndPersistDraft,
   openWorkspaceDirectory,
+  selectCustomNewThreadTarget,
   sendCurrentDraft,
 } from "./helpers";
 import { loadE2ERunContext } from "./run-context";
@@ -26,7 +27,7 @@ function weekly(remainingPercent = 28): BackendAccountUsage {
     accountId: "example-codex-account",
     plan: "Pro Max",
     includedUsageAllowed: true,
-    windows: [{ remainingPercent, durationMinutes: 10_080, resetsAt: capturedAt + 3 * 86_400_000 }],
+    windows: [{ scope: { kind: "account" }, remainingPercent, durationMinutes: 10_080, resetsAt: capturedAt + 3 * 86_400_000 }],
   };
 }
 
@@ -50,7 +51,7 @@ test("account quota stays scoped, opens deliberately, and works by touch", async
     await expect(line).toHaveCount(0);
 
     await publishUsage(page, weekly());
-    await expect(line).toHaveAccessibleName(/^Codex.* included usage: 28% remaining\. Show usage details\.$/);
+    await expect(line).toHaveAccessibleName(/^Codex.* included usage: Weekly, 28% remaining\. Show usage details\.$/);
     await fillAndPersistDraft(page, "Review the recent changes and suggest the next step.", "Message Codex");
     await capture(page, testInfo, "account-usage-desktop-line.png");
 
@@ -132,7 +133,7 @@ test("account quota stays scoped, opens deliberately, and works by touch", async
     await expect(mobileLine).toHaveCount(0);
     await expect(mobilePopover).toHaveCount(0);
     await publishUsage(page, { ...weekly(0), includedUsageAllowed: false });
-    await expect(mobileLine).toHaveAccessibleName(/^Codex.* included usage: 0% remaining\. Show usage details\.$/);
+    await expect(mobileLine).toHaveAccessibleName(/^Codex.* included usage: Weekly, 0% remaining\. Show usage details\.$/);
     await mobileLine.tap();
     await expect(mobilePopover.getByText("0% left", { exact: true })).toBeVisible();
     await expect(mobilePopover.getByText("Included usage is currently unavailable.", { exact: true })).toBeVisible();
@@ -146,12 +147,69 @@ test("account quota stays scoped, opens deliberately, and works by touch", async
     await publishUsage(page, { ...weekly(), capturedAt: Date.now() - 11 * 60_000 });
     await expect(line).toHaveCount(0);
     await expect(mobileLine).toHaveCount(0);
-    await publishUsage(page, { ...weekly(), windows: [{ remainingPercent: 28, durationMinutes: 10_080, resetsAt: Date.now() - 1_000 }] });
+    await publishUsage(page, { ...weekly(), windows: [{ scope: { kind: "account" }, remainingPercent: 28, durationMinutes: 10_080, resetsAt: Date.now() - 1_000 }] });
     await expect(line).toHaveCount(0);
     expect(mobileErrors).toEqual([]);
   } finally {
     await mobileContext.close();
     await publishUsage(page, null);
     await page.request.post("/__e2e/codex/turn-completion/reset");
+  }
+});
+
+test("Claude quota follows the model selected for the next turn", async ({ page, browser }, testInfo) => {
+  const directory = path.join(loadE2ERunContext().workspacesDirectory, "claude-account-usage");
+  await mkdir(directory, { recursive: true });
+  await openWorkspaceDirectory(page, directory);
+  await page.getByTestId("desktop-sidebar").getByTestId("new-thread-trigger").click();
+  await selectCustomNewThreadTarget(page, "Claude subscription · Claude");
+  await page.getByRole("textbox", { name: "Thread name" }).fill("Claude quota");
+  await page.getByRole("button", { name: "Create thread" }).click();
+  await expect(page).toHaveURL(/\/threads\/[0-9a-f-]+$/);
+  const threadPath = new URL(page.url()).pathname;
+  const composer = page.getByTestId("composer");
+  const model = composer.getByRole("combobox", { name: "Model" });
+  await expect(model).toContainText("Claude Sonnet 5");
+
+  // Binding the real Claude driver starts the first observation from the offline SDK.
+  await fillAndPersistDraft(page, "/review quota", "Message Claude");
+  await sendCurrentDraft(page);
+  await expect(page.getByText("Claude completed the selected review skill as an ordinary model turn.")).toBeVisible();
+  const line = composer.locator(".account-usage-line");
+  const card = page.getByRole("dialog", { name: /^Claude.* included usage$/ });
+  await expect(line).toHaveAccessibleName(/Weekly · All models, 47% remaining/);
+  await line.hover();
+  const rows = card.locator(".account-usage-window");
+  await expect(rows).toHaveCount(2);
+  await expect(rows.first()).toContainText("Weekly · All models");
+  await expect(rows.first()).toContainText("47% left");
+  const checked = await card.locator(".account-usage-checked time").getAttribute("datetime");
+  await page.keyboard.press("Escape");
+
+  await model.click();
+  await page.getByRole("option", { name: "Claude Fable 5.2", exact: true }).click();
+  await expect(line).toHaveAccessibleName(/Weekly · Fable, 35% remaining/);
+  await expect(composer.locator(".account-usage-line")).toHaveCount(1);
+  await expect(composer).not.toContainText(/\d+% left/);
+  await line.focus();
+  await expect(rows.first()).toContainText("Weekly · Fable");
+  await expect(rows.first()).toContainText("35% left");
+  await expect(rows.nth(1)).toContainText("Weekly · All models");
+  await expect(card.locator(".account-usage-checked time")).toHaveAttribute("datetime", checked!);
+  await capture(page, testInfo, "account-usage-claude-fable.png");
+
+  const mobile = await browser.newPage({
+    baseURL: process.env.E2E_BASE_URL, viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true,
+  });
+  try {
+    await mobile.goto(threadPath);
+    await mobile.getByRole("button", { name: /Weekly · Fable, 35% remaining/ }).tap();
+    const mobileCard = mobile.getByRole("dialog", { name: /^Claude.* included usage$/ });
+    await expect(mobileCard.locator(".account-usage-window").first()).toContainText("Weekly · Fable");
+    await expect(mobileCard.getByText("47% left", { exact: true })).toBeVisible();
+    await expectNoPageOverflow(mobile);
+    await capture(mobile, testInfo, "account-usage-claude-fable-mobile.png");
+  } finally {
+    await mobile.close();
   }
 });

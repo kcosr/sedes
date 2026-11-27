@@ -501,7 +501,7 @@ controlled OpenSSH integration tests cover that carrier separately.
 
 The live execution-settings test uses disposable OpenSSH and a packaged sidecar.
 It adds the first Claude backend during a streaming Luna-low turn and sends one
-Sonnet 5.5-low prompt through the new backend. It checks both responses and the
+Haiku 5.5-low prompt through the new backend. It checks both responses and the
 original sidecar incarnation and controller epoch. This gate uses authenticated
 capacity and leaves the new native conversations in their provider stores.
 Run it with permission for both providers.
@@ -547,7 +547,7 @@ SEDES_REAL_CLAUDE_CONFIG_DIRECTORY=/absolute/provider-home \
 ```
 
 It requires a logged-in first-party `claude.ai` subscription with a nonempty
-subscription type and no API-key override, exactly one `claude-sonnet-5-5`/low
+subscription type and no API-key override, exactly one `claude-haiku-5-5`/low
 catalog entry, `dontAsk`, an empty tool list, and no MCP servers. It creates two
 disposable provider sessions and retains their native history. The Native MCP
 file adds a third: the production `ClaudeSdkSession` with no built-in tools,
@@ -555,7 +555,7 @@ strict MCP configuration, and only the thread's `sedes` server, in `default`
 permission mode approving only `mcp__sedes__*` calls. It verifies the server
 connects, the reference stays out of the CLI arguments, and one Individual
 tool call round-trips through a real Sedes listener.
-The native-history file pins the currently available `claude-sonnet-5-5`/low
+The native-history file pins the currently available `claude-haiku-5-5`/low
 entry with the same subscription checks; its detached-history case allows no
 tools and verifies that reading a closed session creates no query and leaves
 the native transcript unchanged.
@@ -571,9 +571,15 @@ deterministic official-SDK-shaped unit, integration, and browser fixtures.
 A separately reviewed, capacity-bounded live canary still requires explicit
 authorization.
 
+To qualify the account usage control on its own, set
+`SEDES_REAL_CLAUDE_ACCOUNT_USAGE=1` and run
+`env -u NODE_ENV npm run test:real-claude -- tests/real-claude/claude-account-usage.test.ts`.
+It checks the subscription windows and confirms that the CLI received zero
+model inputs and reported zero API time and cost.
+
 The focused `claude-manual-compaction-live.test.ts` gate separately requires
 `SEDES_REAL_CLAUDE=1`, subscription authentication, and exactly
-`claude-sonnet-5-5` with low effort. It disables tools, MCP servers, hooks,
+`claude-haiku-5-5` with low effort. It disables tools, MCP servers, hooks,
 plugins, and setting sources; bounds the session budget and duration; and
 verifies manual compaction, a following prompt, and native resume. It retains
 the disposable native history. This is distinct from

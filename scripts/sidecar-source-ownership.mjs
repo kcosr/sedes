@@ -284,6 +284,7 @@ const ALLOWED_REPOSITORY_SOURCES = new Set([
   "src/shared/protocol/domain.ts",
   "src/shared/protocol/payload.ts",
   "src/shared/protocol/background-activity.ts",
+  "src/shared/protocol/account-usage.ts",
   "src/shared/protocol/workspace-diffs.ts",
   "src/shared/protocol/workspace-files.ts",
 ]);

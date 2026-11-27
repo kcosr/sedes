@@ -61,6 +61,19 @@ export class ClaudePersistentRuntimeClient implements ClaudeRuntimeClient {
     return this.#retainedIdentity ? "started" : "unknown";
   }
 
+  async readAccountUsage(signal: AbortSignal) {
+    signal.throwIfAborted();
+    const attachment = this.#attachment;
+    if (this.#closed || !attachment) return null;
+    const operation = worker.claudeRuntimeAccountUsageOperation;
+    // An observation never calls attachment() or execute()'s launch/retry path.
+    const reply = await attachment.connection.execute({
+      action: "account_usage", request: {}, runtimeId: attachment.runtimeId, controllerEpoch: attachment.lease.controllerEpoch,
+    }, { signal, deadlineMilliseconds: worker.CLAUDE_ACCOUNT_USAGE_TIMEOUT_MS });
+    if (this.#attachment !== attachment) return null;
+    return operation.responseSchema.parse(reply).usage;
+  }
+
   async probe(input: ClaudeRuntimeProbeInput): Promise<ClaudeRuntimeProbeResult> {
     this.#assertIdentity(input);
     assertEmptyEnvironment(input.environment);

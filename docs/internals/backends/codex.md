@@ -58,7 +58,7 @@ through the principal-scoped stream and its replay/checkpoint projection. Target
 include their application backend instance ID so the composer can select the
 exact backend and environment. There is no browser polling or connection-interest
 tracking. Client expiry hides readings after ten minutes or a reported reset.
-Pi SDK, Pi, Claude, Grok, and OpenCode explicitly contribute no account quota.
+Claude also contributes [subscription quota](claude.md#account-quota). Pi SDK, Pi, Grok, OpenCode and Antigravity contribute the unsupported source.
 
 ## Protocol and release admission
 

@@ -17,6 +17,8 @@ export interface ClaudeQueryProcessScope {
    * process tree is proven gone; rejects when any cleanup is unproven.
    */
   settled(): Promise<void>;
+  /** Terminates a finished probe’s process tree even if its leader ignores SDK close. */
+  terminate(): Promise<void>;
 }
 
 /** Adds owned-process supervision to the official SDK facade used in a worker. */
@@ -103,14 +105,10 @@ export class TrackedClaudeSdkFacade implements ClaudeSdkFacade {
       hasSessionTranscript: (...input) => this.hasSessionTranscript(...input),
       renameSession: (...input) => this.renameSession(...input),
     };
-    return Object.freeze({
-      sdk,
-      settled: async () => {
-        await Promise.all(
-          processes.map((spawned) => this.#supervisor.processCleanup(spawned)),
-        );
-      },
-    });
+    const cleanup = async (mode: "after_exit" | "terminate") => {
+      await Promise.all(processes.map(spawned => this.#supervisor.processCleanup(spawned, mode)));
+    };
+    return Object.freeze({ sdk, settled: () => cleanup("after_exit"), terminate: () => cleanup("terminate") });
   }
 
   #createQuery(

@@ -178,6 +178,19 @@ export class FakeOutboundClaudeSdkFacade implements ClaudeSdkFacade {
     return Object.assign(messages[Symbol.asyncIterator](), {
       [Symbol.asyncIterator]() { return this; },
       initializationResult: async () => initialization(),
+      usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async (options: { skipBehaviors?: boolean }) => {
+        if (options.skipBehaviors !== true || input.options.persistSession !== false || cwd !== "/" || sendCount !== 0) {
+          throw new Error("outbound_claude_fixture_account_query_invalid");
+        }
+        const reset = new Date(Date.now() + 7 * 86_400_000).toISOString();
+        return {
+          subscription_type: "max", behaviors: null, rate_limits_available: true,
+          rate_limits: {
+            seven_day: { utilization: 53, resets_at: reset },
+            model_scoped: [{ display_name: "Fable", utilization: 65, resets_at: reset }],
+          },
+        };
+      },
       interrupt: async () => {
         log("interrupt");
         currentTurn?.abort(new Error("outbound_claude_fixture_interrupted"));

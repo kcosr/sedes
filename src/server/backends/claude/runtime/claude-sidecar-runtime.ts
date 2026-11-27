@@ -11,7 +11,7 @@ import { claudePersistentCommandSchema, claudePersistentConfigurationSchema, cla
   type ClaudePersistentCommand, type ClaudePersistentConfiguration, type ClaudePersistentEvent } from "./claude-persistent-runtime-wire.js";
 import type { ClaudePersistentRuntimeRegistry } from "./claude-persistent-runtime-registry.js";
 
-const capability = { capabilityId: "claude_persistent_runtime", majorVersion: 6 } as const;
+const capability = { capabilityId: "claude_persistent_runtime", majorVersion: 7 } as const;
 const stopRefusals = new Map<string, BackendRuntimeControlRejectedError["reason"]>([
   ["claude_persistent_confirmation_stale", "confirmation_stale"],
   ["claude_persistent_restart_blocked", "blocked"],
@@ -141,7 +141,7 @@ export function registerClaudePersistentRuntimeHost(input: ProviderPolicyAttachm
           stage, frameBytes: bytes, queuedEventBytes: eventBytes, queuedEventCount: eventCount, requestedClose: true }, error);
         detach();
       }).finally(() => { eventCount--; eventBytes -= bytes; });
-    }, () => currentBackendGrant(input, host.workerIdentity));
+    }, () => currentBackendGrant(input, host.workerIdentity), context.signal);
     return await input.channel.encodeBody(result);
   });
   return detach;

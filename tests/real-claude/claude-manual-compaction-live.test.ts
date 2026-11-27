@@ -1,3 +1,4 @@
+import { createLiveClaudeQuery, LIVE_CLAUDE_MODEL as MODEL, assertLiveClaudeCatalog, LIVE_CLAUDE_EFFORT as EFFORT } from "../support/live-claude-model.js";
 import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import os from "node:os";
@@ -11,8 +12,6 @@ import { CLAUDE_AGENT_SDK_RELEASE, OfficialClaudeSdkFacade, type ClaudeQueryInpu
 import { assertClaudeSubscriptionAuthStatus, probeClaudeSdkDirect } from "../../src/server/backends/claude/claude-sdk-probe.js";
 import { ClaudeSdkSession } from "../../src/server/backends/claude/claude-sdk-session.js";
 
-const MODEL = "claude-sonnet-5-5";
-const EFFORT = "low";
 const CLI_RELEASE = "2.1.319";
 
 /** Native authentication remains real; only tools and user configuration are disabled. */
@@ -28,13 +27,13 @@ class BoundedLiveCompactionSdk extends OfficialClaudeSdkFacade {
   override createQuery(input: ClaudeQueryInput): Query {
     if (input.options.persistSession !== false &&
         (input.options.model !== MODEL || input.options.effort !== EFFORT || input.options.permissionMode !== "dontAsk")) {
-      throw new Error("REAL_CLAUDE_BLOCKER: Sonnet 5.5/low/dontAsk required");
+      throw new Error("REAL_CLAUDE_BLOCKER: Haiku 5.5/low/dontAsk required");
     }
-    const native = super.createQuery({ ...input, options: {
+    const native = createLiveClaudeQuery({ ...input, options: {
       ...input.options, tools: [], allowedTools: [], strictMcpConfig: true, mcpServers: {},
       plugins: [], settingSources: [], settings: { disableAllHooks: true }, maxTurns: 4, maxBudgetUsd: 0.25,
       canUseTool: async () => ({ behavior: "deny", message: "The live compaction qualification cannot use tools." }),
-    } });
+    } }, guarded => super.createQuery(guarded));
     const iterator = native[Symbol.asyncIterator].bind(native);
     const onFrame = this.onFrame;
     native[Symbol.asyncIterator] = async function* () {
@@ -125,11 +124,7 @@ it.runIf(process.env.SEDES_REAL_CLAUDE === "1")("live manual compaction retains 
     expect(preflight.cliRelease).toBe(CLI_RELEASE);
     expect(preflight.account.apiProvider).toBe("firstParty");
     expect(preflight.account.subscriptionType).toBeTruthy();
-    // The production catalog drops the moving default alias in favor of an
-    // explicit native row. Require one Sonnet 5.5 row advertising low effort.
-    const eligibleModels = preflight.models.filter(model => model.value !== "default" && (model.resolvedModel ?? model.value) === MODEL &&
-      model.supportsEffort && model.supportedEffortLevels?.includes(EFFORT));
-    if (eligibleModels.length !== 1) throw new Error(`REAL_CLAUDE_BLOCKER: exactly one ${MODEL}/${EFFORT} catalog entry required; available ${JSON.stringify(preflight.models.map(model => ({ id: model.resolvedModel ?? model.value, efforts: model.supportedEffortLevels ?? [] })))}`);
+    assertLiveClaudeCatalog(preflight.models);
     session = createSession("new");
     await bounded(session.start()); await drainStartup(session);
     expect((await send("Remember these disposable test facts: archive color is violet and archive number is 17. Reply with exactly SEDES_COMPACT_SETUP_OK. Do not use tools.")).result)

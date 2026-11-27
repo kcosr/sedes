@@ -253,7 +253,7 @@ describe("ApplicationSnapshotService", () => {
     const accountUsages = ["environment-local", "environment-ssh", "environment-empty"].map(executionEnvironmentId => ({
       backendInstanceId: `backend-${executionEnvironmentId}`, executionEnvironmentId,
       capturedAt: 1_000, accountId: "account", plan: "Pro", includedUsageAllowed: true,
-      windows: [{ remainingPercent: 25, durationMinutes: 10_080, resetsAt: 2_000 }],
+      windows: [{ scope: { kind: "account" as const }, remainingPercent: 25, durationMinutes: 10_080, resetsAt: 2_000 }],
     }));
     const service = new ApplicationSnapshotService(
       {

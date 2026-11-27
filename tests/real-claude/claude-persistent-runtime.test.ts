@@ -15,7 +15,8 @@ import { ClaudePersistentRuntimeRegistry } from "../../src/server/backends/claud
 import { registerClaudePersistentRuntimeHost } from "../../src/server/backends/claude/runtime/claude-sidecar-runtime.js";
 import { verifyClaudeRuntimeVersion } from "../../src/server/backends/claude/claude-release-guard.js";
 import type { ClaudeRuntimeSessionOptions } from "../../src/server/backends/claude/claude-runtime-client.js";
-import { buildToolDisabledWorker, LIVE_CLAUDE_MODEL as MODEL } from "../support/live-claude-worker.js";
+import { LIVE_CLAUDE_MODEL as MODEL, assertLiveClaudeCatalog } from "../support/live-claude-model.js";
+import { buildToolDisabledWorker } from "../support/live-claude-worker.js";
 import { LocalEnvironmentChannelProvider } from "../../src/server/execution/local-environment-channel.js";
 import { PersistentSidecarServiceRegistry } from "../../src/server/sidecar/persistent-sidecar-service-registry.js";
 import type { SidecarRuntimeLease, SidecarRuntimeProvider } from "../../src/server/sidecar/runtime-channel.js";
@@ -136,9 +137,7 @@ describe.sequential("real Claude persistent runtime with a compressed local SSH 
       verifyClaudeRuntimeVersion(probe.cliRelease);
       expect(probe.account.apiProvider).toBe("firstParty");
       expect(probe.account.subscriptionType).toBeTruthy();
-      const eligible = probe.models.filter(model =>
-        (model.resolvedModel ?? model.value) === MODEL && model.supportedEffortLevels?.includes("low"));
-      expect(eligible, "REAL_CLAUDE_BLOCKER: exactly one Sonnet 5.5/low catalog entry required").toHaveLength(1);
+      assertLiveClaudeCatalog(probe.models);
       expect((await readAudit(auditPath)).some(entry => entry.authVerified)).toBe(true);
 
       const sessionId = randomUUID();
