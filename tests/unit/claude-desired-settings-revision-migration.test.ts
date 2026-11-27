@@ -6,6 +6,7 @@ import { ConversationBindingRepository } from "../../src/server/db/repositories/
 import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
 import { savedAgentDatabase, insertPreRootGrantWorkspace } from "../support/saved-agent-fixture.js";
 
+const throughDesiredSettingsRevision = backendNormalizedMigrations.filter(({ version }) => version <= 162);
 const databases: ReturnType<typeof savedAgentDatabase>["database"][] = [];
 
 afterEach(() => {
@@ -68,7 +69,7 @@ describe("Claude desired settings revision migration", () => {
     insertLegacySettings();
     const before = database.prepare("SELECT * FROM claude_thread_settings").get();
 
-    applyDatabaseMigrations(database, backendNormalizedMigrations);
+    applyDatabaseMigrations(database, throughDesiredSettingsRevision);
 
     expect(database.prepare("SELECT * FROM claude_thread_settings").get())
       .toEqual({ ...before as Record<string, unknown>, desired_revision: 12 });
@@ -91,7 +92,7 @@ describe("Claude desired settings revision migration", () => {
     });
 
     const confirmed = settings.get(scope, thread.id);
-    applyDatabaseMigrations(database, backendNormalizedMigrations);
+    applyDatabaseMigrations(database, throughDesiredSettingsRevision);
     expect(settings.get(scope, thread.id)).toEqual(confirmed);
     expect(database.pragma("foreign_key_check")).toEqual([]);
     expect(database.pragma("integrity_check", { simple: true })).toBe("ok");
@@ -99,7 +100,7 @@ describe("Claude desired settings revision migration", () => {
 
   it("initializes new rows at zero and rejects malformed desired revisions", () => {
     const { database, scope, thread, target } = fixture();
-    applyDatabaseMigrations(database, backendNormalizedMigrations);
+    applyDatabaseMigrations(database, throughDesiredSettingsRevision);
     const settings = new ClaudeThreadRepository(database);
     const initialized = settings.initialize(scope, thread.id, target, {
       model: "claude-sonnet-5", effort: "high", permissionMode: "acceptEdits",
@@ -119,7 +120,7 @@ describe("Claude desired settings revision migration", () => {
     insertLegacySettings(Number.MAX_SAFE_INTEGER + 1);
     const before = database.prepare("SELECT * FROM claude_thread_settings").get();
 
-    expect(() => applyDatabaseMigrations(database, backendNormalizedMigrations))
+    expect(() => applyDatabaseMigrations(database, throughDesiredSettingsRevision))
       .toThrow(/CHECK constraint failed/u);
 
     expect(database.prepare("SELECT * FROM claude_thread_settings").get()).toEqual(before);

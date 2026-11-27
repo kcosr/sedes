@@ -2531,6 +2531,11 @@ implements this for both local and sidecar targets. Pi SDK, Pi, Codex, Claude,
 Grok and OpenCode retain their existing native rename paths and do not advertise
 application-owned rename. The browser continues to use normalized `rename`.
 
+Claude also uses the discovery override for explicit Sedes renames. A draft
+rename records it with the local title. A bound rename records it with the
+title once the SDK rename succeeds or reconciliation proves acceptance.
+Discovery continues to import native titles for Claude threads without an override.
+
 ## Discovery and pagination
 
 Discovery is bounded by provider namespace, workspace, backend instance,

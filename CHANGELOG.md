@@ -484,6 +484,11 @@ User-facing changes are collected here before release. See the
 
 ### Fixed
 
+- Claude threads keep the name you set in Sedes across daemon restarts and
+  workspace refreshes, including names set before the first message. On upgrade,
+  Sedes restores the last successful rename when its record is still available.
+  ([#167](https://github.com/kcosr/sedes/pull/167))
+
 - Codex can finish a continuously observed reply without rereading older
   turns. A slow history check no longer cuts off the opening sentence and
   starts the same reply again. A steered turn with several accepted inputs
