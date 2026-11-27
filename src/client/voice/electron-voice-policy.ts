@@ -69,9 +69,10 @@ export function electronSpeechText(source: string, clean: boolean): string {
   return output.join("").trim();
 }
 
-const resultParts = (result?: SelectedAssistantResult): string[] => {
+export const resultParts = (result?: SelectedAssistantResult, range: "all" | "beforeFinal" = "all"): string[] => {
   const parts: string[] = [];
   for (const phase of ["provisional", "partial", "unclassified", "final"] as const) {
+    if (phase === "final" && range === "beforeFinal") break;
     const value = result?.[phase];
     if (value?.text) parts.push(value.text);
     if (value?.truncation) parts.push("The remaining response was truncated.");

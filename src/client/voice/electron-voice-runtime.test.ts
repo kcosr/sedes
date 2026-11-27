@@ -897,6 +897,28 @@ describe("early Electron reply playback", () => {
       expect(terminalCheck).toHaveBeenCalledOnce();
     });
 
+  it("plays earlier selected phases first when a staged final body has exactly the same opening", async () => {
+    const h = await setup("responsive", { speechContent: "both" });
+    const drain = deferred<void>();
+    h.playback.finish.mockImplementationOnce(() => drain.promise);
+    h.early(yesOpening);
+    await vi.waitFor(() => expect(h.playback.finish).toHaveBeenCalledOnce());
+    h.early({ ...append, text: yesReply.slice(4), rawStart: 4, rawEnd: yesReply.length });
+    h.early({ ...common, kind: "yield", reason: "item_done", seq: 2 });
+    await vi.waitFor(() => expect(h.texts()).toEqual([finalPreamble, yesReply]));
+    const staged = h.speech.speak.mock.calls[1]![0].requestId;
+    const provisional = yesReply + " I will check the results.";
+    const notice = notification(id);
+    h.current().callbacks.frame("notification", { ...notice, payload: { ...notice.payload,
+      title: "Agent finished", message: "Thread A", assistantResult: { provisional: { text: provisional }, final: { text: yesReply } },
+    } }, h.current().voiceStreamId!);
+    drain.resolve(); await h.idle();
+    expect(h.speech.cancel).toHaveBeenCalledWith({ requestId: staged });
+    const played = h.speech.speak.mock.calls.map(([call]) => call).filter(call => call.requestId !== staged);
+    expect(played.map(call => call.text)).toEqual([finalPreamble, provisional, yesReply]);
+    expect(h.playback.append).toHaveBeenCalledTimes(played.length);
+  });
+
   it("includes the rest of a long answer delivered with completion in the first body request", async () => {
     const h = await setup("responsive");
     const full = "Yes. Sedes can show whether a thread is running, idle, or waiting for input, either for one thread or across a list of threads.\n" +

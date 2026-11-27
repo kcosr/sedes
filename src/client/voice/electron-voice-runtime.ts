@@ -1140,7 +1140,7 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
             const presentation = reply.presentationSettings(this.#state.settings);
             const nextPart = this.#sealedSpeechParts(item, presentation).find(part => part.trim());
             if (!fresh || reply.retired || !this.#eligible(item) || presentation.audioMode !== "speak" ||
-                (current.chunk.frontier && presentation.speechContent === "announcements") ||
+                (current.chunk.frontier && !reply.canPromoteBody(item.notification, presentation, this.#lastAudibleOwner)) ||
                 !nextPart?.trimStart().startsWith(current.chunk.text.trim())) current.close(true);
           }
           if (current.failed()) await current.arrived;

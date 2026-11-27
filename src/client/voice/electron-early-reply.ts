@@ -2,7 +2,7 @@ import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { earlyReplyAnnouncement, MAX_EARLY_REPLY_BYTES, type EarlyReplyFrame } from "../../shared/protocol/early-reply.js";
 import type { VoiceNotification } from "../../shared/protocol/notification.js";
-import { electronSpeechText, notificationMessageParts, prepareSpeechParts, voiceChunkRanges } from "./electron-voice-policy.js";
+import { electronSpeechText, notificationMessageParts, prepareSpeechParts, resultParts, voiceChunkRanges } from "./electron-voice-policy.js";
 import type { NativeEarlyReplyPlaybackMode, NativeVoiceSettings } from "./native-voice-plugin.js";
 
 type Begin = Extract<EarlyReplyFrame, { kind: "begin" }>;
@@ -198,6 +198,13 @@ export class ElectronEarlyReply {
   sealedSection(notice: VoiceNotification) {
     return this.identity.event === "turn.progress" ? notice.payload.progress : notice.payload.assistantResult?.final;
   }
+  canPromoteBody(notice: VoiceNotification, settings: NativeVoiceSettings, lastOwner: string | undefined): boolean {
+    if (settings.speechContent === "announcements" || (settings.speechContent === "both" && lastOwner !== this.identity.replyId)) return false;
+    // Until a final-body request drains, speech follows the terminal's selected phase order.
+    // Two phases can start with identical words.
+    return !!this.frontier || this.identity.event !== "turn.completed" ||
+      !resultParts(notice.payload.assistantResult, "beforeFinal").some(text => electronSpeechText(text, settings.cleanSpeechText));
+  }
   /** Null requests the ordinary context-first renderer. Each returned part is already formatted. */
   continuation(notice: VoiceNotification, settings: NativeVoiceSettings, lastAudibleOwner: string | undefined): string[] | null {
     if (settings.audioMode !== "speak" || !this.frontier && !this.preambleEnd) return null;
@@ -214,11 +221,7 @@ export class ElectronEarlyReply {
     if (this.frontier && this.matches(raw, settings.cleanSpeechText)) {
       body = [clean(raw).slice(this.frontier.preparedEnd).trimStart()];
       if (section?.truncation) body.push("The remaining response was truncated.");
-      const result = notice.payload.assistantResult;
-      for (const key of ["provisional", "partial", "unclassified"] as const) {
-        if (result?.[key]?.text) body.push(clean(result[key]!.text));
-        if (result?.[key]?.truncation) body.push("The remaining response was truncated.");
-      }
+      body.push(...resultParts(notice.payload.assistantResult, "beforeFinal").map(clean));
     } else {
       // A corrected answer restarts its body. The preamble has its own playback receipt.
       body = notificationMessageParts(notice.payload).map(clean);
