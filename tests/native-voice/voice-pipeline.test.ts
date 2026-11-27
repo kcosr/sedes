@@ -706,7 +706,7 @@ describe("native voice production pipeline with loopback providers", () => {
     }
   });
 
-  it.skipIf(!androidSerial).each(["final", "progress"] as const)("plays a held live Codex reply in the packaged Android background service (%s)", async earlyKind => {
+  it.skipIf(!androidSerial).each(["final", "progress", "short-handoff"] as const)("plays a held live Codex reply in the packaged Android background service (%s)", async earlyKind => {
     const progress = earlyKind === "progress";
     const title = "Early playback qualification";
     await adb(["shell", "pm", "clear", "dev.sedes.local"]);
@@ -747,40 +747,46 @@ describe("native voice production pipeline with loopback providers", () => {
         }, 55_000));
       };
       const spoken = async () => (await speech.observations()).speech.map(request => request.text);
-      const short = progress ? "Yes." : "It passed.";
+      const shortHandoff = earlyKind === "short-handoff";
+      const short = progress || shortHandoff ? "Yes." : "It passed.";
       const sentence = progress ? "The first inspection is still running and the remaining files are currently being checked." : "The file passed inspection.";
       const opening = short + " " + sentence;
       const suffix = "All done.";
       const preamble = (progress ? "Agent progress" : "Agent finished") + "\n\n" + title;
       const answer = codex.startAnswer(progress ? "commentary" : "final_answer");
-      answer.append(short + " The");
+      answer.append(short + (shortHandoff ? " This" : " The"));
       const announced = await waitForStage("voicePreamble");
       expect(announced.drain).toMatchObject({ sampleRate: 24_000, writtenFrames: 24_000 });
       expect(announced.drain.playedFrames).toBeGreaterThanOrEqual(24_000);
       expect(await spoken()).toEqual([preamble]);
-      answer.append(sentence.slice(3) + " All");
-      const evidence = await waitForStage("voiceOpening");
-      expect(evidence).toMatchObject({ foreground: false, drain: { sampleRate: 24_000, writtenFrames: 24_000 } });
-      expect(evidence.drain.playedFrames).toBeGreaterThanOrEqual(24_000);
-      expect(evidence.interactionId).toBe(announced.interactionId);
-      expect((await app.thread(threadId)).runState).toBe("running");
-      expect(await spoken()).toEqual([preamble, opening]);
-      answer.append(suffix.slice(3));
-      answer.complete();
       const skippedOpening = "I am still examining the second file before I can finish checking the complete response.";
       const finalText = "The final response still reaches the speaker.";
-      if (progress) {
-        expect(await waitForStage("voiceProgressSettled")).toEqual({ interactionId: evidence.interactionId });
+      const shortBody = "Yes. This is a test.";
+      if (shortHandoff) {
+        answer.complete("final_answer", shortBody);
+      } else {
+        answer.append(sentence.slice(3) + " All");
+        const evidence = await waitForStage("voiceOpening");
+        expect(evidence).toMatchObject({ foreground: false, drain: { sampleRate: 24_000, writtenFrames: 24_000 } });
+        expect(evidence.drain.playedFrames).toBeGreaterThanOrEqual(24_000);
+        expect(evidence.interactionId).toBe(announced.interactionId);
         expect((await app.thread(threadId)).runState).toBe("running");
-        expect(await spoken()).toEqual([preamble, opening, suffix]);
-        const second = codex.startAnswer("commentary");
-        second.append(skippedOpening + " More");
-        expect((await waitForStage("voiceSkipped")).interactionId).not.toBe(evidence.interactionId);
-        second.append(" text is available now. This sentence must also be discarded.");
-        second.complete();
-        const final = codex.startAnswer(null);
-        final.append(finalText);
-        final.complete("final_answer");
+        expect(await spoken()).toEqual([preamble, opening]);
+        answer.append(suffix.slice(3));
+        answer.complete();
+        if (progress) {
+          expect(await waitForStage("voiceProgressSettled")).toEqual({ interactionId: evidence.interactionId });
+          expect((await app.thread(threadId)).runState).toBe("running");
+          expect(await spoken()).toEqual([preamble, opening, suffix]);
+          const second = codex.startAnswer("commentary");
+          second.append(skippedOpening + " More");
+          expect((await waitForStage("voiceSkipped")).interactionId).not.toBe(evidence.interactionId);
+          second.append(" text is available now. This sentence must also be discarded.");
+          second.complete();
+          const final = codex.startAnswer(null);
+          final.append(finalText);
+          final.complete("final_answer");
+        }
       }
       codex.completeTurn();
 
@@ -790,14 +796,14 @@ describe("native voice production pipeline with loopback providers", () => {
       expect(result.suffix.writtenFrames).toBe(24_000);
       expect(result.suffix.playedFrames).toBeGreaterThanOrEqual(24_000);
       expect(result.captureChunks).toBe(0);
-      expect(result.physicalDrains).toBe(progress ? 6 : 3);
+      expect(result.physicalDrains).toBe(shortHandoff ? 2 : progress ? 6 : 3);
       expect(await spoken()).toEqual(progress
         ? [preamble, opening, suffix, preamble, skippedOpening, `Agent finished\n\n${title}\n\n${finalText}`]
-        : [preamble, opening, suffix]);
+        : shortHandoff ? [preamble, shortBody] : [preamble, opening, suffix]);
     } finally {
       await adb(["shell", "am", "force-stop", "dev.sedes.local"]);
       await device?.catch(() => undefined);
-      await writeFile(path.join(artifactDirectory, progress ? "android-early-progress.log" : "android-early-reply.log"), output + "\nSpeech requests: " + JSON.stringify((await speech.observations()).speech));
+      await writeFile(path.join(artifactDirectory, earlyKind === "final" ? "android-early-reply.log" : `android-early-${earlyKind}.log`), output + "\nSpeech requests: " + JSON.stringify((await speech.observations()).speech));
       await codex.close();
     }
   }, 330_000);
