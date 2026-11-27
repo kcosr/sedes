@@ -644,8 +644,8 @@ export async function startProductionApplication(
         .map(connectionProfile);
     };
     let profiles = configuredProfiles();
-    const inventoryRepository = new InventoryRepository(database,
-      (eventScope, threadId) => actors?.currentTurnForParking(eventScope, threadId));
+    const currentParkTurn = (eventScope: RequestScope, threadId: string) => actors?.currentTurnForParking(eventScope, threadId);
+    const inventoryRepository = new InventoryRepository(database, currentParkTurn);
     const userInputs = new UserInputRevisionRepository(database);
     const clientControls = new ClientControlService();
     resources.defer("client controls", () => clientControls.close());
@@ -2237,12 +2237,7 @@ export async function startProductionApplication(
       agentToolPolicies,
       agentToolEnvironmentAuthority,
       agentToolSources,
-      runtimes, clientControlTools,
-      (eventScope, threadId) => {
-        const source = actors?.observeInputRuntime(eventScope, threadId);
-        return source?.authoritative && source.sourceTurnStatus === "in_progress" &&
-          source.sourceTurnId === source.activeTurnId ? source.activeTurnId : undefined;
-      },
+      runtimes, clientControlTools, currentParkTurn,
     );
     const principalClientAgentTools = new PrincipalAgentToolClientService(
       toolProvenanceKey,

@@ -321,6 +321,35 @@ describe("live completion notification provenance", { timeout: 30_000 }, () => {
     },
   );
 
+  it("keeps an agent self-park admitted while the same owner refreshes its running turn", async () => {
+    const current = await fixture();
+    const { driver, scope, runtimes, actors, inventoryRepository, database } = current.harness;
+    const responses = vi.spyOn(driver, "scheduleScriptedResponse").mockImplementation(() => {});
+    try {
+      const id = await current.start();
+      const runtime = await runtimes.acquire(scope, id);
+      try {
+        const targetId = (await runtime.actor.captureSnapshotState()).timeline.activeTurnId!;
+        const [record] = responses.mock.calls[0]!;
+        let sourceTurnId: string | undefined;
+        const unsubscribe = actors.subscribeInputActivity((eventScope, threadId) => {
+          if (threadId === id && actors.observeInputRuntime(eventScope, id)?.reestablishing) {
+            sourceTurnId = actors.currentTurnForParking(eventScope, id);
+          }
+        });
+        try {
+          driver.emit(record, { type: "resnapshot_required", reason: "history_changed" });
+          await runtime.actor.captureSnapshotState();
+          expect(sourceTurnId).toBe(targetId);
+          inventoryRepository.parkThread(scope, id, { selfParkTurnId: sourceTurnId, mutationId: randomUUID(),
+            expectedRevision: inventoryRepository.getInventory(scope, id).inventoryRevision, now: Date.now() });
+          expect(database.prepare("SELECT park_keep_on_success AS keep FROM thread_principal_state WHERE tenant_id=? AND principal_id=? AND thread_id=?")
+            .get(scope.tenantId, scope.principalId, id)).toEqual({ keep: 1 });
+        } finally { unsubscribe(); }
+      } finally { runtime.release(); }
+    } finally { await current.close(); }
+  });
+
   it.each([
     ["ordinary", "completed"], ["ordinary", "failed"], ["ordinary", "interrupted"],
     ["self", "completed"], ["self", "failed"], ["self", "interrupted"],
