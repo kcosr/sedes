@@ -119,12 +119,17 @@ export class OutboundSidecarProvisioner implements SidecarProvisioner {
     }
     for (let attempt = 0; attempt < 100; attempt += 1) {
       signal.throwIfAborted();
-      const current = await this.inspect(signal);
-      if (!current) break;
-      if (current.serviceIncarnation !== input.expectedServiceIncarnation) {
-        if (input.operation === 'stop') return undefined;
-        if (this.#outdated(current)) throw new SidecarServiceManagementError('sidecar_service_replaced_concurrently', current);
-        return current;
+      try {
+        const current = await this.inspect(signal);
+        if (!current) break;
+        if (current.serviceIncarnation !== input.expectedServiceIncarnation) {
+          if (input.operation === 'stop') return undefined;
+          if (this.#outdated(current)) throw new SidecarServiceManagementError('sidecar_service_replaced_concurrently', current);
+          return current;
+        }
+      } catch (error) {
+        // The stopped service can close its socket before its recorded process exits.
+        if (!(error instanceof SidecarServiceManagementError) || error.code !== 'sidecar_service_retirement_in_progress') throw error;
       }
       if (attempt === 99) throw new SidecarServiceManagementError('sidecar_service_stop_unconfirmed');
       await pause(50, undefined, { signal });

@@ -75,7 +75,7 @@ function fixture(enabled = true) {
 
 describe("OpenCode remote startup cancellation", () => {
   it("clears stale remote assessment after failed health and requires a new attachment", async () => {
-    const f = fixture(); f.info.snapshot.runtimeVersion = "2.2.7";
+    const f = fixture(); f.info.snapshot.runtimeVersion = "2.3.1";
     await f.runtime.start();
     f.respond.mockRejectedValueOnce(new OpenCodeRuntimeError("opencode_runtime_identity_changed"));
     expect(await f.runtime.health()).toMatchObject({ available: false });
@@ -83,7 +83,7 @@ describe("OpenCode remote startup cancellation", () => {
     expect(f.observeVersion).toHaveBeenLastCalledWith(undefined);
     await f.runtime.start();
     expect(f.acquire).toHaveBeenCalledTimes(2);
-    expect(f.observeVersion).toHaveBeenLastCalledWith({ version: "2.2.7", newerThanTested: true });
+    expect(f.observeVersion).toHaveBeenLastCalledWith({ version: "2.3.1", newerThanTested: true });
   });
 
   it("retains valid remote version evidence when only the current observation is cancelled", async () => {
@@ -112,10 +112,10 @@ describe("OpenCode remote startup cancellation", () => {
     expect(f.leases[1]!.release).toHaveBeenCalledOnce();
   });
   it("reports the observed remote version and clears its assessment when disconnected", async () => {
-    const f = fixture(); f.info.snapshot.runtimeVersion = "2.2.7+vendor.1";
+    const f = fixture(); f.info.snapshot.runtimeVersion = "2.3.1+vendor.1";
     await f.runtime.start();
-    expect(f.observeVersion).toHaveBeenLastCalledWith({ version: "2.2.7+vendor.1", newerThanTested: true });
-    expect(f.runtime.snapshot().runtimeVersion).toBe("2.2.7+vendor.1");
+    expect(f.observeVersion).toHaveBeenLastCalledWith({ version: "2.3.1+vendor.1", newerThanTested: true });
+    expect(f.runtime.snapshot().runtimeVersion).toBe("2.3.1+vendor.1");
     f.disconnected.resolve();
     await vi.waitFor(() => expect(f.runtime.snapshot().state).toBe("disconnected"));
     expect(f.observeVersion).toHaveBeenLastCalledWith(undefined);

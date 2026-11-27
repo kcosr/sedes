@@ -187,13 +187,13 @@ async function persistedInvocationFixture() {
 
 describe("OpenCode compiled module", () => {
   it("publishes observed runtime compatibility advisories, refreshes on health, and clears on stop or close", async () => {
-    const factory = nativeFactory("2.2.7+vendor.1"), fixture = context();
+    const factory = nativeFactory("2.3.1+vendor.1"), fixture = context();
     const runtime = new OpenCodeBackendModule(factory.create).prepare(configuration()).createRuntime(fixture.value);
     const changed = vi.fn(); runtime.installationAdvisories.subscribe(changed);
     expect(runtime.installationAdvisories.active()).toEqual([]);
     await runtime.start();
     expect(runtime.installationAdvisories.active()).toMatchObject([{ id: "runtime-newer-than-tested",
-      message: { text: "Running 2.2.7+vendor.1; Sedes is tested through 2.2.6." } }]);
+      message: { text: "Running 2.3.1+vendor.1; Sedes is tested through 2.3.0." } }]);
     const owner = factory.instances[0]!, driver = runtime.driverFactory.create(fixture.connection);
     owner.runtimeVersion = "2.2.6";
     await driver.health();

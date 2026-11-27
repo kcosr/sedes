@@ -123,7 +123,7 @@ Pi, Codex, Claude and Grok retain their existing backend contracts.
 The immutable compiled HTTP/SSE profile pins `@opencode/client`,
 `@opencode/protocol` and `@opencode/schema` to **2.3.0**, upstream source revision
 `a6b15d33daf6ab7d35569f6d711fdb630b9f04e7`. Runtime admission is independent:
-stable stock releases **2.2.6 or newer** are admitted, tested through **2.2.6**.
+stable stock releases **2.2.6 or newer** are admitted, tested through **2.3.0**.
 Prereleases, malformed versions and releases below the floor fail closed; build
 metadata does not change version precedence. Every admitted runtime uses the
 one compiled schema profile and the existing authentication, process/store
@@ -154,8 +154,8 @@ contracts; only their sidecar carriers require the current shared wire version.
 | Owned | `serve --stdio --hostname 127.0.0.1 --port 0`; stdout announces the HTTP endpoint, and stdin controls process lifetime. Application traffic uses authenticated HTTP and SSE. | Conversation references can reach zero while the daemon and its background work remain alive. Backend Stop/Restart retire the owned process. Main shutdown ends a local owner; a persistent sidecar owner outlives main. |
 | External | Authenticated HTTP to an explicit loopback IP literal and port on the execution host. DNS, direct remote native endpoints, URL credentials, redirects, query strings and endpoint paths are rejected. | Retiring the host attachment closes its subscriptions and lease without interrupting the external daemon. Remote Disconnect releases only main's attachment; the sidecar attachment remains resident. |
 
-Runtime snapshots carry the observed native version through private sidecar
-protocol 4. Main revalidates this evidence and derives a process-local active
+Runtime snapshots carry the observed native version through `opencode_runtime`.
+Main revalidates this evidence and derives a process-local active
 installation advisory when the version exceeds the tested-through release.
 Successful assessment replaces the current advisory; disconnect, retirement or
 failed admission clears it. Pi keeps its explicit empty advisory source;
@@ -437,7 +437,7 @@ reconciliation, queue and automatic-detachment rules.
 Deterministic tests cover schema/authentication boundaries, release mismatch,
 HTTP response limits, runtime identity replacement, runtime ownership leases and
 scoped operation evidence. Opt-in isolated native tests qualify stock
-`opencode2` 2.2.6 with fixture-owned state. They exercise owned startup, malformed/expired
+`opencode2` 2.2.6 and 2.3.0 with fixture-owned state. They exercise owned startup, malformed/expired
 readiness, background-shell survival after reference release, external
 Disconnect, detached-descendant cleanup, retained database identity and restart.
 History qualification also exercises the actual driver/handle/actor with native

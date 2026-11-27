@@ -8,13 +8,13 @@ describe("OpenCode runtime compatibility policy", () => {
   it("keeps the compiled protocol profile separate from runtime admission evidence", () => {
     expect(OPENCODE_RELEASE).toBe("2.3.0");
     expect(OPENCODE_RUNTIME_MINIMUM_SUPPORTED_RELEASE).toBe("2.2.6");
-    expect(OPENCODE_RUNTIME_TESTED_THROUGH_RELEASE).toBe("2.2.6");
+    expect(OPENCODE_RUNTIME_TESTED_THROUGH_RELEASE).toBe("2.3.0");
   });
-  it.each(["2.2.6", "2.2.6+vendor.7"])("admits stable runtime within the tested-through boundary %s", version => {
+  it.each(["2.2.6", "2.2.6+vendor.7", "2.2.7", "2.3.0", "2.3.0+vendor.1"])("admits stable runtime within the tested-through boundary %s", version => {
     expect(admitOpenCodeRelease(version)).toBe(version);
     expect(assessOpenCodeRuntimeVersion(version)).toEqual({ version, newerThanTested: false });
   });
-  it.each(["2.2.7", "2.3.0", "2.10.0+build.1", "3.0.0", "900719925474099300.0.0"])("admits newer stable runtime %s with an advisory", version => {
+  it.each(["2.3.1", "2.10.0+build.1", "3.0.0", "900719925474099300.0.0"])("admits newer stable runtime %s with an advisory", version => {
     expect(assessOpenCodeRuntimeVersion(version)).toEqual({ version, newerThanTested: true });
   });
   it.each([undefined, null, 20101, "1.18.30", "2.0.29", "2.0.32", "2.0.32+vendor.7", "2.1.0", "2.1.0+build.1", "2.1.1", "2.1.1+build.1", "2.2.5", "2.2.5+build.1", "2.2.6-rc.1", "2.1.2-beta", "v2.2.6", "2.2.6 ", "2.01.1", "2.2.6+", "2.2.6+a..b", "2.1", "2.2.6\n", "9".repeat(65)])("rejects malformed, prerelease, and below-floor runtime %s", version => {

@@ -124,6 +124,36 @@ describe('outbound lifecycle provisioning', () => {
     expect(registry.openRuntime).not.toHaveBeenCalled();
   });
 
+  it('waits for the stopped process to exit after its socket closes', async () => {
+    const operations: string[] = [];
+    const { registry, provisioner } = setup(async (_scope, _environment, _operation, raw) => {
+      const request = raw as SidecarManagementRequest;
+      operations.push(request.operation);
+      const response = { managementVersion: 1, requestId: request.requestId };
+      if (request.operation === 'stop') return { ...response, outcome: 'ok', status: status({ state: 'stopped' }) };
+      if (operations.length === 2) return { ...response, outcome: 'error', code: 'sidecar_service_retirement_in_progress' };
+      return { ...response, outcome: 'absent' };
+    });
+    await expect(provisioner.control({ mutationId: 'stop', operation: 'stop', expectedServiceIncarnation: 'incarnation',
+      controllerEpoch: 1, expectedConfiguration: configuration, expectedResourcesFingerprint: 'b'.repeat(64), force: true }, signal())).resolves.toBeUndefined();
+    expect(operations).toEqual(['stop', 'status', 'status']);
+    expect(registry.openRuntime).not.toHaveBeenCalled();
+  });
+
+  it('propagates an ownership failure while waiting for a stopped process to exit', async () => {
+    const operations: string[] = [];
+    const { provisioner } = setup(async (_scope, _environment, _operation, raw) => {
+      const request = raw as SidecarManagementRequest;
+      operations.push(request.operation);
+      const response = { managementVersion: 1, requestId: request.requestId };
+      return request.operation === 'stop' ? { ...response, outcome: 'ok', status: status({ state: 'stopped' }) }
+        : { ...response, outcome: 'error', code: 'sidecar_service_recovery_required' };
+    });
+    await expect(provisioner.control({ mutationId: 'stop', operation: 'stop', expectedServiceIncarnation: 'incarnation',
+      controllerEpoch: 1, expectedConfiguration: configuration, expectedResourcesFingerprint: 'b'.repeat(64), force: true }, signal())).rejects.toThrow('sidecar_service_recovery_required');
+    expect(operations).toEqual(['stop', 'status']);
+  });
+
   it('never creates a missing daemon on the recovery attachment path', async () => {
     const { registry, provisioner } = setup(async (_scope, _environment, _operation, raw) => {
       const request = raw as SidecarManagementRequest;

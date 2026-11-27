@@ -1,7 +1,7 @@
 # OpenCode v2
 
 Sedes supports stable stock OpenCode **2.2.6 or newer**, tested through
-**2.2.6**, on a Linux execution host, locally or
+**2.3.0**, on a Linux execution host, locally or
 through the persistent SSH or outbound HTTP(S) sidecar. The Sedes server may run
 on another machine or OS. OpenCode and its sidecar use the same host account.
 Sedes finds `opencode2` on the execution account’s PATH by default; an
@@ -22,7 +22,7 @@ Prereleases and releases below 2.2.6 are rejected. Upgrade the native executable
 on every OpenCode execution host, including external daemon hosts, and restart
 those daemons at the upgraded version. Upgrade execution sidecars with the
 server for sidecar wire protocol **18** and private OpenCode runtime protocol
-**5**. The adapter uses one strict current schema; older message formats are
+**6**. The adapter uses one strict current schema; older message formats are
 not accepted through a compatibility parser.
 
 ## Connections

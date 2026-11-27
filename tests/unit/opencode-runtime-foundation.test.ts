@@ -90,16 +90,16 @@ describe("OpenCode v2 transport admission", () => {
   });
   it("records the observed runtime version and clears assessment when its same-process identity changes version", async () => {
     const root = await directory(), store = path.join(root, "opencode.db"); await writeFile(store, "native history");
-    const input = { version: "2.2.7+vendor.1" }, fixture = await server(input), observeVersion = vi.fn();
+    const input = { version: "2.3.1+vendor.1" }, fixture = await server(input), observeVersion = vi.fn();
     const runtime = new OpenCodeRuntime({ hostIncarnation: "fixture-host", authority, nativeStorePath: store,
       ownershipDirectory: root, environment: {}, externalPassword: async () => password,
       onRuntimeVersionAssessment: observeVersion,
       connection: { ownership: "external", channel: { type: "http", url: fixture.endpoint } } });
     try {
       await runtime.start();
-      expect(runtime.snapshot().runtimeVersion).toBe("2.2.7+vendor.1");
-      expect(observeVersion).toHaveBeenLastCalledWith({ version: "2.2.7+vendor.1", newerThanTested: true });
-      input.version = "2.2.7+daemon.2";
+      expect(runtime.snapshot().runtimeVersion).toBe("2.3.1+vendor.1");
+      expect(observeVersion).toHaveBeenLastCalledWith({ version: "2.3.1+vendor.1", newerThanTested: true });
+      input.version = "2.3.1+daemon.2";
       await expect(runtime.assertCurrent()).resolves.toBeUndefined();
       input.version = "2.2.6";
       await expect(runtime.assertCurrent()).rejects.toThrow("opencode_runtime_identity_changed");

@@ -91,7 +91,7 @@ User-facing changes are collected here before release. See the
   ([#116](https://github.com/kcosr/sedes/pull/116), [#123](https://github.com/kcosr/sedes/pull/123))
 
 - Upgrade OpenCode to stable stock **2.2.6 or newer** on every execution host.
-  OpenCode's private runtime protocol is now **5**. See
+  OpenCode's private runtime protocol is now **6**. See
   [OpenCode setup](docs/operator/backends/opencode.md).
   ([#93](https://github.com/kcosr/sedes/pull/93), [#123](https://github.com/kcosr/sedes/pull/123), [#134](https://github.com/kcosr/sedes/pull/134))
 
@@ -465,9 +465,9 @@ User-facing changes are collected here before release. See the
   [parking](docs/user/organize-work.md#park-quiet-work).
   ([#95](https://github.com/kcosr/sedes/pull/95))
 
-- OpenCode uses the **2.2.6** SDK/schema profile, admitting current server,
+- OpenCode uses the **2.3.0** SDK/schema profile, admitting current server,
   session, model and error metadata while retaining existing history, session
-  statistics and usage accounting. Qualification extends through **2.2.6**;
+  statistics and usage accounting. Qualification extends through **2.3.0**;
   newer-than-tested stable runtimes still show an active advisory. See
   [OpenCode compatibility](docs/operator/backends/opencode.md).
   ([#93](https://github.com/kcosr/sedes/pull/93), [#123](https://github.com/kcosr/sedes/pull/123), [#134](https://github.com/kcosr/sedes/pull/134))
@@ -512,6 +512,10 @@ User-facing changes are collected here before release. See the
 - OpenCode threads with first-token timestamps reopen on OpenCode 2.3.0.
   Update the server and OpenCode sidecars together for the new provider
   protocol profile. See [OpenCode compatibility](docs/operator/backends/opencode.md).
+  ([#176](https://github.com/kcosr/sedes/pull/176))
+
+- Stopping a paired outbound host waits for the sidecar process to exit after
+  its management socket closes, so Settings can confirm the original Stop request.
   ([#176](https://github.com/kcosr/sedes/pull/176))
 
 - Compatible sidecars can upgrade automatically after Antigravity verifies
