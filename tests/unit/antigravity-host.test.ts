@@ -774,6 +774,22 @@ describe("Antigravity execution host", () => {
     expect(f.readHistory).toHaveBeenCalledOnce(); expect(f.host.snapshot().blockers).toContain("active_work");
     expect(await f.host.attachExisting(identity)).not.toBeNull();
   });
+  it("fences new retained controls during the final native read of a nonforced shutdown", async () => {
+    const f = await fixture(), identity = await f.host.create({ cwd: f.cwd, operationId: "create" });
+    await f.host.acknowledgeCreation({ ...identity, operationId: "create" });
+    const { handleId } = await f.host.attach(identity);
+    let finish!: (history: AntigravityHistory) => void;
+    f.readHistory.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const stopping = f.host.stop({ expectedRevision: f.host.snapshot().revision, force: false });
+    try {
+      await expect(f.host.request({ handleId, operationId: "late-stop", command: { type: "cancel" } }))
+        .rejects.toMatchObject({ code: "antigravity_runtime_closed", delivery: "not_sent" });
+      await expect(f.host.outcome({ handleId, operationId: "late-stop" })).rejects.toMatchObject({ code: "antigravity_operation_unknown" });
+    } finally {
+      finish({ ...identity, native: { revision: "a".repeat(64), steps: [], executions: [] } });
+      await stopping;
+    }
+  });
   it("never replays unidentified crossed creation and clears uncertainty only through proven forced retirement", async () => {
     const f = await fixture(), create = vi.spyOn(AntigravityAcpConnection.prototype, "create").mockRejectedValueOnce(new Error("reply_lost_after_dispatch"));
     const input = { cwd: f.cwd, operationId: "uncertain" };

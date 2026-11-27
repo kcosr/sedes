@@ -883,7 +883,23 @@ replacement then happens as soon as the service is observed idle, on the next
 connection or maintenance pass, without a prompt. Active provider turns,
 pending approval decisions, commands, transfers, unsettled receipts, live
 terminals, unacknowledged final terminal history, or unknown ownership
-block automatic replacement until they settle. **Upgrade and restart** obtains
+block automatic replacement until they settle. The environment row names the
+blocking resources and their reasons. The impact preview lists the rest if
+several resources are blocking.
+
+Antigravity refreshes native session and child activity before replacement.
+Sedes checks retained operations against the bound thread's durable records
+and acknowledges outcomes it can account for. A live child, an unreadable
+inventory or an unresolved outcome keeps the upgrade pending.
+
+An external OpenCode daemon keeps its PID and native work across sidecar
+replacement. Its Sedes attachment can retire once its requests, tool routes,
+observed work and retained evidence have settled. An owned OpenCode daemon
+still requires complete native idle evidence. These checks run in the
+resident sidecar. An older sidecar that always reports OpenCode ownership
+as unknown can still require one confirmed upgrade to install the fix.
+
+**Upgrade and restart** obtains
 a fresh interruption impact before acting. Confirmation authorizes interruption
 of owned work and abandonment of unrecovered transient outcomes; retained
 delivery state does not block this explicit shutdown. Provider-native history

@@ -64,6 +64,7 @@ function fixture(
     readonly servingInstallation?: SidecarArtifactInstallation;
     readonly transportKind?: string;
     readonly connectionCompression?: () => boolean;
+    readonly reconcileForUpgrade?: (incarnation: string, signal: AbortSignal) => Promise<boolean>;
   } = {},
 ) {
   let environmentRevision = 3;
@@ -107,6 +108,7 @@ function fixture(
     sedesOperations: new SidecarOperationRegistry(),
     startSession,
     onLifecycleEvidence,
+    reconcileForUpgrade: options.reconcileForUpgrade,
     onBackgroundError,
     ...(options.idleMilliseconds
       ? { idleMilliseconds: options.idleMilliseconds }
@@ -605,27 +607,73 @@ describe("SidecarRuntimeOwner", () => {
 
   it("replaces a compatible outdated service automatically once connect observes it idle", async () => {
     const value = fixture();
-    const outdated: SidecarServiceStatus = { ...serviceStatus(), serviceIncarnation: "service-old", buildId: "old-build", artifactSha256: "c".repeat(64) };
+    const outdated: SidecarServiceStatus = { ...serviceStatus(), buildId: "old-build", artifactSha256: "c".repeat(64) };
     const installer = value.provisioner;
-    installer.inspect.mockResolvedValueOnce(outdated);
+    installer.inspect.mockResolvedValueOnce(outdated).mockResolvedValueOnce({ ...serviceStatus(), serviceIncarnation: "replacement" });
     const status = await value.owner.connect(new AbortController().signal);
     expect(installer.control).toHaveBeenCalledOnce();
-    expect(installer.control).toHaveBeenCalledWith(expect.objectContaining({ operation: "upgrade", force: false, expectedServiceIncarnation: "service-old", controllerEpoch: outdated.controllerEpoch }), expect.anything());
-    expect(status.serviceIncarnation).toBe("service-1");
+    expect(installer.control).toHaveBeenCalledWith(expect.objectContaining({ operation: "upgrade", force: false, expectedServiceIncarnation: outdated.serviceIncarnation, controllerEpoch: outdated.controllerEpoch }), expect.anything());
+    expect(status.serviceIncarnation).toBe("replacement");
     expect(value.startSession).toHaveBeenCalledTimes(2);
     await value.owner.close();
   });
 
   it("keeps serving through a compatible outdated service that still owns work", async () => {
-    const value = fixture();
-    const busy: SidecarServiceStatus = { ...serviceStatus(), serviceIncarnation: "service-old", buildId: "old-build", artifactSha256: "c".repeat(64),
+    const reconcileForUpgrade = vi.fn(async () => true);
+    const value = fixture({ reconcileForUpgrade });
+    const busy: SidecarServiceStatus = { ...serviceStatus(), buildId: "old-build", artifactSha256: "c".repeat(64),
       resources: [{ resourceId: "terminal", kind: "terminal", state: "active", revision: "1", blockers: ["live_terminal"] }] };
     value.provisioner.inspect.mockResolvedValue(busy);
     const status = await value.owner.connect(new AbortController().signal);
     expect(value.provisioner.control).not.toHaveBeenCalled();
+    expect(reconcileForUpgrade).not.toHaveBeenCalled();
     expect(status.buildId).toBe("old-build");
     expect(value.startSession).toHaveBeenCalledOnce();
     await value.owner.close();
+  });
+
+  it.each(["settled", "still blocked", "controller changed", "inspection failed"] as const)(
+    "rechecks the authenticated service after reconciling retained provider work (%s)", async scenario => {
+      const reconcileForUpgrade = vi.fn(async () => {
+        if (scenario === "inspection failed") throw new Error("native read failed");
+        return true;
+      });
+      const value = fixture({ reconcileForUpgrade });
+      const blocked: SidecarServiceStatus = { ...serviceStatus(), buildId: "previous", artifactSha256: "c".repeat(64),
+        resources: [{ kind: "provider", resourceId: "antigravity:resident", revision: "1", state: "active", blockers: ["unsettled_outcome"] }] };
+      const fresh = { ...blocked, resources: scenario === "still blocked" ? blocked.resources : [], resourcesFingerprint: "f".repeat(64),
+        controllerEpoch: scenario === "controller changed" ? blocked.controllerEpoch + 1 : blocked.controllerEpoch };
+      value.provisioner.inspect.mockResolvedValueOnce(blocked).mockResolvedValueOnce(fresh);
+      const status = await value.owner.connect(new AbortController().signal);
+      expect(reconcileForUpgrade).toHaveBeenCalledWith(blocked.serviceIncarnation, expect.any(AbortSignal));
+      if (scenario === "settled") {
+        expect(value.provisioner.control).toHaveBeenCalledWith(expect.objectContaining({ operation: "upgrade", force: false,
+          expectedResourcesFingerprint: fresh.resourcesFingerprint, controllerEpoch: fresh.controllerEpoch }), expect.anything());
+        expect(status.buildId).toBe(artifact.buildId);
+      } else {
+        expect(value.provisioner.control).not.toHaveBeenCalled();
+        expect(status.buildId).toBe(blocked.buildId);
+      }
+      await value.owner.close();
+    });
+
+  it("keeps serving when the bounded provider reconciliation cannot finish", async () => {
+    const deadline = new AbortController();
+    const reconcileForUpgrade = vi.fn(() => new Promise<boolean>(() => undefined));
+    const value = fixture({ reconcileForUpgrade });
+    const blocked: SidecarServiceStatus = { ...serviceStatus(), buildId: "previous", artifactSha256: "c".repeat(64),
+      resources: [{ kind: "provider", resourceId: "resident", revision: "1", state: "unknown", blockers: ["unknown_state"] }] };
+    value.provisioner.inspect.mockResolvedValue(blocked);
+    const timeout = AbortSignal.timeout.bind(AbortSignal);
+    const budgets = vi.spyOn(AbortSignal, "timeout").mockImplementation(ms => ms === 10_000 ? deadline.signal : timeout(ms));
+    try {
+      const connecting = value.owner.connect(new AbortController().signal);
+      await vi.waitFor(() => expect(reconcileForUpgrade).toHaveBeenCalledOnce());
+      deadline.abort(new DOMException("Inspection deadline elapsed", "TimeoutError"));
+      expect(await connecting).toEqual(blocked);
+      expect(value.provisioner.control).not.toHaveBeenCalled();
+      expect(value.startSession).toHaveBeenCalledOnce();
+    } finally { budgets.mockRestore(); await value.owner.close(); }
   });
 
   it("does not report a refused or deferred admission as a carrier failure", async () => {

@@ -11,6 +11,7 @@ import { OpenCodeRuntime } from "../../src/server/backends/opencode/opencode-run
 import { OpenCodeHostAgentTools } from "../../src/server/backends/opencode/opencode-host-agent-tools.js";
 import { configurationFingerprint } from "../../src/server/config/configuration-fingerprint.js";
 import { openCodeTestMutationControl } from "../helpers/opencode-native-port-fixture.js";
+import { startExternalOpenCodeSidecar } from "../helpers/persistent-opencode-fixture.js";
 import * as ownedProcesses from "../../src/server/backends/opencode/opencode-owned-process.js";
 
 const roots: string[] = [];
@@ -28,7 +29,7 @@ afterEach(async () => {
 async function directory(): Promise<string> {
   const root = await mkdtemp(path.join(os.tmpdir(), "opencode-runtime-test-")); roots.push(root); return root;
 }
-async function server(input: { authenticated?: boolean; version?: string; redirect?: string; oversized?: boolean; sessionDirectory?: string } = {}) {
+async function server(input: { authenticated?: boolean; version?: string; redirect?: string; oversized?: boolean; sessionDirectory?: string; runningSession?: string } = {}) {
   const requests: string[] = [];
   const eventStreams = new Set<ServerResponse>();
   const http = createServer((request, response) => {
@@ -43,6 +44,9 @@ async function server(input: { authenticated?: boolean; version?: string; redire
       response.write('data: {"id":"evt_connected","type":"server.connected","data":{}}\n\n'); return;
     }
     response.setHeader("content-type", "application/json");
+    if (input.runningSession && request.url === "/api/session/active") {
+      response.end(JSON.stringify({ data: { [input.runningSession]: { type: "running" } } })); return;
+    }
     if (input.sessionDirectory && request.url === "/api/session/ses_fixture") {
       response.end(JSON.stringify({ data: { id: "ses_fixture", projectID: "prj_fixture", title: "Fixture", location: { directory: input.sessionDirectory },
         cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, time: { created: 1, updated: 1 } } })); return;
@@ -222,6 +226,43 @@ describe.skipIf(process.platform !== "linux")("OpenCode native store and externa
     resolvePassword(password); await Promise.resolve();
     expect(requests).toBe(phase === "password" ? 0 : phase === "identity" ? 2 : 1);
   });
+  it.each([false, true])("preserves the external daemon and its native work across sidecar retirement (retained tool route %s)", async keepRoute => {
+    const root = await directory(), store = path.join(root, "opencode.db"); await writeFile(store, "native history");
+    const fixture = await server({ version: "2.3.0", runningSession: "ses_independent", sessionDirectory: root });
+    const { runtime, services, stop, epoch } = await startExternalOpenCodeSidecar({ ownershipDirectory: root,
+      nativeStorePath: store, endpoint: fixture.endpoint, password });
+    const independent = new OpenCodeHttpClient({ endpoint: fixture.endpoint, password });
+    try {
+      const target = { directory: root, session: { applicationThreadId: "thread", nativeSessionID: "ses_fixture", bindingFingerprint: "b".repeat(64) } };
+      const port = runtime.acquire(target);
+      await expect(port.client.read("getSession", { sessionID: target.session.nativeSessionID })).resolves.toMatchObject({ id: "ses_fixture" });
+      expect(services.status().resources[0]?.blockers).toEqual([]);
+      const pid = (await independent.info()).pid;
+      if (keepRoute) {
+        const route = runtime.admitToolSession(target, { sourceCapability: "mcp", catalog: [] });
+        expect(services.status().resources[0]?.blockers).toEqual(["active_work"]);
+        await route; port.release();
+        // A retained native tool route can be used after detach even with no current call.
+        services.detach(epoch);
+        await expect(stop()).rejects.toThrow("upgrade_blocked");
+        expect(runtime.snapshot().state).toBe("ready");
+        return;
+      }
+      expect((await services.refreshStatus()).resources[0]).toMatchObject({ state: "idle", blockers: [] });
+      const retiring = stop();
+      expect(() => services.assertAdmission(epoch)).toThrow("not_accepting_work");
+      await retiring;
+      expect(port.client.lifetime.aborted).toBe(true);
+      expect(runtime.snapshot().state).toBe("stopped");
+      expect(services.status().state).toBe("stopped");
+      await expect(independent.info()).resolves.toMatchObject({ pid, version: "2.3.0" });
+      await expect(independent.call((client, signal) => client.session.active({ signal }), value => value))
+        .resolves.toEqual({ ses_independent: { type: "running" } });
+      expect(fixture.requests.every(request => request.startsWith("GET "))).toBe(true);
+      expect((await readdir(root)).filter(name => name.endsWith(".lock"))).toEqual([]);
+    } finally { independent.close(); await runtime.close(); }
+  });
+
   it("retains host tool routing and native observation after the caller's last port closes", async () => {
     const root = await directory(), store = path.join(root, "opencode.db"); await writeFile(store, "native history");
     const fixture = await server({ sessionDirectory: root });

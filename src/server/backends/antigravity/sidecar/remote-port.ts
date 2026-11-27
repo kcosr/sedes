@@ -55,7 +55,10 @@ export class AntigravityRemotePort implements AntigravityPort {
         this.#serviceReplaced = true;
         throw new AntigravityError("antigravity_runtime_incarnation_changed", "sent_outcome_unknown");
       }
-      let value = await call(lease, retained
+      // A fresh normal proxy must check its configured native profile even on
+      // an existing-only lease. Recovery of a previously bound runtime can
+      // rely on its pinned incarnation and runtime ID across configuration drift.
+      let value = await call(lease, retained && (this.#identity || this.input.existingOnly)
         ? { action: "lookup_retained", backendInstanceId: this.input.configuration.backendInstanceId }
         : { action: "lookup", configuration: this.input.configuration }, this.#lifetime.signal);
       if (value === null && !this.#identity && !retained) {

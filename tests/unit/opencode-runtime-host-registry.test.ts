@@ -23,6 +23,9 @@ const configuration: OpenCodeRuntimeConfiguration = {
   nativeStorePath: "/native/opencode.db", configDirectory: "/native/config",
   connection: { ownership: "owned", channel: { type: "process_stdio", executablePath: "/bin/opencode2", workingDirectory: "/workspace" } },
 };
+const externalConfiguration: OpenCodeRuntimeConfiguration = { ...configuration,
+  connection: { ownership: "external", channel: { type: "http", url: "http://127.0.0.1:4096", authentication: {
+    type: "basic", username: "opencode", secret: { source: "environment", variable: "SEDES_OPENCODE_PASSWORD" } } } } };
 function deferred() { let release!: () => void; const promise = new Promise<void>(resolve => { release = resolve; }); return { promise, release }; }
 function fixture(createHost?: (runtimeId: string) => OpenCodeNativeHost, beforeOwnedLaunch?: () => Promise<void>) {
   const archive = vi.fn(async (_record: unknown) => {});
@@ -41,10 +44,11 @@ function fixture(createHost?: (runtimeId: string) => OpenCodeNativeHost, beforeO
       return this.cliCapabilities.get(capability);
     }
     state: OpenCodeRuntimeSnapshot["state"] = "stopped";
-    frozen = false; revision = 0; retained = 0; active: number | null = null; interactions: number | null = null;
+    frozen = false; hasAttachmentWork = false; revision = 0; retained = 0; active: number | null = null; interactions: number | null = null;
     startPromise?: Promise<void>;
     readonly host = {
       freezeAdmission: () => { this.frozen = true; }, restoreAdmission: () => { this.frozen = false; }, prepareRetirement: vi.fn(async () => {}),
+      attachmentActivity: () => ({ active: false, unknown: false, unsettled: this.retained > 0 }),
       retentionSnapshot: () => ({ revision: String(this.revision), threadIds: this.retained ? ["retained-thread"] : [], pendingMutationCount: 0, retainedMutationCount: this.retained,
         pendingInteractionCount: this.interactions, activeWorkCount: this.active,
         observation: { pendingEvidenceCount: 0, nativeConnected: true, currentInputCount: 0, retentionExhausted: false } }),
@@ -192,20 +196,19 @@ describe("resident OpenCode runtime registry", () => {
     const next = attachFixturePolicy(f.services, serviceConfiguration); expect(await f.hosts.lookup(configuration, next)).toBe(f.owners[0]);
   });
 
-  it.each(["owned", "external"] as const)("reports a ready idle %s resident without inventing active work or allowing automatic retirement", async ownership => {
+  it.each(["owned", "external"] as const)("requires full native inventory for backend Stop and owned daemon replacement (%s)", async ownership => {
     const f = fixture();
-    const selected: OpenCodeRuntimeConfiguration = ownership === "owned" ? configuration : { ...configuration,
-      connection: { ownership: "external", channel: { type: "http", url: "http://127.0.0.1:4096", authentication: {
-        type: "basic", username: "opencode", secret: { source: "environment", variable: "SEDES_OPENCODE_PASSWORD" } } } } };
+    const selected = ownership === "owned" ? configuration : externalConfiguration;
     const runtime = await f.hosts.ensure(selected, f.epoch), owner = f.owners[0]!;
     owner.active = 0; owner.interactions = 0;
     const idle = await f.hosts.inspect(runtime.runtimeId);
     expect(idle).toMatchObject({ state: "active", blockers: ["unknown_state"], retainedThreadIds: [] });
     expect(owner.host.retentionSnapshot()).toMatchObject({ activeWorkCount: 0, pendingInteractionCount: 0, retainedMutationCount: 0 });
     const service = f.services.status();
-    expect(service.resources[0]).toMatchObject({ state: "unknown", blockers: ["unknown_state"] });
+    expect(service.resources[0]).toMatchObject({ resourceId: `opencode:${runtime.runtimeId}`,
+      ...(ownership === "owned" ? { state: "unknown", blockers: ["unknown_state"] } : { state: "idle", blockers: [] }) });
     await expect(f.hosts.stop(runtime.runtimeId, idle.revision, false)).rejects.toThrow("restart_blocked");
-    await expect(f.serviceStop(false)).rejects.toThrow("cleanup_unproven");
+    if (ownership === "owned") await expect(f.serviceStop(false)).rejects.toThrow("cleanup_unproven");
     expect(f.controls.signals).not.toHaveBeenCalled();
     expect(owner.frozen).toBe(false);
 
@@ -216,6 +219,71 @@ describe("resident OpenCode runtime registry", () => {
     expect(await f.hosts.inspect(runtime.runtimeId)).toMatchObject({ state: "active", blockers: ["unknown_state"] });
     owner.state = "cleanup_unproved";
     expect(await f.hosts.inspect(runtime.runtimeId)).toMatchObject({ state: "unknown", blockers: ["unknown_state", "cleanup_unproven"] });
+    await expect(f.serviceStop(false)).rejects.toThrow("cleanup_unproven");
+  });
+
+  it("retires an external attachment only after in-flight requests drain and uncertain outcomes are acknowledged", async () => {
+    const wire = createOpenCodeApiFixture(), client = new OpenCodeHttpClient({
+      endpoint: "http://127.0.0.1:4096", password: "fixture", fetch: wire.fetch,
+    });
+    const f = fixture(runtimeId => new OpenCodeNativeHost({ ...scope, executionEnvironmentId,
+      backendInstanceId: "backend", runtimeId, nativeGeneration: "native-generation" }, new OpenCodeHttpNativeAdapter(client), {
+      assertCurrent: async () => {}, installSessionEnvironment: async () => {}, ensureMcpRegistration: async () => {},
+    }, client.lifetime));
+    try {
+      const runtime = await f.hosts.ensure(externalConfiguration, f.epoch), host = f.hosts.get(runtime.runtimeId);
+      const port = host.acquire({ directory: wire.directory, session: {
+        applicationThreadId: "thread", nativeSessionID: wire.sessionID, bindingFingerprint: "binding",
+      } });
+      const observer = port.observe({ purpose: "evidence" }), boundary = await observer.ready;
+      const hold = wire.hold(`/api/session/${wire.sessionID}`);
+      // An existing port can race the service's asynchronous inspection. The
+      // fenced snapshot must still see this request before participant close.
+      const retiring = f.serviceStop(false);
+      const read = port.read("getSession", { sessionID: wire.sessionID });
+      await expect(retiring).rejects.toThrow("confirmation_stale");
+      await hold.entered;
+      expect(f.services.status().resources[0]?.blockers).toEqual(["active_work"]);
+      await expect(f.serviceStop(false)).rejects.toThrow("upgrade_blocked");
+      hold.release(); await read;
+      const control = openCodeTestMutationControl("stop");
+      wire.setResponse(`/api/session/${wire.sessionID}/interrupt`, 503, {});
+      await expect(port.mutate("interruptSession", { sessionID: wire.sessionID }, control)).rejects.toMatchObject({ delivery: "sent_outcome_unknown" });
+      expect(f.services.status().resources[0]?.blockers).toEqual(["unsettled_outcome"]);
+      await expect(f.serviceStop(false)).rejects.toThrow("upgrade_blocked");
+      await port.acknowledgeMutation("interruptSession", control.identity);
+      const delivered = { id: "evt_input", created: 1, type: "session.inbox.delivered",
+        durable: { aggregateID: wire.sessionID, seq: 1, version: 1 }, data: { sessionID: wire.sessionID, inboxID: "msg_input" } };
+      wire.send(delivered);
+      await observer.wait();
+      await observer.acknowledge({ journalId: boundary.journalId, sequence: observer.drain().at(-1)!.sequence });
+      expect(f.services.status().resources[0]).toMatchObject({ state: "active", blockers: ["active_work"] });
+      // Conflicting history invalidates the input's execution fence. A failed
+      // reconciliation cannot label the lost execution active or prove settlement.
+      wire.setResponse("/api/session/active", 503, {});
+      wire.send({ ...delivered, data: { sessionID: wire.sessionID, inboxID: "msg_conflicting" } });
+      await observer.wait();
+      expect(f.services.status().resources[0]).toMatchObject({ state: "unknown", blockers: ["unsettled_outcome", "unknown_state"] });
+      await observer.acknowledge({ journalId: boundary.journalId, sequence: observer.drain().at(-1)!.sequence });
+      expect(f.services.status().resources[0]).toMatchObject({ state: "unknown", blockers: ["unknown_state"] });
+      await expect(f.serviceStop(false)).rejects.toThrow("cleanup_unproven");
+      wire.send({ id: "evt_terminal", created: 2, type: "session.execution.succeeded",
+        durable: { aggregateID: wire.sessionID, seq: 2, version: 1 }, data: { sessionID: wire.sessionID } });
+      await observer.wait();
+      expect(f.services.status().resources[0]?.blockers).toEqual(["unsettled_outcome"]);
+      await observer.acknowledge({ journalId: boundary.journalId, sequence: observer.drain().at(-1)!.sequence });
+      // An idle observer and its open port can be released by disconnect. A
+      // native job outside this attachment and its evidence is independently owned.
+      wire.setResponse("/api/session/active", 200, { data: { ses_unrelated: { type: "running" } } });
+      expect((await f.services.refreshStatus()).resources[0]).toMatchObject({ state: "idle", blockers: [] });
+      await f.serviceStop(false);
+      expect(port.lifetime.aborted).toBe(true);
+      expect((await observer.ended).reason).toBe("aborted");
+      await expect(port.read("getSession", { sessionID: wire.sessionID })).rejects.toThrow("unavailable");
+      expect(f.controls.signals).not.toHaveBeenCalled();
+      expect(f.archive).not.toHaveBeenCalled();
+      expect(wire.requests.filter(request => request.method === "POST")).toHaveLength(1);
+    } finally { client.close(); }
   });
 
   it("requires current confirmation and explicit force for unknown background inventory", async () => {
@@ -235,9 +303,7 @@ describe("resident OpenCode runtime registry", () => {
 
   it.each(["owned", "external"] as const)("retires %s ownership with metadata archival and the correct native control authority", async ownership => {
     const f = fixture();
-    const selected: OpenCodeRuntimeConfiguration = ownership === "owned" ? configuration : { ...configuration,
-      connection: { ownership: "external", channel: { type: "http", url: "http://127.0.0.1:4096", authentication: {
-        type: "basic", username: "opencode", secret: { source: "environment", variable: "SEDES_OPENCODE_PASSWORD" } } } } };
+    const selected = ownership === "owned" ? configuration : externalConfiguration;
     const runtime = await f.hosts.ensure(selected, f.epoch); f.owners[0]!.retained = 1;
     await f.hosts.stop(runtime.runtimeId, (await f.hosts.inspect(runtime.runtimeId)).revision, true);
     expect(f.controls.signals).toHaveBeenCalledTimes(ownership === "owned" ? 1 : 0);
@@ -265,7 +331,7 @@ describe("resident OpenCode runtime registry", () => {
     expect(retained).toBe(f.owners[0]); expect(f.services.status().resources[0]!.blockers).toContain("cleanup_unproven");
   });
 
-  it.each(["owned", "external"] as const)("preserves confirmed service retirement of %s work while native SSE continues after detach", async ownership => {
+  it.each(["owned", "external"] as const)("binds confirmed service retirement of %s work to current replacement blockers across detach", async ownership => {
     const wire = createOpenCodeApiFixture(), client = new OpenCodeHttpClient({
       endpoint: "http://127.0.0.1:4096", password: "fixture", fetch: wire.fetch,
     });
@@ -276,9 +342,7 @@ describe("resident OpenCode runtime registry", () => {
       ensureMcpRegistration: async () => { throw new Error("unexpected MCP mutation"); },
     }, client.lifetime));
     try {
-      const selected: OpenCodeRuntimeConfiguration = ownership === "owned" ? configuration : { ...configuration,
-        connection: { ownership: "external", channel: { type: "http", url: "http://127.0.0.1:4096", authentication: {
-          type: "basic", username: "opencode", secret: { source: "environment", variable: "SEDES_OPENCODE_PASSWORD" } } } } };
+      const selected = ownership === "owned" ? configuration : externalConfiguration;
       const runtime = await f.hosts.ensure(selected, f.epoch), host = f.hosts.get(runtime.runtimeId);
       const port = host.acquire({ directory: wire.directory, session: {
         applicationThreadId: "retained-thread", nativeSessionID: wire.sessionID, bindingFingerprint: "binding",
@@ -291,12 +355,13 @@ describe("resident OpenCode runtime registry", () => {
       wire.setResponse("/api/session/active", 200, { data: { [wire.sessionID]: { type: "running" } } });
       expect((await f.hosts.inspect(runtime.runtimeId)).state).toBe("active");
       const confirmed = f.services.status();
-      expect(confirmed.resources[0]).toMatchObject({ state: "unknown", blockers: ["unknown_state"] });
+      expect(confirmed.resources[0]).toMatchObject(ownership === "owned"
+        ? { state: "unknown", blockers: ["unknown_state"] } : { state: "active", blockers: ["active_work"] });
 
-      // A native mutation receipt, followed by main closing its evidence reader,
-      // changes the detailed inventory but not authority to retire this owner.
+      // A new retained Sedes response changes the external attachment's risks.
       await port.mutate("interruptSession", { sessionID: wire.sessionID }, openCodeTestMutationControl("interrupt"));
       expect(host.retentionSnapshot().retainedMutationCount).toBe(1);
+      const withResponse = f.services.status();
       await observer.close(); host.release(port); f.services.detach(f.epoch);
       const beforeStreaming = host.retentionSnapshot().revision;
       wire.send({ id: "evt_delta", created: 2, type: "session.text.delta", data: {
@@ -308,10 +373,14 @@ describe("resident OpenCode runtime registry", () => {
           inboxID: "msg_queued", item: { type: "user", delivery: "queue", payload: { text: "queued during detach" } } } });
       await vi.waitFor(() => expect(host.retentionSnapshot().observation.pendingEvidenceCount).toBe(1));
       expect(host.retentionSnapshot().activeWorkCount).toBeNull();
-      expect(f.services.status().resourcesFingerprint).toBe(confirmed.resourcesFingerprint);
-
+      expect(f.services.status().resourcesFingerprint).toBe(withResponse.resourcesFingerprint);
+      if (ownership === "external") {
+        await expect(f.services.stop({ expectedServiceIncarnation: confirmed.serviceIncarnation, controllerEpoch: confirmed.controllerEpoch,
+          expectedConfiguration: confirmed.desiredConfiguration, expectedResourcesFingerprint: confirmed.resourcesFingerprint,
+          force: true, reason: "upgrade" })).rejects.toThrow("confirmation_stale");
+      }
       await f.services.stop({ expectedServiceIncarnation: confirmed.serviceIncarnation, controllerEpoch: confirmed.controllerEpoch,
-        expectedConfiguration: confirmed.desiredConfiguration, expectedResourcesFingerprint: confirmed.resourcesFingerprint,
+        expectedConfiguration: confirmed.desiredConfiguration, expectedResourcesFingerprint: withResponse.resourcesFingerprint,
         force: true, reason: "upgrade" });
       expect(f.services.status().state).toBe("stopped");
       expect(f.controls.signals).toHaveBeenCalledTimes(ownership === "owned" ? 1 : 0);

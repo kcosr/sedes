@@ -454,6 +454,9 @@ export class AntigravityHost implements AntigravityPort {
     const command = antigravityCommandSchema.parse(input.command); const fingerprint = digest(command);
     const existing = session.operations.get(input.operationId) ?? session.tombstones.get(input.operationId);
     if (existing) { if (existing.fingerprint !== fingerprint) throw new AntigravityError("antigravity_operation_conflict"); return existing.outcome; }
+    // Retained cancel and deny controls can outlive the original policy, but a
+    // fenced host shutdown must not admit a new operation during its final read.
+    if (this.#frozen || this.#closed) throw new AntigravityError("antigravity_runtime_closed");
     if (command.type !== "cancel" && command.type !== "permission") this.#admit(authority, signal);
     if (command.type === "permission" && command.response.outcome.outcome === "selected") {
       const optionId = command.response.outcome.optionId;
@@ -750,9 +753,12 @@ export class AntigravityHost implements AntigravityPort {
     }
     this.#completeCancellation(session, cancellationEpoch);
   }
-  async #refreshNative(session: Session, completeDrain = false) {
+  async #refreshNative(session: Session, completeDrain = false, signal?: AbortSignal) {
     const epoch = !session.cancelDrain || completeDrain ? this.#cancellationReadEpoch(session) : undefined;
-    try { this.#applyNative(session, await this.#readNative(session.identity), epoch); }
+    try {
+      const history = await this.#readNative(session.identity, signal);
+      signal?.throwIfAborted(); this.#applyNative(session, history, epoch);
+    }
     catch { if (!session.nativeUnknown) this.#revision++; session.nativeUnknown = true; session.nativeReadable = false; }
   }
   async #closeSessionPeer(session: Session, purpose: "replace" | "retire") {
@@ -807,8 +813,13 @@ export class AntigravityHost implements AntigravityPort {
         pendingWork: this.#pendingWork.size > 0, creating: [...this.#creating.keys()].sort() }), blockers: [...blockers],
       retainedSessions: [...this.#sessions.values()].map(session => ({ ...session.identity, handleId: session.handleId, generation: session.generation, closed: session.closed })) };
   }
+  async #refreshSessions(signal?: AbortSignal) {
+    const deadline = AbortSignal.timeout(10_000);
+    const inventory = signal ? AbortSignal.any([signal, deadline]) : deadline;
+    await Promise.all([...this.#sessions.values()].map(session => this.#refreshNative(session, false, inventory)));
+  }
   async inspect(signal?: AbortSignal, authority = localAuthority) {
-    this.#current(authority, signal); await Promise.all([...this.#sessions.values()].map(session => this.#refreshNative(session)));
+    this.#current(authority, signal); await this.#refreshSessions(signal);
     this.#current(authority, signal); return this.snapshot();
   }
   async stop(input: Parameters<AntigravityPort["stop"]>[0], signal?: AbortSignal, authority = localAuthority,
@@ -821,7 +832,7 @@ export class AntigravityHost implements AntigravityPort {
         // Compare the operator's stable ownership revision before any refresh.
         // Fence admission while checking native work which may have started
         // independently since the last inspection, then refuse every blocker.
-        await Promise.all([...this.#sessions.values()].map(session => this.#refreshNative(session)));
+        await this.#refreshSessions(signal);
         this.#current(authority, signal);
         if (this.snapshot().blockers.length) throw new AntigravityError("antigravity_runtime_busy");
       }

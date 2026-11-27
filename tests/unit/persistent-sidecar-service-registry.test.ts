@@ -182,14 +182,14 @@ describe("persistent sidecar resource ownership", () => {
     expect(service.status().state).toBe("stopped");
   });
 
-  it("refreshes unknown status without freezing admission and shares concurrent observations", async () => {
+  it.each(["unknown", "active", "idle"] as const)("refreshes blocked %s status without freezing admission and shares concurrent observations", async state => {
     const service = registry();
     let known = false;
     let release!: () => void;
     const pending = new Promise<void>(resolve => { release = resolve; });
     const prepareRestart = vi.fn(async () => { await pending; known = true; });
     service.register({ resourceId: "provider-a", kind: "provider",
-      snapshot: () => ({ state: known ? "idle" : "unknown", revision: known ? "idle" : "unknown", blockers: known ? [] : ["unknown_state"] }),
+      snapshot: () => ({ state: known ? "idle" : state, revision: known ? "idle" : "cached", blockers: known ? [] : ["unsettled_outcome"] }),
       prepareRestart, stop: async () => undefined });
     const controllerEpoch = attachFixturePolicy(service, configuration);
     const first = service.refreshStatus();
@@ -209,11 +209,11 @@ describe("persistent sidecar resource ownership", () => {
       const service = registry();
       const stop = vi.fn(async () => undefined);
       const prepareRestart = vi.fn(() => new Promise<void>(() => undefined));
-      service.register({ resourceId: "provider-a", kind: "provider", snapshot: () => ({ state: "unknown", revision: "unknown", blockers: ["unknown_state"] }), prepareRestart, stop });
+      service.register({ resourceId: "provider-a", kind: "provider", snapshot: () => ({ state: "active", revision: "pending", blockers: ["unsettled_outcome"] }), prepareRestart, stop });
       const controllerEpoch = attachFixturePolicy(service, configuration);
       const observation = service.refreshStatus();
       await vi.advanceTimersByTimeAsync(1_000);
-      expect((await observation).resources[0]).toMatchObject({ state: "unknown" });
+      expect((await observation).resources[0]).toMatchObject({ state: "unknown", blockers: ["unsettled_outcome", "unknown_state"] });
       service.assertAdmission(controllerEpoch);
       const stopping = service.stop({ expectedServiceIncarnation: service.serviceIncarnation, controllerEpoch, expectedConfiguration: configuration,
         expectedResourcesFingerprint: service.status().resourcesFingerprint, force: true, reason: "stop" });

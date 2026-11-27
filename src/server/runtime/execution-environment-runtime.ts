@@ -101,6 +101,7 @@ export interface ExecutionEnvironmentRuntime {
 export interface ExecutionEnvironmentRuntimeInput {
   readonly readDesiredPolicy?: () => InstalledExecutionPolicy;
   readonly onPolicyChanged?: () => void;
+  readonly reconcileForUpgrade?: SidecarRuntimeOwnerOptions<SidecarClientSession>["reconcileForUpgrade"];
   readonly policyRecovery?: SidecarRuntimeOwnerOptions<SidecarClientSession>["policyRecovery"];
   readonly readWorkspaceBinding?: (workspaceId: string, rootId?: string) => {authorityRootId?: string; authorityRevision: number} | undefined;
   readonly readWorkspaceRoots: () => InstalledExecutionPolicy["snapshot"]["roots"];
@@ -394,6 +395,7 @@ export async function createExecutionEnvironmentRuntime(
     const runtimeOptions = {
       readDesiredPolicy,
       onPolicyChanged: input.onPolicyChanged,
+      reconcileForUpgrade: input.reconcileForUpgrade,
       policyRecovery: input.policyRecovery,
       scope,
       executionEnvironmentId: record.id,

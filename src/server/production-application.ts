@@ -78,7 +78,7 @@ import { configurationFingerprint } from "./config/configuration-fingerprint.js"
 import { workspaceRootGrant } from "./execution/workspace-root-grant.js";
 import { ExecutionHostQueue } from "./runtime/execution-host-queue.js";
 import type { ConfigurationEnvironment, ConfigurationRuntimeState } from "../shared/protocol/configuration-admin.js";
-import type { SidecarServiceStatus } from "../internal/sidecar-protocol/service-management-v1.js";
+import { blocksSidecarUpgrade, type SidecarServiceStatus } from "../internal/sidecar-protocol/service-management-v1.js";
 import {
   ConversationActorManager,
   type AuthoritativeCompletionObserver,
@@ -687,6 +687,7 @@ export async function startProductionApplication(
       return found ? environmentTransportFingerprint(found) : undefined;
     };
     let onHostPolicyChange: ((environmentId: string) => void) | undefined;
+    let reconcileProviderOutcomes: ((environmentId: string, incarnation: string, signal: AbortSignal) => Promise<boolean>) | undefined;
     const agentToolSidecarRuntimes = new Map<string, SidecarRuntimeOwner<SidecarClientSession>>();
     let sidecarArtifactPromise: Promise<SidecarArtifactRegistration> | undefined;
     const sidecarArtifact = (): Promise<SidecarArtifactRegistration> => {
@@ -727,6 +728,7 @@ export async function startProductionApplication(
             return policy;
           },
           onPolicyChanged: () => onHostPolicyChange?.(environmentId),
+          reconcileForUpgrade: async (incarnation, signal) => await reconcileProviderOutcomes?.(environmentId, incarnation, signal) ?? false,
         } : {}),
         activeEnvironmentRecord: () => inventoryRepository.getEnvironment(scope, environmentId),
         automaticConnectionEnabled: () => configurationRepository.runtime(scope, "environment", environmentId).preference === "automatic",
@@ -2635,6 +2637,20 @@ export async function startProductionApplication(
         configurationRepository.runtime(scope, "backend", backendId).preference === "automatic" &&
         configurationRepository.runtime(scope, "environment", environmentId).preference === "automatic";
     };
+    reconcileProviderOutcomes = async (environmentId, incarnation, signal) => {
+      let inspected = false;
+      for (const [id, module] of moduleRuntimes) {
+        const admin = module.administration;
+        if (!admin?.reconcileForUpgrade || backendHost(id) !== environmentId ||
+          !backendAttachmentAdmission(id, module)() || !backendHasRemoteProvider(id)) continue;
+        const bound = backendSidecarBindings.get(module)?.serviceIncarnation;
+        if (bound && bound !== incarnation) continue;
+        signal.throwIfAborted();
+        await admin.reconcileForUpgrade(signal);
+        inspected = true;
+      }
+      return inspected;
+    };
     const attachAdmittedThreads = async (
       backendId: string, threadIds: readonly string[], signal: AbortSignal, isAdmitted: () => boolean, coordinator: ThreadRuntimeCoordinator,
       reportable: (error: unknown) => boolean = () => true,
@@ -2845,11 +2861,13 @@ export async function startProductionApplication(
       if (record.resourceKind === "environment") {
         const definition = current.configuration.executionEnvironments.find(item => item.id === id);
         const owner = environmentRuntimes.get(id)?.sidecarRuntime;
+        const hostBackends = current.configuration.backends.filter(backend => current.configuration.targets.some(target =>
+          target.backendInstanceId === backend.id && target.executionEnvironmentId === id));
         if (refresh && owner) {
           // Refresh backend-owned native inventory before binding an environment
           // impact token. The independent management status still works when a
           // provider runtime cannot be recovered or speaks an older dialect.
-          for (const backend of (refreshProvider ? current.configuration.backends : []).filter(backend => current.configuration.targets.some(target => target.backendInstanceId === backend.id && target.executionEnvironmentId === id))) {
+          for (const backend of refreshProvider ? hostBackends : []) {
             try { const control = backendHasRemoteProvider(backend.id) ? await recoverBackendAdministration(backend.id) : moduleRuntimes.get(backend.id)?.administration; if (control) { observedBackends.set(backend.id, await control.inspect()); attachRetainedWork(backend.id); } }
             catch { /* Stable management inventory remains authoritative below. */ }
           }
@@ -2860,10 +2878,18 @@ export async function startProductionApplication(
         const replacementReady = recoveryRequired === "sidecar_service_replacement_ready";
         service = replacementReady ? undefined : observedServices.get(id) ?? undefined;
         const terminalImpact = terminalService.impact(scope, id);
-        const blockers = service?.resources.filter(item => item.state !== "idle" || item.blockers.length > 0) ?? [];
-        interruptions.push(...blockers.map(item => `${item.kind} ${item.resourceId} (${item.state}): ${item.blockers.join(", ") || "no additional blockers"}`));
+        const blockers = service?.resources.filter(blocksSidecarUpgrade) ?? [];
+        const blockedResources = blockers.map(item => {
+          const backend = item.kind === "provider" && hostBackends.find(backend => {
+            const incarnation = observedBackends.get(backend.id)?.incarnation;
+            return incarnation && (item.resourceId === incarnation || item.resourceId === `${backend.kind}:${incarnation}`);
+          });
+          const label = backend ? `${backend.label} (${item.resourceId})` : item.resourceId;
+          return `${item.kind} ${label} (${item.state}): ${item.blockers.join(", ") || "no additional blockers"}`;
+        });
+        interruptions.push(...blockedResources);
         // Provider-reported work, including conversations nobody has open.
-        for (const backend of current.configuration.backends.filter(backend => current.configuration.targets.some(target => target.backendInstanceId === backend.id && target.executionEnvironmentId === id))) {
+        for (const backend of hostBackends) {
           const activity = describeRuntimeActivity(observedBackends.get(backend.id)?.activity);
           if (activity) interruptions.push(`${backend.label}: ${activity}.`);
         }
@@ -2890,16 +2916,20 @@ export async function startProductionApplication(
           : remote
             ? prepared && (stopped || (disconnected && !service) || Boolean(policyConfirmed && (record.preference !== "disconnected" || disconnected)))
             : prepared;
+        const upgradeState = !remote ? "current" : !service || !owner ? "unknown" : service.artifactSha256 === owner.artifact.artifactSha256 ? "current" : service.runtimeWireVersion === SIDECAR_WIRE_VERSION ? "pending" : "required";
+        const attachmentCode = !service?.attached ? attachmentBlocks.get(id) : undefined;
+        const upgradeBlock = upgradeState === "pending" && record.preference === "automatic" && blockedResources.length
+          ? `Automatic upgrade is waiting for ${blockedResources.slice(0, 2).join(" and ")}. ${blockedResources.length > 2 ? `See ${blockedResources.length - 2} more in the impact preview. ` : ""}Use Upgrade and restart to review the impact.` : null;
         runtime = {...record,
           effectiveRevision: applied ? record.desiredRevision : record.effectiveRevision,
           applyState: policyConflict || outboundOffline || observationFailures.has(key) || environmentPreparationFailures.has(id) ? "unavailable" : applied ? "applied" : "pending",
           connectionState: outboundOffline ? "unreachable" : policyConflict ? "policy_conflict" : replacementReady ? "disconnected" : recoveryRequired ? "recovery_required" : stopped ? "stopped" : disconnected ? "disconnected" : observationFailures.has(key) ? "unreachable" : remote ? service?.attached ? "connected" : observed ? "disconnected" : "unknown" : environmentRuntimes.has(id) ? "connected" : "stopped",
           incarnation: service?.serviceIncarnation ?? (remote ? null : environmentRuntimes.has(id) ? `local:${sidecarInstallationId}:${id}` : null),
           softwareVersion: service?.buildId ?? null,
-          upgradeState: !remote ? "current" : !service || !owner ? "unknown" : service.artifactSha256 === owner.artifact.artifactSha256 ? "current" : service.runtimeWireVersion === SIDECAR_WIRE_VERSION ? "pending" : "required",
+          upgradeState,
           activeResources: Math.max(blockers.length, terminalImpact.liveCount + terminalImpact.unknownCount),
           supportedActions: owner && definition && !outboundOffline ? policyConflict ? ["restart", "stop", "disconnect"] : replacementReady ? ["connect", "disconnect", "start"] : ["connect", "disconnect", "start", "stop", "restart", "upgrade"] : [],
-          lastError: policyConflict ? "The running service has a conflicting execution policy. Inspect its active work before restarting the service to recover." : outboundOffline ? "The host connector is offline. Start it on the host or wait for it to reconnect; retained work has not been discarded." : recoveryRequired ? sidecarOwnershipRecoveryMessage(recoveryRequired) : observationFailures.has(key) ? "The execution host is unreachable; retained work has not been discarded." : environmentPreparationFailures.has(id) ? "The environment could not apply its configuration. Check its settings and installed sidecar artifacts." : service?.state === "handoff_pending" ? "Final terminal history or operation outcomes must be recovered before this service can stop." : service?.state === "cleanup_unproven" ? "Resource cleanup is unconfirmed; replacement is blocked. Stop the service to retry its cleanup." : attachmentBlocks.has(id) && !service?.attached ? attachmentBlockMessage(attachmentBlocks.get(id)!) : null,
+          lastError: policyConflict ? "The running service has a conflicting execution policy. Inspect its active work before restarting the service to recover." : outboundOffline ? "The host connector is offline. Start it on the host or wait for it to reconnect; retained work has not been discarded." : recoveryRequired ? sidecarOwnershipRecoveryMessage(recoveryRequired) : observationFailures.has(key) ? "The execution host is unreachable; retained work has not been discarded." : environmentPreparationFailures.has(id) ? "The environment could not apply its configuration. Check its settings and installed sidecar artifacts." : service?.state === "handoff_pending" ? "Final terminal history or operation outcomes must be recovered before this service can stop." : service?.state === "cleanup_unproven" ? "Resource cleanup is unconfirmed; replacement is blocked. Stop the service to retry its cleanup." : attachmentCode && (attachmentCode !== "sidecar_service_upgrade_blocked" || !upgradeBlock) ? attachmentBlockMessage(attachmentCode) : upgradeBlock,
         };
       } else {
         const definition = current.configuration.backends.find(item => item.id === id);

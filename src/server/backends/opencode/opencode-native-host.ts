@@ -239,6 +239,13 @@ export class OpenCodeNativeHost {
   hasAdmittedTarget(target: OpenCodeRuntimeTarget): boolean {
     return this.#scopes.has(configurationFingerprint({ ...this.owner, ...target }));
   }
+  /** Service status reads only the flags on its decision path, without copying session or operation inventories. */
+  attachmentActivity() {
+    this.#assertOpen();
+    const observed = this.#hub.attachmentActivity();
+    return { active: observed.active || this.#journal.hasPendingMutation || [...this.#scopes.values()].some(scope => scope.operations > 0),
+      unknown: observed.unknown, unsettled: observed.unsettled || this.#journal.hasRetainedMutation };
+  }
   retentionSnapshot() {
     const journal = this.#journal.snapshot(), observation = this.#hub.retentionSnapshot();
     const inventory = this.#inventory?.observationRevision === observation.revision && this.#inventory.journalRevision === journal.revision ? this.#inventory : undefined;

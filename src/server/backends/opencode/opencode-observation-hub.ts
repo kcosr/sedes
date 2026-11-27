@@ -224,6 +224,17 @@ export class OpenCodeObservationHub {
       close: async () => finish({ reason: "closed" }),
     };
   }
+  attachmentActivity() {
+    let active = false, unknown = this.#exhausted, unsettled = false;
+    for (const scope of this.#scopes.values()) {
+      const work = scope.proof.attachmentActivity();
+      active ||= work.active;
+      unknown ||= work.unknown;
+      unsettled ||= scope.records.length > 0;
+      if (active && unknown && unsettled) break;
+    }
+    return { active, unknown, unsettled };
+  }
   retentionSnapshot() {
     const scopes = [...this.#scopes.values()];
     return { revision: this.#revision, nativeContinuity: this.#continuity, nativeConnected: this.#connected,

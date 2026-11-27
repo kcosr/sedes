@@ -8,6 +8,7 @@ import { z } from "zod";
 import { OpenCodeRuntime } from "../../src/server/backends/opencode/opencode-runtime.js";
 import { startOpenCodeOwnedProcess } from "../../src/server/backends/opencode/opencode-owned-process.js";
 import { boundedOpenCodeProcessFile, readOpenCodeNativeIdentity } from "../../src/server/backends/opencode/opencode-native-identity.js";
+import { startExternalOpenCodeSidecar } from "../helpers/persistent-opencode-fixture.js";
 import { startOpencodeNativeFixture } from "../support/opencode-native-fixture.js";
 
 import * as ownedProcesses from "../../src/server/backends/opencode/opencode-owned-process.js";
@@ -180,7 +181,7 @@ it.skipIf(!enabled)("owned opencode2 preserves native configuration, remains res
   }
 });
 
-it.skipIf(!enabled)("external stock opencode2 keeps its daemon and background shell alive after Disconnect", async () => {
+it.skipIf(!enabled)("external stock opencode2 keeps its daemon and background shell alive after Disconnect and automatic sidecar replacement", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "sedes-opencode-external-"));
   const configDirectory = path.join(root, "config");
   const nativeStorePath = path.join(root, "opencode.db");
@@ -227,6 +228,13 @@ it.skipIf(!enabled)("external stock opencode2 keeps its daemon and background sh
     const lease = runtime.acquire({ directory: root }); lease.release();
     expect(runtime.snapshot()).toMatchObject({ state: "ready", references: 0, identity: { pid: native.pid, storeObservation: "open_file" } });
     await expect(runtime.close()).resolves.toEqual({ cleanup: "proved", nativeInterrupts: "not_owned" });
+    const sidecar = await startExternalOpenCodeSidecar({ ownershipDirectory: path.join(root, "sidecar-owners"),
+      nativeStorePath, endpoint: native.endpoint, password });
+    runtime = sidecar.runtime;
+    expect(runtime.snapshot().identity?.pid).toBe(native.pid);
+    expect((await sidecar.services.refreshStatus()).resources[0]).toMatchObject({ state: "idle", blockers: [] });
+    await sidecar.stop();
+    expect(sidecar.services.status().state).toBe("stopped");
     expect(await alive(native.pid)).toBe(true);
     expect(await alive(shell.data.pid)).toBe(true);
     const runtimeVersion = await probeOpenCodeRelease(native.executablePath, { HOME: root, PATH: process.env.PATH });

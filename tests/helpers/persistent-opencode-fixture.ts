@@ -1,3 +1,4 @@
+import { SIDECAR_WIRE_VERSION } from "../../src/internal/sidecar-protocol/envelopes.js";
 import { executionPolicyDigest, policyReadOperation, policyStageOperation, policyApplyOperation, type InstalledExecutionPolicy } from "../../src/internal/sidecar-protocol/execution-policy.js";
 import { runtimeLaunchDigest } from "../../src/server/backends/provider-launch-digest.js";
 import { attachFixturePolicy } from "./execution-policy-fixture.js";
@@ -11,7 +12,7 @@ import { openCodeToolInvokeOperation } from "../../src/server/backends/opencode/
 import { OpenCodeNativeHost } from "../../src/server/backends/opencode/opencode-native-host.js";
 import { OpenCodeHttpNativeAdapter } from "../../src/server/backends/opencode/opencode-http-native-adapter.js";
 import { OpenCodeHttpClient } from "../../src/server/backends/opencode/opencode-http-client.js";
-import { openCodeRuntimeNamespaceKey, type OpenCodeRuntime, type OpenCodeRuntimeInput, type OpenCodeRuntimeSnapshot } from "../../src/server/backends/opencode/opencode-runtime.js";
+import { openCodeRuntimeNamespaceKey, OpenCodeRuntime, type OpenCodeRuntimeInput, type OpenCodeRuntimeSnapshot } from "../../src/server/backends/opencode/opencode-runtime.js";
 import type { OpenCodeRuntimeConfiguration } from "../../src/server/backends/opencode/opencode-runtime-configuration.js";
 import { registerOpenCodeRuntimeHost } from "../../src/server/backends/opencode/opencode-sidecar-runtime.js";
 import { PersistentSidecarServiceRegistry } from "../../src/server/sidecar/persistent-sidecar-service-registry.js";
@@ -141,4 +142,28 @@ export function createPersistentOpenCodeFixture(ownership: "owned" | "external" 
       nativeClient.close();
     },
   };
+}
+
+/** Real provider host/management lifecycle, with credentials and ownership storage confined to the test. */
+export async function startExternalOpenCodeSidecar(input: { ownershipDirectory: string; nativeStorePath: string; endpoint: string; password: string }) {
+  const scope = { tenantId: "tenant", principalId: "principal" }, executionEnvironmentId = "remote";
+  const configuration = { environmentRevision: 1, operationsRevision: 1 };
+  const services = new PersistentSidecarServiceRegistry({ scope: { ...scope, executionEnvironmentId, installationId: "installation" },
+    buildId: "build", artifactSha256: "a".repeat(64), runtimeWireVersion: SIDECAR_WIRE_VERSION, configuration });
+  const epoch = attachFixturePolicy(services, configuration);
+  const hosts = new OpenCodeRuntimeHostRegistry({ services, scope, executionEnvironmentId, environment: {},
+    environmentChannel: { scope, executionEnvironmentId, resolveSecret: async () => ({ value: input.password, discard() {} }) } as unknown as ExecutionEnvironmentChannelProvider,
+    createRuntime: runtimeInput => new OpenCodeRuntime({ ...runtimeInput, ownershipDirectory: input.ownershipDirectory }),
+    agentTools: { cli: () => ({ endpoint: "http://127.0.0.1:4784", executableDirectory: "/host/bin" }), invoke: vi.fn() },
+  });
+  const runtime = await hosts.ensure({
+    instance: { id: "backend", tenantId: "tenant", kind: "opencode", label: "OpenCode", enabled: true, configurationRevision: 1, protocolRelease: OPENCODE_RELEASE },
+    connections: [{ id: "profile", tenantId: "tenant", ownerPrincipalId: "principal", templateId: "template",
+      kind: "opencode_http", backendInstanceId: "backend", executionEnvironmentId, label: "OpenCode", enabled: true, configurationRevision: 1 }],
+    nativeStorePath: input.nativeStorePath, connection: { ownership: "external", channel: { type: "http", url: input.endpoint,
+      authentication: { type: "basic", username: "opencode", secret: { source: "environment", variable: "SEDES_OPENCODE_PASSWORD" } } } },
+  }, epoch);
+  const stop = () => services.stop({ expectedServiceIncarnation: services.serviceIncarnation, controllerEpoch: epoch,
+    expectedConfiguration: configuration, expectedResourcesFingerprint: services.status().resourcesFingerprint, force: false, reason: "upgrade" });
+  return { runtime, services, epoch, stop };
 }
