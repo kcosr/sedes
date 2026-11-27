@@ -224,19 +224,26 @@ describe("native voice production pipeline with loopback providers", () => {
     });
   });
 
-  it("synthesizes a short opening with the rest of the completed item in one HTTP request", async () => {
-    await withCodexPlayback("short-handoff", "messages", "responsive", async ({ codex, desktop, frames, pcm }) => {
+  it.each(["messages", "both"] as const)("makes one body request across the completed-item handoff with %s", async content => {
+    await withCodexPlayback(`short-handoff-${content}`, content, "responsive", async ({ codex, desktop, frames, pcm, holdDrain }) => {
       const body = "Yes. This is a test.";
+      const header = "Agent finished\n\nEarly playback qualification";
+      const expected = content === "both" ? [header, body] : [body];
+      const spoken = async () => (await speech.observations()).speech.map(request => request.text);
+      const held = content === "both" ? holdDrain() : undefined;
       const answer = codex.startAnswer("final_answer");
       answer.append("Yes. This");
-      await waitForSpeech(async () => (await desktop.getState()).phase === "waiting_for_reply_text");
-      expect((await speech.observations()).speech).toEqual([]);
+      await waitForSpeech(async () => (await desktop.getState()).phase === (held ? "speaking" : "waiting_for_reply_text"));
+      expect(await spoken()).toEqual(held ? [header] : []);
       answer.complete("final_answer", body);
+      // In Both mode the provider has the body while the preamble is still playing.
+      await expect.poll(spoken, { timeout: 15_000 }).toEqual(expected);
       codex.completeTurn();
       await waitForSpeech(() => frames.some(frame => frame.event === "notification" && frame.value.payload.event === "turn.completed"));
+      held?.release();
       await waitForSpeech(async () => (await desktop.getState()).phase === "idle");
-      expect((await speech.observations()).speech).toEqual([{ text: body }]);
-      expect(Buffer.concat(pcm)).toEqual(speech.pcm);
+      expect(await spoken()).toEqual(expected);
+      expect(Buffer.concat(pcm)).toEqual(Buffer.concat(expected.map(() => speech.pcm)));
     });
   });
 

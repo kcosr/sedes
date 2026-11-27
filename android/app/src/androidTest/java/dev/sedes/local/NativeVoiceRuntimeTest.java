@@ -2434,6 +2434,54 @@ public class NativeVoiceRuntimeTest {
             assertEquals(NEXT_SENTENCE + " Third.", suffix.text);
         }
     }
+    @Test public void matchingPrefetchedBodySurvivesSealAndWaitsForFreshnessBeforePromotion() throws Exception {
+        for (boolean fresh : new boolean[]{true, false}) try (Fixture f = new Fixture(false, false)) {
+            f.readyEarlyVoice(); f.settings(NativeVoiceJson.object("speechContent", "both", "startupPreRollMs", 0));
+            String id = "dceb".repeat(16), body = "Yes. This is a test.";
+            f.earlySpan(id, 0, 0, "Yes.");
+            SpeechJob header = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(header);
+            f.earlySpan(id, 1, 4, " This is a test.");
+            JSONObject marker = f.earlyFrame(id, "yield", 2); NativeVoiceJson.put(marker, "reason", "item_done");
+            f.wire(NativeVoiceSse.EARLY_REPLY, marker);
+            SpeechJob preview = f.stageNextWhilePlaying(); assertEquals(body, preview.text);
+            f.holdPlaybackValidation = true;
+            f.earlyTerminal(id, body);
+            assertFalse(preview.cancelled); assertFalse(header.cancelled);
+            // Drain the real preceding spool so that the same staged spool can be promoted.
+            header.listener.pcm(header.id, 24000, new byte[9600]); header.listener.completed(header.id);
+            NativeVoiceHttp.Result check = f.takeClientTarget(f.target);
+            Object item = field(f.runtime, "active");
+            assertNull(field(item, "ttsId")); assertEquals(preview.id, field(item, "stagedId"));
+            JSONObject context = Fixture.inputContext(f.target);
+            if (!fresh) NativeVoiceJson.put(context, "userInputRevision", 1);
+            check.done(200, context, null); f.flush();
+            assertTrue(f.speech.speechRequests.isEmpty());
+            if (fresh) {
+                assertEquals(preview.id, field(item, "ttsId")); assertFalse(preview.cancelled);
+                f.runtime.playbackSubmitted(preview.id); f.runtime.drained(preview.id); f.flush();
+            } else assertTrue(preview.cancelled);
+            assertTrue(f.runtime.snapshot().isNull("active")); assertTrue(f.speech.speechRequests.isEmpty());
+            assertTrue(f.speech.transcriptions.isEmpty());
+        }
+    }
+    @Test public void discardedEarlyPreviewGetsOneAuthoritativeRequestAfterThePreamble() throws Exception {
+        for (String reason : new String[]{"changed", "failed", "spool_lost"}) try (Fixture f = new Fixture(false, false)) {
+            f.readyEarlyVoice(); f.settings(NativeVoiceJson.object("speechContent", "both"));
+            String id = "deac".repeat(16);
+            f.earlySpan(id, 0, 0, OPENING);
+            SpeechJob header = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(header);
+            SpeechJob preview = f.stageNextWhilePlaying();
+            String finalText = reason.equals("changed") ? "Corrected opening." : OPENING;
+            f.earlyTerminal(id, finalText);
+            if (reason.equals("failed")) f.runtime.failed(preview.id, "invalid_pcm");
+            if (reason.equals("spool_lost")) ((NativeVoiceAudio)field(f.runtime, "audio")).discardStaged(preview.id);
+            f.runtime.playbackSubmitted(header.id); f.runtime.drained(header.id); f.flush();
+            SpeechJob retry = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(retry);
+            assertEquals(finalText, retry.text); assertTrue(preview.cancelled);
+            f.runtime.failed(preview.id, "invalid_pcm"); f.runtime.failed(retry.id, "invalid_pcm"); f.flush();
+            assertTrue(f.runtime.snapshot().isNull("active")); assertTrue(f.speech.speechRequests.isEmpty());
+        }
+    }
     @Test public void sealedStagedAudioErrorPreservesPrecedingChunkAndUsesOrdinaryProviderFailurePolicy() throws Exception {
         try (Fixture f = new Fixture(false, false)) {
             f.readyEarlyVoice(); f.settings(NativeVoiceJson.object("speechTextLimit", 14, "autoListen", true));

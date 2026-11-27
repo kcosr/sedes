@@ -243,8 +243,11 @@ final class NativeEarlyReply {
         JSONObject section = spokenSection(terminal.envelope.optJSONObject("payload"));
         if (section == null) return false;
         String raw = section.optString("text");
-        String prefix = prepared(part.rawEnd).substring(0, part.preparedEnd);
-        return raw.startsWith(source.substring(0, verifiedEnd(part.rawEnd, prefix))) && prepare(raw, cleanup).startsWith(prefix);
+        return matchesLivePrefix(raw, prepare(raw, cleanup), part.rawEnd, part.preparedEnd);
+    }
+    private boolean matchesLivePrefix(String raw, String authoritative, int end, int spoken) {
+        String prefix = prepared(end).substring(0, spoken);
+        return raw.startsWith(source.substring(0, verifiedEnd(end, prefix))) && authoritative.startsWith(prefix);
     }
     void drained(Part part) {
         if (part == null || detached) return;
@@ -271,7 +274,28 @@ final class NativeEarlyReply {
     /** Reconcile once, at activation after any other speaker, against the terminal's whole selected document. */
     String terminal(NativeVoiceQueue.Item notice, NativeVoiceSettings settings, String lastOwner) {
         detach();
-        if (notice.speech.isEmpty() || !settings.mode().equals("speak")) return notice.speech;
+        return continuation(notice, settings, lastOwner);
+    }
+    /** Inspect the actual continuation after the preceding drain without consuming its staged successor. */
+    boolean startsWithStaged(Part part, NativeVoiceQueue.Item notice, NativeVoiceSettings settings, String lastOwner) {
+        if (!settings.mode().equals("speak")) return false;
+        if (part.preparedEnd > preparedEnd) {
+            if (settings.text("speechContent").equals("announcements") || both && !id.equals(lastOwner)) return false;
+            if (preparedEnd == 0 && event.equals("turn.completed")) {
+                // When only the title has played, earlier selected phases still precede the final body,
+                // even when a provisional answer happens to start with exactly the same words.
+                JSONObject result = notice.envelope.optJSONObject("payload").optJSONObject("assistantResult");
+                for (String phase : NativeVoiceProtocol.RESULT_PHASES) {
+                    if (phase.equals("final")) break;
+                    JSONObject section = result == null ? null : result.optJSONObject(phase);
+                    if (section != null && (section.has("truncation") || !prepare(section.optString("text"), cleanup).isEmpty())) return false;
+                }
+            }
+        }
+        return continuation(notice, settings, lastOwner).startsWith(part.text);
+    }
+    private String continuation(NativeVoiceQueue.Item notice, NativeVoiceSettings settings, String lastOwner) {
+        if (notice.speech.isEmpty() || !settings.mode().equals("speak")) return "";
         JSONObject payload = notice.envelope.optJSONObject("payload");
         if (settings.text("speechContent").equals("announcements")) {
             if (preambleEnd > 0) {
@@ -292,10 +316,10 @@ final class NativeEarlyReply {
         JSONObject section = spokenSection(payload);
         String raw = section == null ? "" : section.optString("text", "");
         String authoritative = prepare(raw, cleanup);
-        if (raw.length() < rawEnd || authoritative.length() < preparedEnd ||
-            !Arrays.equals(rawHash, hash(raw.substring(0, rawEnd))) ||
-            !Arrays.equals(preparedHash, hash(authoritative.substring(0, preparedEnd))))
-            return NativeVoiceQueue.speech(payload, "messages", cleanup);
+        boolean matches = detached ? raw.length() >= rawEnd && authoritative.length() >= preparedEnd &&
+            Arrays.equals(rawHash, hash(raw.substring(0, rawEnd))) && Arrays.equals(preparedHash, hash(authoritative.substring(0, preparedEnd)))
+            : matchesLivePrefix(raw, authoritative, rawEnd, preparedEnd);
+        if (!matches) return NativeVoiceQueue.speech(payload, "messages", cleanup);
         ArrayList<String> parts = new ArrayList<>();
         add(parts, authoritative.substring(preparedEnd).trim());
         if (section != null && section.has("truncation")) add(parts, "The remaining response was truncated.");

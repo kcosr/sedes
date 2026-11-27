@@ -211,6 +211,43 @@ public class NativeEarlyReplyTest {
         assertNull(stream.reply.next(null));
         assertEquals("", stream.reply.terminal(terminal(opening + trailing, null, messages), messages, ID));
     }
+    @Test public void sealedBodyPreviewRequiresSourceAndPresentationAgreementAndOnlyDrainAdvancesIt() {
+        NativeVoiceSettings both = settings("both");
+        String body = "Yes. This is a test.";
+        for (String event : new String[]{"turn.completed", "turn.progress"}) {
+            NativeEarlyReply reply = new NativeEarlyReply(span(event, 0, 0, body, true), 0);
+            reply.freeze("responsive", both, 4096); finishLive(reply, 1);
+            NativeEarlyReply.Part header = reply.next(null), staged = reply.next(header);
+            NativeVoiceQueue.Item seal = notice(event, body + " More detail.", both);
+            assertTrue(reply.agreesWith(staged, seal));
+            assertFalse(reply.agreesWith(staged, notice(event, "Corrected answer.", both)));
+            assertFalse(reply.startsWithStaged(staged, seal, both, ID));
+            reply.drained(header);
+            assertTrue(reply.startsWithStaged(staged, seal, both, ID));
+            assertFalse(reply.startsWithStaged(staged, seal, both, "other-speaker"));
+            if (event.equals("turn.completed"))
+                assertFalse(reply.startsWithStaged(staged, terminal(body, body, both), both, ID));
+            assertFalse(reply.startsWithStaged(staged, seal, settings("announcements"), ID));
+            assertTrue(reply.startsWithStaged(staged, seal, both, ID)); // A preview is still unplayed.
+            reply.drained(staged);
+            assertEquals("More detail.", reply.terminal(seal, both, ID));
+        }
+    }
+    @Test public void identicalAnnouncementWordsCannotAuthorizeAStagedBodyInRestrictedModes() {
+        NativeVoiceSettings messages = settings("messages");
+        NativeEarlyReply reply = new NativeEarlyReply(span(0, 0, "It starts with these six words. ", false), 0);
+        reply.freeze("responsive", messages, 4096);
+        NativeEarlyReply.Part opening = reply.next(null);
+        reply.accept(span(1, opening.rawEnd, "Agent finished", false), 1); finishLive(reply, 2);
+        NativeEarlyReply.Part staged = reply.next(opening);
+        reply.drained(opening);
+        NativeVoiceSettings announcements = settings("announcements");
+        NativeVoiceQueue.Item seal = terminal(opening.text + " Agent finished", null, announcements);
+        assertTrue(seal.speech.startsWith(staged.text));
+        assertFalse(reply.startsWithStaged(staged, seal, announcements, ID));
+        NativeVoiceSettings input = messages.patch(messages.revision, NativeVoiceJson.object("audioMode", "input"));
+        assertFalse(reply.startsWithStaged(staged, seal, input, ID));
+    }
     @Test public void paragraphMarkerAndAbsoluteSequenceRangeHaveNoDuplicateOutput() {
         NativeEarlyReply.Frame begin = span(0, 0, "One.", false);
         NativeEarlyReply reply = new NativeEarlyReply(begin, 0); reply.freeze("natural", settings("messages"), 4);

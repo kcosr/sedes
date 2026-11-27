@@ -856,6 +856,47 @@ describe("early Electron reply playback", () => {
     });
   });
 
+  it.each(["matching", "stale", "corrected", "announcements only", "failed stage"] as const)(
+    "validates the sealed body prefetched during its preamble (%s)", async outcome => {
+      const h = await setup("responsive", { speechContent: "both" });
+      const drain = deferred<void>(), validity = deferred<Response>();
+      h.playback.finish.mockImplementationOnce(() => drain.promise);
+      h.early(yesOpening);
+      await vi.waitFor(() => expect(h.playback.finish).toHaveBeenCalledOnce());
+      if (outcome === "failed stage") {
+        const sendPcm = h.speech.speak.getMockImplementation()!;
+        h.speech.speak.mockImplementationOnce(async call => { await sendPcm(call); throw new Error("Failed staged body"); });
+      }
+      h.early({ ...append, text: yesReply.slice(4), rawStart: 4, rawEnd: yesReply.length });
+      h.early({ ...common, kind: "yield", reason: "item_done", seq: 2 });
+      await vi.waitFor(() => expect(h.texts()).toEqual([finalPreamble, yesReply]));
+      const staged = h.speech.speak.mock.calls[1]![0].requestId;
+      const terminalCheck = vi.fn(() => validity.promise);
+      h.request(terminalCheck);
+      const authoritative = outcome === "corrected" ? "Here is the corrected answer." : yesReply;
+      h.complete(authoritative);
+      expect(h.playback.append).toHaveBeenCalledOnce();
+      if (outcome === "corrected") expect(h.speech.cancel).toHaveBeenCalledWith({ requestId: staged });
+      drain.resolve();
+      await vi.waitFor(() => expect(terminalCheck).toHaveBeenCalledOnce());
+      expect(h.playback.append).toHaveBeenCalledOnce();
+      if (outcome === "announcements only") {
+        await h.runtime.updateSettings({ ...await h.command(), expectedRevision: (await h.runtime.getState()).settingsRevision,
+          patch: { speechContent: "announcements" } });
+      }
+      validity.resolve(Response.json({ ...context(), userInputRevision: outcome === "stale" ? 2 : 1 }));
+      await h.idle();
+      if (outcome === "stale" || outcome === "announcements only") {
+        expect(h.speech.cancel).toHaveBeenCalledWith({ requestId: staged });
+        expect(h.playback.append).toHaveBeenCalledOnce();
+      } else {
+        expect(h.playback.append).toHaveBeenCalledTimes(2);
+      }
+      expect(h.texts()).toEqual(outcome === "failed stage" || outcome === "corrected"
+        ? [finalPreamble, yesReply, authoritative] : [finalPreamble, yesReply]);
+      expect(terminalCheck).toHaveBeenCalledOnce();
+    });
+
   it("includes the rest of a long answer delivered with completion in the first body request", async () => {
     const h = await setup("responsive");
     const full = "Yes. Sedes can show whether a thread is running, idle, or waiting for input, either for one thread or across a list of threads.\n" +
@@ -941,20 +982,20 @@ describe("early Electron reply playback", () => {
   });
 
   it.each([opening, commentary])("finishes a limited-size preamble once when $event seals during its first request", async frame => {
-    const h = await setup("balanced", { speechContent: "both", speechTextLimit: 9 });
+    const h = await setup("balanced", { speechContent: "both", speechTextLimit: 18 });
     const drained = deferred<void>(); h.playback.finish.mockImplementationOnce(() => drained.promise);
     h.early({ ...frame, text: "One. ", rawEnd: 5 });
     await vi.waitFor(() => expect(h.speech.speak).toHaveBeenCalledTimes(2));
-    expect(h.texts()[0]).toBe("Agent ");
+    expect(h.texts()[0]).toBe(frame.event === "turn.progress" ? "Agent progress\n" : "Agent finished\n");
+    expect(h.texts()[1]).toBe("\nThread A");
     const prefetched = h.speech.speak.mock.calls[1]![0].requestId;
     if (frame.event === "turn.progress") h.progress("One. Two.");
     else h.complete("One. Two.");
-    expect(h.speech.cancel).toHaveBeenCalledWith({ requestId: prefetched });
+    expect(h.speech.cancel).not.toHaveBeenCalledWith({ requestId: prefetched });
     expect(h.playback.append).toHaveBeenCalledOnce();
     drained.resolve(); await h.idle();
-    // The second request was prefetched but never played. Every other request reached the speaker.
-    expect(h.playback.append).toHaveBeenCalledTimes(h.texts().length - 1);
-    const spoken = [h.texts()[0], ...h.texts().slice(2)].join(" ").replace(/\s+/gu, " ").trim();
+    expect(h.playback.append).toHaveBeenCalledTimes(h.texts().length);
+    const spoken = h.texts().join(" ").replace(/\s+/gu, " ").trim();
     expect(spoken).toBe(frame.event === "turn.progress" ? "Agent progress Thread A One. Two." : "Agent finished Thread A One. Two.");
   });
 

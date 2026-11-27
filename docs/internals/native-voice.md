@@ -455,7 +455,9 @@ the recipient has the complete speakable source and can group all unscheduled
 words, even a one-word reply. A `markup`, `limit`, `stall`, or
 `observation_ended` yield ends early delivery with only a prefix available.
 The device holds a group below its word minimum until the matching notification
-supplies the remaining text. Only fully drained audio advances the spoken prefix.
+supplies the remaining text. A device can play buffered audio that matches
+the completed notification after it rechecks input freshness. Only fully
+drained audio advances the spoken prefix.
 
 Skipping retires the whole message. Newer input, stream loss, policy changes,
 and deadlines retire live playback independently of ordinary notification
