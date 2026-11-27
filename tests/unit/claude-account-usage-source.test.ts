@@ -103,23 +103,27 @@ describe("Claude account usage polling", () => {
 
   it("ignores a late membership reply after the last handle detaches and another query reopens", async () => {
     let complete!: (reply: typeof observation) => void;
+    const reopened = { ...queryB, startupProbeUuid: "reopened-query" };
     const readAccountUsage = vi.fn(async (_signal: AbortSignal, _id?: string) => observation)
       .mockResolvedValueOnce(observation)
       .mockImplementationOnce(() => new Promise<typeof observation>(resolve => { complete = resolve; }))
-      .mockResolvedValueOnce({ ...observation, verifiedSessions: [] });
+      .mockResolvedValueOnce({ ...observation, verifiedSessions: [{ ...proofB, startupProbeUuid: reopened.startupProbeUuid }] });
     const source = new ClaudeAccountUsageSource({ readAccountUsage });
     const releaseA = source.retain(queryA);
     await vi.advanceTimersByTimeAsync(0);
+    const capturedAt = source.snapshot()!.capturedAt;
     releaseA();
     const releaseB = source.retain(queryB);
     await vi.advanceTimersByTimeAsync(0);
     releaseB();
     expect(readAccountUsage.mock.calls[1]![0].aborted).toBe(true);
-    source.retain({ ...queryB, startupProbeUuid: "reopened-query" });
+    source.retain(reopened);
     await vi.advanceTimersByTimeAsync(0);
+    const expected = { capturedAt, eligibleThreadIds: [queryB.applicationThreadId] };
+    expect(source.snapshot()).toMatchObject(expected);
     complete(observation);
     await vi.advanceTimersByTimeAsync(0);
-    expect(source.snapshot()).toBeNull();
+    expect(source.snapshot()).toMatchObject(expected);
     expect(readAccountUsage.mock.calls.map(([, id]) => id)).toEqual([undefined, observationId, observationId]);
     source.close();
   });
