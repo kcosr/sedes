@@ -1124,7 +1124,7 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
           this.#assertCurrent(active);
           if (!current.stopped()) {
             if (current.chunk.frontier) reply.frontier = current.chunk.frontier;
-            if (current.chunk.attribution) reply.attributed = true;
+            if (current.chunk.preambleEnd !== undefined) reply.preambleEnd = current.chunk.preambleEnd;
             this.#trace("playback_drained");
           }
           waitingDrain = false;

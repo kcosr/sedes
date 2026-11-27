@@ -1,8 +1,8 @@
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
-import { MAX_EARLY_REPLY_BYTES, type EarlyReplyFrame } from "../../shared/protocol/early-reply.js";
+import { earlyReplyAnnouncement, MAX_EARLY_REPLY_BYTES, type EarlyReplyFrame } from "../../shared/protocol/early-reply.js";
 import type { VoiceNotification } from "../../shared/protocol/notification.js";
-import { electronSpeechText, voiceChunkRanges, voiceChunks } from "./electron-voice-policy.js";
+import { electronSpeechText, notificationMessageParts, prepareSpeechParts, voiceChunkRanges } from "./electron-voice-policy.js";
 import type { NativeEarlyReplyPlaybackMode, NativeVoiceSettings } from "./native-voice-plugin.js";
 
 type Begin = Extract<EarlyReplyFrame, { kind: "begin" }>;
@@ -15,7 +15,7 @@ interface Frontier {
   preparedEnd: number;
   preparedHash: string;
 }
-export interface EarlySpeechChunk { text: string; frontier?: Frontier; attribution?: boolean }
+export interface EarlySpeechChunk { text: string; frontier?: Frontier; preambleEnd?: number }
 
 /** Live source and physical request cursors are discarded when a reply gives up its queue position.
  * Only verified, fully drained chunks advance its compact receipt. */
@@ -29,7 +29,8 @@ export class ElectronEarlyReply {
   #yield: "none" | "server" | "presentation" = "none";
   get yielded(): boolean { return this.#yield !== "none"; }
   suppressed = false;
-  attributed = false;
+  preambleEnd = 0;
+  #preamble = "";
   frontier?: Frontier;
   timer?: ReturnType<typeof setTimeout>;
   /** A notification or new group can wake a starved worker or stage its next request. */
@@ -102,9 +103,10 @@ export class ElectronEarlyReply {
       this.#yield = "presentation"; return;
     }
     if (!first && settings.speechContent === "both") {
-      const title = electronSpeechText(this.identity.threadTitle, settings.cleanSpeechText);
-      const chunks = voiceChunks(title, limit);
-      this.#physical.push(...chunks.map((text, index) => ({ text, attribution: index === chunks.length - 1 })));
+      this.#preamble = prepareSpeechParts([earlyReplyAnnouncement(this.identity.event), this.identity.threadTitle], settings);
+      for (const chunk of voiceChunkRanges(this.#preamble, limit)) {
+        this.#physical.push({ text: chunk.text, preambleEnd: chunk.end });
+      }
     }
     const addition = prepared.slice(this.#prepared.length).trimStart();
     const startOffset = prepared.length - addition.length;
@@ -133,21 +135,28 @@ export class ElectronEarlyReply {
   }
   /** Null requests the ordinary context-first renderer. Each returned part is already formatted. */
   continuation(notice: VoiceNotification, settings: NativeVoiceSettings, lastAudibleOwner: string | undefined): string[] | null {
-    const section = this.sealedSection(notice), raw = section?.text ?? "";
-    if (settings.audioMode !== "speak" || settings.speechContent === "announcements" || !this.frontier && !this.attributed ||
-        !this.matches(raw, settings.cleanSpeechText)) return null;
+    if (settings.audioMode !== "speak" || !this.frontier && !this.preambleEnd) return null;
+    const remainingPreamble = this.#preamble.slice(this.preambleEnd).trimStart();
+    if (settings.speechContent === "announcements") return this.preambleEnd ? [remainingPreamble] : null;
     const clean = (text: string) => electronSpeechText(text, settings.cleanSpeechText);
-    const remaining = clean(raw).slice(this.frontier?.preparedEnd ?? 0).trimStart();
-    const tail = [remaining, ...(section?.truncation ? ["The remaining response was truncated."] : [])];
-    const result = this.identity.event === "turn.completed" ? notice.payload.assistantResult : undefined;
-    const rest: string[] = [];
-    for (const key of ["provisional", "partial", "unclassified"] as const) {
-      if (result?.[key]?.text) rest.push(clean(result[key]!.text));
-      if (result?.[key]?.truncation) rest.push("The remaining response was truncated.");
+    const section = this.sealedSection(notice), raw = section?.text ?? "";
+    let body: string[];
+    if (this.frontier && this.matches(raw, settings.cleanSpeechText)) {
+      body = [clean(raw).slice(this.frontier.preparedEnd).trimStart()];
+      if (section?.truncation) body.push("The remaining response was truncated.");
+      const result = notice.payload.assistantResult;
+      for (const key of ["provisional", "partial", "unclassified"] as const) {
+        if (result?.[key]?.text) body.push(clean(result[key]!.text));
+        if (result?.[key]?.truncation) body.push("The remaining response was truncated.");
+      }
+    } else {
+      // A corrected answer restarts its body. The preamble has its own playback receipt.
+      body = notificationMessageParts(notice.payload).map(clean);
     }
-    if (settings.speechContent === "messages") return [...tail, ...rest];
-    if (lastAudibleOwner !== this.identity.replyId) return [clean(notice.payload.message || this.identity.threadTitle), clean(notice.payload.title), ...tail, ...rest];
-    return [...tail, clean(notice.payload.title), ...(this.attributed ? [] : [clean(notice.payload.message)]), ...rest];
+    if (settings.speechContent !== "both" || !body.some(Boolean)) return body;
+    const preamble = lastAudibleOwner === this.identity.replyId ? remainingPreamble
+      : prepareSpeechParts([notice.payload.title, notice.payload.message], settings);
+    return [preamble, ...body];
   }
   detach(): void {
     this.retired = true; clearTimeout(this.timer); this.timer = undefined;

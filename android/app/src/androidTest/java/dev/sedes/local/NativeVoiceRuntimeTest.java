@@ -2252,7 +2252,7 @@ public class NativeVoiceRuntimeTest {
         try (Fixture f = new Fixture(false, false)) {
             f.readyEarlyVoice(); f.settings(NativeVoiceJson.object("speechContent", "both"));
             String id = "eefa".repeat(16); f.earlySpan(id, 0, 0, "Opening.");
-            SpeechJob title = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(title); assertEquals("Early", title.text);
+            SpeechJob title = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(title); assertEquals("Agent finished\n\nEarly", title.text);
             f.runtime.playbackSubmitted(title.id); f.runtime.drained(title.id); f.flush();
             SpeechJob opening = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(opening);
             f.runtime.playbackSubmitted(opening.id); f.flush();
@@ -2267,7 +2267,7 @@ public class NativeVoiceRuntimeTest {
             SpeechJob other = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(other); assertEquals("Other reply", other.text);
             f.runtime.playbackSubmitted(other.id); f.runtime.drained(other.id); f.flush();
             SpeechJob resumed = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(resumed);
-            assertEquals("Early\n\nAgent finished\n\nRemaining.", resumed.text);
+            assertEquals("Agent finished\n\nEarly\n\nRemaining.", resumed.text);
         }
     }
     @Test public void approvalsAndBlockingInputReleaseAfterTwoSecondsOrdinaryRepliesWaitSixty() throws Exception {

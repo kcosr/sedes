@@ -50,3 +50,7 @@ export const earlyReplyFrameSchema = z.discriminatedUnion("kind", [
   }
 });
 export type EarlyReplyFrame = z.infer<typeof earlyReplyFrameSchema>;
+
+export function earlyReplyAnnouncement(event: Extract<EarlyReplyFrame, { kind: "begin" }>["event"]): string {
+  return event === "turn.progress" ? "Agent progress" : "Agent finished";
+}

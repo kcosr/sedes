@@ -210,10 +210,13 @@ Between sentences, the microphone stays closed. If a reply yields its
 queue position, the device can play another notification and return to the
 remaining text when the progress update or turn finishes.
 
-With **Both**, the opening identifies the thread. A progress update adds its
-“Agent progress” announcement when the message finishes. For a final answer,
-the turn outcome and additional selected sections arrive at turn completion. An interrupted or revised
-turn can change words you already heard. Turning Early reply playback Off
+With **Both**, each message starts with “Agent progress” or “Agent finished,”
+then the thread title, then the message text. Later sentences continue directly.
+If another item speaks before a reply resumes, the device reintroduces the
+reply before reading the remaining text. “Agent finished” can introduce a final
+answer while the agent is still writing. Automatic listening and deferred
+thread actions still wait for turn settlement and playback. An interrupted or
+revised turn can change words you already heard. Turning Early reply playback Off
 during a reply returns its remaining eligible text to completion playback.
 
 ### Listening after a reply

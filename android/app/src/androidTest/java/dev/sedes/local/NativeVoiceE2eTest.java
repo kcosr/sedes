@@ -576,7 +576,7 @@ public class NativeVoiceE2eTest {
                 "earlyReplyPlayback", "responsive"));
             command("updateSettings", NativeVoiceJson.object("expectedRevision", runtime.snapshot().getLong("settingsRevision"), "patch",
                 NativeVoiceJson.object("speechProvider", "server", "speechEndpoint", endpoint, "ttsModel", "kokoro-local",
-                    "sttModel", "parakeet-local", "ttsVoice", "af_heart", "speechContent", progress ? "both" : "messages", "autoListen", false, "startupPreRollMs", 0)));
+                    "sttModel", "parakeet-local", "ttsVoice", "af_heart", "speechContent", "both", "autoListen", false, "startupPreRollMs", 0)));
             command("updateSettings", NativeVoiceJson.object("expectedRevision", runtime.snapshot().getLong("settingsRevision"), "patch", NativeVoiceJson.object("audioMode", "speak")));
             await(() -> runtime.snapshot().optBoolean("ready") && idleVoice(runtime.snapshot()), 45000, "foreground service and native policy ready");
             verifyBackgroundEarlyReply(activity, server, required(args, "threadId"), required(args, "initialText"), captures, progress);
@@ -602,7 +602,7 @@ public class NativeVoiceE2eTest {
         Bundle admission = new Bundle();
         admission.putString("voiceAdmission", submitRegisteredInput(server, thread, input));
         instrumentation.sendStatus(0, admission);
-        int openingDrains = progress ? 2 : 1; // Both-mode progress speaks the thread title first.
+        int openingDrains = 2; // The preamble and opening sentence both drain before the item closes.
         await(() -> runtime.snapshot().optString("phase").equals("waiting_for_reply_text") && newPlaybackDrains(audio, baseline).size() == openingDrains,
             45000, "opening sentence physically drained before the source item completed");
         JSONObject waiting = runtime.snapshot();
@@ -618,7 +618,7 @@ public class NativeVoiceE2eTest {
         if (progress) {
             reportVoiceStage("voiceProgressSettled", NativeVoiceJson.object("interactionId", firstId));
             await(() -> runtime.snapshot().optString("phase").equals("waiting_for_reply_text") && newPlaybackDrains(audio, baseline).size() == 5,
-                45000, "second progress title and opening drained");
+                45000, "second progress preamble and opening drained");
             JSONObject secondActive = runtime.snapshot().getJSONObject("active");
             assertEquals("turn.progress", secondActive.getString("eventKind"));
             String secondId = secondActive.getString("id");

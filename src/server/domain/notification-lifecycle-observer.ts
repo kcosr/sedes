@@ -1,3 +1,4 @@
+import { earlyReplyAnnouncement } from "../../shared/protocol/early-reply.js";
 import { progressNotificationKey, turnNotificationKey } from "./notification-identity.js";
 import type { ClassifiedAssistantResult } from "../../shared/protocol/completion-result.js";
 import type { NotificationEventPayload } from "../../shared/protocol/notification.js";
@@ -36,7 +37,7 @@ export class NotificationLifecycleObserver<Publication = void> {
       const context = this.#context(scope, threadId);
       return this.emit(scope, {
         event: input.phase === "partial" ? "turn.partial" : "turn.progress",
-        occurredAt: new Date().toISOString(), title: input.phase === "partial" ? "Partial answer" : "Agent progress",
+        occurredAt: new Date().toISOString(), title: input.phase === "partial" ? "Partial answer" : earlyReplyAnnouncement("turn.progress"),
         message: context.thread.title, ...context, turn: { id: input.applicationTurnId },
         progress: { phase: input.phase, itemId: input.applicationItemId, ...input.text },
       }, progressNotificationKey(threadId, input.applicationTurnId, input.applicationItemId), "live",
@@ -125,7 +126,7 @@ export class NotificationLifecycleObserver<Publication = void> {
           occurredAt: new Date(observation.completionObservedAt).toISOString(),
           title:
             outcome === "completed"
-              ? "Agent finished"
+              ? earlyReplyAnnouncement("turn.completed")
               : outcome === "failed"
                 ? "Agent turn failed"
                 : "Agent turn interrupted",

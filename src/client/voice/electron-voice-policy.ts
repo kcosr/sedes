@@ -78,8 +78,15 @@ const resultParts = (result?: SelectedAssistantResult): string[] => {
   }
   return parts;
 };
-const assemble = (parts: string[], settings: NativeVoiceSettings) => parts.map(text => electronSpeechText(text, settings.cleanSpeechText))
+export const prepareSpeechParts = (parts: string[], settings: NativeVoiceSettings) => parts.map(text => electronSpeechText(text, settings.cleanSpeechText))
   .filter(Boolean).join(settings.cleanSpeechText ? "\n\n" : "\n");
+
+export function notificationMessageParts(payload: VoiceNotification["payload"]): string[] {
+  if (payload.progress) {
+    return payload.progress.truncation ? [payload.progress.text, "The remaining response was truncated."] : [payload.progress.text];
+  }
+  return payload.event === "turn.completed" ? resultParts(payload.assistantResult) : [];
+}
 
 export interface ElectronVoiceQueueItem {
   readonly id: string;
@@ -91,18 +98,13 @@ export interface ElectronVoiceQueueItem {
   readonly replay?: NativeReplySpeech;
 }
 function renderVoiceItem(item: ElectronVoiceQueueItem, settings: NativeVoiceSettings): string {
-  if (item.replay) return assemble(resultParts(item.replay.assistantResult), settings);
+  if (item.replay) return prepareSpeechParts(resultParts(item.replay.assistantResult), settings);
   const notice = item.notification;
   if (!notice || settings.audioMode !== "speak" || notice.voice === "none") return "";
   const payload = notice.payload;
   const parts = settings.speechContent === "messages" ? [] : [payload.title, payload.message];
-  if (settings.speechContent !== "announcements") {
-    if (payload.progress) {
-      parts.push(payload.progress.text);
-      if (payload.progress.truncation) parts.push("The remaining response was truncated.");
-    } else if (payload.event === "turn.completed") parts.push(...resultParts(payload.assistantResult));
-  }
-  return assemble(parts, settings);
+  if (settings.speechContent !== "announcements") parts.push(...notificationMessageParts(payload));
+  return prepareSpeechParts(parts, settings);
 }
 interface PreparedVoiceItem { presentation: string; text: string; bytes: number }
 const preparedItems = new WeakMap<ElectronVoiceQueueItem, PreparedVoiceItem>();

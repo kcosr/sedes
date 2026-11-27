@@ -216,13 +216,14 @@ the Activity. The host waits for the registered client's input to be accepted
 before it streams an answer. Each synthesis request supplies 24,000 PCM frames
 at 24 kHz with zero startup pre-roll.
 
-- The final-answer case uses Messages. The host waits until Android reports
-  that the opening drained while the turn is still running. It then releases
-  the remaining text and completes the turn. The host checks both speech
-  requests and physical drains in `android-early-reply.log`.
-- The progress case uses Both. The thread title and opening sentence drain
-  before the commentary item closes. Closing that item releases its suffix and
-  the deferred “Agent progress” announcement while the turn is still running.
+- Both cases select **Both**. In the final-answer case the host waits for Android
+  to drain “Agent finished,” the thread title, and the opening sentence while
+  the turn is still running. It then releases the remaining text and completes
+  the turn. The host checks all three requests and physical drains in
+  `android-early-reply.log`.
+- In the progress case, “Agent progress,” the thread title, and the opening
+  sentence drain before the commentary item closes. Closing the item releases
+  its remaining sentence while the turn is still running.
   Android then selects Next on a second commentary item. The host sends that
   item's remaining text and a distinct final answer. The test checks the exact
   synthesis inputs, all six physical drains, and zero microphone captures in

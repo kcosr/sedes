@@ -45,9 +45,9 @@ final class NativeEarlyReply {
     }
     static final class Part {
         final String text;
-        final int rawEnd, preparedEnd, titleEnd;
-        Part(String text, int rawEnd, int preparedEnd, int titleEnd) {
-            this.text = text; this.rawEnd = rawEnd; this.preparedEnd = preparedEnd; this.titleEnd = titleEnd;
+        final int rawEnd, preparedEnd, preambleEnd;
+        Part(String text, int rawEnd, int preparedEnd, int preambleEnd) {
+            this.text = text; this.rawEnd = rawEnd; this.preparedEnd = preparedEnd; this.preambleEnd = preambleEnd;
         }
     }
     private static IllegalArgumentException invalid() { return new IllegalArgumentException("invalid_early_reply"); }
@@ -55,12 +55,12 @@ final class NativeEarlyReply {
     final long generation, inputRevision, opened;
     String reservation;
     long lastSpan, urgentSince = -1;
-    boolean yielded, detached, skipped, titleSubmitted;
+    boolean yielded, detached, skipped;
     private final ArrayList<Segment> frames = new ArrayList<>();
     private StringBuilder source = new StringBuilder();
-    private int rawBytes, rawEnd, preparedEnd, titleEnd;
+    private int rawBytes, rawEnd, preparedEnd, preambleEnd;
     private byte[] rawHash, preparedHash;
-    private String mode, cachedPrepared;
+    private String mode, cachedPrepared, preamble;
     private int cachedRawEnd = -1;
     private boolean cleanup, both, requested;
     private int limit;
@@ -99,6 +99,8 @@ final class NativeEarlyReply {
         if (cleanup != settings.flag("cleanSpeechText")) cachedRawEnd = -1;
         cleanup = settings.flag("cleanSpeechText");
         both = settings.text("speechContent").equals("both"); this.limit = limit;
+        String label = event.equals("turn.progress") ? "Agent progress" : "Agent finished";
+        preamble = both ? NativeVoiceQueue.assemble(Arrays.asList(label, title), cleanup) : "";
     }
     void requested() { requested = true; }
     private static String prepare(String value, boolean cleanup) {
@@ -116,7 +118,7 @@ final class NativeEarlyReply {
         if (detached || mode == null) return null;
         int raw = reserved == null ? rawEnd : reserved.rawEnd;
         int spoken = reserved == null ? preparedEnd : reserved.preparedEnd;
-        int attributed = reserved == null ? titleEnd : reserved.titleEnd;
+        int headerEnd = reserved == null ? preambleEnd : reserved.preambleEnd;
         String prepared = prepared(raw);
         if (spoken > prepared.length()) throw invalid();
         int end = raw;
@@ -127,18 +129,15 @@ final class NativeEarlyReply {
             if (!full.startsWith(prepared)) throw invalid();
             prepared = full;
         }
-        if (both) {
-            String name = prepare(title, cleanup);
-            int start = skipSeparators(name, attributed);
-            if (start < name.length()) {
-                String text = NativeVoiceQueue.firstChunk(name, start, limit);
-                return new Part(text, raw, spoken, start + text.length());
-            }
+        int headerStart = skipSeparators(preamble, headerEnd);
+        if (headerStart < preamble.length()) {
+            String text = NativeVoiceQueue.firstChunk(preamble, headerStart, limit);
+            return new Part(text, raw, spoken, headerStart + text.length());
         }
         int start = skipSeparators(prepared, spoken);
         if (start == prepared.length()) throw invalid();
         String chunk = NativeVoiceQueue.firstChunk(prepared, start, limit);
-        return new Part(chunk, end, start + chunk.length(), attributed);
+        return new Part(chunk, end, start + chunk.length(), headerEnd);
     }
     private static int skipSeparators(String text, int start) {
         while (start < text.length() && Character.isWhitespace(text.charAt(start))) start++;
@@ -173,12 +172,9 @@ final class NativeEarlyReply {
         String raw = section.optString("text");
         return raw.startsWith(source.substring(0, part.rawEnd)) && prepare(raw, cleanup).startsWith(prepared(part.rawEnd).substring(0, part.preparedEnd));
     }
-    void submitted(Part part) {
-        if (part != null && part.titleEnd > titleEnd) titleSubmitted = true;
-    }
     void drained(Part part) {
         if (part == null || detached) return;
-        rawEnd = part.rawEnd; preparedEnd = part.preparedEnd; titleEnd = part.titleEnd;
+        rawEnd = part.rawEnd; preparedEnd = part.preparedEnd; preambleEnd = part.preambleEnd;
     }
     void detach() {
         if (detached) return;
@@ -194,27 +190,30 @@ final class NativeEarlyReply {
     /** Reconcile once, at activation after any other speaker, against the terminal's whole selected document. */
     String terminal(NativeVoiceQueue.Item notice, NativeVoiceSettings settings, String lastOwner) {
         detach();
-        if (mode == null || !titleSubmitted && preparedEnd == 0 || notice.speech.isEmpty() ||
-            !settings.mode().equals("speak") || settings.text("speechContent").equals("announcements")) return notice.speech;
+        if (mode == null || preambleEnd == 0 && preparedEnd == 0 || notice.speech.isEmpty() ||
+            !settings.mode().equals("speak")) return notice.speech;
+        if (settings.text("speechContent").equals("announcements"))
+            return preambleEnd == 0 ? notice.speech : preamble.substring(preambleEnd).trim();
         JSONObject payload = notice.envelope.optJSONObject("payload");
+        String remaining = remainingSpeech(payload);
+        if (!both || remaining.isEmpty()) return remaining;
+        String header = id.equals(lastOwner) ? preamble.substring(preambleEnd).trim()
+            : NativeVoiceQueue.speech(payload, "announcements", cleanup);
+        return header.isEmpty() ? remaining : header + (cleanup ? "\n\n" : "\n") + remaining;
+    }
+    private String remainingSpeech(JSONObject payload) {
+        if (preparedEnd == 0) return NativeVoiceQueue.speech(payload, "messages", cleanup);
         JSONObject section = spokenSection(payload);
         String raw = section == null ? "" : section.optString("text", "");
         String authoritative = prepare(raw, cleanup);
-        if (preparedEnd > 0 && (raw.length() < rawEnd || authoritative.length() < preparedEnd ||
+        if (raw.length() < rawEnd || authoritative.length() < preparedEnd ||
             !Arrays.equals(rawHash, hash(raw.substring(0, rawEnd))) ||
-            !Arrays.equals(preparedHash, hash(authoritative.substring(0, preparedEnd)))))
-            return NativeVoiceQueue.speech(payload, both ? "both" : "messages", cleanup);
+            !Arrays.equals(preparedHash, hash(authoritative.substring(0, preparedEnd))))
+            return NativeVoiceQueue.speech(payload, "messages", cleanup);
         ArrayList<String> parts = new ArrayList<>();
-        boolean context = both;
-        boolean reintroduce = context && !id.equals(lastOwner);
-        if (reintroduce) {
-            add(parts, prepare(payload.optString("message"), cleanup));
-            add(parts, prepare(payload.optString("title"), cleanup));
-        }
         add(parts, authoritative.substring(preparedEnd).trim());
         if (section != null && section.has("truncation")) add(parts, "The remaining response was truncated.");
-        if (context && !reintroduce) add(parts, prepare(payload.optString("title"), cleanup));
-        JSONObject result = notice.progress() ? null : payload.optJSONObject("assistantResult");
+        JSONObject result = payload.optJSONObject("assistantResult");
         if (result != null) for (String phase : NativeVoiceProtocol.RESULT_PHASES) {
             JSONObject other = result.optJSONObject(phase);
             if (phase.equals("final") || other == null) continue;

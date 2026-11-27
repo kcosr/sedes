@@ -316,7 +316,7 @@ final class NativeVoiceQueue {
     private static void appendResult(List<String> parts, JSONObject result) {
         if (result != null) for (String phase : NativeVoiceProtocol.RESULT_PHASES) appendBounded(parts, result.optJSONObject(phase));
     }
-    private static String assemble(List<String> parts, boolean cleanup) {
+    static String assemble(List<String> parts, boolean cleanup) {
         StringBuilder speech = new StringBuilder();
         // Each notification part is an independent document. An unfinished fence in a
         // truncated section must not consume context, its truncation notice, or later results.

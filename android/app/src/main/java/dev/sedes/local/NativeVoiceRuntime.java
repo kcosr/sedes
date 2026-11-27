@@ -2437,17 +2437,13 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         lastOutputOwner = item.id;
         if (!item.lastAudioId.equals(item.ttsId)) return;
         item.outputSubmitted = true;
-        if (item.earlyPart != null) {
-            item.notification.early.submitted(item.earlyPart);
-            if (audio.physicallyDrained(item.ttsId)) item.notification.early.drained(item.earlyPart);
-        }
+        if (item.earlyPart != null && audio.physicallyDrained(item.ttsId)) item.notification.early.drained(item.earlyPart);
     }
     public void playbackSubmitted(String requestId) { handler.post(() -> {
         Active item = active;
         if (item == null || item.stopped) return;
         if (requestId.equals(item.ttsId)) {
             item.outputSubmitted = true; lastOutputOwner = item.id;
-            if (item.earlyPart != null) item.notification.early.submitted(item.earlyPart);
             phase = "speaking"; publish();
         } else if (requestId.equals(item.announcementId) || requestId.equals(item.cueId) || requestId.equals(item.completionCueId))
             lastOutputOwner = item.id;
