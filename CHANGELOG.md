@@ -355,6 +355,7 @@ User-facing changes are collected here before release. See the
   Snoozed threads back to Active while you stay in your current chat. A pending
   request brings its thread back only once.
   [Park quiet work](docs/user/organize-work.md#park-quiet-work).
+  ([#173](https://github.com/kcosr/sedes/pull/173))
 
 - Snoozing a running thread keeps it snoozed when that submission completes
   successfully. The reply still appears as unread. Resolve pending input or
