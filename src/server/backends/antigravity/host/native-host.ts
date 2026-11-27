@@ -6,7 +6,7 @@ import path from "node:path";
 import type { NewSessionRequest, RequestPermissionRequest, RequestPermissionResponse, SessionNotification } from "@agentclientprotocol/sdk";
 import type { ExecutionEnvironmentChannelProvider } from "../../../execution/environment-channel.js";
 import { mergeResolvedEnvironment, resolveEnvironmentVariables } from "../../../environment-variables/runtime-environment.js";
-import { OwnedNdjsonStdioTransportFactory } from "../../../provider-protocol/transport/owned-ndjson-stdio-transport.js";
+import { type OwnedNdjsonStdioTransport, OwnedNdjsonStdioTransportFactory } from "../../../provider-protocol/transport/owned-ndjson-stdio-transport.js";
 import { AcpDeliveryError, AcpRemoteError } from "../../../provider-protocol/bindings/acp-v1/index.js";
 import { AntigravityAcpConnection } from "../acp-connection.js";
 import { antigravityNativeActivity } from "./native-activity.js";
@@ -36,7 +36,8 @@ type NativeEvidence = {
 type Session = {
   identity: AntigravityIdentity; handleId: string; generation: string; setup: AntigravitySetup;
   loadPermissionChanged?: () => void;
-  peer: AntigravityAcpConnection; events: AntigravityEvent[]; sequence: number; offered: number; acknowledged: number;
+  loadFailed?: true;
+  peer: AntigravityAcpConnection; transport: OwnedNdjsonStdioTransport; events: AntigravityEvent[]; sequence: number; offered: number; acknowledged: number;
   retainedAfter: number; eventBytes: number; attached: boolean; closed: boolean; cleanupUnproven: boolean;
   activePrompts: Set<string>; tools: Set<string>; permissions: Map<string, Permission>;
   cancelledPrompts: Set<string>;
@@ -70,7 +71,7 @@ export class AntigravityHost implements AntigravityPort {
   readonly #failedEphemeral = new Set<AntigravityAcpConnection>();
   readonly #released = new Set<string>();
   readonly #pendingWork = new Set<Promise<void>>();
-  readonly #orphanedTransports = new Set<Awaited<ReturnType<OwnedNdjsonStdioTransportFactory["open"]>>>();
+  readonly #orphanedTransports = new Set<OwnedNdjsonStdioTransport>();
   readonly #launchControllers = new Set<AbortController>();
   readonly #historyReads = new Set<Promise<AntigravityHistory>>();
   #historyClosed = false;
@@ -117,13 +118,13 @@ export class AntigravityHost implements AntigravityPort {
     let resolve!: () => void; const promise = new Promise<void>(yes => { resolve = yes; }); this.#pendingWork.add(promise);
     return () => { this.#pendingWork.delete(promise); resolve(); };
   }
-  async #open(cwd: string, handlers: OpenHandlers, authority: AntigravityHostAuthority, executionEnvironment?: Parameters<AntigravityPort["attach"]>[0]["executionEnvironment"], agentTools?: Parameters<AntigravityPort["attach"]>[0]["agentTools"]): Promise<AntigravityAcpConnection> {
+  async #open(cwd: string, handlers: OpenHandlers, authority: AntigravityHostAuthority, executionEnvironment?: Parameters<AntigravityPort["attach"]>[0]["executionEnvironment"], agentTools?: Parameters<AntigravityPort["attach"]>[0]["agentTools"]) {
     if (this.#closed || this.#frozen) throw new AntigravityError("antigravity_runtime_closed");
     const finish = this.#beginWork();
     try { return await this.#openPeer(cwd, handlers, authority, executionEnvironment, agentTools); }
     finally { finish(); }
   }
-  async #openPeer(cwd: string, handlers: OpenHandlers, authority: AntigravityHostAuthority, executionEnvironment?: Parameters<AntigravityPort["attach"]>[0]["executionEnvironment"], agentTools?: Parameters<AntigravityPort["attach"]>[0]["agentTools"]): Promise<AntigravityAcpConnection> {
+  async #openPeer(cwd: string, handlers: OpenHandlers, authority: AntigravityHostAuthority, executionEnvironment?: Parameters<AntigravityPort["attach"]>[0]["executionEnvironment"], agentTools?: Parameters<AntigravityPort["attach"]>[0]["agentTools"]) {
     const config = this.input.configuration;
     const baseline: Record<string, string> = {};
     for (const name of ["HOME", "USERPROFILE", "PATH", "LANG", "LC_ALL", "TZ", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "SSL_CERT_FILE", "XDG_CONFIG_HOME", "XDG_DATA_HOME"]) {
@@ -150,7 +151,7 @@ export class AntigravityHost implements AntigravityPort {
     const controller = new AbortController();
     this.#launchControllers.add(controller);
     const timer = setTimeout(() => controller.abort(), config.initializationTimeoutMs);
-    let transport: Awaited<ReturnType<typeof factory.open>> | undefined;
+    let transport: OwnedNdjsonStdioTransport | undefined;
     try {
       if (this.#closed || this.#frozen) throw new AntigravityError("antigravity_runtime_closed");
       this.#admit(authority);
@@ -161,7 +162,7 @@ export class AntigravityHost implements AntigravityPort {
       this.runtimeVersion = peer.initialize.agentInfo?.version ?? null;
       this.#ephemeral.add(peer);
       if (this.#closed || this.#frozen) { await this.#closeEphemeral(peer); throw new AntigravityError("antigravity_runtime_closed"); }
-      return peer;
+      return { peer, transport };
     } catch (error) {
       if (transport) try { await transport.close("antigravity_launch_failed"); }
       catch (cleanupError) { this.#orphanedTransports.add(transport); throw new AntigravityError("antigravity_cleanup_unproven", "sent_outcome_unknown", { cause: cleanupError }); }
@@ -175,7 +176,7 @@ export class AntigravityHost implements AntigravityPort {
     const directory = await mkdtemp(path.join(tmpdir(), "sedes-antigravity-catalog-"));
     let peer: AntigravityAcpConnection | undefined; let identity: AntigravityIdentity | undefined;
     try {
-      peer = await this.#open(directory, { authorizeSession: () => true, update() {}, permission: async () => ({ outcome: { outcome: "cancelled" } }) }, authority);
+      ({ peer } = await this.#open(directory, { authorizeSession: () => true, update() {}, permission: async () => ({ outcome: { outcome: "cancelled" } }) }, authority));
       this.#ephemeral.add(peer); this.#admit(authority, signal);
       const response = await peer.create(directory); identity = { sessionId: response.sessionId, cwd: directory };
       const modelOptions: NonNullable<AntigravitySetup["modelOptions"]>[number][] = [];
@@ -214,7 +215,7 @@ export class AntigravityHost implements AntigravityPort {
   async connect(signal?: AbortSignal, authority = localAuthority) {
     this.#admit(authority, signal);
     const cwd = await realpath(this.input.environment.HOME ?? homedir());
-    const peer = await this.#open(cwd, { authorizeSession: () => false, update() {}, permission: async () => ({ outcome: { outcome: "cancelled" } }) }, authority);
+    const { peer } = await this.#open(cwd, { authorizeSession: () => false, update() {}, permission: async () => ({ outcome: { outcome: "cancelled" } }) }, authority);
     this.#ephemeral.add(peer);
     try { this.#current(authority, signal); return { runtimeId: this.runtimeId, version: peer.initialize.agentInfo!.version }; }
     finally { await this.#closeEphemeral(peer); }
@@ -251,20 +252,24 @@ export class AntigravityHost implements AntigravityPort {
     if (receipt) { this.#creating.delete(input.operationId); this.#creationReceipts.set(input.operationId, { fingerprint: receipt.fingerprint, identity }); }
   }
   async #establish(input: Parameters<AntigravityPort["attach"]>[0] | Omit<Parameters<AntigravityPort["attach"]>[0], "sessionId">, authority: AntigravityHostAuthority,
-    creation?: { requested(): void; created(identity: AntigravityIdentity): void }): Promise<AntigravityAttachment> {
-    if (this.#sessions.size + this.#establishing >= MAX_SESSIONS) throw new AntigravityError("antigravity_session_capacity");
+    creation?: { requested(): void; created(identity: AntigravityIdentity): void }, replacing?: Session): Promise<AntigravityAttachment> {
+    const retained = this.#sessions.size - (replacing ? 1 : 0);
+    if (retained + this.#establishing >= MAX_SESSIONS) throw new AntigravityError("antigravity_session_capacity");
     this.#establishing++; const finish = this.#beginWork();
-    try { return await this.#establishSession(input, authority, creation); }
+    try {
+      if (replacing) { await this.#closeSessionPeer(replacing, "replace"); this.#admit(authority); }
+      return await this.#establishSession(input, authority, creation, replacing);
+    }
     finally { this.#establishing--; finish(); }
   }
   async #establishSession(input: { cwd: string; sessionId?: string; executionEnvironment?: Parameters<AntigravityPort["attach"]>[0]["executionEnvironment"]; agentTools?: Parameters<AntigravityPort["attach"]>[0]["agentTools"] }, authority: AntigravityHostAuthority,
-    creation?: { requested(): void; created(identity: AntigravityIdentity): void }): Promise<AntigravityAttachment> {
+    creation?: { requested(): void; created(identity: AntigravityIdentity): void }, replacing?: Session): Promise<AntigravityAttachment> {
     const cwd = await realpath(input.cwd);
     if (cwd !== input.cwd) throw new AntigravityError("antigravity_workspace_not_canonical");
     let session: Session | undefined;
     const early: SessionNotification[] = [];
     let earlyBytes = 0;
-    const peer = await this.#open(cwd, {
+    const { peer, transport } = await this.#open(cwd, {
       authorizeSession: id => !session?.closed && (input.sessionId ? id === input.sessionId : !session || id === session.identity.sessionId),
       update: notification => {
         if (session) this.#update(session, notification);
@@ -290,7 +295,7 @@ export class AntigravityHost implements AntigravityPort {
       this.#admit(authority);
       if (early.some(notification => notification.sessionId !== sessionId)) throw new AntigravityError("antigravity_session_mismatch");
       session = { identity: { sessionId, cwd }, handleId: randomUUID(), generation: randomUUID(),
-        setup: { initialize: peer.initialize, session: response ?? {} }, peer, events: [], sequence: 0, offered: 0, acknowledged: 0,
+        setup: { initialize: peer.initialize, session: response ?? {} }, peer, transport, events: [], sequence: 0, offered: 0, acknowledged: 0,
         retainedAfter: 0, eventBytes: 0, attached: true, closed: false, cleanupUnproven: false,
         activePrompts: new Set(), cancelledPrompts: new Set(), tools: new Set(), permissions: new Map(), operations: new Map(), tombstones: new Map(), wake: new Set(), receiptBytes: 0, nativeActive: false, nativeUnknown: true, nativeForegroundActive: false, nativeReadable: false, nativeHeadIndex: -1, promptSettlementEpoch: 0, configurationObservation: 0, modeObservation: 0, uncertainSetters: new Map(), canceling: false, cancellationFailed: false, nativeCounts: { agents: 0, commands: 0, other: 0 },
         toolPeerStamp: input.agentTools?.surface === "cli" ? toolPeerStamp(input.agentTools.endpoint) : undefined,
@@ -300,8 +305,16 @@ export class AntigravityHost implements AntigravityPort {
       if (input.sessionId) await this.#loadBoundSession(session, mcpServers);
       await this.#refreshNative(session);
       this.#admit(authority);
-      if (session.closed || (session.loadPermissionChanged && !session.nativeReadable))
+      if (session.closed || ((session.loadPermissionChanged || replacing) && !session.nativeReadable))
         throw new AntigravityError("antigravity_session_load_unavailable");
+      if (replacing) {
+        // Preserve the exact operation IDs and dispositions, including an
+        // unproven Stop. The new peer must never redispatch those commands.
+        session.operations = replacing.operations;
+        session.tombstones = replacing.tombstones;
+        session.receiptBytes = replacing.receiptBytes;
+        this.#forgetHandle(replacing);
+      }
       this.#sessions.set(session.handleId, session); this.#revision++;
       this.#ephemeral.delete(peer);
       const owned = session;
@@ -336,14 +349,14 @@ export class AntigravityHost implements AntigravityPort {
       if (this.#sessions.has(session.handleId)) this.#event(session, { kind: "session_loaded", session: response });
     }).catch(async error => {
       finish();
+      session.loadFailed = true;
       session.closed = true;
       if (this.#sessions.has(session.handleId)) {
         for (const pending of session.permissions.values()) pending.resolve({ outcome: { outcome: "cancelled" } });
         this.#event(session, { kind: "failure", failure: { code: "antigravity_session_load_unavailable", delivery: "not_sent" } });
         // Close native control but retain decision receipts for the controller
         // to acknowledge, just as on any other closed provider connection.
-        try { await session.peer.close(); }
-        catch { session.cleanupUnproven = true; }
+        await this.#closeSessionPeer(session, "replace").catch(() => undefined);
       }
       throw error;
     });
@@ -351,7 +364,7 @@ export class AntigravityHost implements AntigravityPort {
   }
   async listSessions(input: Parameters<AntigravityPort["listSessions"]>[0], signal?: AbortSignal, authority = localAuthority) {
     this.#admit(authority, signal);
-    const peer = await this.#open(input.cwd, { authorizeSession: () => false, update() {}, permission: async () => ({ outcome: { outcome: "cancelled" } }) }, authority);
+    const { peer } = await this.#open(input.cwd, { authorizeSession: () => false, update() {}, permission: async () => ({ outcome: { outcome: "cancelled" } }) }, authority);
     this.#ephemeral.add(peer);
     try { const response = await peer.list(input.cwd, input.cursor); this.#current(authority, signal);
       return { sessions: response.sessions.map(session => ({ sessionId: session.sessionId, cwd: session.cwd,
@@ -404,15 +417,21 @@ export class AntigravityHost implements AntigravityPort {
   async attach(input: Parameters<AntigravityPort["attach"]>[0], signal?: AbortSignal, authority = localAuthority) {
     this.#admit(authority, signal);
     let session = this.#find(input);
-    if (!session) {
+    if (session?.loadFailed && session.environmentFingerprint !== digest(input.executionEnvironment ?? {}))
+      throw new AntigravityError("antigravity_execution_environment_restart_required");
+    // A failed load can leave a stale running row in SQLite. Keep exposing the
+    // old generation until its events are delivered and issued requests settle.
+    // Preserve its activity inventory until a replacement successfully reads it.
+    if (!session || (session.loadFailed && session.sequence === session.acknowledged &&
+        ![...session.operations.values()].some(operation => operation.outcome.status === "pending"))) {
       const key = JSON.stringify([input.cwd, input.sessionId]);
       let pending = this.#attaching.get(key);
-      if (!pending) { pending = this.#establish(input, authority).finally(() => this.#attaching.delete(key)); this.#attaching.set(key, pending); }
+      if (!pending) { pending = this.#establish(input, authority, undefined, session).finally(() => this.#attaching.delete(key)); this.#attaching.set(key, pending); }
       const result = await pending;
       this.#admit(authority, signal);
       session = this.#get(result.handleId);
     }
-    if (session.closed) throw new AntigravityError("antigravity_session_closed", "sent_outcome_unknown");
+    if (session.closed && !session.loadFailed) throw new AntigravityError("antigravity_session_closed", "sent_outcome_unknown");
     if (session.environmentFingerprint !== digest(input.executionEnvironment ?? {})) throw new AntigravityError("antigravity_execution_environment_restart_required");
     session.attached = true; return this.#attachment(session);
   }
@@ -424,7 +443,8 @@ export class AntigravityHost implements AntigravityPort {
   #attachment(session: Session): AntigravityAttachment {
     const createdByOperationId = this.#creationOrigins.get(JSON.stringify([session.identity.sessionId, session.identity.cwd]));
     return { ...session.identity, ...(session.toolPeerStamp ? { toolPeerStamp: session.toolPeerStamp } : {}), handleId: session.handleId, generation: session.generation, setup: session.setup,
-      ...(session.loadPermissionChanged ? { loading: true } : {}), ...(createdByOperationId ? { createdByOperationId } : {}),
+      ...(session.loadPermissionChanged ? { loading: true } : {}), ...(session.closed ? { closed: true } : {}),
+      ...(createdByOperationId ? { createdByOperationId } : {}),
       throughSequence: session.sequence, retainedAfterSequence: session.retainedAfter, retainedOperationIds: [...session.operations.keys()],
       activePromptIds: [...session.activePrompts], pendingPermissions: [...session.permissions].map(([requestId, permission]) => ({ requestId, openedAt: permission.openedAt, request: permission.request })) };
   }
@@ -735,10 +755,27 @@ export class AntigravityHost implements AntigravityPort {
     try { this.#applyNative(session, await this.#readNative(session.identity), epoch); }
     catch { if (!session.nativeUnknown) this.#revision++; session.nativeUnknown = true; session.nativeReadable = false; }
   }
+  async #closeSessionPeer(session: Session, purpose: "replace" | "retire") {
+    try {
+      await session.peer.close();
+      // The ACP closure report is immutable. The owned transport can retry
+      // failed process-group cleanup, and reuses successful closure proof.
+      await session.transport.close("antigravity_close");
+    } catch (error) {
+      session.cleanupUnproven = true;
+      throw new AntigravityError("antigravity_cleanup_unproven", "sent_outcome_unknown", { cause: error });
+    }
+    session.closed = true;
+    session.cleanupUnproven = purpose === "replace" && (await session.peer.binding.closed).continuations === "unsettled";
+    if (session.cleanupUnproven) throw new AntigravityError("antigravity_cleanup_unproven", "sent_outcome_unknown");
+  }
+  #forgetHandle(session: Session) {
+    if (!this.#sessions.delete(session.handleId)) return;
+    this.#released.add(session.handleId); while (this.#released.size > 4096) this.#released.delete(this.#released.values().next().value!); this.#revision++;
+  }
   async #retire(session: Session) {
-    try { await session.peer.close(); session.closed = true; session.cleanupUnproven = false; this.#sessions.delete(session.handleId);
-      this.#released.add(session.handleId); while (this.#released.size > 4096) this.#released.delete(this.#released.values().next().value!); this.#revision++; }
-    catch (error) { session.cleanupUnproven = true; throw error; }
+    await this.#closeSessionPeer(session, "retire");
+    this.#forgetHandle(session);
     await this.#forgetHistory(session.identity);
   }
   async #closeEphemeral(peer: AntigravityAcpConnection) {

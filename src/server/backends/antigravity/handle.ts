@@ -75,6 +75,7 @@ export class AntigravityHandle implements ConversationHandle {
     readonly detail: AntigravityBinding, readonly attachment: AntigravityAttachment) {
     this.binding = attached.binding; this.#setup = attachment.setup; this.#after = attachment.retainedAfterSequence;
     this.#loading = attachment.loading === true;
+    this.#disconnected = attachment.closed === true;
     this.#permissionSequence = attachment.throughSequence;
     this.#configurationSequence = attachment.throughSequence;
     this.#accounting = new AntigravityUsage(driver.input.usage, this.binding, detail.nativeNamespaceKey);
@@ -97,9 +98,9 @@ export class AntigravityHandle implements ConversationHandle {
   get scope() { return { binding: this.detail, key: this.driver.input.correlationKey }; }
   get identity() { return { sessionId: this.detail.sessionId, cwd: this.detail.canonicalWorkspacePath }; }
   async initialize(): Promise<void> {
-    if (!this.#loading) this.driver.input.modeCatalog?.observe(this.#setup);
+    if (!this.#loading && !this.#disconnected) this.driver.input.modeCatalog?.observe(this.#setup);
     // Control is independent of transcript acquisition and revoked on owner loss.
-    this.attached.onControlReady?.({ generation: this.attachment.generation, lifetime: this.#control.signal,
+    if (!this.#disconnected) this.attached.onControlReady?.({ generation: this.attachment.generation, lifetime: this.#control.signal,
       interrupt: input => this.interrupt(input), reconcileInterrupt: input => this.reconcileInterrupt(input) });
     for (const pending of this.attachment.pendingPermissions) this.#permissions.set(pending.requestId, pending);
     this.#observeActivePrompts(this.attachment.activePromptIds);
@@ -323,7 +324,7 @@ export class AntigravityHandle implements ConversationHandle {
             this.#applyRetainedSetup(retained);
             this.#observeActivePrompts(retained.activePromptIds);
             this.#applyRetainedPermissions(retained, changed);
-            this.#disconnected = false;
+            this.#disconnected = retained.closed === true;
           });
           if (this.#control.signal.aborted) return;
         } catch { /* Keep ownership unknown until exact retained lookup succeeds. */ }

@@ -1002,6 +1002,82 @@ describe("Antigravity driver authority and projection", () => {
     expect((await handle.establishProjection({ signal: new AbortController().signal })).snapshot.runState).toBe("idle");
     stop(); await handle.close();
   });
+  it("projects an already closed retained generation as disconnected before its first observation and withholds Stop control", async () => {
+    const f = fixture(), onControlReady = vi.fn();
+    vi.mocked(f.port.attach).mockResolvedValue({ ...f.attachment, closed: true });
+    let deliverClosed!: () => void;
+    const firstObservation = new Promise<void>(resolve => { deliverClosed = resolve; });
+    vi.mocked(f.port.observe).mockImplementationOnce(async () => {
+      await firstObservation;
+      return { events: [], activePromptIds: [], retainedAfterSequence: 0, throughSequence: 0, closed: true };
+    });
+    try {
+      const handle = await f.driver.attach({ ...f.attached, onControlReady });
+      const initial = await handle.establishProjection({ signal: new AbortController().signal });
+      expect(f.port.observe).toHaveBeenCalledOnce();
+      expect(initial.snapshot.runState).toBe("disconnected");
+      expect(onControlReady).not.toHaveBeenCalled();
+      await expect(handle.captureSubmissionRetryAnchor()).rejects.toThrow();
+      expect(f.port.request).not.toHaveBeenCalled();
+    } finally { deliverClosed(); }
+  });
+  describe("bound load recovery without replay of the answer or load result", () => {
+    const pending = { requestId: "early", openedAt: "2026-11-22T00:00:00.000Z", request: { sessionId: identity.sessionId,
+      toolCall: { toolCallId: "tool", title: "Review" }, options: [{ optionId: "allow", name: "Allow once", kind: "allow_once" as const }] } };
+    async function openLoadingHandle() {
+      const f = fixture(), signal = new AbortController().signal;
+      vi.mocked(f.port.attach).mockResolvedValue({ ...f.attachment, loading: true,
+        setup: { initialize: f.attachment.setup.initialize, session: {} }, pendingPermissions: [pending] });
+      const handle = await f.driver.attach(f.attached);
+      const initial = await handle.establishProjection({ signal });
+      const events: BackendConversationEvent[] = [];
+      initial.subscribeFromNext(({ event }) => events.push(event));
+      expect(initial.snapshot.runState).toBe("running");
+      expect((await handle.backendCapabilities()).actions).toEqual([]);
+      expect(events).toContainEqual(expect.objectContaining({ type: "interaction_opened", interaction: expect.objectContaining({ backendInteractionId: "early" }) }));
+      return { f, handle, events, signal };
+    }
+    function finishWhileUnobserved(f: ReturnType<typeof fixture>, cause: "replay gap" | "disconnect", owner = f.attachment) {
+      // The answer and session_loaded both fell out of replay. Only the retained
+      // attachment can establish which permissions and settings are current.
+      vi.mocked(f.port.attachExisting).mockResolvedValue({ ...owner, retainedAfterSequence: 2, throughSequence: 2 });
+      if (cause === "disconnect") vi.mocked(f.port.observe).mockRejectedValueOnce(new AntigravityError("carrier_lost", "not_sent"));
+      vi.mocked(f.port.observe).mockImplementation(async (_input, signal) => {
+        await delay(10, undefined, { signal });
+        return { events: [], retainedAfterSequence: 2, throughSequence: 2, activePromptIds: [], closed: false };
+      });
+    }
+    it.each(["replay gap", "disconnect"] as const)("finishes the same retained load after a %s", async cause => {
+      const { f, handle, events, signal } = await openLoadingHandle();
+      finishWhileUnobserved(f, cause);
+      await vi.waitFor(() => expect(events).toContainEqual({ type: "run_state_changed", state: "idle" }), { timeout: 3000 });
+      expect(events).toContainEqual(cause === "replay gap"
+        ? { type: "resnapshot_required", reason: "sequence_gap" }
+        : { type: "run_state_changed", state: "disconnected" });
+      expect(f.port.attachExisting).toHaveBeenCalledExactlyOnceWith(identity, expect.any(AbortSignal));
+      expect(f.port.attach).toHaveBeenCalledOnce();
+      expect(f.port.request).not.toHaveBeenCalled();
+      expect(events.filter(event => event.type === "interaction_resolved")).toEqual([{ type: "interaction_resolved", backendInteractionId: pending.requestId }]);
+      expect((await handle.backendCapabilities()).effectiveSettings.model?.id).toBe("model");
+      const recovered = await handle.establishProjection({ signal }), replay: BackendConversationEvent[] = [];
+      expect(recovered.snapshot.runState).toBe("idle");
+      recovered.subscribeFromNext(({ event }) => replay.push(event))();
+      expect(replay.filter(event => event.type === "interaction_opened")).toEqual([]);
+      await expect(handle.captureSubmissionRetryAnchor()).resolves.toBe(f.native.revision);
+    });
+    it.each([
+      { cause: "replay gap", mismatch: "handleId" },
+      { cause: "disconnect", mismatch: "generation" },
+    ] as const)("refuses retained load results from a different $mismatch after a $cause", async ({ cause, mismatch }) => {
+      const { f, handle, events } = await openLoadingHandle();
+      finishWhileUnobserved(f, cause, { ...f.attachment, [mismatch]: "replacement" });
+      await vi.waitFor(() => expect(events).toContainEqual({ type: "resnapshot_required", reason: "provider_handle_closed" }));
+      expect(f.port.attachExisting).toHaveBeenCalledWith(identity, expect.any(AbortSignal));
+      expect(events.some(event => event.type === "capabilities_changed" || event.type === "interaction_resolved")).toBe(false);
+      await expect(handle.captureSubmissionRetryAnchor()).rejects.toThrow();
+      expect(f.port.attach).toHaveBeenCalledOnce();
+    });
+  });
   it("restores pending permissions independently of replay and resolves them when Stop cancels the reverse request", async () => {
     const f = fixture();
     const pending = { requestId: "permission", openedAt: "2026-11-22T00:00:00.000Z", request: { sessionId: identity.sessionId, toolCall: { toolCallId: "native-tool", title: "Run command" },

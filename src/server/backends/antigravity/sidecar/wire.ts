@@ -95,7 +95,7 @@ export const antigravityHostResponseSchema = z.discriminatedUnion("status", [
   z.strictObject({ status: z.literal("failed"), runtimeVersion: z.string().max(128).nullable(), failure: antigravityFailureSchema }),
 ]);
 export const antigravityAttachmentSchema = antigravityIdentitySchema.extend({ toolPeerStamp: z.string().regex(/^[0-9a-f]{64}$/u).optional(), handleId: id, generation: id, setup: antigravitySetupSchema,
-  loading: z.literal(true).optional(),
+  loading: z.literal(true).optional(), closed: z.literal(true).optional(),
   createdByOperationId: id.optional(),
   throughSequence: position, retainedAfterSequence: position, retainedOperationIds: z.array(id).max(640), activePromptIds: z.array(id).max(32),
   pendingPermissions: z.array(z.strictObject({ requestId: id, openedAt: z.iso.datetime(), request: acp<RequestPermissionRequest>(decodeRequestPermissionRequest) })).max(64) });

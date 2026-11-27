@@ -133,8 +133,9 @@ it("qualifies stock streaming, exact retained steering cancellation, and passive
     const result = await command(f.host, f.attachment.handleId, { type: "cancel" }) as { settledOperationIds: string[]; nativeRevision: string };
     expect(result.settledOperationIds).toEqual(expect.arrayContaining(steers)); expect(result.nativeRevision).toMatch(/^[a-f0-9]{64}$/u);
     for (const operationId of steers) {
-      const outcome = await waitOutcome(f.host, f.attachment.handleId, operationId); expect(outcome.status).toBe("completed");
-      if (outcome.status === "completed" && (outcome.result as { stopReason?: string }).stopReason === "cancelled") expect(outcome.cancelledAtNativeRevision).toBe(result.nativeRevision);
+      const outcome = await waitOutcome(f.host, f.attachment.handleId, operationId);
+      if (outcome.status !== "completed") throw new Error(`LIVE_ANTIGRAVITY_BLOCKER: Steer ${operationId} returned ${JSON.stringify(outcome)}`);
+      if ((outcome.result as { stopReason?: string }).stopReason === "cancelled") expect(outcome.cancelledAtNativeRevision).toBe(result.nativeRevision);
       await f.host.acknowledgeOperation({ handleId: f.attachment.handleId, operationId }); expect(await f.host.outcome({ handleId: f.attachment.handleId, operationId })).toEqual(outcome);
     }
     const first = await readPortHistory(f.host, f.identity), second = await readPortHistory(f.host, f.identity);

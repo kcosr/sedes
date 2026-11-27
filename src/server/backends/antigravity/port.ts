@@ -51,6 +51,8 @@ export type AntigravityEvent = { readonly sequence: number } & (
 export interface AntigravityAttachment extends AntigravityIdentity {
   /** Exact bound session awaiting its load response after an early permission. */
   readonly loading?: true;
+  /** A dead generation retained for delivery of its events and operation receipts. */
+  readonly closed?: true;
   readonly toolPeerStamp?: string;
   readonly createdByOperationId?: string;
   readonly handleId: string;

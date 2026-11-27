@@ -93,8 +93,13 @@ It does not make an already completed foreground turn active.
 A bound session can replay a permission before ACP `session/load` returns.
 Sedes exposes that decision for the exact session during loading and keeps
 ordinary submissions and settings changes fenced until load completes. The
-finished load supplies its authoritative settings. Attachments and observation
-pages also carry the IDs of pending native prompts. A pending prompt holds
+finished load supplies its authoritative settings. If the load fails, reconnect
+can drain the closed generation's events. After confirming peer cleanup, a
+subsequent attach reloads the same native session and retains the outcomes of
+prior requests, including an uncertain Stop. The host keeps its prior activity
+inventory until the new generation reads history.
+
+Attachments and observation pages carry the IDs of pending native prompts. A pending prompt holds
 Send across non-daemon background work even after the foreground turn settles.
 A late failure notice can enrich the timeline without completing the turn again.
 Acknowledged mutation outcomes remain readable while the host is retained,
@@ -281,6 +286,11 @@ not fabricate that proof. Live qualification recovered this case with an explici
 Stop, verifying the queued callback's cancellation receipt and subsequent prompt
 admission. The application does not issue a hidden Stop to turn permission
 rejection into cancellation of all work.
+
+During stock 1.5.18 qualification, a second concurrent Steer sometimes reached
+the provider after Stop had begun. The CLI rejected that prompt with JSON-RPC
+`-32603`. Sedes kept the rejection on that operation and retained the native
+cancellation receipts for the prompts the provider had accepted.
 
 Accepted ACP events advance and acknowledge their cursor before passive history
 acquisition, so a history-worker failure does not replay them. Reconnect applies
