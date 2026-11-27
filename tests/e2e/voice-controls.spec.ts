@@ -138,7 +138,7 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   await page.mouse.click(statusBox.x + 12, statusBox.y + statusBox.height / 2);
   await expect(page).toHaveURL(new RegExp(`${threadPath}$`, "u"));
   await expect(targetPicker).toHaveCount(0);
-  await expect(composer).toHaveValue(draft);
+  await expect(composer).toHaveText(draft);
   await toolbar.getByRole("button", { name: /^Change recording thread:/u }).click();
   await targetPicker.getByRole("button", { name: "Voice navigation destination", exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`${threadPath}$`, "u"));
@@ -331,7 +331,7 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   }, { x: shortcutBox!.x + shortcutBox!.width / 2, y: shortcutBox!.y + shortcutBox!.height / 2 });
   await expect(targetPicker).toHaveCount(0);
   await expect(page).toHaveURL(new RegExp(`${threadPath}$`, "u"));
-  await expect(composer).toHaveValue(draft);
+  await expect(composer).toHaveText(draft);
   await expect(composer).not.toBeFocused();
   await expect(keep).toBeFocused();
   await expect(tile.locator(".lucide-mic")).toBeVisible();
@@ -439,7 +439,7 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   await expectNoPageOverflow(page);
   await capture(page, testInfo, "voice-reconnecting-wider.png");
   await page.setViewportSize({ width: 320, height: 780 });
-  await expect(composer).toHaveValue(draft);
+  await expect(composer).toHaveText(draft);
   for (const [width, held] of [[320, false], [320, true], [360, false], [360, true], [1280, false], [1280, true]] as const) {
     await page.setViewportSize({ width, height: 780 });
     await publishVoiceState(page, { phase: "listening", active: { ...active, recording: { ...active.recording, keepListening: held } },
@@ -540,7 +540,7 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   await expectNoPageOverflow(page);
   await capture(page, testInfo, "voice-recovery-transcription-needed-narrow.png");
   await sheet.getByRole("button", { name: "Close", exact: true }).click();
-  await expect(composer).toHaveValue(draft);
+  await expect(composer).toHaveText(draft);
 
   await publishVoiceState(page, { phase: "recordingRecovery", ready: true, readiness: "ready", settings: base.settings,
     recordingRecovery: { ...saved, revision: 5, canRetryRecognition: true } });
@@ -633,7 +633,7 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   await measureRow("olderSavedDuringRecording", 4);
   await expectNoPageOverflow(page);
   await capture(page, testInfo, "voice-saved-access-during-recording-narrow.png");
-  await expect(composer).toHaveValue(draft);
+  await expect(composer).toHaveText(draft);
   await testInfo.attach("voice-row-heights", { body: JSON.stringify({ viewports, originalRowHeight: 60, heights }, null, 2), contentType: "application/json" });
   await testInfo.attach("voice-row-text-offsets", { body: JSON.stringify({ viewports, leftOffsets, topOffsets }, null, 2), contentType: "application/json" });
   await testInfo.attach("voice-recording-control-gaps", { body: JSON.stringify({ viewports, controlGaps }, null, 2), contentType: "application/json" });
@@ -726,7 +726,7 @@ test("saved dictation appends to its original composer without losing drafts or 
   await recovery.getByRole("button", { name: "Add to composer", exact: true }).click();
   await expect(sheet).toHaveCount(0);
   await expect(page).toHaveURL(new RegExp(`${originalPath}$`, "u"));
-  await expect(composer).toHaveValue("Existing destination draft.\n\nRecovered dictation text.");
+  await expect(composer).toHaveText("Existing destination draft.\n\nRecovered dictation text.", { useInnerText: true });
   await firstSaved;
   expect(await page.evaluate(() => window.__voiceFixture.state.recordingRecovery?.recordingId)).toBe(saved.recordingId);
   expect(await page.evaluate(() => window.__voiceFixture.calls.filter(call => ["sendRecoveredRecording", "discardRecording"].includes(call.method)))).toEqual([]);
@@ -756,11 +756,11 @@ test("saved dictation appends to its original composer without losing drafts or 
     await toolbar.getByRole("button", { name: "Open voice controls", exact: true }).click();
     await sheet.getByRole("button", { name: "Add to composer", exact: true }).click();
     await expect(sheet).toHaveCount(0);
-    await expect(composer).toHaveValue(`${unsaved}\n\nMore recovered words.`);
+    await expect(composer).toHaveText(`${unsaved}\n\nMore recovered words.`, { useInnerText: true });
   } finally { releaseSave(); }
   await recoveredSaved;
   await page.reload();
-  await expect(composer).toHaveValue(`${unsaved}\n\nMore recovered words.`);
+  await expect(composer).toHaveText(`${unsaved}\n\nMore recovered words.`, { useInnerText: true });
 
   await page.evaluate(() => { window.__voiceFixture.recoveredText = "é".repeat(131_072); });
   await publishVoiceState(page, { recordingRecovery: { ...saved, recordingId: "oversized-recording" } });
@@ -769,9 +769,9 @@ test("saved dictation appends to its original composer without losing drafts or 
   await expect(sheet).toContainText("This dictation does not fit in the composer. Copy the text instead.");
   expect(await page.evaluate(() => window.__voiceFixture.state.recordingRecovery?.recordingId)).toBe("oversized-recording");
   await sheet.press("Escape");
-  await expect(composer).toHaveValue(`${unsaved}\n\nMore recovered words.`);
+  await expect(composer).toHaveText(`${unsaved}\n\nMore recovered words.`, { useInnerText: true });
   await page.goto(otherPath);
-  await expect(composer).toHaveValue("Keep this other draft.");
+  await expect(composer).toHaveText("Keep this other draft.");
 });
 
 test("a completed turn's footer replays its reply and stays reachable on touch with voice on or Off", async ({ page, browser }, testInfo) => {

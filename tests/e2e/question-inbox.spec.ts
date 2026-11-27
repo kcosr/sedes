@@ -161,7 +161,7 @@ test("nonblocking questions navigate oldest first, send individual answers, and 
     await expect(banner).toContainText("3 open questions");
     await expect(panel).toHaveCount(0);
     await page.reload();
-    await expect(composer).toHaveValue("Keep this unrelated draft intact.");
+    await expect(composer).toHaveText("Keep this unrelated draft intact.");
     await expect(panel).toBeVisible();
     await expect(cards).toHaveCount(1);
     await expect(cards).toContainText("Which deployment region?");
@@ -207,7 +207,7 @@ test("nonblocking questions navigate oldest first, send individual answers, and 
       await expect(sending).toContainText("Which deployment region?: eu-west-1");
       await expect(sending.getByRole("status")).toHaveText("Sending");
       await expect(sending).not.toContainText("User responded to a question:");
-      await expect(composer).toHaveValue("Keep this unrelated draft intact.");
+      await expect(composer).toHaveText("Keep this unrelated draft intact.");
       await capture(page, testInfo, "question-reply-sending.png");
       await expectNoPageOverflow(page);
     } finally {
@@ -219,7 +219,7 @@ test("nonblocking questions navigate oldest first, send individual answers, and 
     await expect(regionRequest).toHaveAttribute("data-question-status", "pending");
     await expect(regionRequest.locator(".question-disclosure-preview")).toHaveText("What should I keep in mind?");
     await expect(cards.getByRole("textbox")).toHaveCount(0);
-    await expect(composer).toHaveValue("Keep this unrelated draft intact.");
+    await expect(composer).toHaveText("Keep this unrelated draft intact.");
     await expect(
       page.getByRole("button", { name: "Stop", exact: true }),
     ).toBeVisible();
@@ -237,7 +237,7 @@ test("nonblocking questions navigate oldest first, send individual answers, and 
     await expect(banner).toContainText("1 open question");
     await expect(questionTab).toHaveText("Question");
     await expect(regionRequest).toHaveAttribute("data-question-status", "answered");
-    await expect(composer).toHaveValue("Keep this unrelated draft intact.");
+    await expect(composer).toHaveText("Keep this unrelated draft intact.");
     await releaseSteerMaterialization();
     await panel.getByRole("button", { name: "Close questions" }).click();
     const responses = page
@@ -324,7 +324,7 @@ test("nonblocking questions navigate oldest first, send individual answers, and 
         .locator('[data-message-role="user"]')
         .filter({ hasText: "Should I prepare a rollout note?" }),
     ).toHaveCount(0);
-    await expect(composer).toHaveValue("Keep this unrelated draft intact.");
+    await expect(composer).toHaveText("Keep this unrelated draft intact.");
 
     // A later turn must bring the hidden attention UI back without a reload.
     expect(

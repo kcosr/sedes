@@ -62,6 +62,20 @@ import {
 } from "../../src/shared/index.js";
 import { SEDES_VERSION } from "../../src/shared/version.js";
 
+describe("inline thread reference presentation", () => {
+  it("accepts one rich body only from an ordinary user delivery", () => {
+    const reference = { threadId: "99c14688-f218-438e-a2dd-07347834da66", title: "Parked speech" };
+    const body = { kind: "thread_reference_body", parts: ["Compare ", reference, "."] };
+    const message = { id: "item", turnId: "turn", revision: 0, kind: "user_message", status: "completed", content: [body] };
+    const authored = { ...message, deliveryOperationId: "send" };
+    expect(conversationItemSchema.parse(authored)).toEqual(authored);
+    expect(conversationItemSchema.safeParse(message).success).toBe(false);
+    expect(conversationItemSchema.safeParse({ ...authored, origin: { kind: "automatic_retry" } }).success).toBe(false);
+    expect(conversationItemSchema.safeParse({ ...authored, content: [body, body] }).success).toBe(false);
+    expect(conversationItemSchema.safeParse({ ...authored, content: [body, { kind: "text", text: { text: "duplicate" } }] }).success).toBe(false);
+  });
+});
+
 describe("normalized skill aliases", () => {
   it("bounds search names without changing canonical selection identity or reference", () => {
     const skill = { id: "skill-id", name: { text: "canonical" }, reference: "/canonical", aliases: ["old-directory"] };
@@ -2409,7 +2423,7 @@ describe("application sidebar background-work wire contract", () => {
     }).success).toBe(false);
   });
   it("carries the same counts through snapshot and thread-upsert events without changing run state", () => {
-    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(185);
+    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(186);
     expect(normalizedApplicationEventSchema.parse({ type: "snapshot", generation: "generation-1", snapshot }))
       .toMatchObject({ snapshot: { threads: [{ runState: "idle", backgroundWork }] } });
     expect(normalizedApplicationEventSchema.parse({ type: "thread_upsert", generation: "generation-1", thread }))

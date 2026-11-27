@@ -4,7 +4,7 @@ import type { QueuedInputRecord } from "../../src/server/db/repositories/queued-
 import { queuedInputPresentationSchema } from "../../src/shared/protocol/api.js";
 import { queuedInputSummarySchema } from "../../src/shared/protocol/conversation.js";
 import { MAXIMUM_MESSAGE_ITEM_BYTES } from "../../src/shared/protocol/payload.js";
-import { formatThreadReferenceText } from "../../src/shared/thread-references.js";
+import { formatInlineThreadReferenceText, formatThreadReferenceText } from "../../src/shared/thread-references.js";
 
 function queued(
   input: Partial<QueuedInputRecord> &
@@ -29,6 +29,7 @@ function queued(
     requestedDraftRevision: null,
     triggerKind: "user",
     isUserInput: 1,
+    hasThreadReferenceBody: 0,
     sourceAutomationId: null,
     sourceAutomationRunId: null,
     initiatingAgentThreadId: null,
@@ -84,6 +85,24 @@ describe("queued input projection", () => {
     ]);
     const referenceOnly = { ...record, text: formatThreadReferenceText("", references) };
     expect(projectQueuedInputSummaries([referenceOnly])[0]?.preview.text).toBe("Referenced thread: Related work");
+  });
+  it("projects inline mentions in order in the queue preview and full captured input", () => {
+    const ref = { threadId: "616946aa-4574-41f7-bd70-d3a9edd56dbd", title: "Related work" };
+    const parts = ["Compare ", ref, " to ", ref, "."];
+    const text = formatInlineThreadReferenceText(parts);
+    const record = queued({ id: "inline", sequence: 1, requestedDraftRevision: 3, hasThreadReferenceBody: 1, text,
+      applicationThreadId: "88b72554-a697-4ebc-9d96-b2ab09343f13" });
+    expect(projectQueuedInputSummaries([record])[0]?.preview.text).toBe("Compare Related work to Related work.");
+    expect(projectQueuedInputPresentation(record, 1, record.mutationId).content)
+      .toEqual([{ kind: "thread_reference_body", parts }]);
+    const literal = { ...record, hasThreadReferenceBody: 0 as const };
+    expect(projectQueuedInputSummaries([literal])[0]?.preview.text).toContain("Sedes inline thread reference body:");
+    expect(projectQueuedInputPresentation(literal, 1, record.mutationId).content)
+      .toEqual([{ kind: "text", text: { text } }]);
+    const automation = { ...literal, triggerKind: "automation" as const };
+    expect(projectQueuedInputSummaries([automation])[0]?.preview.text).toContain("Sedes inline thread reference body:");
+    expect(projectQueuedInputPresentation(automation, 1, record.mutationId).content)
+      .toEqual([{ kind: "text", text: { text } }]);
   });
   it.each([65_536, 65_537, 262_144])("projects restorable %i-byte input without the obsolete composer restriction", bytes => {
     const text = "é".repeat(Math.floor(bytes / 2)) + (bytes % 2 ? "x" : "");

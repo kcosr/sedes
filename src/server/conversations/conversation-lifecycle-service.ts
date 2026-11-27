@@ -1692,6 +1692,7 @@ export class ConversationLifecycleService {
         source: submissionSource(attempt),
         reconciliationToken: attempt.retryReconciliationToken!,
         text: attempt.initialInputText,
+        ...(attempt.hasThreadReferenceBody ? { hasThreadReferenceBody: true } : {}),
         ...(attempt.initialSkillId === null
           ? {}
           : { selectedSkillId: attempt.initialSkillId }),
@@ -2193,6 +2194,7 @@ export class ConversationLifecycleService {
         source: submissionSource(attempt),
         reconciliationToken: attempt.reconciliationToken!,
         text: attempt.initialInputText,
+        ...(attempt.hasThreadReferenceBody ? { hasThreadReferenceBody: true } : {}),
         ...(attempt.initialSkillId === null
           ? {}
           : { selectedSkillId: attempt.initialSkillId }),

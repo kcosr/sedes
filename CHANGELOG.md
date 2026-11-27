@@ -53,10 +53,11 @@ User-facing changes are collected here before release. See the
   ([#121](https://github.com/kcosr/sedes/pull/121))
 
 - Upgrade the server and browser/packaged clients together for client protocol
-  **185**. Rebuild Android and Electron clients for native voice snapshot **17**
+  **186**. Rebuild Android and Electron clients for native voice snapshot **17**
   and the early reply subscription for progress updates and final answers. See
   [early reply playback](docs/operator/clients/voice.md#early-reply-playback).
   ([#165](https://github.com/kcosr/sedes/pull/165), [#169](https://github.com/kcosr/sedes/pull/169))
+  Migration 175 preserves inline thread mentions in delivery snapshots.
   Thread inventory uses `parked` with `park` and `unpark` actions.
   Existing parked threads and saved sidebar visibility preferences carry over.
   Provisional voice notifications now carry the thread’s park revision.
@@ -467,8 +468,9 @@ User-facing changes are collected here before release. See the
   ([#85](https://github.com/kcosr/sedes/pull/85))
 
 - Composer prompts support up to 16 thread references and 16 Task references.
-  Long reference lists scroll above the message box; the shared 256 KiB input
-  budget still applies. See [thread references](docs/user/files-and-context.md#reference-another-thread)
+  Thread mentions stay inline in the draft and sent message. Type **@** to
+  search this project or all threads, or drop a sidebar thread at the insertion
+  caret. The shared 256 KiB input budget still applies. See [thread references](docs/user/files-and-context.md#reference-another-thread)
   and [Task references](docs/user/tasks-and-automations.md#add-a-task-to-a-prompt).
   ([#83](https://github.com/kcosr/sedes/pull/83))
 

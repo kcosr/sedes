@@ -1,3 +1,5 @@
+import type { ListMentionCandidatesQuery, MentionCandidatePage } from "../../shared/protocol/api.js";
+import { listMentionCandidateIds } from "./mention-candidates.js";
 import {
   normalizedApplicationSnapshotSchema,
   normalizedApplicationThreadSummarySchema,
@@ -186,14 +188,28 @@ export class ApplicationSnapshotService {
 
   /** A targeted inventory read never attaches the conversation or reads history. */
   async readThreadSummary(scope: RequestScope, id: string): Promise<NormalizedApplicationThreadSummary | undefined> {
-    const durable = this.summaries.listByIds(scope, [id])[0];
-    if (!durable) return undefined;
-    const terminalSummary = this.terminalSummaries.summariesByThread(scope, [id]).get(id)
-      ?? { runningCount: 0, retainedCount: 0 };
-    const loaded = await this.runtimes.captureLoadedState(scope, id, { presentation: true });
-    return normalizedApplicationThreadSummarySchema.parse(presentApplicationThread(
-      durable, terminalSummary, loaded, this.inventory.currentParkTurn?.(scope, id),
-    ));
+    return (await this.readThreadSummaries(scope, [id]))[0];
+  }
+
+  async listMentionCandidates(scope: RequestScope, sourceId: string, query: ListMentionCandidatesQuery): Promise<MentionCandidatePage> {
+    const page = listMentionCandidateIds(this.inventory.database, scope, sourceId, query);
+    const threads = await this.readThreadSummaries(scope, page.ids);
+    return { threads, nextCursor: page.nextCursor };
+  }
+
+  private async readThreadSummaries(scope: RequestScope, ids: readonly string[]): Promise<NormalizedApplicationThreadSummary[]> {
+    if (ids.length === 0) return [];
+    const byId = new Map(this.summaries.listByIds(scope, ids).map(thread => [thread.id, thread]));
+    if (byId.size === 0) return [];
+    const terminals = this.terminalSummaries.summariesByThread(scope, [...byId.keys()]);
+    // The summary reader's storage order is independent of the search order.
+    const ordered = ids.map(id => byId.get(id)).filter(thread => thread !== undefined);
+    return Promise.all(ordered.map(async durable => {
+      const terminal = terminals.get(durable.id) ?? { runningCount: 0, retainedCount: 0 };
+      const parkTurn = this.inventory.currentParkTurn?.(scope, durable.id);
+      const loaded = await this.runtimes.captureLoadedState(scope, durable.id, { presentation: true });
+      return normalizedApplicationThreadSummarySchema.parse(presentApplicationThread(durable, terminal, loaded, parkTurn));
+    }));
   }
 
   async capture(scope: RequestScope): Promise<NormalizedApplicationSnapshot> {

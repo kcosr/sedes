@@ -37,6 +37,7 @@ export type PrepareDeliveryInputSnapshot = {
   readonly rootSubmit?: true;
   readonly applicationOperationId: string;
   readonly text: string;
+  readonly hasThreadReferenceBody?: true;
   readonly selectedSkillId?: string | null;
   readonly contextExcerpts: readonly ContextExcerpt[];
   readonly taskContexts: readonly MaterializedTaskContext[];
@@ -65,6 +66,7 @@ export type DeliveryInputSnapshot = {
   readonly threadId: string;
   readonly deliveryOperationId: string;
   readonly text: string;
+  readonly hasThreadReferenceBody?: true;
   readonly selectedSkillId?: string;
   readonly contextExcerpts: readonly ContextExcerpt[];
   readonly taskContexts: readonly MaterializedTaskContext[];
@@ -80,6 +82,7 @@ type SnapshotRow = {
   readonly threadId: string;
   readonly applicationOperationId: string;
   readonly text: string;
+  readonly hasThreadReferenceBody: 0 | 1;
   readonly selectedSkillId: string | null;
   readonly contextExcerptsJson: string;
   readonly taskContextsJson: string;
@@ -95,6 +98,7 @@ const columns = `
   application_thread_id AS threadId,
   application_operation_id AS applicationOperationId,
   original_text AS text,
+  has_thread_reference_body AS hasThreadReferenceBody,
   selected_skill_id AS selectedSkillId,
   context_excerpts_json AS contextExcerptsJson,
   task_contexts_json AS taskContextsJson,
@@ -139,6 +143,7 @@ function parseAttachments(value: string): DeliveryInputAttachmentEvidence[] {
 function normalizeInput(input: PrepareDeliveryInputSnapshot): {
   readonly applicationOperationId: string;
   readonly text: string;
+  readonly hasThreadReferenceBody?: true;
   readonly selectedSkillId?: string;
   readonly contextExcerpts: readonly ContextExcerpt[];
   readonly taskContexts: readonly MaterializedTaskContext[];
@@ -200,6 +205,7 @@ function normalizeInput(input: PrepareDeliveryInputSnapshot): {
   return {
     applicationOperationId: input.applicationOperationId,
     text: input.text,
+    hasThreadReferenceBody: input.hasThreadReferenceBody,
     selectedSkillId: input.selectedSkillId ?? undefined,
     contextExcerpts,
     taskContexts,
@@ -213,7 +219,7 @@ function snapshotFingerprint(
   threadId: string,
   input: ReturnType<typeof normalizeInput>,
 ): string {
-  const fingerprintVersion = input.origin === undefined ? 1 : 2;
+  const fingerprintVersion = input.hasThreadReferenceBody ? 3 : input.origin === undefined ? 1 : 2;
   return createHash("sha256")
     .update(
       JSON.stringify([
@@ -239,6 +245,7 @@ function present(row: SnapshotRow): DeliveryInputSnapshot {
     threadId: row.threadId,
     deliveryOperationId: row.applicationOperationId,
     text: row.text,
+    ...(row.hasThreadReferenceBody ? { hasThreadReferenceBody: true as const } : {}),
     ...(row.selectedSkillId === null
       ? {}
       : { selectedSkillId: row.selectedSkillId }),
@@ -269,6 +276,7 @@ function present(row: SnapshotRow): DeliveryInputSnapshot {
   const expected = snapshotFingerprint(row.threadId, {
     applicationOperationId: snapshot.deliveryOperationId,
     text: snapshot.text,
+    hasThreadReferenceBody: snapshot.hasThreadReferenceBody,
     selectedSkillId: snapshot.selectedSkillId,
     contextExcerpts: snapshot.contextExcerpts,
     taskContexts: snapshot.taskContexts,
@@ -333,8 +341,8 @@ export class DeliveryInputSnapshotRepository {
               tenant_id, owner_principal_id, application_thread_id,
               application_operation_id, original_text, selected_skill_id,
               context_excerpts_json, task_contexts_json, attachments_json,
-              origin_json, fingerprint, created_at, root_submit_park_revision
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              origin_json, fingerprint, created_at, root_submit_park_revision, has_thread_reference_body
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `,
         )
         .run(
@@ -353,6 +361,7 @@ export class DeliveryInputSnapshotRepository {
           fingerprint,
           normalized.createdAt,
           input.rootSubmit ? thread.parkRevision : null,
+          normalized.hasThreadReferenceBody ? 1 : 0,
         );
       return this.find(scope, threadId, normalized.applicationOperationId)!;
     })();
@@ -404,6 +413,7 @@ export class DeliveryInputSnapshotRepository {
         this.prepare(scope, childThreadId, {
           applicationOperationId: snapshot.deliveryOperationId,
           text: snapshot.text,
+          hasThreadReferenceBody: snapshot.hasThreadReferenceBody,
           selectedSkillId: snapshot.selectedSkillId ?? null,
           contextExcerpts: snapshot.contextExcerpts,
           taskContexts: snapshot.taskContexts,

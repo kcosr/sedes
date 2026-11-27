@@ -364,7 +364,7 @@ test.describe.serial("normalized interactive Codex projection", () => {
     await expect(page).toHaveURL(new RegExp(`${importedThreadPath}$`));
     await expect(automationChip).toHaveCount(0);
     // The reply drafted before the automation pages is still there.
-    await expect(composer).toHaveValue(ordinaryReply);
+    await expect.poll(() => composer.innerText()).toBe(ordinaryReply);
     await page.getByRole("button", { name: "Thread actions" }).click();
     await expect(
       threadActions.getByRole("menuitem", { name: "Automations…" }),

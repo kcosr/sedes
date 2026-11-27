@@ -12,7 +12,7 @@ import {
 import { DomainError } from "../../src/server/domain/errors.js";
 import type { SubmitTurnInput } from "../../src/server/backends/contracts.js";
 import type { ApplicationSubmitTurnInput } from "../../src/server/conversations/delivery-input-projection.js";
-import { formatThreadReferenceText, splitThreadReferenceText } from "../../src/shared/thread-references.js";
+import { formatInlineThreadReferenceText, formatThreadReferenceText, splitThreadReferenceText } from "../../src/shared/thread-references.js";
 
 const task: MaterializedTaskContext = {
   id: "8af900ae-8495-48f7-9d3f-9e322892ada1",
@@ -62,6 +62,29 @@ function snapshotWithTasks(taskContexts: readonly MaterializedTaskContext[]) {
 }
 
 describe("common delivery input projection", () => {
+  it("projects only frozen composer input for the model and strips skills from the leading text run", () => {
+    const thread = { threadId: "616946aa-4574-41f7-bd70-d3a9edd56dbd", title: "Other thread", project: "project" };
+    const text = formatInlineThreadReferenceText([" /review compare ", thread, " and this "]);
+    const input: ApplicationSubmitTurnInput = {
+      applicationOperationId: "operation-1", mutationId: "mutation-1", source: { kind: "user" },
+      reconciliationToken: "token-1", text, contextExcerpts: [], taskContexts: [task], attachments: [],
+      hasThreadReferenceBody: true,
+    };
+    const skill = { kind: "skill" as const, name: { text: "review" } };
+    const snapshot = { ...snapshotWithTasks([]), text, hasThreadReferenceBody: true as const };
+    const { hasThreadReferenceBody: _flag, ...raw } = input;
+    expect(backendDeliveryInput(input)).toMatchObject({ taskContexts: [], text:
+      renderTaskContextsForModel([task], ` /review compare [Other thread](sedes-thread:${thread.threadId}) and this `) });
+    expect(backendDeliveryInput(input)).not.toHaveProperty("hasThreadReferenceBody");
+    expect(backendDeliveryInput(raw).text).toBe(renderTaskContextsForModel([task], text));
+    expect(canonicalUserMessageContent({ snapshot, providerContent: [skill] })).toEqual([skill,
+      { kind: "thread_reference_body", parts: ["compare ", thread, " and this "] }]);
+    expect(canonicalUserMessageContent({ snapshot: { ...snapshot, text: formatInlineThreadReferenceText(["/review", thread]) }, providerContent: [skill] }))
+      .toEqual([{ kind: "thread_reference_body", parts: ["/review", thread] }]);
+    expect(canonicalUserMessageContent({ snapshot: { ...snapshotWithTasks([]), text }, providerContent: [skill] }))
+      .toEqual([{ kind: "text", text: { text } }]);
+  });
+
   it("frames page replies while retaining exact text and suppressing skill echoes", () => {
     const text = "  /review all files\nKeep these spaces.  ";
     const origin = { kind: "page_response" as const, pageId: "a6081ea9-e9f2-4b07-b2b2-b65062838998", revision: 3, title: "Review form" };

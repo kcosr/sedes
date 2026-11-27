@@ -3582,14 +3582,16 @@ command and tool statuses have no interrupted value, and ACP tool statuses
 have no cancelled value), so an aborted call keeps the provider's reported
 outcome. The in-memory conformance backend keeps the statuses it scripts.
 
-Up to 16 user-selected thread references are bounded canonical plain text (Sedes UUID
-and JSON-quoted display title) in the existing input text contract. All compiled
-backends preserve that text through the shared delivery path;
-it grants no tool or resource authority and includes no referenced transcript.
-Draft, stash, queue, retry, and immutable source snapshots retain the exact text.
-Only exact canonical blocks are rendered as chips; malformed, unknown, and
-code-fenced text remains visible. Provider-native thread IDs never substitute
-for Sedes IDs. TUI submission of reference chips is explicitly unavailable.
+Up to 16 selected thread references carry a bounded title snapshot and a
+Sedes thread UUID. Preserve the ordered text and reference parts in the
+existing draft, stash, queue, retry and immutable delivery source. A typed
+composer snapshot uses fingerprint version 3 and retains its format on fork.
+The shared delivery path expands each reference to a Markdown link with a
+`sedes-thread:` UUID target for the provider. Browser history gets the ordered
+`thread_reference_body` part only from an ordinary composer's captured source.
+Display metadata comes from scoped Sedes inventory. Historical references
+that recorded only a list keep their leading display. A thread reference
+grants no tool or resource authority. Use Chat to stage and submit references.
 
 Text, context excerpts, attachments, and structured Task references are
 normalized application input, not provider-native IDs or browser-selected

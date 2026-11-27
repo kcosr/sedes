@@ -68,6 +68,9 @@ export const test = base.extend<{
               // navigating away from its view deliberately cancels the read.
               (request.method() === "POST" &&
                 /^\/api\/threads\/[^/]+\/usage\/turn-availability$/u.test(new URL(request.url()).pathname)) ||
+              // Each query or scope change cancels the superseded mention search.
+              (request.method() === "GET" &&
+                /^\/api\/threads\/[^/]+\/mention-candidates$/u.test(new URL(request.url()).pathname)) ||
               // Exact input-abandonment lookup is read-only. Materialization,
               // loss of authority, or closing the thread aborts the stale read.
               (request.method() === "POST" &&

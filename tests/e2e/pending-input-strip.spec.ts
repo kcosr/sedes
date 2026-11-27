@@ -297,7 +297,7 @@ async function queueComposerInput(page: Page, text: string): Promise<void> {
   );
   await page.getByRole("button", { name: "Queue", exact: true }).click();
   await accepted;
-  await expect(composer).toHaveValue("");
+  await expect(composer).toHaveText("");
   // Enqueue advances the thread revision. Wait for the authoritative queue
   // projection before composing the next mutation so this journey exercises
   // repeated valid queueing, not a deliberate stale-revision conflict.
@@ -436,7 +436,7 @@ test("idle Send clears immediately and reconciles one final-looking bubble for f
       // This state is observable while the HTTP operation is still in flight:
       // the final-looking destination and visual composer clear are one client
       // transition, independent of receipt or provider materialization.
-      await expect(composer).toHaveValue("");
+      await expect(composer).toHaveText("");
       await expect(composer).toBeFocused();
       await expect(message).toHaveCount(1);
       await expect(message).toHaveAttribute("data-client-provisional", "true");
@@ -526,14 +526,14 @@ test("clean idle rejection removes the bubble and restores the mobile composer",
       .locator(`[data-delivery-operation-id="${mutationId}"]`);
     await expect(message).toHaveCount(1);
     await expect(message).toHaveAttribute("data-client-provisional", "true");
-    await expect(composer).toHaveValue("");
+    await expect(composer).toHaveText("");
     await expect(composer).toBeFocused();
     await expectNoPageOverflow(page);
 
     browserDiagnostics.allowNetworkFailures = true;
     heldRejection.reject();
     await expect(message).toHaveCount(0);
-    await expect(composer).toHaveValue(prompt);
+    await expect(composer).toHaveText(prompt);
     await expect(composer).toBeFocused();
     await expect(page.getByRole("alert")).toContainText(
       "The fixture proved that delivery was not accepted.",
@@ -612,7 +612,7 @@ test("bound uncertain queue takeover removes its optimistic bubble without dupli
   await recovered;
   await expect(page.getByRole("button", { name: "Reconcile delivery" })).toBeEnabled();
   await expect(paused).toContainText("cannot dispatch until this is resolved");
-  await expect(page.getByRole("textbox", { name: "Message Codex" })).toHaveValue(draft);
+  await expect(page.getByRole("textbox", { name: "Message Codex" })).toHaveText(draft);
   await expect(queueRow).toContainText(prompt);
   await page.setViewportSize({ width: 390, height: 844 });
   await expectNoPageOverflow(page);
@@ -741,7 +741,7 @@ test("Queue clears before its request and ambiguous Steer remains until exact ma
   await expectDeliveryMenuAboveTrigger(page);
   await capture(page, testInfo, "delivery-menu-over-composer-mobile.png");
   await page.keyboard.press("Escape");
-  await expect(composer).toHaveValue(menuDraft);
+  await expect.poll(() => composer.innerText()).toBe(menuDraft);
   await page.setViewportSize({ width: 1280, height: 800 });
 
   await selectDeliveryMode(page, "Queue");
@@ -753,7 +753,7 @@ test("Queue clears before its request and ambiguous Steer remains until exact ma
   const queueRow = page.locator(
     `[data-pending-queue-operation-id="${queueOperationId}"]`,
   );
-  await expect(composer).toHaveValue("");
+  await expect(composer).toHaveText("");
   await expect(composer).toBeFocused();
   await expect(queueRow).toHaveCount(1);
   await expect(queueRow).toContainText(queueText);
@@ -794,14 +794,14 @@ test("Queue clears before its request and ambiguous Steer remains until exact ma
       .locator(
         `[data-pending-steer-operation-id="${steerOperationId}"], [data-delivery-operation-id="${steerOperationId}"]`,
       );
-    await expect(composer).toHaveValue("");
+    await expect(composer).toHaveText("");
     await expect(steerRow).toHaveCount(1);
     await expect(steerRow).toContainText(steerText);
     expect(await droppedSteer.upstreamCompleted).toBe(200);
     // Codex admitted it; its durable card stays pending until its exact item
     // appears, whether or not this browser saw the response.
     await expect(steerRow).toContainText(/Steering|Steer unconfirmed/);
-    await expect(composer).toHaveValue("");
+    await expect(composer).toHaveText("");
     await expect(
       page
         .getByRole("region", { name: "Pending inputs" })
@@ -827,7 +827,7 @@ test("Queue clears before its request and ambiguous Steer remains until exact ma
   await expect(page).not.toHaveURL(new RegExp(`${originalPath}$`));
   await page.goBack();
   await expect(page).toHaveURL(new RegExp(`${originalPath}$`));
-  await expect(composer).toHaveValue(postClearDraft);
+  await expect(composer).toHaveText(postClearDraft);
   // Codex admitted it, but it stays unconfirmed until its exact item appears.
   await expect(steerRow).toContainText(/Pending steer|Steering|Steer unconfirmed/);
   await expect(steerRow.getByRole("button")).toHaveCount(0);
@@ -844,7 +844,7 @@ test("Queue clears before its request and ambiguous Steer remains until exact ma
   await expectDeliveryMenuAboveTrigger(page);
   await page.keyboard.press("Escape");
   await expect(page.getByRole("menu")).toBeHidden();
-  await expect(composer).toHaveValue(postClearDraft);
+  await expect(composer).toHaveText(postClearDraft);
   await expect(
     page.locator(
       `[data-item-kind="user_message"][data-delivery-operation-id="${steerOperationId}"]`,
@@ -1005,14 +1005,14 @@ test("pending inputs stay ordered and support Delete, Restore, and head Steer on
     .click();
   await deleteObserved;
   await expect(deleteTarget).toBeVisible();
-  await expect(composer).toHaveValue(retainedDraft);
+  await expect(composer).toHaveText(retainedDraft);
   releaseDelete();
   await deleted;
   await page.unroute("**/api/threads/*/operations");
 
   await expect(deleteTarget).toHaveCount(0);
   await expect(rows).toHaveCount(queuedMessages.length - 2);
-  await expect(composer).toHaveValue(retainedDraft);
+  await expect(composer).toHaveText(retainedDraft);
 
   const draftCleared = page.waitForResponse(
     (response) =>
@@ -1035,7 +1035,7 @@ test("pending inputs stay ordered and support Delete, Restore, and head Steer on
   await restored;
   await expect(restoreTarget).toHaveCount(0);
   await expect(rows).toHaveCount(queuedMessages.length - 3);
-  await expect(composer).toHaveValue(queuedMessages[1]);
+  await expect(composer).toHaveText(queuedMessages[1]);
   await expect(composer).toBeFocused();
   const restoredAttachments = page
     .getByTestId("composer")
@@ -1055,7 +1055,7 @@ test("pending inputs stay ordered and support Delete, Restore, and head Steer on
       name: `Steer queued input into active turn: ${queuedMessages[2]}`,
     }),
   ).toBeVisible();
-  await expect(composer).toHaveValue(queuedMessages[1]);
+  await expect(composer).toHaveText(queuedMessages[1]);
 
   await capture(page, testInfo, "pending-input-strip-streaming-desktop.png");
   const deliveryButton = page.getByTestId("composer").locator(".queue-button");
@@ -1064,7 +1064,7 @@ test("pending inputs stay ordered and support Delete, Restore, and head Steer on
   await page.setViewportSize({ width: 390, height: 844 });
   await expectNoPageOverflow(page);
   await expect(composer).toBeVisible();
-  await expect(composer).toHaveValue(queuedMessages[1]);
+  await expect(composer).toHaveText(queuedMessages[1]);
   await expect(deliveryButton).toHaveText("");
   await expect(page.locator('.desktop-config [data-setting-id="thinking_level"] [role="combobox"]')).toBeVisible();
   const mobileRestore = rows.nth(0).getByRole("button", {
@@ -1084,7 +1084,7 @@ test("pending inputs stay ordered and support Delete, Restore, and head Steer on
   const reloadedComposer = page.getByRole("textbox", {
     name: "Message Scripted agent",
   });
-  await expect(reloadedComposer).toHaveValue(queuedMessages[1]);
+  await expect(reloadedComposer).toHaveText(queuedMessages[1]);
   const reloadedAttachments = page
     .getByTestId("composer")
     .getByLabel("Attachments");
@@ -1121,10 +1121,10 @@ test("pending inputs stay ordered and support Delete, Restore, and head Steer on
     (response) => operationKind(response) === "deliver" && response.ok(),
   );
   await selectDeliveryMode(page, "Steer");
-  await expect(reloadedComposer).toHaveValue(queuedMessages[1]);
+  await expect(reloadedComposer).toHaveText(queuedMessages[1]);
   await page.getByRole("button", { name: "Steer", exact: true }).click();
   await deliveredRestoredInput;
-  await expect(reloadedComposer).toHaveValue("");
+  await expect(reloadedComposer).toHaveText("");
   const deliveredMessage = page
     .locator('[data-item-kind="user_message"]')
     .filter({ hasText: queuedMessages[1] });
@@ -1184,7 +1184,7 @@ test("Pi pending-materialization Steer retains its cleared input until the exact
     .locator(
       `[data-pending-steer-operation-id="${operationId}"], [data-delivery-operation-id="${operationId}"]`,
     );
-  await expect(composer).toHaveValue("");
+  await expect(composer).toHaveText("");
   await expect(pendingRow).toHaveCount(1);
   await expect(pendingRow).toContainText(prompt);
   await expect(pendingRow).toContainText("Steering");
@@ -1202,7 +1202,7 @@ test("Pi pending-materialization Steer retains its cleared input until the exact
     .locator(`[data-delivery-operation-id="${operationId}"]`);
   await expect(materialized).toHaveCount(1);
   await expect(materialized).toContainText(prompt);
-  await expect(composer).toHaveValue("");
+  await expect(composer).toHaveText("");
 });
 
 test("Codex sends several Steers serially while earlier ones are unconfirmed and clears each on exact materialization", async ({
@@ -1390,7 +1390,7 @@ test("Codex sends several Steers serially while earlier ones are unconfirmed and
       ).toContainText("Steering");
     }
   }
-  await expect(composer).toHaveValue("");
+  await expect(composer).toHaveText("");
   await expectNoPageOverflow(page);
 });
 
@@ -1494,7 +1494,7 @@ test("Stop returns every Codex steer Codex never used as not sent and keeps a us
     })
     .click();
   await expect(unusedRows[0]!).toHaveCount(0);
-  await expect(composer).toHaveValue(unused[0]!);
+  await expect(composer).toHaveText(unused[0]!);
   await composer.fill("");
 
   // In one turn, a steer Codex drained before Stop stays with the stopped

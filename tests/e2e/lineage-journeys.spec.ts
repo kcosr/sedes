@@ -250,7 +250,7 @@ test.describe.serial("normalized lineage browser journeys", () => {
     await expect.poll(() => new URL(page.url()).pathname).not.toBe(sourcePath);
     await expect(
       page.getByRole("textbox", { name: "Message Scripted agent" }),
-    ).toHaveValue("");
+    ).toHaveText("");
     await page.goto(sourcePath);
 
     await armForkControl(page, sourceThreadId, "hold");
@@ -283,7 +283,7 @@ test.describe.serial("normalized lineage browser journeys", () => {
     ).toHaveCount(0);
     await expect(
       page.getByRole("textbox", { name: "Message Scripted agent" }),
-    ).toHaveValue("");
+    ).toHaveText("");
     await capture(page, testInfo, "lineage-grouped-desktop.png");
 
     const turnGroup = page.locator(".conversation-turn").first();
@@ -479,7 +479,7 @@ test.describe.serial("normalized lineage browser journeys", () => {
     const recoveredChildId = recoveredChildPath.split("/").at(-1)!;
     await expect(
       page.getByRole("textbox", { name: "Message Scripted agent" }),
-    ).toHaveValue("");
+    ).toHaveText("");
 
     const childRow = (candidate: typeof page) =>
       candidate

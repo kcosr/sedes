@@ -17,6 +17,8 @@ export function openOverlayDatabaseConnection(filename: string): Database.Databa
   }
 
   const database = new Database(filename);
+  // SQLite's built-in lower() only folds ASCII. Match JavaScript search text for human names.
+  database.function("sedes_lower", { deterministic: true }, (text) => String(text).toLowerCase());
   database.pragma("foreign_keys = ON");
   database.pragma("journal_mode = WAL");
   database.pragma("busy_timeout = 5000");

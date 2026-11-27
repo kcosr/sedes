@@ -95,7 +95,7 @@ test("settings routes preserve the mounted composer through category history and
   await expect(page).toHaveURL(threadPath);
   await expect(inventory).not.toHaveAttribute("inert");
   await expect(navigation).toHaveCount(0);
-  await expect(composer).toHaveValue(draft);
+  await expect.poll(() => composer.innerText()).toBe(draft);
   await expect(sidebar.getByTestId("settings-trigger")).toBeFocused();
   expect(await composer.evaluate((element, previous) => element === previous, originalComposer)).toBe(true);
   expect(await composer.evaluate(element => element.scrollTop)).toBe(scrollTop);
@@ -149,7 +149,7 @@ test("settings routes preserve the mounted composer through category history and
   await returnFocus.dispose();
   await expect(page).toHaveURL(threadPath);
   await expect(page.getByRole("button", { name: "Open thread navigation", exact: true })).toBeFocused();
-  await expect(composer).toHaveValue(draft);
+  await expect.poll(() => composer.innerText()).toBe(draft);
   expect(await composer.evaluate((element, previous) => element === previous, mobileComposer)).toBe(true);
 });
 

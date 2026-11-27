@@ -184,7 +184,7 @@ test("active chat notes deliver the combined composer draft with Steer and Queue
       });
       await delivered;
       await expect(actions).toBeHidden();
-      await expect(composer).toHaveValue("");
+      await expect(composer).toHaveText("");
       await expect(page.getByTestId("composer").getByLabel("Context excerpts")).toHaveCount(0);
       if (mode === "steer") {
         await expect.poll(async () => {
@@ -581,7 +581,7 @@ test.describe.serial("normalized composer state", () => {
     await expect(tasksPanel).toBeVisible();
 
     const composer = page.getByTestId("composer");
-    const textarea = composer.getByRole("textbox", {
+    const messageEditor = composer.getByRole("textbox", {
       name: "Message Scripted agent",
     });
     const attachedTasks = composer.getByLabel("Attached tasks");
@@ -592,7 +592,7 @@ test.describe.serial("normalized composer state", () => {
       "Implement durable task context",
     );
     await expect(durableTaskChip).toHaveAttribute("data-state", "available");
-    await expect(textarea).toHaveValue("");
+    await expect(messageEditor).toHaveText("");
 
     await page.reload();
     durableTaskChip = page
@@ -602,7 +602,7 @@ test.describe.serial("normalized composer state", () => {
     await expect(durableTaskChip).toContainText(
       "Implement durable task context",
     );
-    await expect(textarea).toHaveValue("");
+    await expect(messageEditor).toHaveText("");
 
     await tasksPanel.getByRole("radio", { name: "Thread" }).click();
     await tasksPanel
@@ -733,7 +733,7 @@ test.describe.serial("normalized composer state", () => {
       .click();
     await missingTaskRemoved;
 
-    await expect(textarea).toHaveValue("");
+    await expect(messageEditor).toHaveText("");
     await sendCurrentDraft(page);
     const deliveredTask = page.locator(
       `.message-task-card[data-task-id="${createdTask.id}"]`,
@@ -793,7 +793,7 @@ test.describe.serial("normalized composer state", () => {
     );
     await deliveredTask.getByRole("button", { name: "Details" }).click();
     await expect(deliveredTask).toContainText(createdTask.id);
-    await expect(textarea).toHaveValue("");
+    await expect(messageEditor).toHaveText("");
   });
 
   test("draft movement and inventory actions survive normalized transitions", async ({
@@ -872,7 +872,7 @@ test.describe.serial("normalized composer state", () => {
     await expect(page).toHaveURL(threadPath);
     await expect(
       page.getByRole("textbox", { name: "Message Scripted agent" }),
-    ).toHaveValue("Preserve this draft while moving it");
+    ).toHaveText("Preserve this draft while moving it");
     await expect(page.getByTestId("thread-context")).toContainText("src");
     // Routing to a thread in another project does not silently replace the
     // user's filter choice; select the moved thread's project explicitly.

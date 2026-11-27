@@ -379,10 +379,18 @@ test("dragging individual threads creates a group and adds to its stack", async 
     const target = sidebar.locator(`[data-thread-id="${targetId}"]`);
     await expect(source).toHaveAttribute("draggable", "true");
     const composer = page.getByTestId("composer");
-    await source.dragTo(composer);
-    await expect(composer.getByRole("list", { name: "Referenced threads" })).toContainText(sourceTitle);
-    await composer.getByRole("button", { name: `Remove thread: ${sourceTitle}` }).click();
     const message = composer.getByRole("textbox");
+    await message.fill("Compare both.");
+    await message.press("Home");
+    await expect.poll(() => message.evaluate(element => element.ownerDocument.getSelection()?.focusOffset)).toBe(0);
+    const bounds = (await composer.boundingBox())!;
+    const editorBounds = (await message.boundingBox())!;
+    const gutter = { x: 5, y: bounds.height - 5 };
+    expect(bounds.y + gutter.y).toBeGreaterThan(editorBounds.y + editorBounds.height);
+    await source.dragTo(composer, { targetPosition: gutter });
+    const dropped = message.locator(`[data-thread-reference-id="${sourceId}"]`);
+    await expect(dropped).toContainText(sourceTitle);
+    await expect(message).toHaveText(new RegExp(`^${sourceTitle}\\s*Compare both\\.$`, "u"));
     await message.fill("Compare ");
     await expect(composer.getByRole("button", { name: "Reference a thread", exact: true })).toHaveCount(0);
     await message.pressSequentially("@");
@@ -410,14 +418,14 @@ test("dragging individual threads creates a group and adds to its stack", async 
     await expect.poll(async () => (await desktopList.boundingBox())!.width).toBeGreaterThan(620);
     await page.keyboard.press("Escape");
     await expect(message).toBeFocused();
-    await expect(message).toHaveValue("Compare @");
+    await expect(message).toHaveText("Compare @");
     await message.fill("Compare ");
     await message.fill("Compare @interface");
-    await expect(desktopPicker.getByRole("option")).toHaveCount(3);
+    await expect(desktopPicker.getByRole("option", { name: "All threads…" })).toBeVisible();
     await expect(desktopPicker.getByRole("option", { name: "Drag target group", exact: true })).toBeVisible();
     await expect(message).toBeFocused();
     await message.fill(`Compare @${context.environment}`);
-    await expect(desktopPicker.getByRole("option")).toHaveCount(3);
+    await expect(desktopPicker.getByRole("option", { name: "All threads…" })).toBeVisible();
     await expect(desktopPicker.getByRole("option", { name: "Drag target group", exact: true })).toBeVisible();
     await expect(message).toBeFocused();
     await message.fill("Compare ");
@@ -438,8 +446,7 @@ test("dragging individual threads creates a group and adds to its stack", async 
     await expect(message).toHaveAttribute("aria-expanded", "true");
     await expect(targetOption).toHaveAttribute("aria-selected", "true");
     await message.press("Enter");
-    await expect(message).toHaveValue("Compare ");
-    await expect(composer.getByRole("list", { name: "Referenced threads" })).toContainText("Drag target group");
+    await expect(message.locator(`[data-thread-reference-id="${targetId}"]`)).toContainText("Drag target group");
     await capture(page, testInfo, "thread-reference-composer.png");
     await source.dragTo(target);
     const dialog = page.getByRole("dialog", { name: "New group", exact: true });
@@ -516,7 +523,7 @@ test("dragging individual threads creates a group and adds to its stack", async 
     await expectPickerContextLayout(mobileOption, context, "two-lines", { requireProjectTruncation: true });
     await expect(picker.getByRole("searchbox", { name: "Search threads" })).toHaveCount(0);
     await expect(message).toBeFocused();
-    await expect(picker.getByRole("option")).toHaveCount(1);
+    await expect(picker.getByRole("option")).toHaveCount(2);
     await expectNoPageOverflow(page);
     await capture(page, testInfo, "thread-reference-composer-picker-mobile.png");
     await page.keyboard.press("Escape");
@@ -601,8 +608,7 @@ test("dragging individual threads creates a group and adds to its stack", async 
     await expect(message).toBeFocused();
     await capture(page, testInfo, "thread-reference-failed-status-desktop.png");
     await message.press("Enter");
-    await expect(message).toHaveValue("Compare ");
-    await expect(composer.getByRole("list", { name: "Referenced threads" })).toContainText(sourceTitle);
+    await expect(message.locator(`[data-thread-reference-id="${sourceId}"]`)).toContainText(sourceTitle);
   } finally {
     if (previousAutomaticRetry !== undefined) {
       await setAutomaticModelRetry(page, previousAutomaticRetry, session.csrfToken);

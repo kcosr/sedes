@@ -1,3 +1,4 @@
+import { restoreStashedComposerText } from "../../domain/stored-composer-text.js";
 import { hostExecutionPolicy } from "../../configuration-admin/configuration-execution-policy.js";
 import { canonicalLocalWorkspaceRoots } from "../../execution/local-workspace-roots.js";
 import { workspaceRootGrant } from "../../execution/workspace-root-grant.js";
@@ -1815,8 +1816,7 @@ export class InventoryRepository {
           "Remove the current skill before restoring a prompt with another skill.",
         );
       }
-      const text =
-        draft.text.length === 0 ? stash.text : `${draft.text}\n\n${stash.text}`;
+      const text = restoreStashedComposerText(draft.text, stash.text);
       const selectedSkillId = draft.selectedSkillId ?? stash.selectedSkillId;
       const contextExcerpts = [
         ...draft.contextExcerpts,

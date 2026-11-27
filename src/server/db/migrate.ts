@@ -1,3 +1,4 @@
+import { inlineThreadReferencesMigration } from "./migrations/175-inline-thread-references.js";
 import { parkUntilDoneMigration } from "./migrations/174-park-until-done.js";
 import { claudeLocalTitleMigration } from "./migrations/173-claude-local-title.js";
 import { parkedThreadInventoryMigration } from "./migrations/172-parked-thread-inventory.js";
@@ -362,6 +363,7 @@ export const backendNormalizedMigrations = [
   parkedThreadInventoryMigration,
   claudeLocalTitleMigration,
   parkUntilDoneMigration,
+  inlineThreadReferencesMigration,
 ] as const;
 
 export type DatabaseMigration = {

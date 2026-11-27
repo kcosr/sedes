@@ -4,18 +4,18 @@ import type { ConversationCreationRepository } from "../../src/server/db/reposit
 import type { ConversationOperationRepository } from "../../src/server/db/repositories/conversation-operation-repository.js";
 import type { ConversationLifecycleTargetResolver } from "../../src/server/conversations/conversation-lifecycle-service.js";
 import type { AgentBackendRegistry } from "../../src/server/backends/registry.js";
-import { formatThreadReferenceText, THREAD_REFERENCE_HEADER } from "../../src/shared/thread-references.js";
+import { formatInlineThreadReferenceText, formatThreadReferenceText, THREAD_REFERENCE_HEADER } from "../../src/shared/thread-references.js";
 
 const references = [{ threadId: "616946aa-4574-41f7-bd70-d3a9edd56dbd", title: "Related thread" }];
 
 describe("first-input recovery previews", () => {
   it.each([
-    { body: "Summarize this work", expected: "Summarize this work" },
-    { body: "", expected: "Referenced thread: Related thread" },
-  ])("previews reference input as $expected without changing its delivery text", async ({ body, expected }) => {
-    const initialInputText = formatThreadReferenceText(body, references);
+    { initialInputText: formatThreadReferenceText("Summarize this work", references), expected: "Summarize this work" },
+    { initialInputText: formatThreadReferenceText("", references), expected: "Referenced thread: Related thread" },
+    { initialInputText: formatInlineThreadReferenceText(["See ", references[0]!, " here."]), expected: "See Related thread here." },
+  ])("previews reference input as $expected without changing its delivery text", async ({ initialInputText, expected }) => {
     const attempt = {
-      creationKind: "first_input", phase: "first_submission_started", initialInputText,
+      creationKind: "first_input", sourceKind: "composer", phase: "first_submission_started", initialInputText,
       provisionalBackendConversationId: "native-session", diagnostic: null,
       retryAnchor: null, backendCorrelation: null, acceptedAt: null,
     };

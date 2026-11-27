@@ -13,7 +13,7 @@ const CLIENT_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
 const DENSITY = "(max-width:819px),(pointer:coarse)";
 
 /** The composer keeps its owner-approved 14.5px (a reference surface). */
-const EXEMPT_SELECTORS = new Set([".composer textarea"]);
+const EXEMPT_SELECTORS = new Set([".composer-editor"]);
 
 function cssFiles(directory: string): string[] {
   const files: string[] = [];

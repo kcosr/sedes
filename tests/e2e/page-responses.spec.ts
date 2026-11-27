@@ -132,7 +132,7 @@ test("page responses capture once, queue while busy, and retain exact text and s
     expect(receipt).toMatchObject({ admittedMode: "queue", currentMode: "queue", status: "queued" });
     await expect(page.getByTestId("pending-input-strip").locator(`[data-queued-input-id="${receipt.queuedInputId}"]`)).toBeVisible();
     await expect(frame.locator("#captures")).toHaveText("Captures: 1");
-    await expect(page.getByRole("textbox", { name: "Message Scripted agent" })).toHaveValue(draft);
+    await expect(page.getByRole("textbox", { name: "Message Scripted agent" })).toHaveText(draft);
 
     // Send exits interaction mode. Re-enter deliberately before editing; those
     // edits must not re-capture or change the already admitted bytes.

@@ -170,7 +170,7 @@ test("idle direct input becomes one complete transcript message while active que
   await expect(message).toHaveAttribute("data-client-provisional", "true");
   await expect(message).toContainText(spokenText);
   await expect(message.locator("[data-submission-phase]")).toHaveCount(0);
-  await expect(composer).toHaveValue(retainedDraft);
+  await expect(composer).toHaveText(retainedDraft);
   await expect(strip).toHaveCount(0);
   await expect.poll(async () => {
     const response = await page.request.get("/__e2e/codex/submit-materialization/state");
@@ -192,7 +192,7 @@ test("idle direct input becomes one complete transcript message while active que
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(message).toBeVisible();
   await expect(strip).toHaveCount(0);
-  await expect(composer).toHaveValue(retainedDraft);
+  await expect(composer).toHaveText(retainedDraft);
   await expectNoPageOverflow(page);
   await capture(page, testInfo, "direct-input-pending-mobile.png");
 
@@ -205,7 +205,7 @@ test("idle direct input becomes one complete transcript message while active que
   const queuedRow = strip.locator(`[data-queued-input-id="${queued.queuedInputId}"]`);
   await expect(queuedRow).toContainText("Recording transcript:");
   await expect(messages.locator(`[data-delivery-operation-id="${queued.operationId}"]`)).toHaveCount(0);
-  await expect(composer).toHaveValue(retainedDraft);
+  await expect(composer).toHaveText(retainedDraft);
   await page.setViewportSize({ width: 320, height: 844 });
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   // The transcript now fits the shared composer limit. Restore remains fenced
@@ -216,7 +216,7 @@ test("idle direct input becomes one complete transcript message while active que
   await queuedRow.getByRole("button", { name: /^Copy full text:/ }).click();
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(queuedText);
   await expect(queuedRow.getByRole("button", { name: /^Copied full text:/ })).toBeVisible();
-  await expect(composer).toHaveValue(retainedDraft);
+  await expect(composer).toHaveText(retainedDraft);
   await expectNoPageOverflow(page);
   await capture(page, testInfo, "direct-input-active-queue-mobile.png");
   // An ordinary queued input ahead would correctly make Steer unavailable.
@@ -241,7 +241,7 @@ test("idle direct input becomes one complete transcript message while active que
     return (await response.json()).heldCount;
   }).toBe(1);
   await expect(messages.locator(`[data-delivery-operation-id="${steered.operationId}"]`)).toHaveCount(0);
-  await expect(composer).toHaveValue(retainedDraft);
+  await expect(composer).toHaveText(retainedDraft);
   await expectNoPageOverflow(page);
   await capture(page, testInfo, "direct-input-active-steer-mobile.png");
 
@@ -260,7 +260,7 @@ test("idle direct input becomes one complete transcript message while active que
   await expect(message).toHaveCount(1);
   await expect(messages.locator('[data-client-provisional="true"]')).toHaveCount(0);
   await expect(strip).toHaveCount(0);
-  await expect(composer).toHaveValue(retainedDraft);
+  await expect(composer).toHaveText(retainedDraft);
   await expectNoPageOverflow(page);
   await capture(page, testInfo, "direct-input-materialized-mobile.png");
 });
@@ -367,7 +367,7 @@ test("another device's idle input stays in the transcript while its full content
     await expect(message).not.toContainText(spokenText.slice(0, 100));
     await expect(message.getByRole("button")).toHaveCount(0);
     await expect(strip).toHaveCount(0);
-    await expect(composer).toHaveValue(retainedDraft);
+    await expect(composer).toHaveText(retainedDraft);
     await expect.poll(() => messages.evaluate(element => element.scrollTop)).toBe(0);
 
     // Acceptance removes the durable queue row before canonical history exists.
@@ -388,7 +388,7 @@ test("another device's idle input stays in the transcript while its full content
     await expect(message).toContainText(spokenText);
     await expect(message.getByRole("status")).toHaveCount(0);
     await expect.poll(() => messages.evaluate(element => element.scrollTop)).toBe(0);
-    await expect(composer).toHaveValue(retainedDraft);
+    await expect(composer).toHaveText(retainedDraft);
     await expect(strip).toHaveCount(0);
     await message.scrollIntoViewIfNeeded();
     await capture(page, testInfo, "direct-input-observer-in-flight-desktop.png");
@@ -397,7 +397,7 @@ test("another device's idle input stays in the transcript while its full content
     await expect(message).not.toHaveAttribute("data-client-provisional");
     await expect(message).toHaveCount(1);
     await expect(message).toContainText(spokenText);
-    await expect(composer).toHaveValue(retainedDraft);
+    await expect(composer).toHaveText(retainedDraft);
     await expect(strip).toHaveCount(0);
     const presentations = await page.evaluate(() => {
       const { stripInsertions, messages } = window.__observerInputPresentations;

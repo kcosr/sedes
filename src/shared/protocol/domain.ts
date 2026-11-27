@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+export const backendBrandSchema = z.enum(["pi", "codex", "claude", "grok", "opencode", "antigravity"]);
+export type BackendBrand = z.infer<typeof backendBrandSchema>;
+
 const opaqueIdPattern = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
 
 export const opaqueIdSchema = z.string().min(1).max(128).regex(opaqueIdPattern);

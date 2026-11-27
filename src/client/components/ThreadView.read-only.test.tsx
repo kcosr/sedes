@@ -44,6 +44,7 @@ import {
   beginThreadLoadAttempt,
   resetThreadLoadAttemptsForTests,
 } from "../app/thread-load-diagnostics.js";
+import { composerText, replaceComposerText } from "./thread/composer-test-dom.js";
 import { ThreadView } from "./ThreadView.js";
 import { useApplicationStore } from "../stores/ApplicationClientStore.js";
 // Render probes: each counts its component's renders and delegates to it. A
@@ -235,7 +236,7 @@ describe("ThreadView saved dictation", () => {
       act(() => state.updateSnapshot({ ...snapshot, runState: "idle", capabilities: ready.capabilities }));
     }
     await act(async () => { expect(await handoff).toBeNull(); });
-    expect(screen.getByRole("textbox", { name: "Message Pi" })).toHaveValue("Current draft\n\nRecovered words");
+    expect(composerText(screen.getByRole("textbox", { name: "Message Pi" }))).toBe("Current draft\n\nRecovered words");
     expect(voice.getSnapshot().pending).toBe(false);
     expect(voice.getSnapshot().native?.recordingRecovery).toEqual(saved);
   });
@@ -260,7 +261,7 @@ describe("ThreadView saved dictation", () => {
     const remote = { ...cached, draft: { ...cached.draft, text: "Newer remote draft", revision: 2,
       selectedSkillId: "remote-skill", attachments: [attachment] } };
     act(() => state.updateThreadState({ connection: "connected", authoritative: true, snapshot: remote }));
-    expect(screen.getByRole("textbox", { name: "Message Pi" })).toHaveValue("Newer remote draft\n\nRecovered words");
+    expect(composerText(screen.getByRole("textbox", { name: "Message Pi" }))).toBe("Newer remote draft\n\nRecovered words");
     view.unmount();
     await waitFor(() => expect(state.registry.get(base.thread.id).saveDraft).toHaveBeenCalledWith(expect.objectContaining({
       text: "Newer remote draft\n\nRecovered words", revision: 2, selectedSkillId: "remote-skill", attachments: [attachment],
@@ -492,9 +493,9 @@ describe("ThreadView loading header", () => {
     expect(screen.getByRole("heading", { name: state.snapshot.thread.title.text })).toBeInTheDocument();
     expect(screen.queryByText("Loading inventory title")).not.toBeInTheDocument();
     expect(screen.queryByText("Loading conversation…")).not.toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: "Message Pi" })).toBeDisabled();
+    expect(screen.getByRole("textbox", { name: "Message Pi" })).toHaveAttribute("contenteditable", "false");
     act(() => state.updateThreadState({ connection: "connected", authoritative: true }));
-    expect(screen.getByRole("textbox", { name: "Message Pi" })).toBeEnabled();
+    expect(screen.getByRole("textbox", { name: "Message Pi" })).toHaveAttribute("contenteditable", "true");
   });
 });
 
@@ -693,11 +694,14 @@ describe("ThreadView message keyboard navigation", () => {
     },
   );
 
-  it("preserves draft editing, other fields, overlays, composition, and other modifier combinations", () => {
+  it("preserves draft editing, other fields, overlays, composition, and other modifier combinations", async () => {
     const { viewport, composer, scrollTo } = mount();
-    fireEvent.change(composer, { target: { value: "Keep editing this draft" } });
+    await replaceComposerText(composer, "Keep editing this draft");
     fireEvent.keyDown(composer, { key: "ArrowUp", ctrlKey: true });
-    expect(composer).toHaveValue("Keep editing this draft");
+    expect(composerText(composer)).toBe("Keep editing this draft");
+    await replaceComposerText(composer, "\n");
+    fireEvent.keyDown(composer, { key: "ArrowDown", metaKey: true });
+    expect(composerText(composer)).toBe("\n");
     for (const modifiers of [
       {},
       { ctrlKey: true, shiftKey: true },
@@ -1731,7 +1735,7 @@ describe("ThreadView backend interaction modes", () => {
     render(<ThreadView threadActive threadId={snapshot.thread.id} visible registry={state.registry} applicationStore={state.applicationStore} />);
     const approve = screen.getByRole("button", { name: "Approve" });
     expect(approve).toBeEnabled();
-    expect(screen.getByRole("textbox", { name: "Message Pi" })).toBeDisabled();
+    expect(screen.getByRole("textbox", { name: "Message Pi" })).toHaveAttribute("contenteditable", "false");
     fireEvent.click(approve);
     await waitFor(() => expect(respond).toHaveBeenCalledWith("interaction-1", { kind: "confirmation", confirmed: true }));
   });
@@ -1812,7 +1816,7 @@ describe("ThreadView Stop during delivery recovery", () => {
 
     // A stale Send capability must not bypass the explicit recovery fence.
     expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
-    expect(screen.getByRole("textbox", { name: "Message Pi" })).toBeDisabled();
+    expect(screen.getByRole("textbox", { name: "Message Pi" })).toHaveAttribute("contenteditable", "false");
     const stop = screen.getByRole("button", { name: "Stop" });
     if (condition === "available") {
       expect(stop).toBeEnabled();

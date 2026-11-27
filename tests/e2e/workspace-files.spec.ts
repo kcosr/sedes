@@ -656,7 +656,7 @@ test.describe.serial("workspace file browser and editor", () => {
           async () => {
             await reopenConflictDuringExit(page, holdOverlay);
             await expect(
-              page.locator('[contenteditable="true"][role="textbox"]'),
+              page.locator('[contenteditable="true"][aria-label="src/example.ts"]'),
             ).toContainText("43");
           },
         );

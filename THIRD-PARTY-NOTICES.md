@@ -24,7 +24,7 @@ even when an install with ignored scripts leaves them present in the tree.
 This file is generated. Run `npm run generate:third-party-notices` to refresh it
 and `npm run check:third-party-notices` to verify that it is current.
 
-Packages listed: 609.
+Packages listed: 618.
 
 ## Packages
 
@@ -3544,6 +3544,13 @@ Packages listed: 609.
 - Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [7d52eae0c2f0](#license-text-7d52eae0c2f0)
 
+### orderedmap 2.1.1
+
+- License: MIT
+- URL: https://github.com/marijnh/orderedmap
+- Shipped by: sedes
+- License text (`LICENSE`): [4c54c0a6cedf](#license-text-4c54c0a6cedf)
+
 ### p-retry 4.6.2
 
 - License: MIT
@@ -3669,6 +3676,48 @@ Packages listed: 609.
 - URL: https://github.com/wooorm/property-information
 - Shipped by: sedes
 - License text (`license`): [c74f9c5a522f](#license-text-c74f9c5a522f)
+
+### prosemirror-history 1.5.2
+
+- License: MIT
+- URL: https://code.haverbeke.berlin/prosemirror/prosemirror-history
+- Shipped by: sedes
+- License text (`LICENSE`): [32b18408ca2d](#license-text-32b18408ca2d)
+
+### prosemirror-keymap 1.2.3
+
+- License: MIT
+- URL: https://github.com/prosemirror/prosemirror-keymap
+- Shipped by: sedes
+- License text (`LICENSE`): [32b18408ca2d](#license-text-32b18408ca2d)
+
+### prosemirror-model 1.25.13
+
+- License: MIT
+- URL: https://code.haverbeke.berlin/prosemirror/prosemirror-model
+- Shipped by: sedes
+- License text (`LICENSE`): [32b18408ca2d](#license-text-32b18408ca2d)
+
+### prosemirror-state 1.4.4
+
+- License: MIT
+- URL: https://github.com/prosemirror/prosemirror-state
+- Shipped by: sedes
+- License text (`LICENSE`): [32b18408ca2d](#license-text-32b18408ca2d)
+
+### prosemirror-transform 1.12.7
+
+- License: MIT
+- URL: https://code.haverbeke.berlin/prosemirror/prosemirror-transform
+- Shipped by: sedes
+- License text (`LICENSE`): [32b18408ca2d](#license-text-32b18408ca2d)
+
+### prosemirror-view 1.44.0
+
+- License: MIT
+- URL: https://code.haverbeke.berlin/prosemirror/prosemirror-view
+- Shipped by: sedes
+- License text (`LICENSE`): [32b18408ca2d](#license-text-32b18408ca2d)
 
 ### protobufjs 7.6.6
 
@@ -3837,6 +3886,13 @@ Packages listed: 609.
 - URL: https://github.com/mourner/robust-predicates
 - Shipped by: sedes
 - License text (`LICENSE`): [79d0fc447160](#license-text-79d0fc447160)
+
+### rope-sequence 1.3.4
+
+- License: MIT
+- URL: https://github.com/marijnh/rope-sequence
+- Shipped by: sedes
+- License text (`LICENSE`): [962bf55435d8](#license-text-962bf55435d8)
 
 ### roughjs 4.6.6
 
@@ -4229,6 +4285,13 @@ Packages listed: 609.
 - URL: https://github.com/vfile/vfile-message
 - Shipped by: sedes
 - License text (`license`): [ea559213e0e9](#license-text-ea559213e0e9)
+
+### w3c-keyname 2.2.8
+
+- License: MIT
+- URL: https://github.com/marijnh/w3c-keyname
+- Shipped by: sedes
+- License text (`LICENSE`): [4c54c0a6cedf](#license-text-4c54c0a6cedf)
 
 ### web-streams-polyfill 3.3.3
 
@@ -6066,6 +6129,32 @@ CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
 ```
 
+### License text 32b18408ca2d
+
+Applies to: prosemirror-history 1.5.2, prosemirror-keymap 1.2.3, prosemirror-model 1.25.13, prosemirror-state 1.4.4, prosemirror-transform 1.12.7, prosemirror-view 1.44.0.
+
+```text
+Copyright (C) 2015-2017 by Marijn Haverbeke <marijn@haverbeke.berlin> and others
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+```
+
 ### License text 35d16fc259cf
 
 Applies to: @hono/node-server 2.0.12.
@@ -7040,6 +7129,32 @@ INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS
 OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
 TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
 THIS SOFTWARE.
+```
+
+### License text 4c54c0a6cedf
+
+Applies to: orderedmap 2.1.1, w3c-keyname 2.2.8.
+
+```text
+Copyright (C) 2016 by Marijn Haverbeke <marijn@haverbeke.berlin> and others
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
 ```
 
 ### License text 4cc9c2af4eb0
@@ -9862,6 +9977,32 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+```
+
+### License text 962bf55435d8
+
+Applies to: rope-sequence 1.3.4.
+
+```text
+Copyright (C) 2016 by Marijn Haverbeke <marijn@haverbeke.berlin>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
 ```
 
 ### License text 98a2c2007296

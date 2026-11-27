@@ -46,6 +46,7 @@ import {
   executionWorkspaceSelectionSchema,
   normalizedDraftSchema,
   messageContentPartSchema,
+  requireAuthoredThreadReferenceBody,
   deliveryInputOriginSchema,
   MAXIMUM_USER_MESSAGE_CONTENT_PARTS,
   queuedInputSummarySchema,
@@ -77,7 +78,7 @@ import {
   normalizedAgentConfigurationOverridesSchema,
   savedAgentIdSchema,
 } from "./saved-agents.js";
-import { applicationEventIdSchema } from "./application.js";
+import { applicationEventIdSchema, normalizedApplicationThreadSummarySchema } from "./application.js";
 import {
   MAXIMUM_MESSAGE_ITEM_BYTES,
   requireSerializedByteLimit,
@@ -1047,6 +1048,19 @@ export type UpdateThreadLineagePlacementRequest = z.infer<
   typeof updateThreadLineagePlacementRequestSchema
 >;
 
+export const MENTION_CANDIDATE_PAGE_SIZE = 30;
+export const listMentionCandidatesQuerySchema = z.strictObject({
+  scope: z.enum(["project", "all"]),
+  query: z.string().trim().max(256).optional(),
+  cursor: z.string().min(1).max(2048).optional(),
+});
+export type ListMentionCandidatesQuery = z.infer<typeof listMentionCandidatesQuerySchema>;
+export const mentionCandidatePageSchema = z.strictObject({
+  threads: z.array(normalizedApplicationThreadSummarySchema).max(MENTION_CANDIDATE_PAGE_SIZE),
+  nextCursor: z.string().min(1).max(2048).optional(),
+});
+export type MentionCandidatePage = z.infer<typeof mentionCandidatePageSchema>;
+
 export const listThreadDescendantsQuerySchema = z.strictObject({
   cursor: z.string().min(1).max(2048).optional(),
   pageSize: z.coerce.number().int().min(1).max(100).default(50),
@@ -1315,6 +1329,7 @@ export const queuedInputPresentationSchema = z.strictObject({
     .min(1)
     .max(MAXIMUM_USER_MESSAGE_CONTENT_PARTS),
 }).superRefine((input, context) => {
+  requireAuthoredThreadReferenceBody(input.content, input.origin === "user" && input.inputOrigin === undefined, context);
   const expectedOrigin = input.origin === "automatic_retry"
     ? "automatic_retry"
     : input.origin === "agent_result"

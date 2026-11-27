@@ -303,6 +303,21 @@ describe("ThreadMessagesService", () => {
     expect(harness.release).toHaveBeenCalledOnce();
   });
 
+  it("reads an inline reference in place and keeps identical literal user text", async () => {
+    const reference = { threadId: "99c14688-f218-438e-a2dd-07347834da66", title: "Parked speech" };
+    const link = `[${reference.title}](sedes-thread:${reference.threadId})`;
+    const rich: ConversationItem = {
+      id: "rich", turnId: "t", revision: 0, status: "completed", kind: "user_message",
+      deliveryOperationId: "capture",
+      content: [{ kind: "thread_reference_body", parts: ["Compare ", reference, " with ", link] }],
+    };
+    const harness = fixture(state([turn("t", "completed", 0, ["rich"])], [rich]));
+    const page = await harness.service.list(scope, "thread-1");
+    expect(page.turns[0]?.messages).toEqual([
+      { role: "user", text: { text: `Compare ${link} with ${link}` } },
+    ]);
+  });
+
   it("reports the source revision for agent forks while omitting page presentation items", async () => {
     const page: ConversationItem = { id: "page", turnId: "turn-1", revision: 0, kind: "page", status: "completed", page: {
       pageId: "22222222-2222-4222-8222-222222222222", threadId: "thread-1", revision: 1, title: "Preview", viewport: {},

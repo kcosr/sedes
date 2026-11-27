@@ -454,9 +454,7 @@ export const ThreadView = memo(function ThreadView({
           if (
             editable &&
             !(
-              editable instanceof HTMLTextAreaElement &&
-              editable.closest('[data-task-drop-surface="composer"]') &&
-              editable.value.length === 0 &&
+              editable.matches('.composer-editor[data-empty="true"]') &&
               editable.getAttribute("aria-expanded") !== "true"
             )
           )

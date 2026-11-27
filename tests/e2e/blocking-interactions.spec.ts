@@ -58,7 +58,7 @@ test.describe.serial("blocking interaction panel", () => {
   }, testInfo) => {
     codexThreadPath = await openImportedCodexThread(page);
     const threadId = threadIdFromPath(codexThreadPath);
-    const composer = page.getByTestId("composer").locator("textarea");
+    const composer = page.getByTestId("composer").getByRole("textbox", { includeHidden: true });
     const retainedDraft = "Keep this draft while approval is open";
     const dialog = page.getByRole("dialog", { name: "Command approval" });
     let requestId: number;
@@ -157,7 +157,7 @@ test.describe.serial("blocking interaction panel", () => {
 
     await releaseInteraction(page, requestId);
     await expect(dialog).toHaveCount(0);
-    await expect(composer).toHaveValue(retainedDraft);
+    await expect(composer).toHaveText(retainedDraft);
     await expect(composer).toBeFocused();
     expect((await fixtureRecord(page, requestId)).safeResponse).toMatchObject({
       kind: "decision",

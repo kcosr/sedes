@@ -268,7 +268,7 @@ test("saved prompts flow from principal settings through desktop and mobile deli
     mode: "submit",
   });
   const composer = page.getByRole("textbox", { name: "Message Codex" });
-  await expect(composer).toHaveValue("");
+  await expect(composer).toHaveText("");
   // Sending closes the picker; its row preview leaves with it.
   await expect(desktopPicker).toBeHidden();
   await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
@@ -297,8 +297,9 @@ test("saved prompts flow from principal settings through desktop and mobile deli
       name: "Add prompt to composer: Review changes",
     })
     .click();
-  await expect(composer).toHaveValue(
+  await expect(composer).toHaveText(
     "Keep this existing draft.\n\nReview the current changes and report concrete correctness risks.",
+    { useInnerText: true },
   );
   expect(deliveryCount).toBe(0);
   page.off("request", countDeliveries);
@@ -319,7 +320,7 @@ test("saved prompts flow from principal settings through desktop and mobile deli
     kind: "deliver",
     mode: "steer",
   });
-  await expect(composer).toHaveValue("");
+  await expect(composer).toHaveText("");
   await expect(
     page.getByText(
       "Keep this existing draft.\n\nReview the current changes and report concrete correctness risks.\n\nExplain the architecture and the important ownership boundaries.",

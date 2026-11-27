@@ -127,7 +127,7 @@ test("playback Record, Next and Stop stay separate on touch while replying to an
     await page.touchscreen.tap(recordBox.x + recordBox.width / 2, recordBox.y + recordBox.height / 2);
     expect(await calls()).toEqual(expected);
     await expect(page).toHaveURL(new RegExp(`${viewedPath}$`, "u"));
-    await expect(composer).toHaveValue(draft);
+    await expect(composer).toHaveText(draft);
     expect(await page.evaluate(() => ({ queue: window.__voiceFixture.state.queue,
       next: window.__voiceFixture.state.nextRecordingTarget, target: window.__voiceFixture.state.active?.recognitionThreadId,
       autoListen: window.__voiceFixture.state.settings.autoListen }))).toEqual({ queue, next: null, target: spokenId, autoListen: false });
@@ -189,7 +189,7 @@ test("playback Record, Next and Stop stay separate on touch while replying to an
   await expect(toolbar.getByRole("button", { name: "Next voice interaction" })).toHaveCount(0);
   await expect(toolbar.getByRole("button", { name: "Stop voice interaction" })).toHaveCount(0);
   await expect(page).toHaveURL(new RegExp(`${viewedPath}$`, "u"));
-  await expect(composer).toHaveValue(draft);
+  await expect(composer).toHaveText(draft);
 
   // Stop releases speech continuity regardless of queue count. The existing
   // explicit choice and pin still lead; otherwise the viewed thread takes over.
@@ -218,7 +218,7 @@ test("playback Record, Next and Stop stay separate on touch while replying to an
         settings: window.__voiceFixture.state.settings }))).toEqual({ active: null, queue: { ...queue, count: 0, bytes: 0 },
         next: nextRecordingTarget, retained: policy === "viewed" ? viewedId : null, settings: stopSettings });
       await expect(page).toHaveURL(new RegExp(`${viewedPath}$`, "u"));
-      await expect(composer).toHaveValue(draft);
+      await expect(composer).toHaveText(draft);
       await expect(composer).not.toBeFocused();
       await expectNoPageOverflow(page);
       if (count === 0) await capture(page, testInfo, `voice-stop-target-${policy}-320.png`);
@@ -245,7 +245,7 @@ test("playback Record, Next and Stop stay separate on touch while replying to an
   await expect(toolbar.locator(".voice-card-title")).toHaveText("Viewed thread A");
   await expect(idleTarget).toHaveCount(0);
   expect(await page.evaluate(() => window.__voiceFixture.state.settings)).toEqual(keepSettings);
-  await expect(composer).toHaveValue(draft);
+  await expect(composer).toHaveText(draft);
   await expect(page).toHaveURL(new RegExp(`${viewedPath}$`, "u"));
 
   await page.setViewportSize({ width: 480, height: 780 });
@@ -330,7 +330,7 @@ test("background recording announcements are opt-in and their preparation can be
   ]);
   await expect(toolbar.locator(".voice-card-sub")).toContainText("Ready");
   await expect(page).toHaveURL(new RegExp(`${viewedPath}$`, "u"));
-  await expect(page.getByRole("textbox", { name: "Message Scripted agent", exact: true })).toHaveValue(draft);
+  await expect(page.getByRole("textbox", { name: "Message Scripted agent", exact: true })).toHaveText(draft);
   expect(await page.evaluate(() => window.__voiceFixture.state.settings.announceRecordingThread)).toBe(true);
   await capture(page, testInfo, "voice-announcement-after-cancel-320.png");
 });
@@ -371,7 +371,7 @@ test("idle voice retains the reply destination until release or deliberate threa
     actions: { ...base.actions, canStart: false, canStop: true, canSkip: true, canRecordDuringPlayback: true } });
   await expect(toolbar.locator(".voice-card-title")).toHaveText("Last voice thread B");
   await expect(toolbar.locator(".voice-card-sub")).toContainText("Speaking");
-  await expect(composer).toHaveValue(draft);
+  await expect(composer).toHaveText(draft);
   await capture(page, testInfo, "voice-retained-speaking-320.png");
   await publishVoiceState(page, { phase: "idle", active: null,
     settings: { ...base.settings, voiceThreadId: chosenId, voiceThreadTitle: "Chosen thread C" }, actions: base.actions });
@@ -385,7 +385,7 @@ test("idle voice retains the reply destination until release or deliberate threa
   await mic.tap();
   expected.push({ method: "startManualListen", args: { expectedConnectionGeneration: 1, threadId: retainedId, threadTitle: "Last voice thread B" } });
   await expect.poll(calls).toEqual(expected);
-  await expect(composer).toHaveValue(draft);
+  await expect(composer).toHaveText(draft);
   await expect(page).toHaveURL(new RegExp(`${viewedPath}$`, "u"));
 
   // Native foreground context disappears in the background; the unchanged route on resume preserves B.
@@ -416,7 +416,7 @@ test("idle voice retains the reply destination until release or deliberate threa
   await expect(releaseTarget).toHaveCount(0);
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect.poll(() => mic.boundingBox()).toEqual(replyMicBox);
-  await expect(composer).toHaveValue(draft);
+  await expect(composer).toHaveText(draft);
   await expect(page).toHaveURL(new RegExp(`${viewedPath}$`, "u"));
   await mic.tap();
   expected.push({ method: "startManualListen", args: { expectedConnectionGeneration: 1, threadId: viewedId, threadTitle: "Viewed thread A" } });
@@ -488,5 +488,5 @@ test("idle voice retains the reply destination until release or deliberate threa
   expected.push({ method: "startManualListen", args: { expectedConnectionGeneration: 1, threadId: chosenId, threadTitle: "Chosen thread C" } });
   await expect.poll(calls).toEqual(expected);
   await expect(page).toHaveURL(new RegExp(`${viewedPath}$`, "u"));
-  await expect(composer).toHaveValue(draft);
+  await expect(composer).toHaveText(draft);
 });
