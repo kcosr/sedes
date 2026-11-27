@@ -129,6 +129,7 @@ User-facing changes are collected here before release. See the
 - Claude threads show remaining subscription quota under the composer. Fable
   threads show their matching weekly allowance. Open the bar for all reported
   windows and reset times. See [Claude account quota](docs/operator/backends/claude.md#account-quota).
+  ([#174](https://github.com/kcosr/sedes/pull/174))
 
 - Four separately granted agent tools support pinning threads, listing Groups,
   moving a thread into or out of a Group, and creating a Group with its first
