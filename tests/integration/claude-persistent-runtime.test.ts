@@ -264,6 +264,42 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     expect(f.runtime.readAccountUsage).toHaveBeenCalledTimes(4);
   });
 
+  it("reads the resident worker quota across a pending launch change and revokes it when the backend grant changes", async () => {
+    const f = await fixture();
+    const { lease } = await f.attach();
+    const client = f.client();
+    const sessionId = randomUUID();
+    const session = client.createSession(sessionOptions(sessionId));
+    await session.start();
+    const report = {
+      observationId: randomUUID(), verifiedSessions: [{ sessionId, startupProbeUuid: session.startupProbeUuid! }],
+      usage: { capturedAt: 123, accountId: null, plan: "Max", includedUsageAllowed: null,
+        windows: [{ scope: { kind: "account" as const }, remainingPercent: 47, durationMinutes: 10_080, resetsAt: null }] },
+    };
+    const policy = f.services.executionPolicy(lease.controllerEpoch);
+    const pending = { ...policy, backends: policy.backends.map(backend => ({ ...backend,
+      launchDigest: runtimeLaunchDigest.claude_agent_sdk({ ...configuration, executablePath: "/updated/claude" }, {}),
+    })) };
+    installFixturePolicy(f.services, lease.controllerEpoch, serviceConfiguration, pending);
+    const signal = new AbortController().signal;
+    f.runtime.readAccountUsage.mockResolvedValue(report);
+    await expect(client.readAccountUsage(signal)).resolves.toEqual(report);
+    expect(f.createRuntime).toHaveBeenCalledOnce();
+
+    let finish!: (result: typeof report) => void;
+    f.runtime.readAccountUsage.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const inFlight = client.readAccountUsage(signal, report.observationId);
+    await vi.waitFor(() => expect(f.runtime.readAccountUsage).toHaveBeenCalledTimes(2));
+    installFixturePolicy(f.services, lease.controllerEpoch, serviceConfiguration, { ...pending,
+      backends: pending.backends.map(backend => ({ ...backend, generation: backend.generation + 1 })),
+    });
+    finish(report);
+    await expect(inFlight).rejects.toThrow("backend_policy_denied");
+    await expect(client.readAccountUsage(signal)).rejects.toThrow("backend_policy_denied");
+    expect(f.runtime.readAccountUsage).toHaveBeenCalledTimes(2);
+    expect(f.createRuntime).toHaveBeenCalledOnce();
+  });
+
   it("round-trips bounded context telemetry and refuses a stale query generation", async () => {
     const f = await fixture(); const carrier = await f.attach(); const client = f.client();
     const id = randomUUID(); const session = client.createSession(sessionOptions(id));

@@ -407,6 +407,8 @@ export class ClaudePersistentRuntimeHost {
         if (!report || ![...this.#sessions.values()].some(attached) || (command.request.observationId !== undefined && report.observationId !== command.request.observationId)) {
           return { observation: null };
         }
+        // The controller's backend grant may have been revoked during a provider read.
+        assertPolicy?.();
         const verifiedSessions = report.verifiedSessions.filter(({ sessionId, startupProbeUuid }) => {
           const session = this.#sessions.get(sessionId);
           return attached(session) && session?.runtime.startupProbeUuid === startupProbeUuid;
