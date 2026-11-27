@@ -1113,22 +1113,25 @@ describe("early Electron reply playback", () => {
     h.early({ ...common, seq: 1, kind: "yield", reason: "markup" }); await h.idle();
     await h.runtime.updateSettings({ ...await h.command(), expectedRevision: (await h.runtime.getState()).settingsRevision,
       patch: { speechContent: "announcements" } });
+    h.complete("Other reply.", "other"); await h.idle();
     h.progress("One. Unread suffix."); await h.idle();
-    expect(h.texts()).toEqual([progressPreamble, "One."]);
+    expect(h.texts()).toEqual([progressPreamble, "One.", finalPreamble]);
   });
 
-  it("finishes only the unheard preamble when switched to announcements during a split header", async () => {
-    const h = await setup("responsive", { speechContent: "both", speechTextLimit: 9 });
+  it.each([false, true])("reconciles an announcement interrupted during its split preamble (intervening speaker %s)", async intervening => {
+    const h = await setup("responsive", { speechContent: "both", speechTextLimit: 23 });
     const pendingDrain = deferred<void>();
     h.playback.finish.mockResolvedValueOnce(undefined).mockImplementationOnce(() => pendingDrain.promise);
-    h.early(commentary); await vi.waitFor(() => expect(h.playback.finish).toHaveBeenCalledTimes(2));
-    expect(h.texts()[0]).toBe("Agent ");
+    h.early({ ...commentary, threadTitle: "First draft thread title" });
+    await vi.waitFor(() => expect(h.playback.finish).toHaveBeenCalledTimes(2));
+    expect(h.texts()[0]).toBe("Agent progress\n\nFirst ");
     await h.runtime.updateSettings({ ...await h.command(), expectedRevision: (await h.runtime.getState()).settingsRevision,
       patch: { speechContent: "announcements" } });
     pendingDrain.resolve(); await h.idle();
+    if (intervening) { h.complete("Other reply.", "other"); await h.idle(); }
     const beforeSeal = h.texts().length;
     h.progress("One. Unread suffix."); await h.idle();
-    expect(h.texts().slice(beforeSeal).join("").trim()).toMatch(/^progress\s+Thread A$/u);
+    expect(h.texts().slice(beforeSeal).join("")).toBe(intervening ? progressPreamble : "draft thread title");
   });
 
   it("honors Input mode at terminal even after an early slice drained in Speak", async () => {

@@ -170,21 +170,29 @@ public class NativeEarlyReplyTest {
             assertEquals("", reply.terminal(notice, both, "other"));
         }
     }
-    @Test public void switchingToAnnouncementsFinishesOnlyTheUnheardPreamble() {
+    @Test public void switchingToAnnouncementsReintroducesAnUnfinishedPreambleAfterAnotherOwner() {
         NativeVoiceSettings both = settings("both"), announcements = settings("announcements");
-        NativeVoiceQueue.Item notice = progress(ID, "message", "One. Tail.", announcements);
+        JSONObject envelope = progress(ID, "message", "One. Tail.", both).envelope;
+        JSONObject payload = envelope.optJSONObject("payload");
+        NativeVoiceJson.put(payload, "message", "Renamed project");
+        NativeVoiceJson.put(payload.optJSONObject("thread"), "title", "Renamed project");
+        NativeVoiceQueue.Item notice = new NativeVoiceQueue.Item(envelope, both);
         for (int limit : new int[]{6, 4096}) {
             NativeEarlyReply reply = new NativeEarlyReply(span("turn.progress", 0, 0, "One.", true), 0);
             reply.freeze("responsive", both, limit);
-            reply.drained(reply.next(null)); reply.detach();
-            String remaining = limit == 6 ? "progress\n\nProject" : "";
-            assertEquals(remaining, reply.terminal(notice, announcements, ID));
-            assertEquals(remaining, reply.terminal(notice, announcements, "other"));
+            NativeEarlyReply.Part part;
+            do {
+                part = reply.next(null);
+                reply.drained(part);
+            } while (part.preambleEnd <= "Agent progress\n\n".length());
+            reply.detach();
+            assertEquals(limit == 6 ? "t" : "", reply.terminal(notice, announcements, ID));
+            assertEquals(limit == 6 ? "Agent progress\n\nRenamed project" : "", reply.terminal(notice, announcements, "other"));
         }
         NativeEarlyReply reply = new NativeEarlyReply(span("turn.progress", 0, 0, "One.", true), 0);
         reply.freeze("responsive", settings("messages"), 4096);
         reply.drained(reply.next(null));
-        assertEquals("Agent progress\n\nProject", reply.terminal(notice, announcements, ID));
+        assertEquals("Agent progress\n\nRenamed project", reply.terminal(notice, announcements, ID));
     }
     @Test public void unflushedNaturalGroupsWaitBeforeSpeakingThePreambleAndRawSpeechKeepsItsSeparator() {
         NativeVoiceSettings both = settings("both");

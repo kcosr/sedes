@@ -137,7 +137,12 @@ export class ElectronEarlyReply {
   continuation(notice: VoiceNotification, settings: NativeVoiceSettings, lastAudibleOwner: string | undefined): string[] | null {
     if (settings.audioMode !== "speak" || !this.frontier && !this.preambleEnd) return null;
     const remainingPreamble = this.#preamble.slice(this.preambleEnd).trimStart();
-    if (settings.speechContent === "announcements") return this.preambleEnd ? [remainingPreamble] : null;
+    const sameSpeaker = lastAudibleOwner === this.identity.replyId;
+    if (settings.speechContent === "announcements") {
+      if (!this.preambleEnd) return null;
+      if (!remainingPreamble) return [];
+      return sameSpeaker ? [remainingPreamble] : null;
+    }
     const clean = (text: string) => electronSpeechText(text, settings.cleanSpeechText);
     const section = this.sealedSection(notice), raw = section?.text ?? "";
     let body: string[];
@@ -154,7 +159,7 @@ export class ElectronEarlyReply {
       body = notificationMessageParts(notice.payload).map(clean);
     }
     if (settings.speechContent !== "both" || !body.some(Boolean)) return body;
-    const preamble = lastAudibleOwner === this.identity.replyId ? remainingPreamble
+    const preamble = sameSpeaker ? remainingPreamble
       : prepareSpeechParts([notice.payload.title, notice.payload.message], settings);
     return [preamble, ...body];
   }

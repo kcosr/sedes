@@ -190,11 +190,16 @@ final class NativeEarlyReply {
     /** Reconcile once, at activation after any other speaker, against the terminal's whole selected document. */
     String terminal(NativeVoiceQueue.Item notice, NativeVoiceSettings settings, String lastOwner) {
         detach();
-        if (mode == null || preambleEnd == 0 && preparedEnd == 0 || notice.speech.isEmpty() ||
-            !settings.mode().equals("speak")) return notice.speech;
-        if (settings.text("speechContent").equals("announcements"))
-            return preambleEnd == 0 ? notice.speech : preamble.substring(preambleEnd).trim();
+        if (notice.speech.isEmpty() || !settings.mode().equals("speak")) return notice.speech;
         JSONObject payload = notice.envelope.optJSONObject("payload");
+        if (settings.text("speechContent").equals("announcements")) {
+            if (preambleEnd > 0) {
+                String remaining = preamble.substring(preambleEnd).trim();
+                if (remaining.isEmpty() || id.equals(lastOwner)) return remaining;
+            }
+            return NativeVoiceQueue.speech(payload, "announcements", settings.flag("cleanSpeechText"));
+        }
+        if (mode == null || preambleEnd == 0 && preparedEnd == 0) return notice.speech;
         String remaining = remainingSpeech(payload);
         if (!both || remaining.isEmpty()) return remaining;
         String header = id.equals(lastOwner) ? preamble.substring(preambleEnd).trim()
