@@ -23,7 +23,7 @@ import { assertConversationRetentionMilliseconds } from "./conversation-retentio
 import { assertConversationRuntimeBudget } from "./conversation-runtime-budget-policy.js";
 import type { DeliveryInputSnapshotRepository } from "../db/repositories/delivery-input-snapshot-repository.js";
 import type { BoundedText } from "../../shared/protocol/payload.js";
-import type { BackendCapabilityDocument } from "../../shared/protocol/backend.js";
+import type { BackendCapabilityDocument, DriverInteraction } from "../../shared/protocol/backend.js";
 import type { ConversationItem, ThreadRunState } from "../../shared/protocol/conversation.js";
 import { recordVoiceDiagnostic } from "../diagnostics/voice-diagnostics.js";
 import type { ApplicationPublicationAnchor } from "../../shared/protocol/application-publications.js";
@@ -322,6 +322,8 @@ function isCompletedModelToolActivity(item: ConversationItem): boolean {
   }
 }
 
+type BlockingRequestObserver = (scope: ExecutionScope, threadId: string, interaction: DriverInteraction) => void;
+
 type HistoricalQuestionObserver = (
   scope: ExecutionScope,
   threadId: string,
@@ -347,6 +349,7 @@ type CaptureEarlyReplyObserver = (scope: ExecutionScope, threadId: string, sourc
 export class ConversationActorManager {
   readonly #captureEarlyReply?: CaptureEarlyReplyObserver;
   readonly #readProgressParkRevision?: (scope: ExecutionScope, threadId: string) => number | undefined;
+  readonly #onBlockingRequest?: BlockingRequestObserver;
   readonly #onNonblockingQuestions?: NonblockingQuestionObserver;
   readonly #onHistoricalQuestion?: HistoricalQuestionObserver;
   readonly #environments: ExecutionEnvironmentProvider;
@@ -390,6 +393,7 @@ export class ConversationActorManager {
     readonly onLiveProgress?: LiveProgressObserver;
     readonly onLiveProgressSkipped?: LiveProgressSkippedObserver;
     readonly onModelFeedback?: ModelFeedbackObserver;
+    readonly onBlockingRequest?: BlockingRequestObserver;
     readonly onNonblockingQuestions?: NonblockingQuestionObserver;
     readonly onHistoricalQuestion?: HistoricalQuestionObserver;
   }) {
@@ -407,6 +411,7 @@ export class ConversationActorManager {
     this.#onLiveProgress = input.onLiveProgress;
     this.#onLiveProgressSkipped = input.onLiveProgressSkipped;
     this.#onModelFeedback = input.onModelFeedback;
+    this.#onBlockingRequest = input.onBlockingRequest;
     this.#onNonblockingQuestions = input.onNonblockingQuestions;
     this.#onHistoricalQuestion = input.onHistoricalQuestion;
     assertConversationRetentionMilliseconds(input.retentionMilliseconds);
@@ -1637,6 +1642,10 @@ export class ConversationActorManager {
           : {}),
         initialObserver: (event) => {
           onStateChanged();
+          if (event.type === "backend_event" && event.event.type === "interaction_opened" && !signal.aborted) {
+            this.#onBlockingRequest?.(input.scope, input.binding.applicationThreadId,
+              event.event.interaction);
+          }
           const historyItems = event.type === "projection_replaced"
             ? Object.values(event.state.timeline.itemsById)
             : event.type === "projection_events"

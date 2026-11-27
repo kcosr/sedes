@@ -3,6 +3,7 @@ import type { Locator, Page } from "@playwright/test";
 import { expect, test } from "./fixtures";
 import {
   capture,
+  createDraftThread,
   openSedesWorkspace,
   overlaySettled,
   selectRadixOption,
@@ -173,9 +174,28 @@ test.describe.serial("blocking interaction panel", () => {
     expect((await page.request.post("/__e2e/codex/turn-completion/arm")).ok()).toBe(true);
     try {
       await startCodexFixtureTurn(page, "Review generic MCP invocation parameters");
+      const otherThreadPath = await createDraftThread(page, "Work while approval is pending");
+      const otherComposer = page.getByRole("textbox", { name: "Message Scripted agent" });
+      const sidebar = page.getByTestId("desktop-sidebar");
+      const approvalThread = sidebar.locator(`[data-thread-id="${threadId}"]`).getByTestId("thread-row-link");
+      await sidebar.getByTestId("view-options-trigger").click();
+      const showParked = page.getByRole("menuitemcheckbox", { name: "Parked", exact: true });
+      await expect(showParked).toBeChecked();
+      await showParked.click();
+      await page.keyboard.press("Escape");
+      await approvalThread.click({ button: "right" });
+      await page.getByRole("menuitem", { name: "Park until done", exact: true }).click();
+      await expect(approvalThread).toHaveCount(0);
+      await otherComposer.focus();
+
       const [requestId] = await openScenario(page, threadId, "mcp_invocation");
       const title = "Allow the fixture_catalog MCP server to run inspect_catalog?";
       const dialog = page.getByRole("dialog", { name: title });
+      await expect(approvalThread).toBeVisible();
+      await expect(page).toHaveURL(otherThreadPath);
+      await expect(otherComposer).toBeFocused();
+      await expect(dialog).toHaveCount(0);
+      await approvalThread.click();
       await expect(dialog).toBeVisible();
       await expect(dialog).toContainText("Invocation parameters");
       await expect(dialog).toContainText("local models");

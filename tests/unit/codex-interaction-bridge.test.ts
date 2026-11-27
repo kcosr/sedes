@@ -41,6 +41,7 @@ function fixture(input?: {
   router.activateGeneration(1);
   const events: InteractionEvent[] = [];
   const bridge = new CodexInteractionBridge({
+    nativeNamespace: "fixture-store",
     router,
     nativeThreadId: "thread-1",
     ownsRoute: (route) =>
@@ -80,6 +81,31 @@ function fixture(input?: {
 }
 
 describe("CodexInteractionBridge", () => {
+  it("retains the request identity for replay and distinguishes a fresh transport reusing its RPC ID", async () => {
+    const params = {
+      conversationId: "thread-1", callId: "call", approvalId: "approval",
+      command: ["pwd"], cwd: "/workspace", reason: null, parsedCmd: [],
+    };
+    async function openAndResolve() {
+      const current = fixture();
+      const pending = current.invoke("execCommandApproval", 1, params);
+      await vi.waitFor(() => expect(current.events).toHaveLength(1));
+      const interaction = current.opened();
+      expect(current.bridge.pendingInteractions()[0]?.requestIdentity).toBe(interaction.requestIdentity);
+      const confirmation = current.bridge.respond({ kind: "decision", interactionId: interaction.backendInteractionId,
+        applicationOperationId: "answer", selectedActionId: "accept" });
+      await pending;
+      current.bridge.observeProviderResolved(1, 1);
+      await confirmation;
+      current.bridge.close();
+      return interaction;
+    }
+    const first = await openAndResolve();
+    const next = await openAndResolve();
+    expect(next.backendInteractionId).toBe(first.backendInteractionId);
+    expect(next.requestIdentity).not.toBe(first.requestIdentity);
+  });
+
   it("does not expose unadvertised human-only approvals as ordinary decisions", async () => {
     const current = fixture();
     await expect(current.invoke("item/commandExecution/requestApproval", 400, {
@@ -1161,6 +1187,7 @@ describe("CodexInteractionBridge", () => {
     const current = fixture();
     const observerEvents: InteractionEvent[] = [];
     const observer = new CodexInteractionBridge({
+      nativeNamespace: "fixture-store",
       router: current.router,
       nativeThreadId: "thread-1",
       ownsRoute: () => true,

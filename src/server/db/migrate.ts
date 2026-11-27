@@ -1,3 +1,4 @@
+import { blockingRequestObservationsMigration } from "./migrations/176-blocking-request-observations.js";
 import { inlineThreadReferencesMigration } from "./migrations/175-inline-thread-references.js";
 import { parkUntilDoneMigration } from "./migrations/174-park-until-done.js";
 import { claudeLocalTitleMigration } from "./migrations/173-claude-local-title.js";
@@ -364,6 +365,7 @@ export const backendNormalizedMigrations = [
   claudeLocalTitleMigration,
   parkUntilDoneMigration,
   inlineThreadReferencesMigration,
+  blockingRequestObservationsMigration,
 ] as const;
 
 export type DatabaseMigration = {

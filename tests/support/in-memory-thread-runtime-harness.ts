@@ -1,3 +1,4 @@
+import { pendingBlockingRequests } from "../../src/server/conversations/blocking-request-inventory.js";
 import { readProgressParkState } from "../../src/server/db/repositories/progress-park-state.js";
 import { UserInputRevisionRepository } from "../../src/server/db/repositories/user-input-revision-repository.js";
 import type Database from "better-sqlite3";
@@ -526,7 +527,7 @@ export async function createInMemoryThreadRuntimeHarness(options: {
       );
     },
     publishApplicationThread,
-  }, undefined, undefined, interactions);
+  }, undefined, undefined, pendingBlockingRequests(interactions, actors));
   const mutations = new ThreadMutationGateway({
     bindings,
     actors,

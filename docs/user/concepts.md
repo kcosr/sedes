@@ -147,8 +147,9 @@ provider turn is running.
 - **Active**: ordinary working inventory.
 - **Snoozed**: hidden or placed in Upcoming until a deadline or new activity
   wakes it.
-- **Parked**: out of the working set until new input, including an
-  automation run, returns it to Active. Archive is for finished work.
+- **Parked**: out of the working set. New input, including an automation
+  prompt, or a new request for your answer or approval returns it to Active.
+  **Park until done** also brings it back when the selected turn ends.
 - **Archived**: removed from the normal sidebar and unable to accept new input
   until restored.
 

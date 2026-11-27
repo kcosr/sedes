@@ -136,6 +136,7 @@ import {
   directThreadExecutionWorkspaceReader,
   type ThreadBackendPresentationProvider,
 } from "../../src/server/conversations/database-thread-application-readers.js";
+import { BlockingRequestInventory, pendingBlockingRequests } from "../../src/server/conversations/blocking-request-inventory.js";
 import { InteractionBroker } from "../../src/server/conversations/interaction-broker.js";
 import { RuntimeBackedQueuedInputConversationGateway } from "../../src/server/conversations/queued-input-conversation-gateway.js";
 import { QueuedInputDispatcher } from "../../src/server/conversations/queued-input-dispatcher.js";
@@ -4648,6 +4649,9 @@ async function main(): Promise<void> {
   const actorTargets = new DatabaseActorTargetResolver(targets);
   const lifecycleTargets = new DatabaseLifecycleTargetResolver(targets);
   let questions: QuestionRequestService | undefined;
+  const blockingRequests = new BlockingRequestInventory(inventoryRepository, (eventScope, state) => {
+    authoritativeCompletionFollowUp.defer(() => inventory.publishCommitted(eventScope, [state], state.stateChangedAt));
+  });
   let mutationsForSubmissions: ThreadMutationGateway | undefined;
   let automaticModelRetries: AutomaticModelRetryService | undefined;
   let observeAuthoritativeCompletion:
@@ -4682,6 +4686,8 @@ async function main(): Promise<void> {
     deliveryInputSnapshots,
     retentionMilliseconds: config.conversationRetentionMilliseconds,
     runtimeBudget: config.conversationRuntimeBudget,
+    onBlockingRequest: (eventScope, threadId, interaction) =>
+      blockingRequests.observeUnbound(interactions, eventScope, threadId, interaction),
     onHistoricalQuestion: (eventScope, threadId, sourceItemId) =>
       questions?.remember(eventScope, threadId, sourceItemId),
     onNonblockingQuestions: (eventScope, threadId, sourceItemId, payload) =>
@@ -4761,13 +4767,12 @@ async function main(): Promise<void> {
   const threadHubs = new ScopedThreadEventHubRegistry();
   const applicationHubs = new ScopedApplicationEventHubs();
   const interactions = new InteractionBroker({
-    onOpened: (eventScope, interaction) => {
-      notificationLifecycle.interactionOpened(eventScope, interaction);
-      authoritativeCompletionFollowUp.defer(async () => {
-        await inventory.wakeForRuntimeSignal(eventScope, interaction.threadId, {
-          kind: "needs_input",
-        });
-      });
+    onOpened(eventScope, interaction, requestIdentity) {
+      try {
+        blockingRequests.observe(eventScope, interaction.threadId, requestIdentity);
+      } finally {
+        notificationLifecycle.interactionOpened(eventScope, interaction);
+      }
     },
   });
   const threadInventory = new DatabaseThreadApplicationInventoryReader({
@@ -4933,10 +4938,12 @@ async function main(): Promise<void> {
     queue: queueRepository,
     gateway: queueGateway,
     dispatch: queue,
-    publish(eventScope, threadId, result) {
-      void publishApplicationThread
-        ?.publish(eventScope, threadId)
-        .catch(() => undefined);
+    publish(eventScope, threadId, result, changedInventory) {
+      if (changedInventory) {
+        authoritativeCompletionFollowUp.defer(() => inventory.publishCommitted(eventScope, [changedInventory], changedInventory.stateChangedAt));
+      } else {
+        void publishApplicationThread?.publish(eventScope, threadId).catch(() => undefined);
+      }
       const hub = threadHubs.thread(eventScope, threadId);
       if (hub.projectionGeneration) {
         hub.publish({
@@ -5157,7 +5164,7 @@ async function main(): Promise<void> {
       run: (eventScope, threadId, operation) =>
         runtimes.runWithRuntimeRetired(eventScope, threadId, operation),
     },
-    interactions,
+    pendingBlockingRequests(interactions, actors),
   );
   const tasks = new TaskService(taskRepository, applicationSnapshots);
   const workpads = new WorkpadService(new WorkpadRepository(database), applicationSnapshots);

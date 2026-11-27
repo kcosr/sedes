@@ -172,6 +172,20 @@ describe("OpenCode interaction authority and immutable input", () => {
     expect(changed.requestFingerprint).not.toBe(result.requestFingerprint);
     expect(changed.interaction.backendInteractionId).not.toBe(result.interaction.backendInteractionId);
   });
+  it("recognizes the same pending permission or form after the runtime and opening timestamp change", () => {
+    for (const map of [
+      (owner: OpenCodeInteractionAuthority, time: string, id: string) =>
+        mapped(mapOpenCodePermission({ request: { ...permission, id: `per_${id}` }, authority: owner, openedAt: time })),
+      (owner: OpenCodeInteractionAuthority, time: string, id: string) =>
+        mapped(mapOpenCodeForm({ request: form([{ key: "value", type: "string" }], { id: `frm_${id}` }), authority: owner, openedAt: time })),
+    ]) {
+      const original = map(authority, openedAt, "first").interaction;
+      const reopened = map({ ...authority, generation: "replacement" }, "2026-09-29T13:00:00.000Z", "first").interaction;
+      expect(reopened.backendInteractionId).not.toBe(original.backendInteractionId);
+      expect(reopened.requestIdentity).toBe(original.requestIdentity);
+      expect(map(authority, openedAt, "next").interaction.requestIdentity).not.toBe(original.requestIdentity);
+    }
+  });
   it("retains native value mapping after the caller mutates the original request", () => {
     const request = form([{ key: "original", type: "string", options: [{ value: "native-original", label: "Original" }] }]);
     const result = mapped(mapOpenCodeForm({ request, authority, openedAt }));

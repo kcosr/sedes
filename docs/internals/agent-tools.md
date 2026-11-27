@@ -469,8 +469,10 @@ set-state`, mutes automatic progress speech. A target with a turn in progress re
 Active on confirmed completion, failure, or interruption of that turn, including an outcome
 learned during recovery. When Sedes verifies that the calling agent is
 parking its own thread from that exact turn, success keeps the thread Parked.
-Failure or interruption still returns it to Active. Tool clients follow the
-ordinary running-thread behavior even when targeting their default thread.
+Failure or interruption still returns it to Active. New approval or input
+requests, including nonblocking questions, wake both parked and snoozed threads
+even when the agent parked its own thread. Tool clients follow the ordinary
+running-thread behavior even when targeting their default thread.
 Running and queued work, Tasks, and stashes stay attached. Use `thread.restore`
 for an archived thread.
 

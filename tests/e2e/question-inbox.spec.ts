@@ -326,7 +326,7 @@ test("nonblocking questions navigate oldest first, send individual answers, and 
     ).toHaveCount(0);
     await expect(composer).toHaveText("Keep this unrelated draft intact.");
 
-    // A later turn must bring the hidden attention UI back without a reload.
+    // A later turn's questions wake a snoozed thread and reopen its inbox.
     expect(
       (await page.request.post("/__e2e/codex/turn-completion/arm")).status(),
     ).toBe(204);
@@ -334,9 +334,18 @@ test("nonblocking questions navigate oldest first, send individual answers, and 
     await expect(
       page.getByRole("button", { name: "Stop", exact: true }),
     ).toBeVisible();
+    await page.getByRole("button", { name: "Thread actions" }).click();
+    await page.getByRole("menuitem", { name: "Snooze…" }).click();
+    const snooze = page.getByRole("dialog", { name: "Snooze this thread" });
+    const wakeReminder = "Review the rollout when input is needed.";
+    await snooze.getByLabel(/Reminder/).fill(wakeReminder);
+    await snooze.getByRole("button", { name: "1 hour" }).click();
+    await snooze.getByRole("button", { name: "Snooze", exact: true }).click();
+    await expect(snooze).toBeHidden();
     expect(
       (await page.request.post(`/__e2e/codex/questions/${threadId}`)).status(),
     ).toBe(204);
+    await expect(page.getByTestId("wake-attention")).toContainText(wakeReminder);
     await expect(banner).toContainText("3 open questions");
     await expect(questionTab).toBeVisible();
     await expect(panel).toBeVisible();
