@@ -779,7 +779,7 @@ describe("early Electron reply playback", () => {
   const progressPreamble = "Agent progress\n\nThread A";
   const finalPreamble = "Agent finished\n\nThread A";
   const append = { ...common, kind: "append", seq: 1, rawStart: 5, rawEnd: 10, text: "Two. ", paragraphEnd: false };
-  const setup = async (mode: "balanced" | "responsive" | "natural" = "responsive", patch = {}) => {
+  const setup = async (mode: "balanced" | "responsive" | "natural" = "balanced", patch = {}) => {
     const h = harness(); await h.enable({ audioMode: "speak", speechContent: "messages", autoListen: false, ...patch }); h.emitPolicy();
     await h.runtime.setEarlyReplyPlayback({ ...await h.command(), expectedEarlyReplyRevision: 0, earlyReplyPlayback: mode });
     const early = (frame: unknown) => h.current().callbacks.frame("voice_early_reply", frame, h.current().voiceStreamId!);
@@ -815,8 +815,38 @@ describe("early Electron reply playback", () => {
     expect(h.texts()).toEqual(["One.", "Two.", "Three.", "B reply."]);
   });
 
+  it.each([opening, commentary])("waits for three Responsive body words and flushes a short tail on $event seal", async frame => {
+    const h = await setup("responsive", { speechContent: "both" });
+    const first = "It passed. ", second = "Good. ", tail = "Done.";
+    h.early({ ...frame, text: first, rawEnd: first.length }); await h.waiting();
+    expect(h.texts()).toEqual([]);
+    const end = first.length + second.length;
+    h.early({ ...append, text: second, rawStart: first.length, rawEnd: end });
+    const preamble = frame.event === "turn.progress" ? progressPreamble : finalPreamble;
+    await vi.waitFor(() => expect(h.texts()).toEqual([preamble, "It passed. Good."])); await h.waiting();
+    h.early({ ...append, seq: 2, text: tail, rawStart: end, rawEnd: end + tail.length });
+    if (frame.event === "turn.progress") h.progress(first + second + tail);
+    else h.complete(first + second + tail);
+    await h.idle();
+    expect(h.texts()).toEqual([preamble, "It passed. Good.", "Done."]);
+  });
+
+  it("keeps short Responsive sentences in their own items and flushes each once", async () => {
+    const h = await setup("responsive");
+    h.early({ ...opening, text: "It passed.", rawEnd: 10 }); await h.waiting();
+    const second = { ...commentary, replyId: "c".repeat(64), itemId: "next", text: "Good.", rawEnd: 5 };
+    h.early(second);
+    h.complete("It passed.");
+    await vi.waitFor(async () => expect((await h.runtime.getState()).active?.id).toBe(second.replyId)); await h.waiting();
+    expect(h.texts()).toEqual(["It passed."]);
+    h.early({ ...common, replyId: second.replyId, itemId: second.itemId, seq: 1, kind: "yield", reason: "item_done" });
+    await h.idle();
+    h.progress("Good.", second.replyId, second.itemId); await h.idle();
+    expect(h.texts()).toEqual(["It passed.", "Good."]);
+  });
+
   it.each(["messages", "both"] as const)("speaks progress once in %s and keeps successive messages distinct", async speechContent => {
-    const h = await setup("responsive", { speechContent, autoListen: true });
+    const h = await setup("balanced", { speechContent, autoListen: true });
     const second = { ...commentary, replyId: "b".repeat(64), itemId: "next", text: "Next.", rawEnd: 5 };
     h.early(commentary); await h.waiting();
     expect((await h.runtime.getState()).active).toMatchObject({ id, eventKind: "turn.progress" });
@@ -842,7 +872,7 @@ describe("early Electron reply playback", () => {
   });
 
   it.each([opening, commentary])("finishes a limited-size preamble once when $event seals during its first request", async frame => {
-    const h = await setup("responsive", { speechContent: "both", speechTextLimit: 9 });
+    const h = await setup("balanced", { speechContent: "both", speechTextLimit: 9 });
     const drained = deferred<void>(); h.playback.finish.mockImplementationOnce(() => drained.promise);
     h.early(frame);
     await vi.waitFor(() => expect(h.speech.speak).toHaveBeenCalledTimes(2));
@@ -860,14 +890,14 @@ describe("early Electron reply playback", () => {
   });
 
   it("speaks only the corrected body when the original preamble already drained", async () => {
-    const h = await setup("responsive", { speechContent: "both" });
+    const h = await setup("balanced", { speechContent: "both" });
     h.early(opening); await h.waiting();
     h.complete("Revised answer."); await h.idle();
     expect(h.texts()).toEqual([finalPreamble, "One.", "Revised answer."]);
   });
 
   it("remains silent after an intervening item when the complete body was already heard", async () => {
-    const h = await setup("responsive", { speechContent: "both" });
+    const h = await setup("balanced", { speechContent: "both" });
     h.early(commentary); await h.waiting();
     h.early({ ...common, seq: 1, kind: "yield", reason: "item_done" });
     h.complete("Other reply.", "other"); await h.idle();
@@ -988,7 +1018,7 @@ describe("early Electron reply playback", () => {
   });
 
   it("reintroduces yielded speech in Both when another item reached the speaker first", async () => {
-    const h = await setup("responsive", { speechContent: "both" }); h.early(opening); await h.waiting();
+    const h = await setup("balanced", { speechContent: "both" }); h.early(opening); await h.waiting();
     h.early({ ...common, seq: 1, kind: "yield", reason: "item_done" });
     h.complete("B reply.", "other");
     await vi.waitFor(() => expect(h.texts().at(-1)).toContain("B reply."));
@@ -1009,7 +1039,7 @@ describe("early Electron reply playback", () => {
 
   it("gives urgent blocking input two seconds of starvation, while ordinary replies wait", async () => {
     vi.useFakeTimers();
-    const h = await setup("responsive", { speechContent: "both" }); h.early(opening); await h.waiting();
+    const h = await setup("balanced", { speechContent: "both" }); h.early(opening); await h.waiting();
     h.complete("Other reply.", "ordinary"); await vi.advanceTimersByTimeAsync(4_000);
     expect((await h.runtime.getState()).active?.id).toBe(id);
     h.current().callbacks.frame("notification", { sourceEventId: "blocked", generation: 1, voice: "speak",
@@ -1036,7 +1066,7 @@ describe("early Electron reply playback", () => {
   });
 
   it("lets an independently configured failure speak after the user skipped the early reply", async () => {
-    const h = await setup("responsive", { speechContent: "both" }); h.early(opening); await h.waiting();
+    const h = await setup("balanced", { speechContent: "both" }); h.early(opening); await h.waiting();
     await h.runtime.skipCurrentPlayback({ ...await h.command(), interactionId: id });
     const failure = { sourceEventId: id, generation: 1, voice: "speak", userInputRevision: 1,
       payload: { schemaVersion: 5, notificationId: id, event: "turn.failed", title: "Agent turn failed", message: "Thread A",
@@ -1067,7 +1097,7 @@ describe("early Electron reply playback", () => {
   });
 
   it("preserves Record as its own interaction while dropping the later seal of the replaced reply", async () => {
-    const h = await setup("responsive", { autoListen: true });
+    const h = await setup("balanced", { autoListen: true });
     h.early(opening); await h.waiting();
     await h.runtime.recordDuringPlayback({ ...await h.command(), interactionId: id });
     await vi.waitFor(async () => expect((await h.runtime.getState()).phase).toBe("listening"));
@@ -1108,7 +1138,7 @@ describe("early Electron reply playback", () => {
   });
 
   it("honors announcements-only at seal without repeating an opening preamble that already played", async () => {
-    const h = await setup("responsive", { speechContent: "both" });
+    const h = await setup("balanced", { speechContent: "both" });
     h.early(commentary); await h.waiting();
     h.early({ ...common, seq: 1, kind: "yield", reason: "markup" }); await h.idle();
     await h.runtime.updateSettings({ ...await h.command(), expectedRevision: (await h.runtime.getState()).settingsRevision,
@@ -1119,7 +1149,7 @@ describe("early Electron reply playback", () => {
   });
 
   it.each([false, true])("reconciles an announcement interrupted during its split preamble (intervening speaker %s)", async intervening => {
-    const h = await setup("responsive", { speechContent: "both", speechTextLimit: 23 });
+    const h = await setup("balanced", { speechContent: "both", speechTextLimit: 23 });
     const pendingDrain = deferred<void>();
     h.playback.finish.mockResolvedValueOnce(undefined).mockImplementationOnce(() => pendingDrain.promise);
     h.early({ ...commentary, threadTitle: "First draft thread title" });

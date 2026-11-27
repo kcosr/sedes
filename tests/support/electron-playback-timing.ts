@@ -122,7 +122,7 @@ export async function runDesktopTiming(endpoint: string, mode: "responsive" | "o
     callbacks.frame("notification_policy", { generation: 1, settings: { enabled: true, silenced: false, revision: 1,
       scriptPath: "", arguments: [], timeoutSeconds: 30, assistantResultPhases: ["final"], delivery: defaultNotificationDelivery() } }, stream);
     callbacks.notificationsChanged(true);
-    const sentences = Array.from({ length: count }, (_, i) => `Chunk ${String(i + 1).padStart(2, "0")}.`);
+    const sentences = Array.from({ length: count }, (_, i) => `At mark ${String(i + 1).padStart(2, "0")}.`);
     const began = meter.currentTime * meter.sampleRate;
     if (mode === "responsive") {
       const waiting = waitState(state => state.phase === "waiting_for_reply_text" && receivedAt.length === count);

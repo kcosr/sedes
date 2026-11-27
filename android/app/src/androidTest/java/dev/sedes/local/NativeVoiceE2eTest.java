@@ -602,7 +602,10 @@ public class NativeVoiceE2eTest {
         Bundle admission = new Bundle();
         admission.putString("voiceAdmission", submitRegisteredInput(server, thread, input));
         instrumentation.sendStatus(0, admission);
-        int openingDrains = 2; // The preamble and opening sentence both drain before the item closes.
+        await(() -> runtime.snapshot().optString("phase").equals("waiting_for_reply_text") && newPlaybackDrains(audio, baseline).isEmpty(),
+            45000, "Responsive held the short opening before synthesis");
+        reportVoiceStage("voiceShortHeld", new JSONObject());
+        int openingDrains = 2; // The preamble and grouped opening drain before the item closes.
         await(() -> runtime.snapshot().optString("phase").equals("waiting_for_reply_text") && newPlaybackDrains(audio, baseline).size() == openingDrains,
             45000, "opening sentence physically drained before the source item completed");
         JSONObject waiting = runtime.snapshot();

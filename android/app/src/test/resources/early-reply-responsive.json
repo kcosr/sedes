@@ -1,0 +1,15 @@
+[
+  {"text": "Yes.", "ready": false},
+  {"text": "It passed.", "ready": false},
+  {"text": "It all passed.", "ready": true},
+  {"text": "I can’t.", "ready": false},
+  {"text": "Don’t stop now.", "ready": true},
+  {"text": "Re-check this.", "ready": false},
+  {"text": "The end-to-end check.", "ready": true},
+  {"text": "Yes—looks good.", "ready": true},
+  {"text": "— … !", "ready": false},
+  {"text": "Café costs 12.", "ready": true},
+  {"text": "🦦 42.4 days.", "ready": false},
+  {"text": "¡Todo está listo!", "ready": true},
+  {"text": "私は猫です。", "ready": true}
+]

@@ -8,6 +8,23 @@ import type { NativeEarlyReplyPlaybackMode, NativeVoiceSettings } from "./native
 type Begin = Extract<EarlyReplyFrame, { kind: "begin" }>;
 const encoder = new TextEncoder();
 const digest = (text: string) => bytesToHex(sha256(encoder.encode(text)));
+const responsiveMinimumWords = 3;
+const wordSegmenter = new Intl.Segmenter("und", { granularity: "word" });
+
+function responsiveWordCount(text: string): number {
+  let count = 0;
+  let previousEnd = -1;
+  for (const { segment, index, isWordLike } of wordSegmenter.segment(text)) {
+    if (!isWordLike || !/[\p{L}\p{N}]/u.test(segment)) continue;
+    // ICU can split a hyphenated compound or contraction into multiple words.
+    if (previousEnd < 0 || !/^['‘’‐‑-]$/u.test(text.slice(previousEnd, index))) {
+      count++;
+      if (count === responsiveMinimumWords) break;
+    }
+    previousEnd = index + segment.length;
+  }
+  return count;
+}
 
 interface Frontier {
   rawEnd: number;
@@ -37,7 +54,7 @@ export class ElectronEarlyReply {
   changed?: () => void;
   cancelLookahead?: () => void;
   readonly #frames = new Map<number, string>();
-  readonly #ends: Array<{ end: number; paragraph: boolean }> = [];
+  readonly #ends: Array<{ end: number; paragraph: boolean; words?: number }> = [];
   #presentation?: Pick<NativeVoiceSettings, "cleanSpeechText" | "speechContent">;
   #nextSentence = 0;
   #prepared = "";
@@ -81,6 +98,17 @@ export class ElectronEarlyReply {
     return { ...settings, ...this.#presentation };
   }
 
+  #responsiveEnd(first: number): number | undefined {
+    let count = 0;
+    for (let index = first; index < this.#ends.length; index++) {
+      const span = this.#ends[index]!;
+      span.words ??= responsiveWordCount(this.raw.slice(this.#ends[index - 1]?.end ?? 0, span.end));
+      count += span.words;
+      if (count >= responsiveMinimumWords) return index;
+    }
+    if (this.yielded) return this.#ends.length - 1;
+  }
+
   /** Requests are planned from exact cumulative Markdown, including separators supplied across frames. */
   next(settings: NativeVoiceSettings, mode: NativeEarlyReplyPlaybackMode, limit: number): EarlySpeechChunk | undefined {
     if (this.#physical.length) return this.#physical.shift();
@@ -88,7 +116,11 @@ export class ElectronEarlyReply {
     let endIndex = first;
     const firstSentence = this.#ends[first];
     if (!firstSentence || this.retired || this.#yield === "presentation" || mode === "off") return;
-    if (mode === "balanced" && first > 0) {
+    if (mode === "responsive") {
+      const ready = this.#responsiveEnd(first);
+      if (ready === undefined) return;
+      endIndex = ready;
+    } else if (mode === "balanced" && first > 0) {
       while (!this.#ends[endIndex]!.paragraph && this.#ends[endIndex + 1] && this.#ends[endIndex + 1]!.end - start <= 240) endIndex++;
     } else if (mode === "natural") {
       while (!this.#ends[endIndex]!.paragraph && this.#ends[endIndex]!.end - start < 320) {

@@ -1,6 +1,9 @@
 package dev.sedes.local;
 
 import static org.junit.Assert.*;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.Test;
 
@@ -36,22 +39,68 @@ public class NativeEarlyReplyTest {
                 "turn", NativeVoiceJson.object("id", "turn", "outcome", "completed"), "assistantResult", result)), settings);
     }
     @Test public void modesGroupOnlyAvailableSentencesAndNaturalYieldFlushesRemainder() {
+        String one = "Here is one.", two = " Here is two.", three = " Here is three.";
         for (String mode : new String[]{"responsive", "balanced", "natural"}) {
-            NativeEarlyReply reply = new NativeEarlyReply(span(0, 0, "One.", false), 5);
+            NativeEarlyReply reply = new NativeEarlyReply(span(0, 0, one, false), 5);
             reply.freeze(mode, settings("messages"), 4096);
-            if (mode.equals("natural")) assertNull(reply.next(null)); else assertEquals("One.", reply.next(null).text);
-            reply.accept(span(1, 4, " Two.", false), 6); reply.accept(span(2, 9, " Three.", false), 7);
+            if (mode.equals("natural")) assertNull(reply.next(null)); else assertEquals(one, reply.next(null).text);
+            reply.accept(span(1, one.length(), two, false), 6); reply.accept(span(2, one.length() + two.length(), three, false), 7);
             NativeEarlyReply.Part first;
             if (mode.equals("natural")) {
                 assertNull(reply.next(null)); JSONObject control = common("yield", 3); NativeVoiceJson.put(control, "reason", "markup");
                 reply.accept(new NativeEarlyReply.Frame(control), 8); first = reply.next(null);
-                assertEquals("One. Two. Three.", first.text); reply.drained(first); assertNull(reply.next(null));
+                assertEquals(one + two + three, first.text); reply.drained(first); assertNull(reply.next(null));
             } else {
-                first = reply.next(null); assertEquals("One.", first.text);
-                assertEquals(mode.equals("balanced") ? "Two. Three." : "Two.", reply.next(first).text.trim());
+                first = reply.next(null); assertEquals(one, first.text);
+                String secondGroup = mode.equals("balanced") ? (two + three).trim() : two.trim();
+                assertEquals(secondGroup, reply.next(first).text);
                 // Preview/lookahead doesn't commit either utterance.
-                assertEquals("One.", reply.next(null).text); reply.drained(first);
-                assertEquals(mode.equals("balanced") ? "Two. Three." : "Two.", reply.next(null).text.trim());
+                assertEquals(one, reply.next(null).text); reply.drained(first);
+                assertEquals(secondGroup, reply.next(null).text);
+            }
+        }
+    }
+    @Test public void responsiveStartsEveryGroupAtThreeWordsAndReleasesTheTailOnYieldOrSeal() {
+        NativeVoiceSettings messages = settings("messages");
+        for (String event : new String[]{"turn.progress", "turn.completed"}) {
+            String first = "It passed.", next = " Good.", tail = " More soon.";
+            NativeEarlyReply reply = new NativeEarlyReply(span(event, 0, 0, first, true), 0);
+            reply.freeze("responsive", messages, 4096);
+            assertNull(reply.next(null));
+            reply.accept(span(event, 1, first.length(), next, false), 1);
+            NativeEarlyReply.Part group = reply.next(null);
+            assertEquals(first + next, group.text);
+            reply.accept(span(event, 2, first.length() + next.length(), tail, true), 2);
+            assertNull(reply.next(group)); reply.drained(group);
+            assertNull(reply.next(null));
+            NativeVoiceQueue.Item notice = event.equals("turn.progress") ? progress(ID, "message", first + next + tail, messages)
+                : terminal(first + next + tail, null, messages);
+            if (event.equals("turn.progress")) {
+                JSONObject yield = common("yield", 3);
+                NativeVoiceJson.put(yield, "reason", "markup"); reply.accept(new NativeEarlyReply.Frame(yield), 3);
+                NativeEarlyReply.Part remainder = reply.next(null); assertEquals(tail.trim(), remainder.text);
+                reply.drained(remainder); assertNull(reply.next(null));
+                assertEquals("", reply.terminal(notice, messages, ID));
+            } else {
+                assertEquals(tail.trim(), reply.terminal(notice, messages, ID));
+            }
+            NativeEarlyReply shortReply = new NativeEarlyReply(span(event, 0, 0, first, false), 0);
+            shortReply.freeze("responsive", messages, 4096);
+            assertNull(shortReply.next(null));
+            NativeVoiceQueue.Item shortNotice = event.equals("turn.progress") ? progress(ID, "message", first, messages) : terminal(first, null, messages);
+            assertEquals(first, shortReply.terminal(shortNotice, messages, ID));
+        }
+    }
+    @Test public void responsiveWordCountingMatchesSharedSpeechExamples() throws Exception {
+        try (InputStream input = getClass().getResourceAsStream("/early-reply-responsive.json")) {
+            assertNotNull(input);
+            JSONArray cases = new JSONArray(new String(input.readAllBytes(), StandardCharsets.UTF_8));
+            for (int i = 0; i < cases.length(); i++) {
+                JSONObject example = cases.getJSONObject(i);
+                String text = example.getString("text");
+                NativeEarlyReply reply = new NativeEarlyReply(span(0, 0, text, false), 0);
+                reply.freeze("responsive", settings("messages"), 1000);
+                assertEquals(text, example.getBoolean("ready"), reply.next(null) != null);
             }
         }
     }
@@ -81,7 +130,7 @@ public class NativeEarlyReplyTest {
     @Test public void bothUsesAudibleOwnerAtActualContinuationAndFormatsSectionAsAWhole() {
         NativeVoiceSettings both = settings("both");
         NativeEarlyReply reply = new NativeEarlyReply(span(0, 0, "One.", false), 0);
-        reply.freeze("responsive", both, 4096);
+        reply.freeze("balanced", both, 4096);
         NativeEarlyReply.Part header = reply.next(null); assertEquals("Agent finished\n\nProject", header.text);
         reply.drained(header);
         NativeEarlyReply.Part first = reply.next(null); reply.drained(first); reply.detach();
@@ -104,7 +153,7 @@ public class NativeEarlyReplyTest {
     @Test public void progressSealsOnlyItsOwnItemAndKeepsDrainedAttributionAndPrefix() {
         NativeVoiceSettings both = settings("both");
         NativeEarlyReply reply = new NativeEarlyReply(span("turn.progress", 0, 0, "First.", true), 0);
-        reply.freeze("responsive", both, 4096);
+        reply.freeze("balanced", both, 4096);
         assertTrue(new NativeVoiceQueue.Item(reply).progress());
         assertThrows(IllegalArgumentException.class, () -> reply.accept(span(0, 0, "First.", true), 1));
         NativeEarlyReply.Part header = reply.next(null);
@@ -161,7 +210,7 @@ public class NativeEarlyReplyTest {
         NativeVoiceSettings both = settings("both");
         for (String event : new String[]{"turn.progress", "turn.completed"}) {
             NativeEarlyReply reply = new NativeEarlyReply(span(event, 0, 0, "One.", true), 0);
-            reply.freeze("responsive", both, 4096);
+            reply.freeze("balanced", both, 4096);
             reply.drained(reply.next(null));
             reply.drained(reply.next(null));
             NativeVoiceQueue.Item notice = event.equals("turn.progress") ? progress(ID, "message", "One.", both)
@@ -179,7 +228,7 @@ public class NativeEarlyReplyTest {
         NativeVoiceQueue.Item notice = new NativeVoiceQueue.Item(envelope, both);
         for (int limit : new int[]{6, 4096}) {
             NativeEarlyReply reply = new NativeEarlyReply(span("turn.progress", 0, 0, "One.", true), 0);
-            reply.freeze("responsive", both, limit);
+            reply.freeze("balanced", both, limit);
             NativeEarlyReply.Part part;
             do {
                 part = reply.next(null);
@@ -190,7 +239,7 @@ public class NativeEarlyReplyTest {
             assertEquals(limit == 6 ? "Agent progress\n\nRenamed project" : "", reply.terminal(notice, announcements, "other"));
         }
         NativeEarlyReply reply = new NativeEarlyReply(span("turn.progress", 0, 0, "One.", true), 0);
-        reply.freeze("responsive", settings("messages"), 4096);
+        reply.freeze("balanced", settings("messages"), 4096);
         reply.drained(reply.next(null));
         assertEquals("Agent progress\n\nRenamed project", reply.terminal(notice, announcements, ID));
     }
@@ -256,7 +305,7 @@ public class NativeEarlyReplyTest {
         assertEquals(java.util.Arrays.asList("a", "b"), NativeVoiceQueue.chunks("ab", 1));
         assertThrows(IllegalArgumentException.class, () -> NativeVoiceQueue.chunks("🎧", 1));
         NativeEarlyReply reply = new NativeEarlyReply(span(0, 0, "A.", true), 0);
-        reply.freeze("responsive", settings("messages"), 1);
+        reply.freeze("balanced", settings("messages"), 1);
         NativeEarlyReply.Part first = reply.next(null); assertEquals("A", first.text); reply.drained(first);
         NativeEarlyReply.Part end = reply.next(null); assertEquals(".", end.text); reply.drained(end);
         reply.accept(span(1, 2, " B.", true), 8); assertEquals("B", reply.next(null).text);

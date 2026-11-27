@@ -27,7 +27,7 @@ import { VoiceSpeechContent } from "./VoiceSpeechContent.js";
 
 const earlyReplyOptions = [
   ["off", "Off", "Wait for the progress update or turn to finish."],
-  ["responsive", "Responsive", "Read each complete sentence as soon as it is ready."],
+  ["responsive", "Responsive", "Read complete sentences as they arrive. Group short ones until they total three words."],
   ["balanced", "Balanced", "Start with one sentence, then group ready sentences."],
   ["natural", "Natural", "Prefer paragraphs, with breaks in long paragraphs."],
 ] as const;

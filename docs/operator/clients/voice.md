@@ -192,11 +192,14 @@ notification when the message finishes.
 | Choice | What you hear |
 | --- | --- |
 | Off | The device waits for the progress update or turn to finish. |
-| Responsive | Each complete sentence can start playing as soon as the speaker is ready. |
+| Responsive | Read complete sentences as they arrive. A one- or two-word sentence joins the next complete sentence until the group has at least three words. |
 | Balanced | The opening sentence plays first. Later requests group ready sentences in the same paragraph, aiming for 240 characters. |
 | Natural | The device waits for a paragraph break, or for complete sentences to reach 320 characters in a longer paragraph. |
 
-The phrasing targets count UTF-16 units, including spaces between sentences.
+In Responsive, “It passed. The tests are green.” plays as one request. If the
+progress update or final answer ends with only “It passed.” left to read, it
+plays then. Short sentences stay within their own message. Balanced and Natural
+measure their length targets in UTF-16 units, including spaces between sentences.
 An eligible plain-prose opening can play early. Markdown such as links, code,
 and lists moves the remaining text to playback when the message finishes. The
 queue gives each progress update and the final answer a separate position. **Next** skips

@@ -228,21 +228,24 @@ describe("native voice production pipeline with loopback providers", () => {
       const title = "Early playback qualification";
       const requests: string[] = [];
       const spoken = async () => (await speech.observations()).speech.map(request => request.text);
-      for (const [phase, label, sentence] of [
-        ["commentary", "Agent progress", "I am checking the file."],
-        ["final_answer", "Agent finished", "The file passed inspection."],
+      for (const [phase, label, short, sentence] of [
+        ["commentary", "Agent progress", "Yes.", "The check is running."],
+        ["final_answer", "Agent finished", "It passed.", "The file passed inspection."],
       ] as const) {
         const item = codex.startAnswer(phase);
-        item.append(sentence + " The");
+        item.append(short + " The");
         await waitForSpeech(async () => (await desktop.getState()).phase === "waiting_for_reply_text");
-        requests.push(label + "\n\n" + title, sentence);
         expect(await spoken()).toEqual(requests);
+        item.append(sentence.slice(3) + " All");
+        requests.push(label + "\n\n" + title, short + " " + sentence);
+        await expect.poll(spoken, { timeout: 15_000 }).toEqual(requests);
+        await waitForSpeech(async () => (await desktop.getState()).phase === "waiting_for_reply_text");
         expect((await app.thread(threadId)).runState).toBe("running");
 
-        item.append(" next sentence arrived.");
+        item.append(" done.");
         item.complete();
         if (phase === "final_answer") codex.completeTurn();
-        requests.push("The next sentence arrived.");
+        requests.push("All done.");
         await expect.poll(spoken, { timeout: 15_000 }).toEqual(requests);
         await waitForSpeech(async () => (await desktop.getState()).phase === "idle");
       }
@@ -667,7 +670,7 @@ describe("native voice production pipeline with loopback providers", () => {
         return context.sourceTurnId && context.steer.availability === "available";
       }, 180_000);
 
-      const waitForStage = async (stage: "voiceOpening" | "voiceProgressSettled" | "voiceSkipped") => {
+      const waitForStage = async (stage: "voiceShortHeld" | "voiceOpening" | "voiceProgressSettled" | "voiceSkipped") => {
         const marker = new RegExp(`^INSTRUMENTATION_STATUS: ${stage}=(.+)$`, "mu");
         return JSON.parse(await waitForSpeech(() => {
           requireRunningDevice();
@@ -675,10 +678,14 @@ describe("native voice production pipeline with loopback providers", () => {
         }, 55_000));
       };
       const spoken = async () => (await speech.observations()).speech.map(request => request.text);
-      const opening = "This first sentence is playing while the reply is being written.";
-      const suffix = "The final sentence completes the same reply.";
+      const short = progress ? "Yes." : "It passed.";
+      const opening = short + " The reply is still being written.";
+      const suffix = "All done.";
       const answer = codex.startAnswer(progress ? "commentary" : "final_answer");
-      answer.append(opening + " The");
+      answer.append(short + " The");
+      await waitForStage("voiceShortHeld");
+      expect(await spoken()).toEqual([]);
+      answer.append(" reply is still being written. All");
       const evidence = await waitForStage("voiceOpening");
       expect(evidence).toMatchObject({ foreground: false, drain: { sampleRate: 24_000, writtenFrames: 24_000 } });
       expect(evidence.drain.playedFrames).toBeGreaterThanOrEqual(24_000);

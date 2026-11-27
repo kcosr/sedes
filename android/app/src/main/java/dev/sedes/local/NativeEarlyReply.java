@@ -3,16 +3,22 @@ package dev.sedes.local;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.text.BreakIterator;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.json.JSONObject;
 
 /** Live source, device phrasing and fully drained frontier for one logical notification. Handler-owned. */
 final class NativeEarlyReply {
     static final int MAX_BYTES = NativeVoiceEarlyFrames.MAX_PREFIX_BYTES;
     static final long MAX_LIFETIME = 600_000, MAX_WAIT = 60_000, URGENT_WAIT = 2000;
+    private static final int MIN_RESPONSIVE_WORDS = 3;
+    private static final Pattern WORD_CHARACTER = Pattern.compile("[\\p{L}\\p{N}]");
     static final class Frame {
         final String kind, id, event, thread, turn, item, title, origin, text, reason;
         final long generation, inputRevision;
@@ -35,12 +41,32 @@ final class NativeEarlyReply {
         final String kind, reason;
         final int start, end;
         final boolean paragraph;
+        private int words = -1;
         Segment(Frame frame) {
             kind = frame.kind; reason = frame.reason; start = frame.start; end = frame.end; paragraph = frame.paragraph;
         }
         boolean matches(Frame frame, StringBuilder source) {
             return kind.equals(frame.kind) && start == frame.start && end == frame.end && paragraph == frame.paragraph &&
                 Objects.equals(reason, frame.reason) && (frame.text == null || source.substring(start, end).equals(frame.text));
+        }
+        int words(StringBuilder source) {
+            if (words >= 0) return words;
+            String text = source.substring(start, end).replace('–', ' ').replace('—', ' ');
+            BreakIterator bounds = BreakIterator.getWordInstance(Locale.ROOT);
+            bounds.setText(text);
+            Matcher lettersOrNumbers = WORD_CHARACTER.matcher(text);
+            int count = 0, previousEnd = -1;
+            for (int from = bounds.first(), to = bounds.next(); to != BreakIterator.DONE; from = to, to = bounds.next()) {
+                if (!lettersOrNumbers.region(from, to).find()) continue;
+                // Some word iterators split compounds at an apostrophe or hyphen.
+                boolean joined = previousEnd >= 0 && from == previousEnd + 1 && joinsWords(text.charAt(previousEnd));
+                if (!joined && ++count == MIN_RESPONSIVE_WORDS) break;
+                previousEnd = to;
+            }
+            return words = count;
+        }
+        private static boolean joinsWords(char c) {
+            return c == '\'' || c == '‘' || c == '’' || c == '-' || c == '‐' || c == '‑';
         }
     }
     static final class Part {
@@ -144,15 +170,19 @@ final class NativeEarlyReply {
         return start;
     }
     private int readyEnd(int raw) {
-        int end = raw;
+        int end = raw, words = 0;
+        boolean responsive = mode.equals("responsive");
         for (Segment frame : frames) {
             if (frame.end <= raw) continue;
             if (mode.equals("balanced") && end > raw && frame.end - raw > 240) return end;
             end = frame.end;
-            if (frame.paragraph || mode.equals("responsive") || mode.equals("balanced") && raw == 0 ||
+            if (responsive) {
+                words += frame.words(source);
+                if (words >= MIN_RESPONSIVE_WORDS) return end;
+            } else if (frame.paragraph || mode.equals("balanced") && raw == 0 ||
                 mode.equals("natural") && end - raw >= 320) return end;
         }
-        return mode.equals("natural") && !yielded ? raw : end;
+        return (responsive || mode.equals("natural")) && !yielded ? raw : end;
     }
     boolean matchesNotice(NativeVoiceQueue.Item notice) {
         if (!event.equals(notice.event)) return false;

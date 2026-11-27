@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { ElectronEarlyReply } from "./electron-early-reply.js";
 import { ElectronEarlyOutput } from "./electron-early-output.js";
@@ -16,7 +17,6 @@ function append(reply: ElectronEarlyReply, seq: number, text: string, paragraphE
 }
 describe("Electron early phrasing and source reconciliation", () => {
   it.each([
-    ["responsive", ["First.", "Second.", "Third.", "Fourth."]],
     ["balanced", ["First.", "Second. Third.", "Fourth."]],
     ["natural", ["First. Second. Third.", "Fourth."]],
   ] as const)("groups whole ready sentences within paragraphs for %s", (mode, expected) => {
@@ -25,6 +25,26 @@ describe("Electron early phrasing and source reconciliation", () => {
     const chunks = [];
     for (let chunk = reply.next(settings, mode, 1000); chunk; chunk = reply.next(settings, mode, 1000)) chunks.push(chunk.text);
     expect(chunks).toEqual(expected);
+  });
+  it("uses the shared three-word readiness cases for Responsive speech", () => {
+    const corpus: { text: string; ready: boolean }[] = JSON.parse(readFileSync(
+      new URL("../../../android/app/src/test/resources/early-reply-responsive.json", import.meta.url), "utf8"));
+    for (const { text, ready } of corpus) {
+      expect(!!source(text).next(settings, "responsive", 1000), text).toBe(ready);
+    }
+  });
+  it("batches Responsive sentences across paragraphs and starts a fresh count for each group", () => {
+    const reply = source("First.\n\n", true);
+    const next = () => reply.next(settings, "responsive", 1000)?.text;
+    expect(next()).toBeUndefined();
+    append(reply, 1, "Second. "); expect(next()).toBeUndefined();
+    append(reply, 2, "Third. "); expect(next()).toBe("First.\n\nSecond. Third.");
+    append(reply, 3, "Already three words. "); expect(next()).toBe("Already three words.");
+    append(reply, 4, "It passed. "); expect(next()).toBeUndefined();
+    append(reply, 5, "Done. "); expect(next()).toBe("It passed. Done.");
+    append(reply, 6, "Yes."); expect(next()).toBeUndefined();
+    reply.receive({ ...common, seq: 7, kind: "yield", reason: "markup" }, 20);
+    expect(next()).toBe("Yes."); expect(next()).toBeUndefined();
   });
   it("releases a long open Natural paragraph at 320 raw units and a short available tail at yield", () => {
     const reply = source("A".repeat(301) + ". ");
