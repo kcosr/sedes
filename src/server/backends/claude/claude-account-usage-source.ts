@@ -24,7 +24,7 @@ export class ClaudeAccountUsageSource implements BackendAccountUsageSource {
   readonly #listeners = new Set<() => void>();
   #snapshot: VerifiedAccountUsage | null = null;
   #timer: ReturnType<typeof setTimeout> | undefined;
-  #request: { controller: AbortController; cached?: CachedObservation } | undefined;
+  #request: { controller: AbortController; membershipOnly: boolean } | undefined;
   #cached: CachedObservation | undefined;
   #needsMembership = false;
   #nextReadAt = 0;
@@ -71,7 +71,7 @@ export class ClaudeAccountUsageSource implements BackendAccountUsageSource {
     this.#timer = undefined;
     const request = this.#request;
     if (request && !request.controller.signal.aborted) {
-      if (request.cached) {
+      if (request.membershipOnly) {
         this.#request = undefined;
       } else {
         // Reopening after an interrupted provider read may retry shortly after cleanup.
@@ -82,7 +82,7 @@ export class ClaudeAccountUsageSource implements BackendAccountUsageSource {
   }
 
   #schedule(): void {
-    if (this.#closed || !this.#attachments.size || (this.#request && !this.#request.cached)) return;
+    if (this.#closed || !this.#attachments.size || (this.#request && !this.#request.membershipOnly)) return;
     const remaining = this.#nextReadAt - performance.now();
     if (!this.#timer) {
       this.#timer = setTimeout(() => {
@@ -99,7 +99,7 @@ export class ClaudeAccountUsageSource implements BackendAccountUsageSource {
   }
 
   async #read(cached?: CachedObservation): Promise<void> {
-    const request = { controller: new AbortController(), cached };
+    const request = { controller: new AbortController(), membershipOnly: cached !== undefined };
     this.#request = request;
     this.#needsMembership = false;
     if (!cached) {
@@ -129,9 +129,9 @@ export class ClaudeAccountUsageSource implements BackendAccountUsageSource {
     } catch {
       // Optional provider and membership reads may fail independently of the conversation.
     } finally {
-      if (!request.controller.signal.aborted) this.#publish(usage);
       if (this.#request === request) {
         this.#request = undefined;
+        if (!request.controller.signal.aborted) this.#publish(usage);
         this.#schedule();
       }
     }

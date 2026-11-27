@@ -101,6 +101,29 @@ describe("Claude account usage polling", () => {
     source.close();
   });
 
+  it("ignores a late membership reply after the last handle detaches and another query reopens", async () => {
+    let complete!: (reply: typeof observation) => void;
+    const readAccountUsage = vi.fn(async (_signal: AbortSignal, _id?: string) => observation)
+      .mockResolvedValueOnce(observation)
+      .mockImplementationOnce(() => new Promise<typeof observation>(resolve => { complete = resolve; }))
+      .mockResolvedValueOnce({ ...observation, verifiedSessions: [] });
+    const source = new ClaudeAccountUsageSource({ readAccountUsage });
+    const releaseA = source.retain(queryA);
+    await vi.advanceTimersByTimeAsync(0);
+    releaseA();
+    const releaseB = source.retain(queryB);
+    await vi.advanceTimersByTimeAsync(0);
+    releaseB();
+    expect(readAccountUsage.mock.calls[1]![0].aborted).toBe(true);
+    source.retain({ ...queryB, startupProbeUuid: "reopened-query" });
+    await vi.advanceTimersByTimeAsync(0);
+    complete(observation);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(source.snapshot()).toBeNull();
+    expect(readAccountUsage.mock.calls.map(([, id]) => id)).toEqual([undefined, observationId, observationId]);
+    source.close();
+  });
+
   it.each([null, { ...observation, observationId: "foreign-worker-sample" }])(
     "withholds cached quota when the current worker cannot confirm the original observation", async reply => {
       const readAccountUsage = vi.fn(async (_signal: AbortSignal, id?: string) => id ? reply : observation);
