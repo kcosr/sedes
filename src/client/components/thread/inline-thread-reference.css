@@ -1,4 +1,9 @@
 .inline-thread-reference {
+  /* Center the pill and icons on the visible lowercase letters. Its title
+     keeps the same typographic baseline as the sentence. */
+  --mention-optical-offset: 0.1em;
+  position: relative;
+  top: var(--mention-optical-offset);
   display: inline-flex;
   align-items: baseline;
   vertical-align: baseline;
@@ -33,6 +38,8 @@
 }
 
 .inline-thread-reference-title {
+  position: relative;
+  top: calc(0px - var(--mention-optical-offset));
   font-weight: var(--weight-medium);
 }
 
