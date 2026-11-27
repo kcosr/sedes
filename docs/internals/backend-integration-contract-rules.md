@@ -5087,8 +5087,8 @@ running. Claude evicts each query/CLI child separately and releases the shared
 worker/supervisor after its last query and semantic operation. Pi SDK and Grok
 keep their existing per-conversation cleanup. Native Pi and Antigravity retain
 execution-host owners with per-session processes and evidence-driven cleanup.
-OpenCode releases an attachment independently of its daemon, whose native
-background inventory cannot prove automatic retirement safe. Persistent hosts
+OpenCode releases an external attachment independently of its daemon. Stock
+native background inventory cannot prove retirement of an owned daemon safe. Persistent hosts
 require explicit authority from the current scoped controller: main/carrier
 detach alone never authorizes retirement
 of retained queries, active work, pending interactions, or unacknowledged results.
@@ -5103,7 +5103,16 @@ handoff must not manufacture an unexpected-failure receipt.
 Automatic upgrades require
 fenced, authoritative idle and cleanup evidence for every owned resource,
 including terminal checkpoints and unsettled mutation outcomes. Unknown state
-blocks automatic replacement. Persistent terminal termination waits for the
+blocks automatic replacement. Before declining a compatible upgrade on cached
+provider activity, use a bounded existing-owner refresh. A provider that
+retains application receipts can use the admitted module to reconcile them
+with scoped durable evidence. Read management status again after that pass,
+and fence and recheck resources on the service before retirement. Antigravity
+uses its native activity inspection and exact operation acknowledgments.
+External OpenCode accounts for work the sidecar can interrupt, including
+independently callable tool routes and undelivered results. Its independent
+daemon can survive a sidecar upgrade. Owned OpenCode and the other persistent
+providers keep their existing retirement requirements. Persistent terminal termination waits for the
 host's exit evidence; failed signal delivery cannot manufacture an exit or a
 cleanup receipt. A reachable host's exact-incarnation-unknown rejection records
 lost continuity with no exit code or cleanup claim. Keep control admission

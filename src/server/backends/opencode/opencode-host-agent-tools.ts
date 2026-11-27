@@ -61,6 +61,8 @@ export class OpenCodeHostAgentTools {
   readonly #locations = new Map<string, HostLocation>();
   #closed = false;
   #admissions = 0;
+  #activeCalls = 0;
+  get hasActiveCalls(): boolean { return this.#activeCalls > 0; }
   constructor(readonly options: { readonly adapter: OpenCodeHttpNativeAdapter;
     readonly bindRouteToEndpoint?: boolean;
     readonly cli: () => OpenCodeHostToolEndpoint | undefined;
@@ -200,10 +202,13 @@ export class OpenCodeHostAgentTools {
     this.#require(entry.target);
     const stamp = request.operation === "invoke" ? this.options.capture(entry.target) : undefined;
     const invocationSignal = AbortSignal.any([signal, entry.owner.signal]);
-    await this.#assertTarget(entry.target, invocationSignal);
-    if (this.#locations.get(directory) !== location || this.#require(entry.target) !== entry) throw denied();
-    invocationSignal.throwIfAborted();
-    return this.options.invoke(entry.admission.sourceCapability, request, invocationSignal, stamp);
+    this.#activeCalls++;
+    try {
+      await this.#assertTarget(entry.target, invocationSignal);
+      if (this.#locations.get(directory) !== location || this.#require(entry.target) !== entry) throw denied();
+      invocationSignal.throwIfAborted();
+      return await this.options.invoke(entry.admission.sourceCapability, request, invocationSignal, stamp);
+    } finally { this.#activeCalls--; }
   }
   async #register(entry: HostSession, location: HostLocation, signal?: AbortSignal): Promise<void> {
     let nativeWritePossible = location.registration !== undefined;

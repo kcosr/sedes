@@ -60,8 +60,12 @@ this runtime.
 Connect after a remote Disconnect reuses the resident owner. An explicit
 Stop/Restart or environment Stop/Upgrade may abandon retained uncertain
 outcomes after recording them. Stock OpenCode cannot prove a complete inventory
-of background work, so automatic retirement stays blocked; use an explicit
-confirmed action. Cleanup actions remain available when a backend is disabled.
+of background work, so an owned daemon requires explicit confirmation to
+retire. With an external daemon, the sidecar can upgrade automatically once
+its own requests, tool routes, tracked work and unacknowledged outcomes have
+settled. The daemon and independent native work continue. A tool route that
+a native job can still call keeps the upgrade pending after main disconnects.
+Cleanup actions remain available when a backend is disabled.
 Conversation Stop remains a separate session operation.
 
 Authenticate OpenCode's providers separately before sending a Sedes message.

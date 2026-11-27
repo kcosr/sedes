@@ -91,6 +91,7 @@ export class OpenCodeRuntime {
   #retryLaunchCleanup?: () => Promise<void>;
   #lease?: OpenCodeRuntimeOwnershipLease;
   #references = 0;
+  #attachmentRequests = 0;
   #starting?: Promise<void>;
   #startupLifetime?: AbortController;
   #stopping?: Promise<OpenCodeRuntimeStopResult>;
@@ -112,6 +113,11 @@ export class OpenCodeRuntime {
   get runtimeId(): string { return this.#runtimeId; }
   get nativeHost(): OpenCodeNativeHost | undefined { return this.#host; }
 
+  /** Native jobs may still call an admitted tool route after main detaches. */
+  get hasAttachmentWork(): boolean {
+    return this.#attachmentRequests > 0 || this.#toolScopes.size > 0 || !!this.#tools?.hasActiveCalls;
+  }
+
   snapshot(): OpenCodeRuntimeSnapshot {
     return Object.freeze({ state: this.#state, ownership: this.#input.connection.ownership,
       references: this.#references, ...(this.#generation ? { generation: this.#generation } : {}),
@@ -129,6 +135,7 @@ export class OpenCodeRuntime {
     if (!this.#host || !this.#tools) throw new OpenCodeRuntimeError("opencode_runtime_unavailable");
     const host = this.#host, tools = this.#tools, port = host.acquire(target);
     let retained = false, admitted = false;
+    this.#attachmentRequests++;
     try {
       await this.assertCurrent(signal);
       const result = await tools.admit(target, admission, signal);
@@ -142,6 +149,7 @@ export class OpenCodeRuntime {
       signal?.throwIfAborted();
       return result;
     } finally {
+      this.#attachmentRequests--;
       if (!retained) { if (admitted) tools.release(target); host.release(port); }
     }
   }
@@ -332,9 +340,10 @@ export class OpenCodeRuntime {
 
   /** Local identity proofs are cheap and always fresh; a proof scope only permits reuse. */
   async assertCurrent(signal?: AbortSignal, _proofs?: OpenCodeIdentityProofScope): Promise<void> {
-    if (this.#state !== "ready" || !this.#client || !this.#identity) throw new OpenCodeRuntimeError("opencode_runtime_unavailable");
+    if (this.#state !== "ready" || !this.#client || !this.#identity || (this.#stopping && !this.#owned)) throw new OpenCodeRuntimeError("opencode_runtime_unavailable");
     const client = this.#client;
     const identity = this.#identity;
+    this.#attachmentRequests++;
     try {
       const info = await client.info(signal);
       if (!this.#runtimeVersion || !haveSameOpenCodeRuntimeVersionPrecedence(info.version, this.#runtimeVersion)) throw new Error();
@@ -353,7 +362,7 @@ export class OpenCodeRuntime {
       if (this.#client === client && this.#identity === identity) this.#input.onRuntimeVersionAssessment?.(undefined);
       client.close();
       throw new OpenCodeRuntimeError("opencode_runtime_identity_changed");
-    }
+    } finally { this.#attachmentRequests--; }
   }
 
   /** Explicit backend Stop. External owners support Disconnect through close(). */

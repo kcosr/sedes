@@ -2160,6 +2160,32 @@ describe("production configuration reconciliation", () => {
     expect(observed).toMatchObject({ connectionState: "disconnected", upgradeState: "pending", supportedActions: expect.arrayContaining(["upgrade"]) });
   });
 
+  it("identifies the blocking provider and operation while a compatible outdated service stays connected", async () => {
+    const { service, scope, snapshot } = await fixture();
+    const environmentId = randomUUID();
+    const configuration = structuredClone(snapshot.configuration);
+    configuration.executionEnvironments.push({ id: environmentId, kind: "ssh", label: "SSH target", hostAlias: "test-target", connectionCompression: true,
+      workspaceRoots: ["/workspace"], operations: { kind: "none" } });
+    const status: SidecarServiceStatus = { scope: { ...scope, installationId: "installation", executionEnvironmentId: environmentId },
+      serviceIncarnation: "older-service", buildId: "previous", artifactSha256: "a".repeat(64), runtimeWireVersion: SIDECAR_WIRE_VERSION,
+      controllerEpoch: 1, attached: true, attachmentMode: "normal", state: "ready", configurationState: "applied",
+      desiredConfiguration: { environmentRevision: 0, operationsRevision: 0 }, effectiveConfiguration: { environmentRevision: 0, operationsRevision: 0 },
+      resources: [
+        { resourceId: "opencode:resident", kind: "provider", state: "active", revision: "1", blockers: ["active_work"] },
+        { resourceId: "workspace-files", kind: "operation", state: "unknown", revision: "1", blockers: ["unsettled_outcome"] },
+      ], resourcesFingerprint: "b".repeat(64) };
+    const inspect = vi.spyOn(SidecarRuntimeOwner.prototype, "inspectService").mockResolvedValue(status);
+    const saved = await service.save(scope, { mutationId: randomUUID(), expectedRevision: snapshot.revision, configuration });
+    const impact = () => service.impact(scope, { resourceKind: "environment", resourceId: environmentId, action: "upgrade", expectedRevision: saved.revision });
+    await impact();
+    const row = async () => (await service.get(scope)).runtimes.find(value => value.resourceKind === "environment" && value.resourceId === environmentId);
+    expect(await row()).toMatchObject({ connectionState: "connected", upgradeState: "pending",
+      lastError: expect.stringMatching(/opencode:resident.*active_work.*workspace-files.*unsettled_outcome/u) });
+    inspect.mockResolvedValue({ ...status, resources: [] });
+    await impact();
+    expect(await row()).toMatchObject({ connectionState: "connected", lastError: null });
+  });
+
   it.each(["stop", "upgrade"] as const)("uses stable management to %s an incompatible runtime with active work", async action => {
     const { service, scope, snapshot } = await fixture();
     const environmentId = randomUUID();

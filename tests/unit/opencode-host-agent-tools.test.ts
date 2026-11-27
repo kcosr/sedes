@@ -114,7 +114,9 @@ describe("OpenCode execution-host tool ingress", () => {
     const f = fixture(); await f.open();
     const held = f.wire.hold(`/api/session/${f.wire.sessionID}`);
     const pending = f.call(); const failure = expect(pending).rejects.toThrow(); await held.entered;
+    expect(f.tools.hasActiveCalls).toBe(true);
     f.tools.release(f.target); held.release(); await failure;
+    expect(f.tools.hasActiveCalls).toBe(false);
     await f.tools.admit(f.target, { ...f.admission, sourceCapability: "replacement" });
     expect(f.invoke).not.toHaveBeenCalled();
   });

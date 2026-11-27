@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { ThreadMutationGateway } from "../../src/server/conversations/thread-mutation-gateway.js";
+import { antigravityAdministration } from "../../src/server/backends/antigravity/runtime-administration.js";
+import { SubmissionCompletionRepository } from "../../src/server/db/repositories/submission-completion-repository.js";
+import type { AntigravityAttachment, AntigravityInspection, AntigravityPort } from "../../src/server/backends/antigravity/port.js";
 import { ConversationOperationRepository } from "../../src/server/db/repositories/conversation-operation-repository.js";
 import { threadAgentToolPolicyRepository } from "../support/thread-agent-tool-policy.js";
 import { AntigravityActionPersistence } from "../../src/server/backends/antigravity/action-persistence.js";
@@ -100,6 +103,60 @@ describe("Antigravity persistence", () => {
       operation: { action: "rename" as const, title: "Local name" } };
     return { database, scope, thread, settings, inventory, gateway, operations, action, persist, persistImplementation, prepare, acquire, request };
   }
+
+  it("acknowledges only terminal retained operations with matching durable thread evidence before upgrade", async () => {
+    const { database, scope } = savedAgentDatabase();
+    try {
+      const connection = antigravityConnection({ database, scope });
+      const environment = connection.executionEnvironmentId;
+      const instance = new BackendConfigurationRepository(database).getBackend(scope, connection.backendInstanceId);
+      const workspace = new InventoryRepository(database).upsertWorkspace(scope, { environmentId: environment, canonicalPath: "/tmp/upgrade",
+        displayName: "Project", project: { kind: "new", name: "Project" }, available: true, trustState: "trusted", environmentConfigurationRevision: 0, now: 230 });
+      const bindings = new ConversationBindingRepository(database);
+      const thread = bindings.createUnboundThread(scope, { workspaceId: workspace.id, connectionProfileId: connection.id, title: "Antigravity", now: 230 });
+      const session = { sessionId: randomUUID(), cwd: workspace.canonicalPath, handleId: randomUUID(), generation: randomUUID(), closed: false };
+      bindings.bindDiscoveredConversation(scope, thread.id, { backendConversationId: session.sessionId, now: 240 });
+      const settings = new AntigravityThreadRepository(database);
+      const persistence = new AntigravityThreadPersistence({ scope, backendInstanceId: instance.id, settings,
+        modelPolicy: compileBackendModelPolicy({ type: "catalog" }, "model_effort"), defaultsForConnection: () => ({}), nativeNamespaceKey: "test-profile" });
+      persistence.saveBoundBindingDetail(scope, thread.id, serializeAntigravityBinding({ version: 1, ...scope, sessionId: session.sessionId,
+        backendInstanceId: instance.id, connectionProfileId: connection.id, executionEnvironmentId: environment,
+        canonicalWorkspacePath: workspace.canonicalPath, nativeNamespaceKey: "test-profile" }));
+      const completion = new SubmissionCompletionRepository(database);
+      for (const operationId of ["delivered", "pending", "uncertain", "accepted-without-completion"]) {
+        completion.recordAccepted(scope, thread.id, { operationId, backendCorrelation: operationId, acceptedAt: 245 });
+        if (operationId !== "accepted-without-completion") completion.observeCompletion(scope, thread.id, operationId, {
+          completionIdentity: operationId, createAttention: false, observedAt: 250,
+          finalized: { applicationTurnId: randomUUID(), outcome: "completed", result: { text: "Done" }, classifiedResult: null } });
+      }
+      const retained: AntigravityAttachment = { sessionId: session.sessionId, cwd: session.cwd, handleId: session.handleId,
+        generation: session.generation, createdByOperationId: "unbound-creation", throughSequence: 10, retainedAfterSequence: 10,
+        setup: { initialize: { protocolVersion: 1 }, session: {} }, activePromptIds: ["pending"], pendingPermissions: [],
+        retainedOperationIds: ["delivered", "pending", "uncertain", "accepted-without-completion", "unowned"] };
+      const inspection: AntigravityInspection = { runtimeId: randomUUID(), revision: "revision", state: "active", blockers: ["unsettled_outcome"],
+        retainedSessions: [session] };
+      const attachExisting = vi.fn(async () => retained);
+      const acknowledgeOperation = vi.fn<AntigravityPort["acknowledgeOperation"]>();
+      const port = { inspect: vi.fn(async () => inspection), stop: vi.fn(), attachExisting,
+        outcome: vi.fn<AntigravityPort["outcome"]>(async ({ operationId }) => operationId === "pending" ? { status: "pending" } :
+          operationId === "uncertain" ? { status: "failed", failure: { code: "unknown", delivery: "sent_outcome_unknown" } } : { status: "completed", result: {} }),
+        acknowledgeOperation, acknowledgeCreation: vi.fn() };
+      const administration = (principalId = scope.principalId) =>
+        antigravityAdministration({ database, scope: { ...scope, principalId }, instance: { ...instance, enabled: true } }, environment, persistence, port);
+      const signal = AbortSignal.timeout(5000);
+      await administration("other").reconcileForUpgrade!(signal);
+      expect(attachExisting).not.toHaveBeenCalled();
+      port.inspect.mockResolvedValueOnce({ ...inspection, retainedSessions: [{ ...session, cwd: "/wrong-workspace" }] });
+      await administration().reconcileForUpgrade!(signal);
+      expect(attachExisting).not.toHaveBeenCalled();
+      attachExisting.mockResolvedValueOnce({ ...retained, generation: randomUUID() });
+      await administration().reconcileForUpgrade!(signal);
+      expect(acknowledgeOperation).not.toHaveBeenCalled();
+      await administration().reconcileForUpgrade!(signal);
+      expect(acknowledgeOperation.mock.calls).toEqual([[{ handleId: session.handleId, operationId: "delivered" }, signal]]);
+      expect(port.acknowledgeCreation).not.toHaveBeenCalled();
+    } finally { database.close(); }
+  });
 
   it.each(["creating", "creation_unknown"] as const)("refuses local rename during %s without preparing a receipt", async (state) => {
     const f = renameGatewayFixture(state);

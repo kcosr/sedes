@@ -35,6 +35,10 @@ export const sidecarResourceSnapshotSchema = z.strictObject({
 });
 export type SidecarResourceSnapshot = z.infer<typeof sidecarResourceSnapshotSchema>;
 
+export function blocksSidecarUpgrade(resource: SidecarResourceSnapshot): boolean {
+  return resource.state !== "idle" || resource.blockers.length > 0;
+}
+
 export const sidecarServiceStatusSchema = z.strictObject({
   scope: sidecarServiceScopeSchema,
   serviceIncarnation: identity,

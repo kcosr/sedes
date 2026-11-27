@@ -232,14 +232,45 @@ describe("Antigravity persistent sidecar", () => {
     const { port } = proxy(f, () => connected.lease);
     await port.connect();
     const host = (await f.hosts.lookup(f.configuration, connected.epoch))!;
-    const resource = () => f.services.status().resources.find(value => value.resourceId === host.runtimeId);
-    expect(resource()).toEqual({ resourceId: host.runtimeId, kind: "provider", state: "idle", revision: host.snapshot().revision, blockers: [] });
+    const resourceId = `antigravity:${host.runtimeId}`;
+    const resource = () => f.services.status().resources.find(value => value.resourceId === resourceId);
+    expect(resource()).toEqual({ resourceId, kind: "provider", state: "idle", revision: host.snapshot().revision, blockers: [] });
     await port.create({ cwd: f.cwd, operationId: "create" });
     const retained = host.snapshot();
     expect(retained.retainedSessions).toHaveLength(1);
     expect(retained.blockers).toContain("unsettled_outcome");
-    expect(resource()).toEqual({ resourceId: host.runtimeId, kind: "provider", state: retained.state,
+    expect(resource()).toEqual({ resourceId, kind: "provider", state: retained.state,
       revision: retained.revision, blockers: retained.blockers });
+  });
+  it("refreshes stale child work for replacement and waits for the exact child's terminal continuation", async () => {
+    const f = await fixture(), connected = await attachment(f), { port } = proxy(f, () => connected.lease);
+    const identity = await port.create({ cwd: f.cwd, operationId: "create" });
+    await port.acknowledgeCreation({ ...identity, operationId: "create" });
+    const child = "8a54e222-1000-4000-8000-000000000002";
+    const launch = { index: 0, type: 132, status: 3, hasSubtrajectory: false };
+    const read = (state: "active" | "terminal", remaining: AntigravityHistory["native"]["steps"], revision: string) =>
+      f.readHistory.mockResolvedValue({ ...identity, native: { executions: [], revision: revision.repeat(64),
+        steps: [{ ...launch, subagents: [{ sessionId: child, state }] }, ...remaining] } });
+    const resource = () => f.services.status().resources[0]!;
+    const stop = () => f.services.stop({ expectedServiceIncarnation: f.services.serviceIncarnation, controllerEpoch: connected.epoch,
+      expectedConfiguration: serviceConfiguration, expectedResourcesFingerprint: f.services.status().resourcesFingerprint, force: false, reason: "upgrade" });
+    read("active", [], "b");
+    await port.inspect();
+    expect(resource().blockers).toEqual(["active_work"]);
+    await expect(stop()).rejects.toThrow("sidecar_service_upgrade_blocked");
+    read("terminal", [], "c");
+    expect((await f.services.refreshStatus()).resources[0]!.blockers).toContain("active_work");
+    // A foreground terminal without the child's matching delivery is still busy.
+    const terminal = { index: 2, type: 15, status: 3, hasSubtrajectory: false,
+      response: { text: "Done", thinking: "", stopReason: 2, toolCalls: [] } };
+    read("terminal", [terminal], "d");
+    await expect(stop()).rejects.toThrow("sidecar_service_upgrade_blocked");
+    read("terminal", [{ index: 1, type: 101, status: 3, hasSubtrajectory: false,
+      continuation: { id: "child-finished", kind: "agent_message", sender: child, recipient: identity.sessionId, content: "Done" } }, terminal], "e");
+    expect(resource().state).toBe("active");
+    expect((await f.services.refreshStatus()).resources[0]).toMatchObject({ state: "idle", blockers: [] });
+    await stop();
+    expect(f.services.status()).toMatchObject({ state: "stopped", resources: [] });
   });
   it("keeps a turn alive across controller loss and resumes exact retained outcomes", async () => {
     const f = await fixture(); const first = await attachment(f); let current = first.lease;
@@ -266,6 +297,18 @@ describe("Antigravity persistent sidecar", () => {
     // current-configuration lookup; it never starts a competing runtime.
     await resumed.port.request({ handleId: original.handleId, operationId: "send", command: { type: "prompt", prompt: [{ type: "text", text: "hello" }] } });
     await vi.waitFor(async () => expect(await resumed.port.outcome({ handleId: original.handleId, operationId: "send" })).toMatchObject({ status: "completed" }));
+    expect(f.createHost).toHaveBeenCalledOnce();
+  });
+  it("refuses to inspect a different native profile for a fresh proxy during upgrade reconciliation", async () => {
+    const f = await fixture(), connected = await attachment(f);
+    const original = proxy(f, () => connected.lease);
+    await original.port.create({ cwd: f.cwd, operationId: "create" });
+    const configuration = { ...f.configuration, geminiDirectory: "/other-profile" };
+    const runtime = { acquire: vi.fn(), acquireExisting: vi.fn(async () => connected.lease) };
+    const current = new AntigravityRemotePort({ configuration, sidecarRuntime: runtime });
+    cleanup.push(() => current.close());
+    await expect(current.inspect()).rejects.toMatchObject({ code: "antigravity_configuration_scope_denied" });
+    expect(runtime.acquire).not.toHaveBeenCalled();
     expect(f.createHost).toHaveBeenCalledOnce();
   });
   it("fences a changed service incarnation rather than ensuring a replacement runtime", async () => {
