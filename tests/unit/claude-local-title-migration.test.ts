@@ -76,6 +76,8 @@ it("restores each Claude thread's latest successful rename and preserves unrelat
   const draft = f.create("Draft");
   f.draftRename(draft, "Draft name to retain", 130);
   const untouched = f.create("Generated");
+  f.bindings.bindDiscoveredConversation(f.scope, untouched, { backendConversationId: randomUUID(), now: 135 });
+  f.nativeReceipt(untouched, "Superseded title", 140, true);
   f.nativeReceipt(untouched, "Unconfirmed only", 150, false);
   const missingTitle = f.nativeReceipt(untouched, "No retained title", 160, true);
   f.database.prepare("UPDATE mutation_receipts SET result_json = '{}' WHERE mutation_id = ?").run(missingTitle);

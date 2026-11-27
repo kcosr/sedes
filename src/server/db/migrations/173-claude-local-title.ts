@@ -24,19 +24,18 @@ WITH successful_renames AS (
      OR (r.operation_kind = 'conversation_rename' AND r.result_code = 'accepted')
 ), ranked_titles AS (
   SELECT tenant_id, principal_id, thread_id, json_extract(result_json, title_path) AS title,
+    json_type(result_json, title_path) AS title_type,
     row_number() OVER (
       PARTITION BY tenant_id, principal_id, thread_id ORDER BY created_at DESC, receipt_order DESC
     ) AS rank
   FROM successful_renames
-  WHERE json_type(result_json, title_path) = 'text'
-    AND length(json_extract(result_json, title_path)) BETWEEN 1 AND 240
-    AND trim(json_extract(result_json, title_path)) <> ''
 )
 SELECT r.tenant_id, r.principal_id, r.thread_id, r.title, thread.title <> r.title AS changed
 FROM ranked_titles AS r
 JOIN application_threads AS thread
   ON (thread.tenant_id, thread.owner_principal_id, thread.id) = (r.tenant_id, r.principal_id, r.thread_id)
-WHERE r.rank = 1;
+-- A newer successful rename supersedes all previous names even if its title was lost.
+WHERE r.rank = 1 AND r.title_type = 'text' AND length(r.title) BETWEEN 1 AND 240 AND trim(r.title) <> '';
 
 UPDATE claude_thread_settings SET local_title_override = 1
 WHERE (tenant_id, owner_principal_id, application_thread_id) IN

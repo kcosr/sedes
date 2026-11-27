@@ -652,8 +652,9 @@ thread and automation tools publish new schemas. See
 [agent tool contracts](../internals/agent-tools.md#catalog-and-effects).
 
 Migration 173 restores each Claude thread’s most recent successful Sedes
-rename from the records retained in `overlay.sqlite`. The migration runs
-entirely in SQLite and works while Claude is offline.
+rename when its record in `overlay.sqlite` contains the title. This can
+replace a newer name set in Claude Code. To change a restored name, rename
+the thread in Sedes. The migration works while Claude is offline.
 
 Before an upgrade:
 
