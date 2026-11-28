@@ -373,6 +373,11 @@ prefix or owner invalidates it. Missing active execution alone cannot settle an
 unfinished period: an orphan remains disconnected/in-progress until native
 terminal evidence arrives. Settings-only suffixes do not claim running ownership.
 
+A disconnected local daemon is eligible for the offline archive exception
+after its owned process has exited or its configured external loopback endpoint
+refuses a fresh connection. The external check sends no credentials.
+HTTP errors, timeouts, and identity changes leave activity unconfirmed.
+
 Historical settlement and archive safety are separate. A synchronized handle can
 authorize archive retirement of an inactive unfinished period when its current
 native inventories are empty and no Sedes input evidence remains unresolved.

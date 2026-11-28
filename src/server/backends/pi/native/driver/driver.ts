@@ -430,15 +430,15 @@ export class PiNativeConversationDriver implements ConversationBackendDriver {
     });
     input.signal.throwIfAborted();
     if (inspection === undefined) return { outcome: "offline" };
-    if (!inspection) return { outcome: unresolved() || input.retainedOwner ? "inconclusive" : "released" };
-    const retained = inspection.retainedSessions.find(session => session.sessionId === native.sessionId || session.sessionFile === native.sessionFile);
-    if (!retained) return { outcome: unresolved() || input.retainedOwner ? "inconclusive" : "released" };
+    const lostOwner = { outcome: "inconclusive", reason: "Pi’s original session is unavailable. Sedes needs that session to confirm its retained output before archiving." } as const;
+    const retained = inspection?.retainedSessions.find(session => session.sessionId === native.sessionId || session.sessionFile === native.sessionFile);
+    if (!retained) return input.retainedOwner ? lostOwner : { outcome: unresolved() ? "inconclusive" : "released" };
     if (retained.sessionId !== native.sessionId || retained.sessionFile !== native.sessionFile || retained.cwd !== native.cwd) {
       throw reject("pi_native_session_identity_mismatch");
     }
     input.markObserved();
     const owner = archiveOwner(retained);
-    if (input.retainedOwner && input.retainedOwner !== owner) return { outcome: "inconclusive" };
+    if (input.retainedOwner && input.retainedOwner !== owner) return lostOwner;
     const pending = retained.throughSequence > retained.retainedAfterSequence || retained.retainedOperationIds.length > 0;
     if (pending) input.markRetained(owner);
     const target = archiveTarget(retained);
@@ -549,6 +549,7 @@ export class PiNativeConversationDriver implements ConversationBackendDriver {
       }
       await nativeCall(() => handle.close());
       if (archive && acknowledged) archive.input.markSettled(archive.owner);
+      if (!archive && !preparation) handle.confirmInheritedArchiveCut();
     } finally { this.#attaching.delete(native.sessionId); }
   }
   async reconcileSubmission(input: ReconcileSubmissionInput): Promise<SubmissionReconciliation> {
@@ -755,11 +756,23 @@ class PiNativeConversationHandle implements ConversationHandle {
   #draining = false;
   #providerClosed = false;
   #archive?: PrepareConversationArchiveInput;
-  readonly #retainedArchiveOwner?: string;
+  #retainedArchiveOwner?: string;
   #archiveSnapshotApplied = false;
   get archiveSnapshotApplied(): boolean { return this.#archiveSnapshotApplied; }
   get archiveOutputApplied(): boolean {
     return this.#archiveSnapshotApplied && this.#eventCheckpoint.acknowledged >= Math.max(this.#afterSequence, this.attachment.throughSequence) && this.#retainedOperationIds.size === 0;
+  }
+  /** Only the output already present when this handle took ownership belongs to the
+   * interrupted archive. Later live work keeps its normal completion effects. */
+  confirmInheritedArchiveCut(): void {
+    if (this.#archive || !this.#retainedArchiveOwner || !this.#archiveSnapshotApplied ||
+        this.#eventCheckpoint.acknowledged < this.attachment.throughSequence ||
+        this.attachment.retainedOperationIds.some(id => this.#retainedOperationIds.has(id))) return;
+    this.driver.options.archiveRecovery!.acknowledge(this.binding.applicationThreadId, this.#retainedArchiveOwner);
+    this.#retainedArchiveOwner = undefined;
+  }
+  #confirmOrdinaryCut(): void {
+    if (!this.#draining && !this.#controlOnly) this.confirmInheritedArchiveCut();
   }
   #recoveryNotice?: { readonly notice: RuntimeNotice; readonly observed: () => void };
   #controlOnly: boolean;
@@ -843,6 +856,7 @@ class PiNativeConversationHandle implements ConversationHandle {
           ?? this.driver.options.operations.getOperation(this.input.scope, this.binding.applicationThreadId, base);
         if (operation?.state === "completed") await this.#acknowledge([id]);
       }
+      this.#confirmOrdinaryCut();
       if (!drainRetained && !this.#controlOnly) {
         this.driver.options.settings.syncObserved?.(this.input.scope, this.binding.applicationThreadId, capabilities(this.#settings, this.#state, Boolean(this.driver.options.outputArtifacts)).effectiveSettings);
         if (this.#state.isIdle === true) await this.#applyIdleSettings();
@@ -1050,7 +1064,7 @@ class PiNativeConversationHandle implements ConversationHandle {
         next.snapshot.itemsById[item.backendItemId] = item;
         if (!turn.orderedBackendItemIds.includes(item.backendItemId)) turn.orderedBackendItemIds.push(item.backendItemId);
       }
-      if (this.#archive || this.#retainedArchiveOwner) {
+      if (this.#archive || (this.#retainedArchiveOwner && (this.#draining || !this.#archiveSnapshotApplied))) {
         this.#archiveSnapshotApplied = false;
         const completed = next.snapshot.orderedBackendTurnIds.filter(id => next.snapshot.turnsById[id]!.endedBy !== undefined);
         if (this.#archive) {
@@ -1208,6 +1222,7 @@ class PiNativeConversationHandle implements ConversationHandle {
       await this.port.acknowledge({ handleId: this.attachment.handleId, throughSequence }, this.#lifetime.signal);
       this.#eventCheckpoint.acknowledge(throughSequence);
     }
+    this.#confirmOrdinaryCut();
     if (page.closed && !this.#draining) { this.#requestReplacement("observer_closed"); this.#lifetime.abort(); }
     return page;
   }
@@ -1768,6 +1783,7 @@ class PiNativeConversationHandle implements ConversationHandle {
         }
       }
     }
+    this.#confirmOrdinaryCut();
   }
   #completedOutcome(record: PiNativeOperationRecord): "accepted" | "not_applied" {
     return record.receiptJson && object(JSON.parse(record.receiptJson)).outcome === "not_applied" ? "not_applied" : "accepted";
@@ -2045,10 +2061,7 @@ class PiNativeConversationHandle implements ConversationHandle {
             // The host's bounded receipt of a retired handle may have aged out.
             if (!(this.#sessionRetired && cause instanceof PiNativeError && cause.code === "pi_native_session_unknown")) throw cause;
           }
-          if (!this.#archive && this.#retainedArchiveOwner && cleanupSucceeded && this.archiveOutputApplied &&
-              !this.driver.options.operations.hasUnresolvedOperations(this.input.scope, this.binding.applicationThreadId)) {
-            this.driver.options.archiveRecovery!.acknowledge(this.binding.applicationThreadId, this.#retainedArchiveOwner);
-          }
+          if (cleanupSucceeded) this.#confirmOrdinaryCut();
           forgetNativeObservations(this.port, this.attachment.handleId); released = true;
         }
         finally { this.release(cleanupSucceeded && released); }

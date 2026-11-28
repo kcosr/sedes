@@ -412,6 +412,12 @@ but recovery rejects those responses. The shared Stop descriptor does not depend
 on whether new input is supported; an idle session without an active turn does
 not advertise Stop merely because retained obligations remain.
 
+When a normal open recovers an interrupted archive, it applies the initial
+snapshot and clears the exact retained-owner marker after acknowledging the
+event prefix and native operations present at attachment. Later completions
+take the normal notification and automation paths. A missing or replaced
+owner cannot discharge a marker whose original output remains unconfirmed.
+
 Attached drivers acknowledge durable event prefixes during a run after applying
 the authenticated companion snapshot. A message or tool-progress prefix remains
 retained until the snapshot contains its exact completed message or tool result;

@@ -348,8 +348,11 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
   async #existingNative(signal: AbortSignal): Promise<NativeRuntime | undefined> {
     signal.throwIfAborted();
     this.#assertOpen();
-    const owner = this.#owner;
-    if (!owner) return undefined;
+    const owner = this.#owner ?? (this.context.sidecarRuntime ? await this.#native() : undefined);
+    if (!owner) {
+      if (this.configuration.connection.ownership === "owned" && !this.#opening) return undefined;
+      throw new OpenCodeRuntimeError("opencode_runtime_owner_unproved");
+    }
     if (owner instanceof OpenCodeRemoteRuntime) {
       if (owner.snapshot().state !== "ready") {
         try { await owner.startRetained(signal); }
@@ -360,9 +363,10 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
         }
       }
     } else {
-      const state = owner.snapshot().state;
-      if (state === "stopped" || state === "disconnected") return undefined;
-      if (state !== "ready") throw new OpenCodeRuntimeError("opencode_runtime_owner_unproved");
+      if (owner.snapshot().state !== "ready") {
+        if (owner instanceof OpenCodeRuntime && await owner.archiveDaemonUnavailable(signal)) return undefined;
+        throw new OpenCodeRuntimeError("opencode_runtime_owner_unproved");
+      }
     }
     this.#assertOpen();
     return owner;

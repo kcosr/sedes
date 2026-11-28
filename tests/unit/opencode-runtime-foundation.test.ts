@@ -363,6 +363,40 @@ describe.skipIf(process.platform !== "linux")("OpenCode native store and externa
     expect(fixture.requests.every(value => value === "GET /api/info" || value === "GET /api/event")).toBe(true);
     stillRunning.close();
   });
+  it.each(["owned", "external"] as const)("requires current offline proof after an unhealthy %s identity probe during archive", async ownership => {
+    const root = await directory(), store = path.join(root, "opencode.db"); await writeFile(store, "native history");
+    const fixture = await server(), http = servers.at(-1)!;
+    let exited!: () => void;
+    if (ownership === "owned") {
+      vi.spyOn(ownedProcesses, "startOpenCodeOwnedProcess").mockResolvedValue({ pid: process.pid,
+        executablePath: process.execPath, runtimeVersion: "2.3.0", endpoint: fixture.endpoint,
+        client: new OpenCodeHttpClient({ endpoint: fixture.endpoint, password }), shellEnvironment: {},
+        exited: new Promise<void>(resolve => { exited = resolve; }), stop: async () => {} });
+    }
+    const runtime = new OpenCodeRuntime({ hostIncarnation: "fixture-host", authority, nativeStorePath: store,
+      ownershipDirectory: root, environment: {}, externalPassword: async () => password,
+      connection: ownership === "owned" ? { ownership, channel: { type: "process_stdio" } }
+        : { ownership, channel: { type: "http", url: fixture.endpoint } } });
+    const signal = AbortSignal.timeout(5_000);
+    try {
+      await runtime.start();
+      http.removeAllListeners("request");
+      http.on("request", (request, response) => {
+        if (request.method === "HEAD") expect(request.headers.authorization).toBeUndefined();
+        response.writeHead(503).end();
+      });
+      await expect(runtime.assertCurrent()).rejects.toThrow("opencode_runtime_identity_changed");
+      expect(runtime.snapshot().state).toBe("disconnected");
+      expect(await runtime.archiveDaemonUnavailable(signal)).toBe(false);
+      if (ownership === "owned") {
+        exited(); await Promise.resolve();
+      } else {
+        http.closeAllConnections();
+        await new Promise<void>(resolve => http.close(() => resolve()));
+      }
+      expect(await runtime.archiveDaemonUnavailable(signal)).toBe(true);
+    } finally { await runtime.close(); }
+  });
   it("does not revoke a healthy native owner when one identity probe is cancelled", async () => {
     const root = await directory(); const store = path.join(root, "opencode.db"); await writeFile(store, "native history");
     const fixture = await server();

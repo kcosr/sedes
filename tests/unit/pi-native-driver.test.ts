@@ -1717,7 +1717,9 @@ describe("native Pi driver", () => {
       fixture.port.inspectExisting = async () => null;
       const originalOwner = input.markRetained.mock.calls[0]![0];
       expect(typeof originalOwner).toBe("string");
-      await expect(driver.prepareArchive({ ...input, retainedOwner: originalOwner })).resolves.toEqual({ outcome: "inconclusive" });
+      await expect(driver.prepareArchive({ ...input, retainedOwner: originalOwner })).resolves.toMatchObject({
+        outcome: "inconclusive", reason: expect.stringContaining("original session"),
+      });
     }
     const target = { ...native, expectedOwner: { handleId: original.handleId, generation: original.generation } };
     for (const call of vi.mocked(fixture.port.retireSession).mock.calls) expect(call).toEqual([target, input.signal]);
@@ -1746,10 +1748,15 @@ describe("native Pi driver", () => {
     fixture.port.acknowledge = vi.fn(async () => { order.push("ack"); });
     const handle = await driver.attach(conversation);
     await vi.waitFor(() => expect(fixture.port.acknowledge).toHaveBeenCalledOnce());
-    expect(marker).toBeTypeOf("string");
+    expect(order).toEqual(["settle", "ack", "clear"]);
+    expect(marker).toBeNull();
+    const live: BackendConversationEvent[] = [];
+    handle.subscribe(event => live.push(event));
+    fixture.state = { ...fixture.state, entries: [user("later", null), answer("answered", "later")], leafId: "answered" };
+    fixture.push({ kind: "companion", payload: { type: "state_changed" } });
+    await vi.waitFor(() => expect(live.find(event => event.type === "turn_completed")).toMatchObject({ turn: { backendTurnId: "later" } }));
+    expect(order.filter(entry => entry === "settle")).toHaveLength(1);
     await handle.close();
-    expect(order.indexOf("settle")).toBeLessThan(order.indexOf("ack"));
-    expect(order.at(-1)).toBe("clear"); expect(marker).toBeNull();
     fixture.port.inspectExisting = async () => null;
     await expect(driver.prepareArchive(request)).resolves.toEqual({ outcome: "released" });
   });

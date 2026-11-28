@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { OpenCodeIdentityProofScope } from "./opencode-identity-proof.js";
 import path from "node:path";
 import { z } from "zod";
-import { OpenCodeHttpClient } from "./opencode-http-client.js";
+import { OpenCodeHttpClient, openCodeEndpointRefused } from "./opencode-http-client.js";
 import { boundedOpenCodeProcessFile, canonicalOpenCodeStore, readOpenCodeNativeIdentity, sameOpenCodeNativeIdentity, type OpenCodeNativeIdentity } from "./opencode-native-identity.js";
 import { openCodeNativeStoreNamespaceKey } from "./opencode-native-store.js";
 import { createOpenCodeRuntimeOwnershipLifecycle, openCodeRuntimeAuthorityKey, type OpenCodeRuntimeOwnershipLease } from "./opencode-runtime-ownership.js";
@@ -88,6 +88,7 @@ export class OpenCodeRuntime {
     readonly host: OpenCodeNativeHost; readonly port: OpenCodeNativePort }>();
   readonly #runtimeId = randomUUID();
   #owned?: OpenCodeOwnedProcess;
+  #exitedOwner?: OpenCodeOwnedProcess;
   #retryLaunchCleanup?: () => Promise<void>;
   #lease?: OpenCodeRuntimeOwnershipLease;
   #references = 0;
@@ -108,6 +109,13 @@ export class OpenCodeRuntime {
   get nativeNamespaceKey(): string {
     if (!this.#nativeNamespaceKey) throw new OpenCodeRuntimeError("opencode_runtime_not_started");
     return this.#nativeNamespaceKey;
+  }
+
+  async archiveDaemonUnavailable(signal: AbortSignal): Promise<boolean> {
+    signal.throwIfAborted();
+    if (this.#state !== "disconnected" && this.#state !== "stopped") return false;
+    if (this.#input.connection.ownership === "external") return openCodeEndpointRefused(this.#input.connection.channel.url, signal);
+    return this.#state === "stopped" || (this.#owned !== undefined && this.#owned === this.#exitedOwner);
   }
 
   get runtimeId(): string { return this.#runtimeId; }
@@ -283,6 +291,7 @@ export class OpenCodeRuntime {
       const owned = this.#owned;
       if (owned) void owned.exited.then(() => {
         if (this.#owned !== owned || this.#stopping) return;
+        this.#exitedOwner = owned;
         this.#state = "disconnected";
         this.#input.onRuntimeVersionAssessment?.(undefined);
         this.#client?.close();
@@ -416,7 +425,7 @@ export class OpenCodeRuntime {
     this.#client?.close();
     try { await this.#owned?.stop(); await this.#releaseStore(); }
     catch { this.#state = "cleanup_unproved"; throw new OpenCodeRuntimeError("opencode_owned_cleanup_unproved"); }
-    this.#owned = undefined;
+    this.#owned = undefined; this.#exitedOwner = undefined;
     this.#host = undefined; this.#adapter = undefined; this.#tools = undefined;
     this.#client = undefined;
     this.#identity = undefined;
