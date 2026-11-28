@@ -114,6 +114,59 @@ describe("thread rename outcomes", () => {
     },
   );
 
+  it("dismisses an uncertain editor and an in-flight check without forgetting or superseding the submitted title", async () => {
+    const { store, renameThread } = fixture();
+    const unknown = {
+      status: "recovery_required" as const,
+      retryable: false,
+      diagnostic: "Not confirmed",
+    };
+    let finishCheck!: () => void;
+    renameThread
+      .mockResolvedValueOnce(unknown)
+      .mockImplementationOnce(async () => {
+        await new Promise<void>((resolve) => {
+          finishCheck = resolve;
+        });
+        return unknown;
+      });
+    const view = render(<Editor store={store} />);
+    fireEvent.click(screen.getByText("Rename sidebar"));
+    fireEvent.change(input(), { target: { value: "My title" } });
+    submit();
+    await screen.findByRole("alert");
+    fireEvent.keyDown(input(), { key: "Escape" });
+    expect(screen.getByText("Rename sidebar")).toBeEnabled();
+    expect(screen.queryByRole("textbox")).toBeNull();
+    view.rerender(<Editor store={store} thread={latest} />);
+    fireEvent.click(screen.getByText("Rename sidebar"));
+    expect(input()).toHaveValue("My title");
+    expect(input()).toHaveAttribute("readonly");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Check rename status" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByRole("textbox")).toBeNull();
+    finishCheck();
+    view.rerender(<Editor store={store} thread={latest} surface="header" />);
+    fireEvent.click(screen.getByText("Rename header"));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Check rename status" }),
+    );
+    await waitFor(() => expect(screen.queryByRole("textbox")).toBeNull());
+    const first = renameThread.mock.calls[0];
+    expect(first).toEqual([
+      initial.id,
+      "My title",
+      initial.threadRevision,
+      expect.any(String),
+    ]);
+    expect(renameThread.mock.calls).toEqual([first, first, first]);
+    fireEvent.click(screen.getByText("Rename header"));
+    expect(input()).not.toHaveAttribute("readonly");
+    expect(input()).toHaveValue(latest.title.text);
+  });
+
   it("requires an explicit new edit after a rejection and submits against the displayed current revision", async () => {
     const { store, renameThread } = fixture();
     renameThread.mockRejectedValueOnce(

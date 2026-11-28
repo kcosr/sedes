@@ -128,12 +128,15 @@ function openTasks(rootTotal = 0, descendantTotal = 0) {
 function deferred<T>(): {
   readonly promise: Promise<T>;
   readonly resolve: (value: T) => void;
+  readonly reject: (reason: Error) => void;
 } {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((accepted) => {
+  let reject!: (reason: Error) => void;
+  const promise = new Promise<T>((accepted, refused) => {
     resolve = accepted;
+    reject = refused;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 function makeStore(): ApplicationClientStore & {
@@ -2693,6 +2696,32 @@ describe("sidebar row archive control", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Archive request failed");
     expect(screen.getByRole("dialog", { name: "Could not archive thread" })).toHaveTextContent(thread.title.text);
   });
+
+  it.each(["still selected", "navigated away"] as const)(
+    "handles a successful explicit retry after a dismissed archive lost its reply (%s)",
+    async (selection) => {
+      const thread = makeThread();
+      window.history.replaceState(null, "", `/threads/${thread.id}`);
+      const { state, store } = sidebarFixture(thread);
+      const first = deferred<string[]>();
+      const retry = deferred<string[]>();
+      store.archiveThreads.mockReturnValueOnce(first.promise).mockReturnValueOnce(retry.promise);
+      const onNavigate = vi.fn();
+      render(<InventorySidebar state={state} store={store} selectedThreadId={thread.id}
+        onNavigate={onNavigate} onOpenSettings={() => undefined} />);
+      await userEvent.click(screen.getByTestId("thread-row-archive"));
+      await waitFor(() => expect(store.archiveThreads).toHaveBeenCalledOnce());
+      await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+      await act(async () => { first.reject(new Error("Lost archive response")); });
+      await userEvent.click(await screen.findByRole("button", { name: "Retry confirmed archive" }));
+      await waitFor(() => expect(store.archiveThreads).toHaveBeenCalledTimes(2));
+      expect(store.archiveThreads.mock.calls[1]).toEqual(store.archiveThreads.mock.calls[0]);
+      if (selection === "navigated away") window.history.replaceState(null, "", "/threads/other");
+      await act(async () => { retry.resolve([thread.id]); });
+      expect(window.location.pathname).toBe(selection === "still selected" ? "/" : "/threads/other");
+      expect(onNavigate).toHaveBeenCalledTimes(selection === "still selected" ? 1 : 0);
+    },
+  );
 
   it("disables family archive when the authoritative impact reports a blocked descendant", async () => {
     const thread = makeThread();

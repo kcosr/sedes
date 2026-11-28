@@ -61,6 +61,7 @@ export interface ThreadArchiveStart {
 
 export interface ThreadArchiveOperation extends ThreadArchiveStart {
   readonly id: number;
+  readonly retryConfirmed: () => Promise<void>;
   readonly result?:
     | { readonly kind: "choices"; readonly impact: ThreadArchiveImpact }
     | { readonly kind: "error"; readonly message: string };
@@ -166,6 +167,10 @@ class ThreadArchiveOperations {
       ...options,
       id: ++this.#nextId,
       onPendingChange: setPending,
+      retryConfirmed: () => {
+        this.closeResult(operation.id);
+        return this.start(options);
+      },
       onArchived: (choice, ids) => {
         if (!dismissed) options.onArchived?.(choice, ids);
       },

@@ -10,7 +10,7 @@ type Thread = Pick<
 >;
 type Phase = "editing" | "submitting" | "uncertain" | "rejected";
 interface Edit {
-  readonly surface: string;
+  readonly surface: string | null;
   readonly original: string;
   readonly revision: number;
   readonly text: string;
@@ -61,13 +61,16 @@ class ThreadRenames {
     if (edit?.surface === surface && edit.phase === "editing")
       this.set(id, { ...edit, text });
   }
-  cancel(id: string, surface: string) {
+  dismiss(id: string, surface: string) {
     const edit = this.get(id);
-    if (
-      edit?.surface === surface &&
-      (edit.phase === "editing" || edit.phase === "rejected")
-    )
+    if (!edit || edit.surface !== surface) return;
+    if (edit.phase === "submitting" || edit.phase === "uncertain") {
+      // Leave the row usable while keeping the exact submitted operation for
+      // a later status check, including one whose response is still in flight.
+      this.set(id, { ...edit, surface: null });
+    } else {
       this.set(id);
+    }
   }
   restart(thread: Thread, surface: string) {
     const edit = this.get(thread.id);
@@ -163,7 +166,7 @@ export function useThreadRename(
     check: () => {
       void renames.submit(thread.id, surface, true);
     },
-    cancel: () => renames.cancel(thread.id, surface),
+    dismiss: () => renames.dismiss(thread.id, surface),
     restart: () => renames.restart(thread, surface),
     currentTitle: thread.title.text,
   };
@@ -184,9 +187,21 @@ export function ThreadRenameEditor({
 }) {
   const inputId = useId();
   const edit = rename.edit!;
-  const hasFeedback = edit.phase === "uncertain" || edit.phase === "rejected";
+  const hasFeedback = edit.phase !== "editing";
+  const dismiss = () => {
+    onKeyboardFinish();
+    rename.dismiss();
+  };
   return (
-    <div className={hasFeedback ? "grid w-full min-w-0 gap-1" : "contents"}>
+    <div
+      className={hasFeedback ? "grid w-full min-w-0 gap-1" : "contents"}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          event.stopPropagation();
+          dismiss();
+        }
+      }}
+    >
       <form
         className={className}
         onSubmit={(event) => {
@@ -210,32 +225,36 @@ export function ThreadRenameEditor({
           aria-busy={edit.phase === "submitting"}
           onChange={(event) => rename.update(event.target.value)}
           onBlur={rename.submit}
-          onKeyDown={(event) => {
-            if (
-              event.key === "Escape" &&
-              (edit.phase === "editing" || edit.phase === "rejected")
-            ) {
-              event.stopPropagation();
-              onKeyboardFinish();
-              rename.cancel();
-            }
-          }}
         />
       </form>
       {hasFeedback && (
-        <div className="thread-row-error" role="alert">
-          <p>{edit.message}</p>
-          {edit.phase === "uncertain" ? (
-            <Button size="sm" onClick={rename.check}>
-              Check rename status
-            </Button>
+        <div
+          className="thread-row-error"
+          role={edit.phase === "submitting" ? "status" : "alert"}
+        >
+          <p>
+            {edit.phase === "submitting"
+              ? "Waiting for title confirmation…"
+              : edit.message}
+          </p>
+          {edit.phase === "submitting" || edit.phase === "uncertain" ? (
+            <>
+              {edit.phase === "uncertain" && (
+                <Button size="sm" onClick={rename.check}>
+                  Check rename status
+                </Button>
+              )}
+              <Button size="sm" variant="ghost" onClick={dismiss}>
+                Dismiss
+              </Button>
+            </>
           ) : (
             <>
               <p>Current title: {rename.currentTitle || "Untitled thread"}</p>
               <Button size="sm" onClick={rename.restart}>
                 Edit again
               </Button>
-              <Button size="sm" variant="ghost" onClick={rename.cancel}>
+              <Button size="sm" variant="ghost" onClick={dismiss}>
                 Cancel
               </Button>
             </>

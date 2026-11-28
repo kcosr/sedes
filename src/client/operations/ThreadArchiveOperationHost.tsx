@@ -52,10 +52,9 @@ function ArchiveResult({ store, operation }: {
         <DialogBody><DialogAlert id={errorId} tone="danger">{error}</DialogAlert></DialogBody>
         <DialogFooter>
           <Button variant="outline" onClick={close}>Close</Button>
-          {operations.confirmed(thread.id) && <Button onClick={() => {
-            close();
-            void operations.start(operation);
-          }}>Retry confirmed archive</Button>}
+          {operations.confirmed(thread.id) && <Button onClick={() => void operation.retryConfirmed()}>
+            Retry confirmed archive
+          </Button>}
         </DialogFooter>
       </DialogContent>
     </Dialog>

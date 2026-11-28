@@ -310,6 +310,14 @@ test("desktop and mobile sidebar actions preserve the running thread while updat
         await page.getByRole("button", { name: "Open thread navigation" }).click();
         await expect(editor).toHaveValue(desiredTitle);
         await expect(editor).not.toBeEditable();
+        await sidebar.getByRole("button", { name: "Dismiss", exact: true }).click();
+        await expect(editor).toBeHidden();
+        await expect(row.getByTestId("thread-row-link")).toBeVisible();
+        const reopened = await openMenu();
+        await expect(reopened.getByRole("menuitem", { name: "Archive", exact: true })).toBeEnabled();
+        await reopened.getByRole("menuitem", { name: "Rename", exact: true }).click();
+        await expect(editor).toHaveValue(desiredTitle);
+        await expect(editor).not.toBeEditable();
         await sidebar.getByRole("button", { name: "Check rename status" }).click();
       }
       await expect(editor).toBeHidden();
