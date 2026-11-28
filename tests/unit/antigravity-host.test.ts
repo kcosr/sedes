@@ -182,6 +182,16 @@ describe("Antigravity execution host", () => {
     }
     expect(await f.host.retireSession({ ...identity, expected, settledNativeRevision: updated })).toBe("retired");
   });
+  it("reports a pending creation even after a normal consumer drains and closes the ACP session", async () => {
+    const f = await fixture(), operationId = "unacknowledged";
+    const identity = await f.host.create({ cwd: f.cwd, operationId });
+    const attached = (await f.host.attachExisting(identity))!;
+    await drain(f.host, attached.handleId);
+    await f.host.release({ handleId: attached.handleId });
+    expect(await f.host.probeArchiveOwner(identity)).toEqual({ ...identity, pendingCreation: operationId });
+    await f.host.acknowledgeCreation({ ...identity, operationId });
+    expect(await f.host.probeArchiveOwner(identity)).toBeNull();
+  });
   it("retires a proven-closed native session despite passive cache eviction failure", async () => {
     const f = await fixture(), identity = await f.host.create({ cwd: f.cwd, operationId: "create" });
     const { handleId } = await f.host.attach(identity);

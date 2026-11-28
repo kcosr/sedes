@@ -260,6 +260,13 @@ export function mapCodexMutationError(
     );
   }
   if (error instanceof CodexRpcRemoteError) {
+    // A title handler can report an internal failure after the write. Only
+    // overload and JSON-RPC request validation errors prove rejection here.
+    if (operation === "rename" && dispatched &&
+        error.disposition !== "rejected_not_accepted" &&
+        ![-32700, -32600, -32601, -32602].includes(error.code)) {
+      return mutationOutcomeUnknown(operation);
+    }
     if (operation === "interrupt" && error.disposition !== "rejected_not_accepted") {
       return codexError("submission_unknown", "Codex did not confirm whether Stop was applied.",
         "codex_interrupt_outcome_unknown", false, error, true);

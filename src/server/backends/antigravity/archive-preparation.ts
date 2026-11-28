@@ -9,8 +9,8 @@ import { AntigravityUsage } from "./usage.js";
 const busy = { outcome: "busy", reason: "Antigravity still has active work or a pending decision for this thread." } as const;
 const inconclusive = { outcome: "inconclusive", reason: "Sedes could not verify all retained Antigravity output and operation results." } as const;
 
-function sameOwner(expected: AntigravityArchiveOwner, actual: AntigravityArchiveOwner | null): boolean {
-  return actual !== null && actual.handleId === expected.handleId && actual.generation === expected.generation &&
+function sameOwner(expected: AntigravityArchiveOwner, actual: AntigravityArchiveOwner | AntigravityArchiveProbe | null): boolean {
+  return actual !== null && "handleId" in actual && actual.handleId === expected.handleId && actual.generation === expected.generation &&
     actual.sessionId === expected.sessionId && actual.cwd === expected.cwd;
 }
 
@@ -23,18 +23,33 @@ export async function prepareAntigravityArchive(driver: AntigravityDriver, input
     return { outcome: "inconclusive", reason: "The active Antigravity connection is still releasing this thread." };
   }
 
-  let probe: AntigravityArchiveProbe | null;
-  try { probe = await port.probeArchiveOwner(identity, input.signal); }
+  let found: AntigravityArchiveProbe | null;
+  try { found = await port.probeArchiveOwner(identity, input.signal); }
   catch (error) {
     if (!input.signal.aborted && !input.retainedOwner && existingSidecarIsOffline(error)) return { outcome: "offline" };
     return { outcome: "inconclusive", reason: "Sedes could not verify the Antigravity session on its execution host." };
   }
   input.signal.throwIfAborted();
-  if (probe && (probe.sessionId !== identity.sessionId || probe.cwd !== identity.cwd)) {
+  if (found && (found.sessionId !== identity.sessionId || found.cwd !== identity.cwd)) {
     input.markObserved(); return inconclusive;
   }
-  const ownerKey = probe ? createHash("sha256").update(JSON.stringify([probe.sessionId, probe.cwd, probe.handleId, probe.generation])).digest("hex") : undefined;
   const previouslyRetained = input.retainedOwner;
+  const orphan = found && "pendingCreation" in found ? found.pendingCreation : undefined;
+  const outstandingCreation = previouslyRetained?.startsWith("creation:") ? previouslyRetained.slice("creation:".length) : !previouslyRetained ? orphan : undefined;
+  if (outstandingCreation) {
+    // Creation ACKs are retained independently of ACP sessions. Even after a
+    // lost ACK reply the host must confirm the same scoped creation identity.
+    const key = `creation:${outstandingCreation}`;
+    input.markRetained(key);
+    try {
+      if ((orphan && orphan !== outstandingCreation) || !driver.input.archiveReceipts?.creationBound(input, outstandingCreation)) return inconclusive;
+      await port.acknowledgeCreation({ ...identity, operationId: outstandingCreation }, input.signal);
+      input.signal.throwIfAborted(); input.markSettled(key);
+      return prepareAntigravityArchive(driver, { ...input, retainedOwner: undefined });
+    } catch { return inconclusive; }
+  }
+  const probe = found && "handleId" in found ? found : null;
+  const ownerKey = probe ? createHash("sha256").update(JSON.stringify([probe.sessionId, probe.cwd, probe.handleId, probe.generation])).digest("hex") : undefined;
   if (probe && ownerKey && probe.retainedOutput && !previouslyRetained) input.markRetained(ownerKey);
   else if (probe) input.markObserved();
   if (previouslyRetained && previouslyRetained !== ownerKey) {
@@ -43,7 +58,7 @@ export async function prepareAntigravityArchive(driver: AntigravityDriver, input
       if (!retired || retired.ownerKey !== previouslyRetained || retired.history.sessionId !== identity.sessionId || retired.history.cwd !== identity.cwd) return inconclusive;
       const correlations = await settleArchiveHistory(driver, input, retired.history);
       for (const { operation, outcome } of retired.operations) {
-        if (outcome.status === "pending" || !driver.input.archiveReceipts?.apply(input, operation, outcome, correlations.has(operation.operationId), retired.setup)) return inconclusive;
+        if (outcome.status === "pending" || !driver.input.archiveReceipts?.apply(input, previouslyRetained, operation, outcome, correlations.has(operation.operationId), retired.setup)) return inconclusive;
       }
       if (retired.creation) {
         if (!driver.input.archiveReceipts?.creationBound(input, retired.creation)) return inconclusive;
@@ -70,7 +85,7 @@ export async function prepareAntigravityArchive(driver: AntigravityDriver, input
     try {
       const claimed = await port.attachExisting({ ...identity, expected: owner }, input.signal);
       if (!sameOwner(owner, claimed)) return inconclusive;
-      result = await drainArchiveOwner(driver, input, identity, owner);
+      result = await drainArchiveOwner(driver, input, identity, owner, ownerKey);
     } finally {
       // A lost claim reply can still have marked the host attached. Releasing
       // the exact generation never stops a peer or consumes outstanding output.
@@ -84,7 +99,7 @@ export async function prepareAntigravityArchive(driver: AntigravityDriver, input
 }
 
 async function drainArchiveOwner(driver: AntigravityDriver, input: PrepareConversationArchiveInput,
-  identity: AntigravityIdentity, owner: AntigravityArchiveOwner): Promise<ConversationArchivePreparation> {
+  identity: AntigravityIdentity, owner: AntigravityArchiveOwner, ownerKey: string): Promise<ConversationArchivePreparation> {
   const { port, archiveReceipts } = driver.input;
   const { signal } = input;
   while (true) {
@@ -98,6 +113,7 @@ async function drainArchiveOwner(driver: AntigravityDriver, input: PrepareConver
     // ACP deltas supply transient presentation and control hints. All durable
     // transcript/usage effects come from native history. Control outcomes and
     // permission inventory have their own retention independent of event pages.
+    const operationIds = new Set(state.operations.map(operation => operation.operationId));
     let through = state.acknowledged;
     while (through < state.throughSequence) {
       const page = await port.observe({ handleId: owner.handleId, afterSequence: through }, signal);
@@ -106,6 +122,7 @@ async function drainArchiveOwner(driver: AntigravityDriver, input: PrepareConver
           page.throughSequence !== page.events.at(-1)?.sequence) return inconclusive;
       for (const event of page.events) {
         if (event.sequence !== through + 1 ||
+            event.kind === "operation" && !operationIds.has(event.operationId) ||
             event.kind === "update" && event.notification.sessionId !== identity.sessionId ||
             event.kind === "permission" && event.request.sessionId !== identity.sessionId) return inconclusive;
         through = event.sequence;
@@ -121,7 +138,7 @@ async function drainArchiveOwner(driver: AntigravityDriver, input: PrepareConver
       const target = { handleId: owner.handleId, operationId: operation.operationId };
       const outcome = await port.outcome(target, signal);
       if (outcome.status === "pending") return busy;
-      if (!archiveReceipts?.apply(input, operation, outcome, correlations.has(operation.operationId), state.setup)) return inconclusive;
+      if (!archiveReceipts?.apply(input, ownerKey, operation, outcome, correlations.has(operation.operationId), state.setup)) return inconclusive;
       signal.throwIfAborted();
       await port.acknowledgeOperation(target, signal);
     }

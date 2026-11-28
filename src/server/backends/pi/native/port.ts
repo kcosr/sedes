@@ -20,6 +20,10 @@ export interface PiNativeSessionIdentity {
   readonly sessionFile: string;
   readonly cwd: string;
 }
+/** Archive and reconnection can bind maintenance to an already observed process. */
+export interface PiNativeMaintenanceTarget extends PiNativeSessionIdentity {
+  readonly expectedOwner?: Pick<PiNativeAttachment, "handleId" | "generation">;
+}
 export interface PiNativeSessionSummary extends PiNativeSessionIdentity {
   readonly title?: string;
   readonly updatedAt: string;
@@ -138,9 +142,9 @@ export interface PiNativePort {
   readHistory(input: PiNativeSessionIdentity, signal?: AbortSignal): Promise<PiNativeHistory>;
   attach(input: PiNativeAttachInput, signal?: AbortSignal): Promise<PiNativeAttachment>;
   /** Existing residency only; uses its applied environment and never starts a native process. */
-  attachForDrain(input: PiNativeSessionIdentity, signal?: AbortSignal): Promise<PiNativeDrainAttachment | null>;
+  attachForDrain(input: PiNativeMaintenanceTarget, signal?: AbortSignal): Promise<PiNativeDrainAttachment | null>;
   /** Existing live observation gap only; permits explicit Stop and denial, never new work. */
-  attachForControl(input: PiNativeSessionIdentity, signal?: AbortSignal): Promise<PiNativeAttachment | null>;
+  attachForControl(input: PiNativeMaintenanceTarget, signal?: AbortSignal): Promise<PiNativeAttachment | null>;
   request(input: { readonly handleId: string; readonly operationId: string; readonly command: PiNativeCommand; readonly retainOutcome: boolean }, signal?: AbortSignal): Promise<PiNativeOutcome>;
   outcome(input: { readonly handleId: string; readonly operationId: string }, signal?: AbortSignal): Promise<PiNativeOutcome>;
   acknowledgeOperation(input: { readonly handleId: string; readonly operationId: string }, signal?: AbortSignal): Promise<void>;
@@ -152,7 +156,7 @@ export interface PiNativePort {
   acknowledgeObservationGap(input: { readonly handleId: string; readonly generation: string; readonly throughSequence: number }, signal?: AbortSignal): Promise<void>;
   release(input: { readonly handleId: string }, signal?: AbortSignal): Promise<void>;
   /** Proves the exact session process and writer lease retired without discarding work or output. */
-  retireSession(input: PiNativeSessionIdentity, signal?: AbortSignal): Promise<PiNativeRetirement>;
+  retireSession(input: PiNativeMaintenanceTarget, signal?: AbortSignal): Promise<PiNativeRetirement>;
   /** No host, daemon or conversation may be started by this inventory lookup. */
   inspectExisting(signal: AbortSignal): Promise<PiNativeInspection | null>;
   inspect(signal?: AbortSignal): Promise<PiNativeInspection>;

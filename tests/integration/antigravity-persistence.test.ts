@@ -7,6 +7,7 @@ import { ThreadMutationGateway } from "../../src/server/conversations/thread-mut
 import { AntigravityArchiveReceipts } from "../../src/server/backends/antigravity/archive-receipts.js";
 import type { AntigravityArchiveOperation, AntigravityCommand, AntigravitySetup } from "../../src/server/backends/antigravity/port.js";
 import { antigravityAdministration } from "../../src/server/backends/antigravity/runtime-administration.js";
+import { DEFAULT_QUEUE_RETRY_POLICY, QueuedInputRepository } from "../../src/server/db/repositories/queued-input-repository.js";
 import { SubmissionCompletionRepository } from "../../src/server/db/repositories/submission-completion-repository.js";
 import type { AntigravityAttachment, AntigravityInspection, AntigravityPort } from "../../src/server/backends/antigravity/port.js";
 import { ConversationOperationRepository } from "../../src/server/db/repositories/conversation-operation-repository.js";
@@ -175,6 +176,9 @@ describe("Antigravity persistence", () => {
       expect(lost).toHaveBeenCalledTimes(1);
       await expect(driver.prepareArchive(input)).resolves.toEqual({ outcome: "released" });
       expect(savedOwner).toBeUndefined();
+      // The receipt ACK reached the host, while its retained operation event
+      // still needed the same committed disposition on the second request.
+      expect(lost).toHaveBeenCalledTimes(2);
       expect(await host.probeArchiveOwner(identity)).toBeNull();
       expect(completion.get(f.scope, f.thread.id, id)).toMatchObject({ completionOutcome: "completed", assistantResult: { text: "Archived answer" }, attentionCreatedAt: null });
       expect(attach).not.toHaveBeenCalled(); expect(dispatch).not.toHaveBeenCalled();
@@ -199,16 +203,16 @@ describe("Antigravity persistence", () => {
       for (const type of ["prompt", "steer"] as const) {
         const id = randomUUID(), retained = proof(id, { type, prompt: [] });
         completions.recordAccepted(f.scope, f.thread.id, { operationId: id, backendCorrelation: id, acceptedAt: 245 });
-        expect(store.apply(target, retained, complete, true, setup)).toBe(false);
+        expect(store.apply(target, "original", retained, complete, true, setup)).toBe(false);
         completions.observeCompletion(f.scope, f.thread.id, id, { completionIdentity: id, createAttention: false, observedAt: 250,
           finalized: { applicationTurnId: randomUUID(), outcome: "completed", result: { text: "Done" }, classifiedResult: null } });
-        expect(store.apply(target, retained, complete, false, setup)).toBe(false);
-        expect(store.apply(target, retained, complete, true, setup)).toBe(true);
+        expect(store.apply(target, "original", retained, complete, false, setup)).toBe(false);
+        expect(store.apply(target, "original", retained, complete, true, setup)).toBe(true);
       }
       const stop = randomUUID();
       f.operations.prepareInterrupt(f.scope, f.thread.id, { operationId: stop, now: 250 });
       f.operations.markInterruptStarted(f.scope, stop);
-      expect(store.apply(target, proof(stop, { type: "cancel" }), complete, false, setup)).toBe(true);
+      expect(store.apply(target, "original", proof(stop, { type: "cancel" }), complete, false, setup)).toBe(true);
       expect(f.operations.findInterrupt(f.scope, stop)?.state).toBe("accepted");
 
       const permission = randomUUID();
@@ -216,35 +220,50 @@ describe("Antigravity persistence", () => {
         response: { kind: "cancel" }, backendResponse: { applicationOperationId: permission, interactionId: "native", kind: "cancel" }, now: 250 });
       f.operations.markInteractionResponseStarted(f.scope, permission);
       const response = { outcome: { outcome: "cancelled" as const } };
-      expect(store.apply(target, proof(permission, { type: "permission", requestId: "elsewhere", response }), complete, false, setup)).toBe(false);
-      expect(store.apply(target, proof(permission, { type: "permission", requestId: "native", response }), complete, false, setup)).toBe(true);
+      expect(store.apply(target, "original", proof(permission, { type: "permission", requestId: "elsewhere", response }), complete, false, setup)).toBe(false);
+      expect(store.apply(target, "original", proof(permission, { type: "permission", requestId: "native", response }), complete, false, setup)).toBe(true);
       expect(f.operations.findInteractionResponse(f.scope, permission)?.state).toBe("accepted");
 
       const setting = randomUUID();
       const request = { operation: { action: "set_setting" as const, settingId: "model" as const, value: encodeAntigravityModelSetting(binding.connectionProfileId, "model", "low") },
         mutationId: setting, expectedThreadRevision: f.settings.target(f.scope, f.thread.id).revision, expectedSettingsRevision: f.settings.get(f.scope, f.thread.id).revision, now: 250 };
       f.operations.prepareBackendAction(f.scope, f.thread.id, request); f.operations.markBackendActionStarted(f.scope, setting);
-      expect(store.apply(target, proof(setting, { type: "set_config", origin: "thread_action", configId: "wrong", value: "model" }), complete, false, setup)).toBe(false);
+      expect(store.apply(target, "original", proof(setting, { type: "set_config", origin: "thread_action", configId: "wrong", value: "model" }), complete, false, setup)).toBe(false);
       const setConfig = proof(setting, { type: "set_config", origin: "thread_action", configId: "model", value: "model" });
-      expect(store.apply(target, setConfig, complete, false, setup)).toBe(true);
-      expect(store.apply(target, setConfig, complete, false, setup)).toBe(true);
+      expect(store.apply(target, "original", setConfig, complete, false, setup)).toBe(true);
+      expect(store.apply(target, "original", setConfig, complete, false, setup)).toBe(true);
       expect(f.operations.findBackendAction(f.scope, setting)?.state).toBe("accepted");
       expect(f.settings.get(f.scope, f.thread.id)).toMatchObject({ modelId: "model", thinkingLevel: "low", revision: request.expectedSettingsRevision + 1 });
 
       const mode = proof(randomUUID(), { type: "set_mode", origin: "session_configuration", modeId: "plan" });
-      expect(store.apply(target, { ...mode, setterConfirmed: false }, complete, false, setup)).toBe(false);
-      expect(store.apply(target, mode, { status: "failed", failure: { code: "lost", delivery: "sent_outcome_unknown" } }, false, setup)).toBe(false);
-      expect(store.apply(target, mode, complete, false, setup)).toBe(true);
+      expect(store.apply(target, "original", { ...mode, setterConfirmed: false }, complete, false, setup)).toBe(false);
+      expect(store.apply(target, "original", mode, { status: "failed", failure: { code: "lost", delivery: "sent_outcome_unknown" } }, false, setup)).toBe(false);
+      expect(store.apply(target, "original", mode, complete, false, setup)).toBe(true);
       const count = f.database.prepare("SELECT COUNT(*) AS n FROM mutation_receipts WHERE operation_kind = 'antigravity_archive_receipt'").get();
       expect(count).toEqual({ n: 6 });
+
+      const queue = new QueuedInputRepository(f.database);
+      const queuedId = randomUUID();
+      const queued = queue.enqueue(f.scope, f.thread.id, { mutationId: queuedId, text: "Try again", contextExcerpts: [], attachmentIds: [], taskReferences: [],
+        source: { kind: "direct_input", resolvedDeliveryMode: "submit", expectedThreadRevision: f.settings.target(f.scope, f.thread.id).revision }, now: 300 });
+      expect(queue.claimHead(f.scope, f.thread.id, "retry anchor", 301)?.id).toBe(queued.item.id);
+      const before = Date.now();
+      const failed = { status: "failed" as const, failure: { code: "transport", delivery: "not_sent" as const } };
+      const attempt = proof(queuedId, { type: "prompt", prompt: [] });
+      expect(store.apply(target, "original", attempt, failed, false, setup)).toBe(true);
+      const retry = queue.get(f.scope, f.thread.id, queued.item.id);
+      expect(retry).toMatchObject({ state: "retry_wait", retryCount: 1 });
+      expect(retry.nextAttemptAt).toBeGreaterThanOrEqual(before + DEFAULT_QUEUE_RETRY_POLICY.baseDelayMilliseconds);
+      expect(store.apply(target, "original", attempt, failed, false, setup)).toBe(true);
+      expect(queue.get(f.scope, f.thread.id, queued.item.id)).toEqual(retry);
 
       const rejected = randomUUID();
       f.operations.prepareInterrupt(f.scope, f.thread.id, { operationId: rejected, now: 250 });
       f.operations.markInterruptStarted(f.scope, rejected);
       const rejection = { status: "failed" as const, failure: { code: "antigravity_request_rejected", delivery: "rejected" as const } };
-      expect(store.apply(target, proof(rejected, { type: "cancel" }), rejection, false, setup)).toBe(true);
+      expect(store.apply(target, "original", proof(rejected, { type: "cancel" }), rejection, false, setup)).toBe(true);
       expect(f.operations.findInterrupt(f.scope, rejected)).toBeUndefined();
-      expect(store.apply(target, proof(rejected, { type: "cancel" }), rejection, false, setup)).toBe(true);
+      expect(store.apply(target, "original", proof(rejected, { type: "cancel" }), rejection, false, setup)).toBe(true);
     } finally { f.database.close(); }
   });
 

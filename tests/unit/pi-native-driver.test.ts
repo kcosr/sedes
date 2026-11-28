@@ -1719,6 +1719,9 @@ describe("native Pi driver", () => {
       expect(typeof originalOwner).toBe("string");
       await expect(driver.prepareArchive({ ...input, retainedOwner: originalOwner })).resolves.toEqual({ outcome: "inconclusive" });
     }
+    const target = { ...native, expectedOwner: { handleId: original.handleId, generation: original.generation } };
+    for (const call of vi.mocked(fixture.port.retireSession).mock.calls) expect(call).toEqual([target, input.signal]);
+    expect(fixture.port.attachForDrain).toHaveBeenCalledWith(target, input.signal);
     expect(fixture.releaseCount).toBe(1);
     expect(fixture.port.attach).not.toHaveBeenCalled();
   });

@@ -25,7 +25,7 @@ User-facing changes are collected here before release. See the
 
 - Native Pi reduces round trips before sending a message on an attached thread.
   Drain retained native Pi work using the currently installed main and sidecar
-  before upgrading both to native Pi runtime capability **3**.
+  before upgrading both to native Pi runtime capability **4**.
   See [native Pi setup](docs/operator/backends/pi-native.md).
   ([#143](https://github.com/kcosr/sedes/pull/143))
 
@@ -253,7 +253,7 @@ User-facing changes are collected here before release. See the
   backends can share session storage without importing duplicate threads. See
   [native Pi setup and limits](docs/operator/backends/pi-native.md). Pi 1.5.0 is
   qualified on Linux x64; newer stable releases remain available with an installation
-  warning. Remote execution requires native Pi runtime capability **3**. The
+  warning. Remote execution requires native Pi runtime capability **4**. The
   embedded Pi SDK remains pinned separately.
   ([#124](https://github.com/kcosr/sedes/pull/124), [#133](https://github.com/kcosr/sedes/pull/133))
 

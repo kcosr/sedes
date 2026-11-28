@@ -152,7 +152,7 @@ import { WorkspaceFileRootRepository } from "./db/repositories/workspace-file-ro
 import { WorkspaceFileLinkedWorktreeRepository } from "./db/repositories/workspace-file-linked-worktree-repository.js";
 import { WorkspaceDiffReviewRepository } from "./db/repositories/workspace-diff-review-repository.js";
 import { TaskRepository } from "./db/repositories/task-repository.js";
-import { QueuedInputRepository } from "./db/repositories/queued-input-repository.js";
+import { DEFAULT_QUEUE_RETRY_POLICY, QueuedInputRepository } from "./db/repositories/queued-input-repository.js";
 import { SubmissionCompletionRepository, type UnresolvedSubmissionThread } from "./db/repositories/submission-completion-repository.js";
 import { ThreadLineageRepository } from "./db/repositories/thread-lineage-repository.js";
 import { ThreadCompletionCallbackRepository } from "./db/repositories/thread-completion-callback-repository.js";
@@ -1572,11 +1572,7 @@ export async function startProductionApplication(
           }
         },
       },
-      retryPolicy: {
-        maximumRetries: 5,
-        baseDelayMilliseconds: 1_000,
-        maximumDelayMilliseconds: 60_000,
-      },
+      retryPolicy: DEFAULT_QUEUE_RETRY_POLICY,
       isDispatchBlocked: (eventScope, applicationThreadId, purpose) =>
         inventoryRepository.isWorkspaceRemoved(eventScope, inventoryRepository.getThread(eventScope, applicationThreadId).thread.workspaceId) ||
         operationRepository.hasBlockingThreadOperation(

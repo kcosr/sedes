@@ -33,8 +33,8 @@ Sedes's per-thread and startup variable editors do not override it. A leading
 so discovery and the running process always use the same native store.
 
 For a remote runtime, enable persistent sidecar operations and deploy a sidecar
-that advertises native Pi runtime capability **3**. Before upgrading from
-capability 2, use the matching main and sidecar to settle active work, resolve
+that advertises native Pi runtime capability **4**. Before upgrading from
+an earlier capability, use the matching main and sidecar to settle active work, resolve
 pending interactions and drain retained operation and event evidence. Confirm
 the native runtime can stop normally, then upgrade main and sidecar together.
 See the [persistent service upgrade procedure](../operations.md#persistent-remote-services).

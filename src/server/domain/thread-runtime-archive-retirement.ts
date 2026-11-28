@@ -47,8 +47,9 @@ export async function runWithArchivedThreadRuntimesRetired<Result>(input: {
   };
   readonly operation: (beginCommit: () => void) => Promise<Result>;
 }): Promise<Result> {
-  const deadline = (input.startedAt ?? performance.now()) + 45_000;
+  const startedAt = input.startedAt ?? performance.now();
   const threadIds = [...new Set(input.threadIds)].sort();
+  const deadline = startedAt + (threadIds.length === 1 ? 15_000 : 45_000);
   const archive = input.purpose === "archive";
   const controller = new AbortController();
   const timeout = () => controller.abort(new DomainError("invalid_transition",

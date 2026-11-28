@@ -157,6 +157,21 @@ describe("Antigravity archive on a retained owner", () => {
     expect(f.port.attachExisting).toHaveBeenCalledOnce();
     expect(f.archiveReceipts.apply).toHaveBeenCalledTimes(2);
   });
+  it("resolves a creation retained without its ACP session, including a lost acknowledgement reply", async () => {
+    const f = archiveFixture(), pending = { ...identity, pendingCreation: "bound-creation" };
+    vi.mocked(f.port.probeArchiveOwner).mockResolvedValue(pending);
+    f.archiveReceipts.creationBound.mockReturnValue(false);
+    expect(await f.driver.prepareArchive(f.request)).toMatchObject({ outcome: "inconclusive" });
+    expect(f.port.acknowledgeCreation).not.toHaveBeenCalled();
+    f.request.retainedOwner = "creation:bound-creation";
+    f.archiveReceipts.creationBound.mockReturnValue(true);
+    vi.mocked(f.port.acknowledgeCreation).mockRejectedValueOnce(new Error("reply lost"));
+    expect(await f.driver.prepareArchive(f.request)).toMatchObject({ outcome: "inconclusive" });
+    vi.mocked(f.port.probeArchiveOwner).mockResolvedValue(null);
+    expect(await f.driver.prepareArchive(f.request)).toMatchObject({ outcome: "released" });
+    expect(f.request.markSettled).toHaveBeenCalledExactlyOnceWith("creation:bound-creation");
+    expect(f.port.attachExisting).not.toHaveBeenCalled();
+  });
   it("requires exact evidence for a pending creation", async () => {
     const f = archiveFixture();
     vi.mocked(f.port.readArchiveState).mockResolvedValue({ ...f.state, pendingCreation: "creation" });

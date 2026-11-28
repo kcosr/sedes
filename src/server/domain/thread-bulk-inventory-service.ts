@@ -197,6 +197,7 @@ export class ThreadBulkInventoryService {
       beginCommit?.();
       return this.input.inventory.bulkInventoryTransition(scope, {
         ...input,
+        beforeCommit: beginCommit,
         blockedThreadIds: new Set(blocked.keys()),
         now,
         ...(input.action === "archive"

@@ -2182,6 +2182,8 @@ export class InventoryRepository {
       readonly expectedThreadIds: readonly string[];
       readonly blockedThreadIds: ReadonlySet<string>;
       readonly now: number;
+      /** Recheck the preparation deadline before SQLite makes staged writes durable. */
+      readonly beforeCommit?: () => void;
       readonly expectedPendingQuestionCount?: number;
       readonly expectedStashedPromptCount?: number;
       readonly expectedOpenTaskSnapshot?: string;
@@ -2339,6 +2341,7 @@ export class InventoryRepository {
         { version: 2, threadIds: currentThreadIds, movedTaskIds },
         input.now,
       );
+      input.beforeCommit?.();
       return { states, replayed: false, movedTaskIds };
     })();
   }
@@ -2400,6 +2403,8 @@ export class InventoryRepository {
       readonly mutationId: string;
       readonly blockedThreadIds: ReadonlySet<string>;
       readonly now: number;
+      /** Recheck the preparation deadline before SQLite makes staged writes durable. */
+      readonly beforeCommit?: () => void;
       readonly expectedPendingQuestionCount?: number;
       readonly expectedStashedPromptCount?: number;
       readonly expectedOpenTaskCount?: number;
@@ -2566,6 +2571,7 @@ export class InventoryRepository {
         } satisfies BulkInventoryReceiptResult,
         input.now,
       );
+      input.beforeCommit?.();
       return { states, changedThreadIds, movedTaskIds, replayed: false };
     })();
   }

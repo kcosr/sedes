@@ -281,6 +281,7 @@ export class ThreadArchiveService {
         const committed = this.input.inventory.archiveThreads(scope, threadId, {
           ...input,
           expectedThreadIds: threadIds,
+          beforeCommit: beginCommit,
           blockedThreadIds: new Set(blocked.keys()),
           now,
           assertOpenTasks: (ids) =>

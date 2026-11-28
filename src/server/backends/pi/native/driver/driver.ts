@@ -96,6 +96,9 @@ export interface PiNativeOperations {
   /** A sent or unknown submission, action or Stop receipt awaits native evidence. */
   hasUnresolvedOperations(scope: ExecutionScope, threadId: string): boolean;
 }
+function archiveTarget({ sessionId, sessionFile, cwd, handleId, generation }: PiNativeAttachment) {
+  return { sessionId, sessionFile, cwd, expectedOwner: { handleId, generation } };
+}
 function archiveOwner(session: PiNativeAttachment): string {
   return fingerprint([session.sessionId, session.sessionFile, session.cwd, session.handleId, session.generation]);
 }
@@ -438,7 +441,8 @@ export class PiNativeConversationDriver implements ConversationBackendDriver {
     if (input.retainedOwner && input.retainedOwner !== owner) return { outcome: "inconclusive" };
     const pending = retained.throughSequence > retained.retainedAfterSequence || retained.retainedOperationIds.length > 0;
     if (pending) input.markRetained(owner);
-    const retire = () => nativeCall(() => this.options.port.retireSession(native, input.signal));
+    const target = archiveTarget(retained);
+    const retire = () => nativeCall(() => this.options.port.retireSession(target, input.signal));
     // A normal observer may already have acknowledged this exact generation.
     // Re-apply its durable history while a matching owner can still prove the cut.
     if (input.retainedOwner === owner && !pending) await this.#drain(input, undefined, { input, owner, retained });
@@ -485,7 +489,8 @@ export class PiNativeConversationDriver implements ConversationBackendDriver {
     if (this.#handles.has(native.sessionId) || this.#attaching.has(native.sessionId) || this.#releasePending.has(native.sessionId)) throw reject("pi_native_already_attached");
     this.#attaching.add(native.sessionId);
     try {
-      const attachment = await nativeCall(() => this.options.port.attachForDrain(native, archive?.input.signal));
+      const target = archive ? archiveTarget(archive.retained) : native;
+      const attachment = await nativeCall(() => this.options.port.attachForDrain(target, archive?.input.signal));
       if (!attachment) {
         if (archive) throw reject("pi_native_archive_owner_missing");
         return;

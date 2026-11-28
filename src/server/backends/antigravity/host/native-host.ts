@@ -448,9 +448,10 @@ export class AntigravityHost implements AntigravityPort {
   async probeArchiveOwner(input: AntigravityIdentity, signal?: AbortSignal, authority = localAuthority): Promise<AntigravityArchiveProbe | null> {
     this.#current(authority, signal);
     const session = this.#find(input);
-    return session ? { ...session.identity, handleId: session.handleId, generation: session.generation, attached: session.attached,
-      retainedOutput: session.sequence > session.acknowledged || session.operations.size > 0 ||
-        Boolean(this.#pendingArchiveCreation(input)) } : null;
+    const pendingCreation = this.#pendingArchiveCreation(input);
+    if (!session) return pendingCreation ? { ...input, pendingCreation } : null;
+    return { ...session.identity, handleId: session.handleId, generation: session.generation, attached: session.attached,
+      retainedOutput: session.sequence > session.acknowledged || session.operations.size > 0 || pendingCreation !== undefined };
   }
   #archiveOwner(expected: AntigravityArchiveOwner): Session {
     const session = this.#find(expected);
@@ -467,9 +468,14 @@ export class AntigravityHost implements AntigravityPort {
     if (history.sessionId !== input.sessionId || history.cwd !== input.cwd || history.native.revision !== proof.revision) return null;
     return { ownerKey: input.ownerKey, history, setup: proof.setup, operations: proof.operations, ...(proof.creation ? { creation: proof.creation } : {}) };
   }
+  #retainedArchiveOperations(session: Session): Set<string> {
+    const ids = new Set(session.operations.keys());
+    for (const event of session.events) if (event.kind === "operation" && event.sequence > session.acknowledged) ids.add(event.operationId);
+    return ids;
+  }
   #rememberArchiveOperations(session: Session) {
     session.archiveOperationIds ??= new Set();
-    for (const id of session.operations.keys()) session.archiveOperationIds.add(id);
+    for (const id of this.#retainedArchiveOperations(session)) session.archiveOperationIds.add(id);
     const creation = this.#pendingArchiveCreation(session.identity);
     if (creation) session.archiveCreation = creation;
   }
@@ -498,9 +504,15 @@ export class AntigravityHost implements AntigravityPort {
     if (session.nativeUnknown || session.retainedAfter > session.acknowledged) return { state: "unproven" };
     if (this.#busy(session)) return { state: "busy" };
     const creation = this.#pendingArchiveCreation(input);
+    const operations: AntigravityArchiveOperation[] = [];
+    for (const id of this.#retainedArchiveOperations(session)) {
+      const pending = session.operations.get(id);
+      const evidence = pending ? this.#archiveOperation(session, id, pending) : session.tombstones.get(id)?.archiveProof;
+      if (!evidence) return { state: "unproven" };
+      operations.push(evidence);
+    }
     return { state: "idle", acknowledged: session.acknowledged, throughSequence: sequence, history, setup: session.setup,
-      ...(creation ? { pendingCreation: creation } : {}),
-      operations: [...session.operations].map(([operationId, operation]) => this.#archiveOperation(session, operationId, operation)) };
+      ...(creation ? { pendingCreation: creation } : {}), operations };
   }
   async attachExisting(input: Parameters<AntigravityPort["attachExisting"]>[0], signal?: AbortSignal, authority = localAuthority) {
     this.#current(authority, signal); const session = input.expected ? this.#archiveOwner(input.expected) : this.#find(input); if (!session) return null;

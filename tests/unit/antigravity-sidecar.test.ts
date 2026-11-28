@@ -83,17 +83,18 @@ describe("Antigravity persistent sidecar", () => {
     const target = await port.create({ cwd: f.cwd, operationId: "created" });
     const existing = await port.probeArchiveOwner(target);
     expect(existing).toMatchObject({ retainedOutput: true });
-    const owner = { ...target, handleId: existing!.handleId, generation: existing!.generation };
+    if (!existing || !("handleId" in existing)) throw new Error("expected native archive owner");
+    const owner = { ...target, handleId: existing.handleId, generation: existing.generation };
     await port.releaseArchiveClaim(owner);
-    expect((await port.probeArchiveOwner(target))?.attached).toBe(false);
+    expect(await port.probeArchiveOwner(target)).toMatchObject({ attached: false });
     await expect(port.attachExisting({ ...target, expected: { ...owner, generation: "replacement" } })).rejects.toMatchObject({ code: "antigravity_archive_owner_changed" });
-    expect((await port.probeArchiveOwner(target))?.attached).toBe(false);
+    expect(await port.probeArchiveOwner(target)).toMatchObject({ attached: false });
     await port.attachExisting({ ...target, expected: owner });
-    expect((await port.probeArchiveOwner(target))?.attached).toBe(true);
+    expect(await port.probeArchiveOwner(target)).toMatchObject({ attached: true });
     const state = await port.readArchiveState(owner);
     expect(state).toMatchObject({ state: "idle", pendingCreation: "created", operations: [] });
     await port.releaseArchiveClaim(owner);
-    expect((await port.probeArchiveOwner(target))?.attached).toBe(false);
+    expect(await port.probeArchiveOwner(target)).toMatchObject({ attached: false });
     await port.acknowledgeCreation({ ...target, operationId: "created" });
     // A normal open can drain and retire this very owner after a refused archive.
     await port.attachExisting(target);

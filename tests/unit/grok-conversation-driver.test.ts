@@ -422,12 +422,16 @@ describe("normalized Grok conversation driver", () => {
     }
   });
 
-  it.each([false, true])("checks a lost native rename without a second mutation after a competing edit: %s", async edited => {
+  it.each([
+    { behavior: "unknown_after_apply", edited: false },
+    { behavior: "unknown_after_apply", edited: true },
+    { behavior: "internal_error_after_apply", edited: true },
+  ])("checks a lost native rename without a second mutation after $behavior with competing edit $edited", async ({ behavior, edited }) => {
     const sessionId = "13131313-1313-4313-8313-131313131313";
     const fixtureState = await openDriver([
       {
         ...session(sessionId, "Before unknown"),
-        renameBehavior: "unknown_after_apply",
+        renameBehavior: behavior,
       },
     ]);
     const action = {

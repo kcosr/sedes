@@ -33,7 +33,10 @@ export const antigravityConfigurationSchema = z.strictObject({
 });
 export const antigravityIdentitySchema = z.strictObject({ sessionId: id, cwd: hostPath });
 export const antigravityArchiveOwnerSchema = antigravityIdentitySchema.extend({ handleId: id, generation: id });
-export const antigravityArchiveProbeSchema = antigravityArchiveOwnerSchema.extend({ retainedOutput: z.boolean(), attached: z.boolean() });
+export const antigravityArchiveProbeSchema = z.union([
+  antigravityArchiveOwnerSchema.extend({ retainedOutput: z.boolean(), attached: z.boolean() }),
+  antigravityIdentitySchema.extend({ pendingCreation: id }),
+]);
 const retainedTarget = antigravityIdentitySchema.extend({ expected: antigravityArchiveOwnerSchema.optional() });
 export const antigravitySetupSchema = z.strictObject({ initialize: acp<InitializeResponse>(decodeInitializeResponse), session: acp<LoadSessionResponse>(decodeLoadSessionResponse),
   modelOptions: z.array(z.strictObject({ modelId: id, thinkingLevels: z.array(id).max(100), defaultThinkingLevel: id.optional() })).max(1000).optional() });

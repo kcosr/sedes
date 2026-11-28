@@ -1183,6 +1183,25 @@ describe("thread family archive service", () => {
     }
   });
 
+  it.each([[false, 15_001], [true, 45_001]] as const)("rolls back all staged writes if synchronous validation exceeds the archive deadline (family %s)", async (family, elapsed) => {
+    const current = fixture();
+    const clock = vi.spyOn(performance, "now").mockReturnValue(1_000);
+    try {
+      const request = {
+        includeDescendants: family, expectedRevision: 0, mutationId: "family-archive-deadline",
+        executionWorkspaceDisposition: { kind: "keep" as const },
+      };
+      vi.spyOn(current.tasks, "assertOpenThreadTaskSnapshot").mockImplementation(() => { clock.mockReturnValue(1_000 + elapsed); });
+      await expect(current.service.archive(current.scope, current.rootId, request))
+        .rejects.toMatchObject({ code: "invalid_transition", retryable: true });
+      for (const id of [current.rootId, current.childId, current.grandchildId]) {
+        expect(current.inventory.getInventory(current.scope, id)).toMatchObject({ inventoryState: "active", inventoryRevision: 0 });
+      }
+      expect(current.inventory.findArchiveThreadsReplay(current.scope, current.rootId, request)).toBeUndefined();
+      expect(current.publishCommitted).not.toHaveBeenCalled();
+    } finally { clock.mockRestore(); current.database.close(); }
+  });
+
   it("rechecks a concurrent receipt under the fence before retiring a restored target", async () => {
     const nativeArchive = vi.fn(async () => undefined);
     const current = fixture({ archive: nativeArchive });

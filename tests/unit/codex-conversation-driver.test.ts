@@ -17932,6 +17932,41 @@ describe("CodexConversationHandle", () => {
     await handle.close();
   });
 
+  it("keeps a rename retryable when only its metadata read lost a response", async () => {
+    const harness = new RpcHarness();
+    const handle = await attachIdle(harness);
+    await establish(harness, handle);
+    const action = { applicationOperationId: "preflight-rename", action: "rename" as const, title: "New title" };
+    harness.enqueue("thread/read", new CodexRpcDeliveryError({
+      code: "codex_response_lost", delivery: "sent_outcome_unknown", generation: 1, method: "thread/read",
+    }));
+    await expect(handle.perform(action)).rejects.toMatchObject({ crossedSubmissionBoundary: false, retryable: true });
+    expect(harness.calls.filter(({ method }) => method === "thread/name/set")).toHaveLength(0);
+    harness.enqueue("thread/read", { thread: nativeThread() });
+    harness.enqueue("thread/name/set", {});
+    await expect(handle.perform(action)).resolves.toEqual({ accepted: true });
+    expect(harness.calls.filter(({ method }) => method === "thread/name/set")).toHaveLength(1);
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
+  it.each([
+    { error: new Error("response processing interrupted"), crossed: true },
+    { error: new CodexRpcRemoteError({ code: -32603, message: "internal failure", generation: 1, method: "thread/name/set" }), crossed: true },
+    { error: new CodexRpcRemoteError({ code: -32602, message: "invalid params", generation: 1, method: "thread/name/set" }), crossed: false },
+  ])("preserves delivery evidence for a rename write reporting $error.message", async ({ error, crossed }) => {
+    const harness = new RpcHarness();
+    const handle = await attachIdle(harness);
+    await establish(harness, handle);
+    const action = { applicationOperationId: "write-rename", action: "rename" as const, title: "New title" };
+    harness.enqueue("thread/read", { thread: nativeThread() });
+    harness.enqueue("thread/name/set", error);
+    await expect(handle.perform(action)).rejects.toMatchObject({ crossedSubmissionBoundary: crossed });
+    expect(harness.calls.filter(({ method }) => method === "thread/name/set")).toHaveLength(1);
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
   it.each(["requested", "edited", "missing"] as const)("checks a lost rename without repeating it when the current title is %s", async title => {
     const harness = new RpcHarness();
     const handle = await attachIdle(harness);

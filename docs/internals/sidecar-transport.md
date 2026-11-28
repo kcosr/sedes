@@ -12,7 +12,9 @@ build and discovers supported operations in each direction. The connection
 selects its compression mode once. A separately installed policy authorizes
 work on persistent SSH and paired hosts. Local worker contexts keep their
 fixed dispatch tables. OpenCode's private runtime capability **7** selects
-the 2.3.0 SDK/schema profile. The `HSC2` frame header occupies 16 bytes.
+the 2.3.0 SDK/schema profile. Native Pi capability **4** checks the session handle
+and generation before a background archive can claim or retire that session.
+The `HSC2` frame header occupies 16 bytes.
 
 | Offset | Field |
 | --- | --- |

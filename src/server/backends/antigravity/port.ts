@@ -76,10 +76,9 @@ export interface AntigravityArchiveOwner extends AntigravityIdentity {
   readonly handleId: string;
   readonly generation: string;
 }
-export interface AntigravityArchiveProbe extends AntigravityArchiveOwner {
-  readonly retainedOutput: boolean;
-  readonly attached: boolean;
-}
+export type AntigravityArchiveProbe =
+  | (AntigravityArchiveOwner & { readonly retainedOutput: boolean; readonly attached: boolean })
+  | (AntigravityIdentity & { readonly pendingCreation: string });
 export interface AntigravityArchiveOperation {
   readonly operationId: string;
   readonly kind: AntigravityCommand["type"];

@@ -3,7 +3,7 @@ import type Database from "better-sqlite3";
 import { prepareCached } from "../../db/prepared-statements.js";
 import { ConversationCreationRepository } from "../../db/repositories/conversation-creation-repository.js";
 import { ConversationOperationRepository } from "../../db/repositories/conversation-operation-repository.js";
-import { QueuedInputRepository } from "../../db/repositories/queued-input-repository.js";
+import { DEFAULT_QUEUE_RETRY_POLICY, QueuedInputRepository } from "../../db/repositories/queued-input-repository.js";
 import { SubmissionCompletionRepository } from "../../db/repositories/submission-completion-repository.js";
 import type { PrepareConversationArchiveInput } from "../contracts.js";
 import type { AntigravityArchiveOperation, AntigravityOutcome, AntigravitySetup } from "./port.js";
@@ -39,13 +39,13 @@ export class AntigravityArchiveReceipts {
       record.executionEnvironmentId === binding.executionEnvironmentId && record.provisionalBackendConversationId === binding.backendConversationId;
   }
 
-  apply(input: ReceiptInput, operation: AntigravityArchiveOperation, outcome: TerminalOutcome, terminalTurn: boolean, setup: AntigravitySetup): boolean {
+  apply(input: ReceiptInput, owner: string, operation: AntigravityArchiveOperation, outcome: TerminalOutcome, terminalTurn: boolean, setup: AntigravitySetup): boolean {
     const { scope, binding } = input;
     const threadId = binding.applicationThreadId;
     // Acknowledgement can lose its reply after a proven rejection deleted
     // the original uncertain application receipt. Commit that disposition in
     // the same transaction so replay never depends on the now absent row.
-    const key = `antigravity_archive:${digest([threadId, operation.operationId])}`;
+    const key = `antigravity_archive:${digest([threadId, owner, operation.operationId])}`;
     const fingerprint = digest([input.opaqueBindingDetail, operation.operationId, operation.kind, operation.commandFingerprint,
       outcome.status, outcome.status === "failed" ? outcome.failure : [
         outcome.cancelledAtNativeRevision, (outcome.result as { stopReason?: unknown } | null)?.stopReason === "cancelled",
@@ -93,9 +93,10 @@ export class AntigravityArchiveReceipts {
       if (!queued) return false;
       if (queued.state === "failed" && queued.failureReason === "not_sent") return true;
       if (queued.deliveryMode !== "submit" || (queued.state !== "dispatching" && queued.state !== "uncertain")) return false;
-      if (outcome.status === "failed" && outcome.failure.delivery === "not_sent") return false; // normal queue recovery owns retry policy
-      this.#queue.handleCleanFailure(scope, threadId, queued.id, { expectedState: queued.state, retryable: false,
-        diagnostic: notDelivered, failureReason: "not_sent", now: Date.now(), retryPolicy: { maximumRetries: 0, baseDelayMilliseconds: 0, maximumDelayMilliseconds: 0 } });
+      const retryable = outcome.status === "failed" && outcome.failure.delivery === "not_sent";
+      this.#queue.handleCleanFailure(scope, threadId, queued.id, { expectedState: queued.state, retryable,
+        diagnostic: notDelivered, ...(!retryable ? { failureReason: "not_sent" as const } : {}),
+        now: Date.now(), retryPolicy: DEFAULT_QUEUE_RETRY_POLICY });
       return true;
     }
     if (operation.kind === "cancel") {

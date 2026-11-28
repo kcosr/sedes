@@ -2313,6 +2313,7 @@ export class CodexConversationHandle implements ConversationHandle {
       const thread = this.#assertMutableProjection();
       switch (input.action) {
         case "rename": {
+          let dispatched = false;
           try {
             const inspected = await this.#client.requestWithReceipt(
               codexThreadReadMethod,
@@ -2334,6 +2335,7 @@ export class CodexConversationHandle implements ConversationHandle {
             if (inspected.result.thread.name === input.title) {
               return { accepted: true };
             }
+            dispatched = true;
             const response = await this.#client.requestWithReceipt(
               codexThreadSetNameMethod,
               { threadId: thread.id, name: input.title },
@@ -2346,7 +2348,7 @@ export class CodexConversationHandle implements ConversationHandle {
             };
             return { accepted: true };
           } catch (error) {
-            throw mapCodexMutationError(error, "rename");
+            throw dispatched ? mapCodexMutationError(error, "rename", true) : mapCodexReadError(error);
           }
         }
         case "compact": {
