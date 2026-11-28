@@ -25,6 +25,12 @@ import { CodexThreadExecutionSettingsRepository } from "../../src/server/backend
 
 const databases: Database.Database[] = [];
 const directories: string[] = [];
+const migratedAbandonedAttemptDefaults = {
+  has_thread_reference_body: 0,
+  initial_rename_state: "not_sent",
+  initial_rename_operation_id: null,
+  initial_rename_title: null,
+};
 afterEach(() => {
   for (const database of databases.splice(0)) database.close();
   for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true });
@@ -227,7 +233,10 @@ describe("durable verified creation identity", () => {
     expect(attempt).toMatchObject({ force_reset_at: 100, force_reset_mutation_id: "reset",
       initial_input_text: "Original request", provisional_backend_conversation_id: f.nativeId });
     applyDatabaseMigrations(f.database, backendNormalizedMigrations);
-    expect(f.database.prepare("SELECT * FROM conversation_creation_attempts").get()).toEqual({ ...attempt, has_thread_reference_body: 0 });
+    expect(() => f.creation.captureInitialRename(f.scope, f.threadId, "attempt", {
+      applicationOperationId: "attempt:initial-title", title: "Renamed after reset",
+    })).toThrow(expect.objectContaining({ code: "conflict" }));
+    expect(f.database.prepare("SELECT * FROM conversation_creation_attempts").get()).toEqual({ ...attempt, ...migratedAbandonedAttemptDefaults });
     expect(f.database.prepare("SELECT * FROM thread_force_reset_receipts").get()).toEqual(resetReceipt);
     const repository = new ConversationCreationProvenanceRepository(f.database, compiledBackendModuleCatalog);
     expect(repository.get(f.scope, f.threadId)).toBeUndefined();
@@ -248,7 +257,7 @@ describe("durable verified creation identity", () => {
       expectedFingerprint: currentEvidence.fingerprint, now: 200, repairId: "repair" });
     expect(result.inventoryState).toBe("archived");
     expect(repository.matchesBinding(f.scope, f.threadId)).toBe(true);
-    expect(f.database.prepare("SELECT * FROM conversation_creation_attempts").get()).toEqual({ ...attempt, has_thread_reference_body: 0 });
+    expect(f.database.prepare("SELECT * FROM conversation_creation_attempts").get()).toEqual({ ...attempt, ...migratedAbandonedAttemptDefaults });
     expect(f.database.prepare("SELECT * FROM thread_force_reset_receipts").get()).toEqual(resetReceipt);
     expect(f.database.prepare("SELECT * FROM application_threads").get()).toEqual(thread);
     expect(f.database.prepare("SELECT count(*) AS n FROM conversation_creation_provenance_repairs").get()).toEqual({ n: 1 });
@@ -288,7 +297,7 @@ describe("durable verified creation identity", () => {
     output = "";
     expect(await runCreationProvenanceCli([...args, "--apply", "--server-stopped", "--expected-fingerprint", preview.fingerprint], io)).toBe(0);
     expect(JSON.parse(output).status).toBe("repaired");
-    expect(f.database.prepare("SELECT * FROM conversation_creation_attempts").get()).toEqual({ ...attempt, has_thread_reference_body: 0 });
+    expect(f.database.prepare("SELECT * FROM conversation_creation_attempts").get()).toEqual({ ...attempt, ...migratedAbandonedAttemptDefaults });
     expect(f.database.prepare("SELECT * FROM thread_force_reset_receipts").get()).toEqual(resetReceipt);
     expect(f.database.prepare("SELECT inventory_state FROM thread_principal_state WHERE thread_id=?").get(f.threadId)).toEqual({ inventory_state: "archived" });
   });

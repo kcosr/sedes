@@ -772,6 +772,7 @@ export class ConversationCreationRepository {
         initial_rename_title = coalesce(initial_rename_title, ?)
       WHERE tenant_id = ? AND owner_principal_id = ? AND application_thread_id = ? AND attempt_id = ?
         AND creation_kind = 'first_input' AND provisional_backend_conversation_id IS NOT NULL
+        AND force_reset_at IS NULL
         AND phase IN ('conversation_identified', 'recovery_required')
         AND (initial_rename_operation_id IS NULL OR initial_rename_operation_id = ?)
       RETURNING initial_rename_state AS state, initial_rename_title AS title
@@ -788,6 +789,7 @@ export class ConversationCreationRepository {
     const result = this.database.prepare(`
       UPDATE conversation_creation_attempts SET initial_rename_state = ?
       WHERE tenant_id = ? AND owner_principal_id = ? AND application_thread_id = ? AND attempt_id = ?
+        AND force_reset_at IS NULL AND phase IN ('conversation_identified', 'recovery_required')
         AND initial_rename_operation_id = ? AND initial_rename_state = ?
     `).run(next, scope.tenantId, scope.principalId, threadId, attemptId, operationId, expected);
     if (result.changes !== 1) throw new DomainError("conflict", "The first-send rename changed during recovery.");
