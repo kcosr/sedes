@@ -343,7 +343,12 @@ the selected native value. Archive claims release even after a failed read or ac
 archive calls use existing-only transport and perform no provider commands.
 
 The ordinary observer can settle a pinned cut before attaching or releasing
-its native peer. Sedes clears the exact pin only after committing application
+its native peer. Its terminal callbacks cover only signed inputs identified in
+that cut and preserve normal activity, attention, and completion delivery.
+An ordinary operation acknowledgement can precede delivery of its journal
+event. Archive acknowledges the remaining event without replaying the already
+delivered operation. Maintenance acknowledgements retain their replay evidence
+until the host confirms the cut. Sedes clears the exact pin only after committing application
 facts and confirming the original generation's acknowledgements. An archive
 that loses its final retirement reply can therefore recover across a host
 restart. The host records receipt origins during a failed-load handoff after

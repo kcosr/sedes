@@ -185,6 +185,24 @@ describe("Antigravity execution host", () => {
     }
     expect(await f.host.retireSession({ ...identity, expected, settledNativeRevision: updated })).toBe("retired");
   });
+  it("keeps ordinary-acknowledged prompts out of archive receipt replay even while their events remain", async () => {
+    const f = await fixture();
+    const identity = { sessionId: "4c8ece79-6741-451f-8aa5-e01d576ed055", cwd: f.cwd };
+    const { handleId, generation } = await f.host.attach(identity);
+    const owner = { ...identity, handleId, generation };
+    expect(await f.host.readArchiveState(owner)).toMatchObject({ state: "idle", operations: [] });
+    vi.spyOn(AntigravityAcpConnection.prototype, "prompt").mockRejectedValueOnce(new AcpRemoteError(-32602));
+    const operationId = "ordinary-op";
+    await f.host.request({ handleId, operationId, command: { type: "prompt", prompt: [] } });
+    expect(await settled(f.host, handleId, operationId)).toMatchObject({ status: "failed", failure: { delivery: "rejected" } });
+    await f.host.acknowledgeOperation({ handleId, operationId });
+    expect(await f.host.readArchiveState(owner)).toMatchObject({ state: "idle", operations: [], deliveredOperationIds: [operationId] });
+    await drain(f.host, handleId);
+    expect(await f.host.readArchiveState(owner)).toMatchObject({ state: "idle", operations: [], deliveredOperationIds: [] });
+    await f.host.release({ handleId });
+    const ownerKey = createHash("sha256").update(JSON.stringify([identity.sessionId, identity.cwd, handleId, generation])).digest("hex");
+    expect(await f.host.readRetiredArchive({ ...identity, ownerKey })).toMatchObject({ operations: [] });
+  });
   it("reports a pending creation even after a normal consumer drains and closes the ACP session", async () => {
     const f = await fixture(), operationId = "unacknowledged";
     const identity = await f.host.create({ cwd: f.cwd, operationId });

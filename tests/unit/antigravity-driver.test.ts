@@ -1,3 +1,4 @@
+import type { BackendConversationSnapshot } from "../../src/shared/protocol/backend.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setTimeout as delay } from "node:timers/promises";
 import { createHash } from "node:crypto";
@@ -85,7 +86,7 @@ describe("Antigravity archive on a retained owner", () => {
     const owner = { ...identity, generation: f.attachment.generation, handleId: f.attachment.handleId };
     const retained = { ...owner, retainedOutput: true, attached: false };
     vi.mocked(f.port.probeArchiveOwner).mockResolvedValue(retained);
-    const state = { state: "idle" as const, acknowledged: 0, throughSequence: 0, operations: [] as AntigravityArchiveOperation[],
+    const state = { state: "idle" as const, acknowledged: 0, throughSequence: 0, operations: [] as AntigravityArchiveOperation[], deliveredOperationIds: [] as string[],
       history: { ...identity, native: f.native }, setup: f.attachment.setup };
     vi.mocked(f.port.readArchiveState).mockImplementation(async () => state);
     const archiveReceipts = { apply: vi.fn(() => true), creationBound: vi.fn(() => true) };
@@ -154,6 +155,50 @@ describe("Antigravity archive on a retained owner", () => {
     expect(await f.driver.prepareArchive(f.request)).toEqual({ outcome: "released" });
     expect(f.port.readRetiredArchive).not.toHaveBeenCalled();
     expect(f.archiveReceipts.apply).toHaveBeenCalledOnce();
+  });
+  it.each([true, false])("requires positive delivery evidence for a journal-only rejected operation (delivered=%s)", async delivered => {
+    const f = archiveFixture(), operationId = "ordinary-operation";
+    f.emit({ kind: "operation", operationId, outcome: { status: "failed", failure: { code: "rejected", delivery: "rejected" } } });
+    f.state.throughSequence = 1;
+    if (delivered) f.state.deliveredOperationIds.push(operationId);
+    expect(await f.driver.prepareArchive(f.request)).toMatchObject({ outcome: delivered ? "released" : "inconclusive" });
+    expect(f.archiveReceipts.apply).not.toHaveBeenCalled();
+    expect(f.port.acknowledgeOperation).not.toHaveBeenCalled();
+    expect(f.port.acknowledge).toHaveBeenCalledTimes(delivered ? 1 : 0);
+  });
+  it("archives a successor under the original durable pin on the first attempt", async () => {
+    const f = archiveFixture();
+    const original = "b".repeat(64);
+    let pin: string | undefined = original;
+    vi.mocked(f.port.probeArchiveOwner).mockResolvedValue({ ...f.retained, inheritedOwners: [original] });
+    f.state.operations.push(setter()); f.receipts.set("setter", { status: "completed", result: {} });
+    const result = await f.driver.prepareArchive({ ...f.request, get retainedOwner() { return pin; },
+      markRetained(owner) { expect(owner).toBe(pin); },
+      markSettled(owner) { expect(owner).toBe(pin); pin = undefined; } });
+    expect(result).toEqual({ outcome: "released" }); expect(pin).toBeUndefined();
+    expect(f.port.confirmArchiveCut).toHaveBeenCalledOnce(); expect(f.port.retireSession).toHaveBeenCalledOnce();
+  });
+  it("an ordinary observer only finalizes the signed terminal turn belonging to its retained cut", async () => {
+    const f = archiveFixture();
+    for (const id of ["unrelated", "inherited"]) {
+      const prompt = await buildAntigravityPrompt({ binding: f.driver.nativeBinding(identity.sessionId, identity.cwd), key: Buffer.alloc(32, 7) },
+        { ...submit, applicationOperationId: id, mutationId: id });
+      if (prompt[0]?.type !== "text") throw new Error("missing signed user message");
+      f.native.steps.push({ index: f.native.steps.length, type: 14, status: 3, hasSubtrajectory: false, user: { text: prompt[0].text }, executionId: id },
+        { index: f.native.steps.length + 1, type: 15, status: 3, hasSubtrajectory: false, response: { text: id, thinking: "", stopReason: 2, toolCalls: [] }, executionId: id });
+    }
+    f.state.operations.push({ ...setter("inherited"), kind: "prompt", setterConfirmed: false, sessionConfiguration: false });
+    f.receipts.set("inherited", { status: "completed", result: {} });
+    const key = createHash("sha256").update(JSON.stringify([identity.sessionId, identity.cwd, f.owner.handleId, f.owner.generation])).digest("hex");
+    let retained: string | null = key;
+    const observer = { retained: () => retained, settle: vi.fn((_: string, _owner: string, snapshot: BackendConversationSnapshot, ids: readonly string[]) => {
+      expect(Object.keys(snapshot.turnsById)).toHaveLength(2);
+      expect(ids.flatMap(id => snapshot.turnsById[id]!.completionCorrelations)).toEqual(["inherited"]);
+    }), release: () => { retained = null; } };
+    const driver = new AntigravityDriver({ ...f.driver.input, archiveObserver: observer });
+    const handle = await driver.attach(f.attached);
+    try { expect(observer.settle).toHaveBeenCalledOnce(); expect(retained).toBeNull(); }
+    finally { await handle.close(); await driver.close(); }
   });
   it.each(["same", "transferred", "unrelated"] as const)("a normal open settles only a %s retained owner before opening the thread", async kind => {
     const f = archiveFixture();

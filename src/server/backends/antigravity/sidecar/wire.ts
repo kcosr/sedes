@@ -73,7 +73,7 @@ export const antigravityHostCommandSchema = z.discriminatedUnion("action", [
   command("read_retired_archive", antigravityIdentitySchema.extend({ ownerKey: z.string().regex(/^[a-f0-9]{64}$/u) })),
   command("attach_existing", retainedTarget),
   command("request", operation.extend({ command: antigravityCommandSchema })),
-  command("outcome", operation), command("acknowledge_operation", operation),
+  command("outcome", operation), command("acknowledge_operation", operation.extend({ archiveGeneration: id.optional() })),
   command("observe", handle.extend({ afterSequence: position })),
   command("acknowledge", handle.extend({ throughSequence: position })),
   command("release", handle), command("retire_session", retainedTarget.extend({ settledNativeRevision: z.string().regex(/^[a-f0-9]{64}$/u).optional() })), command("inspect", z.strictObject({})),
@@ -126,7 +126,7 @@ export const antigravityRetiredArchiveSchema = z.strictObject({ ownerKey: z.stri
 export const antigravityArchiveStateSchema = z.discriminatedUnion("state", [
   z.strictObject({ state: z.enum(["busy", "unproven", "changed"]) }),
   z.strictObject({ state: z.literal("idle"), acknowledged: position, throughSequence: position, pendingCreation: id.optional(),
-    operations: z.array(archiveOperation).max(640),
+    operations: z.array(archiveOperation).max(4224), deliveredOperationIds: z.array(id).max(4224),
     history: antigravityHistorySchema, setup: antigravitySetupSchema }),
 ]);
 export const antigravityInspectionSchema = z.strictObject({ runtimeId: id, state: z.enum(["idle", "active", "unknown"]), revision: id,

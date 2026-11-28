@@ -121,7 +121,7 @@ export async function prepareAntigravityArchive(driver: AntigravityDriver, input
     try {
       const claimed = await port.attachExisting({ ...identity, expected: owner }, input.signal);
       if (!sameOwner(owner, claimed)) return inconclusive;
-      result = await drainArchiveOwner(driver, input, identity, owner, ownerKey, true);
+      result = await drainArchiveOwner(driver, input, identity, owner, pin, true);
     } finally {
       // A lost claim reply can still have marked the host attached. Releasing
       // the exact generation never stops a peer or consumes outstanding output.
@@ -148,7 +148,7 @@ async function drainArchiveOwner(driver: AntigravityDriver, input: PrepareConver
     // ACP deltas supply transient presentation and control hints. All durable
     // transcript/usage effects come from native history. Control outcomes and
     // permission inventory have their own retention independent of event pages.
-    const operationIds = new Set(state.operations.map(operation => operation.operationId));
+    const operationIds = new Set([...state.operations.map(operation => operation.operationId), ...state.deliveredOperationIds]);
     let through = state.acknowledged;
     while (through < state.throughSequence) {
       const page = await port.observe({ handleId: owner.handleId, afterSequence: through }, signal);
@@ -164,7 +164,7 @@ async function drainArchiveOwner(driver: AntigravityDriver, input: PrepareConver
         if (through === state.throughSequence) break;
       }
     }
-    const correlations = await settleArchiveHistory(driver, input, state.history);
+    const correlations = await settleArchiveHistory(driver, input, state.history, retire ? undefined : operationIds);
     signal.throwIfAborted();
     if (!sameOwner(owner, await port.probeArchiveOwner(identity, signal))) return inconclusive;
     // Keep the independent event cursor until the corresponding host receipts
@@ -175,7 +175,7 @@ async function drainArchiveOwner(driver: AntigravityDriver, input: PrepareConver
       if (outcome.status === "pending") return busy;
       if (!archiveReceipts?.apply(input, operation, outcome, correlations.has(operation.operationId), state.setup)) return inconclusive;
       signal.throwIfAborted();
-      await port.acknowledgeOperation(target, signal);
+      await port.acknowledgeOperation({ ...target, archiveGeneration: owner.generation }, signal);
     }
     if (state.pendingCreation) {
       if (!archiveReceipts?.creationBound(input, state.pendingCreation)) return inconclusive;
@@ -198,13 +198,16 @@ async function drainArchiveOwner(driver: AntigravityDriver, input: PrepareConver
   }
 }
 
-async function settleArchiveHistory(driver: AntigravityDriver, input: PrepareConversationArchiveInput, history: AntigravityHistory): Promise<ReadonlySet<string>> {
+async function settleArchiveHistory(driver: AntigravityDriver, input: PrepareConversationArchiveInput, history: AntigravityHistory, inheritedOperations?: ReadonlySet<string>): Promise<ReadonlySet<string>> {
   const scope = { binding: driver.validate(input), key: driver.input.correlationKey };
   const projection = projectAntigravityHistory(history.native, scope);
   const usage = new AntigravityUsage(driver.input.usage, input.binding, driver.input.nativeNamespaceKey);
   try {
     if (!usage.update(history.native, projection, "history")) throw new Error("antigravity_archive_usage_uncommitted");
-    const terminal = Object.values(projection.snapshot.turnsById).filter(turn => turn.status !== "in_progress");
+    // The ordinary observer owns later and unrelated history. Only first
+    // observe a completion here when this cut contains its exact signed input.
+    const terminal = Object.values(projection.snapshot.turnsById).filter(turn => turn.status !== "in_progress" &&
+      (!inheritedOperations || turn.completionCorrelations?.some(id => inheritedOperations.has(id))));
     await input.settle(projection.snapshot, terminal.map(turn => turn.backendTurnId));
     input.signal.throwIfAborted();
     return new Set(terminal.flatMap(turn => turn.completionCorrelations ?? []));

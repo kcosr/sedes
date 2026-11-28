@@ -118,7 +118,7 @@ describe("Antigravity persistence", () => {
     return { database, scope, thread, workspace, settings, inventory, gateway, operations, action, persist, persistImplementation, prepare, acquire, request };
   }
 
-  it.each(["archive retry", "ordinary open and restart"] as const)("settles a detached native host prompt in SQLite before its ACK and recovers a lost ACK reply through %s", async recovery => {
+  it.each(["archive retry", "ordinary open and restart", "busy then ordinary open"] as const)("settles a detached native host prompt in SQLite before its ACK and recovers a lost ACK reply through %s", async recovery => {
     const cwd = await realpath(await mkdtemp(path.join(tmpdir(), "sedes-antigravity-archive-")));
     const f = renameGatewayFixture("bound", cwd);
     const bindings = new ConversationBindingRepository(f.database);
@@ -137,13 +137,13 @@ describe("Antigravity persistence", () => {
     const obligations = new ThreadArchiveObligationRepository(f.database);
     const completion = new SubmissionCompletionRepository(f.database);
     const questions = new QuestionRequestRepository(f.database, f.inventory);
-    const settle = (snapshot: Parameters<PrepareConversationArchiveInput["settle"]>[0], ids: readonly string[]) =>
+    const settle = (snapshot: Parameters<PrepareConversationArchiveInput["settle"]>[0], ids: readonly string[], purpose: "archive" | "ordinary" = "archive") =>
       settleArchiveSnapshot({ bindings, completion, questions, usage: { registerVisibleTurns() {} },
-        recordSubmission() {}, settleAutomation() {} }, f.scope, f.thread.id, snapshot, ids);
+        recordSubmission() {}, settleAutomation() {} }, f.scope, f.thread.id, snapshot, ids, purpose);
     const driver = new AntigravityDriver({ scope: f.scope, instance: { ...instance, enabled: true }, connection: { ...connection, enabled: true },
       settings: f.settings, port: host, correlationKey: key, nativeNamespaceKey: "test-profile", modelPolicy: compileBackendModelPolicy({ type: "catalog" }, "model_effort"),
       archiveObserver: { retained: () => obligations.read(f.scope, f.thread.id)?.retainedOwner,
-        settle: (_thread, _owner, snapshot, ids) => settle(snapshot, ids),
+        settle: (_thread, _owner, snapshot, ids) => settle(snapshot, ids, "ordinary"),
         release: (thread, owner) => { expect(obligations.settleIfRetained(f.scope, thread, owner)).toBe(true); } },
       archiveReceipts: new AntigravityArchiveReceipts(f.database, f.action) });
     try {
@@ -170,6 +170,20 @@ describe("Antigravity persistence", () => {
         signal: AbortSignal.timeout(8000), get retainedOwner() { return savedOwner(); }, markObserved() { obligations.remember(f.scope, f.thread.id); },
         markRetained(owner) { obligations.markRetained(f.scope, f.thread.id, owner); }, markSettled(owner) { obligations.markSettled(f.scope, f.thread.id, owner); },
         async settle(snapshot, ids) { settle(snapshot, ids); } };
+      if (recovery === "busy then ordinary open") {
+        const revision = f.settings.target(f.scope, f.thread.id).revision;
+        native.steps[1]!.status = 2; native.revision = "c".repeat(64);
+        expect(await driver.prepareArchive(input)).toMatchObject({ outcome: "busy" });
+        expect(savedOwner()).toEqual(expect.any(String)); expect(completion.get(f.scope, f.thread.id, id).completionOutcome).toBeNull();
+        native.steps[1]!.status = 3; native.revision = "d".repeat(64);
+        const ordinary = await driver.attach(input);
+        try {
+          expect(completion.get(f.scope, f.thread.id, id)).toMatchObject({ completionOutcome: "completed", attentionCreatedAt: expect.any(Number) });
+          expect(f.settings.target(f.scope, f.thread.id).revision).toBe(revision + 1);
+          expect(savedOwner()).toBeUndefined();
+        } finally { await ordinary.close(); }
+        return;
+      }
       const ack = host.acknowledgeOperation.bind(host);
       const lost = vi.spyOn(host, "acknowledgeOperation").mockImplementationOnce(async (...args) => {
         expect(completion.get(f.scope, f.thread.id, id)).toMatchObject({ completionOutcome: "completed", assistantResult: { text: "Archived answer" }, attentionCreatedAt: null });
@@ -198,7 +212,8 @@ describe("Antigravity persistence", () => {
       // The receipt ACK reached the host, while its retained operation event
       // still needed the same committed disposition on the second request.
       expect(lost).toHaveBeenCalledTimes(2);
-      expect(completion.get(f.scope, f.thread.id, id)).toMatchObject({ completionOutcome: "completed", assistantResult: { text: "Archived answer" }, attentionCreatedAt: null });
+      expect(completion.get(f.scope, f.thread.id, id)).toMatchObject({ completionOutcome: "completed", assistantResult: { text: "Archived answer" },
+        attentionCreatedAt: recovery === "ordinary open and restart" ? expect.any(Number) : null });
       expect(attach).toHaveBeenCalledTimes(recovery === "ordinary open and restart" ? 1 : 0); expect(dispatch).not.toHaveBeenCalled();
     } finally { await driver.close(); await host.close(); channels.close(); f.database.close(); await rm(cwd, { recursive: true, force: true }); }
   });

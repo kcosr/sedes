@@ -92,7 +92,7 @@ export interface AntigravityArchiveOperation {
 export type AntigravityArchiveState =
   | { readonly state: "busy" | "unproven" | "changed" }
   | { readonly state: "idle"; readonly acknowledged: number; readonly throughSequence: number;
-      readonly pendingCreation?: string; readonly operations: readonly AntigravityArchiveOperation[];
+      readonly pendingCreation?: string; readonly operations: readonly AntigravityArchiveOperation[]; readonly deliveredOperationIds: readonly string[];
       readonly history: AntigravityHistory; readonly setup: AntigravitySetup };
 export interface AntigravityRetiredArchive {
   readonly ownerKey: string;
@@ -128,7 +128,7 @@ export interface AntigravityPort {
   attachExisting(input: AntigravityIdentity & { readonly expected?: AntigravityArchiveOwner }, signal?: AbortSignal): Promise<AntigravityAttachment | null>;
   request(input: { readonly handleId: string; readonly operationId: string; readonly command: AntigravityCommand }, signal?: AbortSignal): Promise<AntigravityOutcome>;
   outcome(input: { readonly handleId: string; readonly operationId: string }, signal?: AbortSignal): Promise<AntigravityOutcome>;
-  acknowledgeOperation(input: { readonly handleId: string; readonly operationId: string }, signal?: AbortSignal): Promise<void>;
+  acknowledgeOperation(input: { readonly handleId: string; readonly operationId: string; readonly archiveGeneration?: string }, signal?: AbortSignal): Promise<void>;
   observe(input: { readonly handleId: string; readonly afterSequence: number }, signal?: AbortSignal): Promise<AntigravityObservation>;
   acknowledge(input: { readonly handleId: string; readonly throughSequence: number }, signal?: AbortSignal): Promise<void>;
   release(input: { readonly handleId: string }, signal?: AbortSignal): Promise<void>;
