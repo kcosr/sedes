@@ -32,6 +32,23 @@ export function openCodeEndpoint(value: string): string {
   return `http://${host}:${Number(match[2])}`;
 }
 
+function connectionRefused(error: unknown): boolean {
+  return error instanceof Error && error.cause instanceof Error && "code" in error.cause && error.cause.code === "ECONNREFUSED";
+}
+
+/** A disconnected external owner may still be running. Check the configured loopback
+ * listener without sending a password, adopting its identity, or starting a daemon. */
+export async function openCodeEndpointRefused(endpoint: string, signal: AbortSignal): Promise<boolean> {
+  try {
+    const response = await fetch(`${openCodeEndpoint(endpoint)}/api/info`, { method: "HEAD", redirect: "manual", signal });
+    await response.body?.cancel();
+    return false;
+  } catch (cause) {
+    signal.throwIfAborted();
+    return connectionRefused(cause);
+  }
+}
+
 export class OpenCodeHttpClient {
   readonly endpoint: string;
   readonly #client: OpenCodeClient;
@@ -145,7 +162,11 @@ export class OpenCodeHttpClient {
     const lifetime = AbortSignal.any([this.#lifetime.signal, headersDeadline.signal, ...(init?.signal ? [init.signal] : [])]);
     let response: Response;
     try { response = await this.#fetch(url, { ...init, headers, redirect: "error", signal: lifetime }); }
-    finally { clearTimeout(timer); }
+    catch (error) {
+      // Loopback connection refusal proves the selected daemon was unreachable; an HTTP error has no such meaning.
+      if (!lifetime.aborted && connectionRefused(error)) throw new OpenCodeRuntimeError("opencode_daemon_offline");
+      throw error;
+    } finally { clearTimeout(timer); }
     if (response.status >= 300 && response.status < 400) {
       await response.body?.cancel();
       throw new OpenCodeRuntimeError("opencode_redirect_rejected");

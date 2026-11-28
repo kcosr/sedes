@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { configurationFingerprint } from "../../config/configuration-fingerprint.js";
-import { isSidecarRevisionChanged, type SidecarRuntimeLease, type SidecarRuntimeProvider } from "../../sidecar/runtime-channel.js";
+import { existingSidecarIsOffline, isSidecarRevisionChanged, type SidecarRuntimeLease, type SidecarRuntimeProvider } from "../../sidecar/runtime-channel.js";
 import { BackendRuntimeControlRejectedError } from "../runtime-control.js";
 import { openCodeRuntimeNamespaceKey, type OpenCodeRuntimeLease, type OpenCodeRuntimeSnapshot } from "./opencode-runtime.js";
 import type { OpenCodeRuntimeConfiguration } from "./opencode-runtime-configuration.js";
@@ -128,7 +128,11 @@ export class OpenCodeRemoteRuntime {
   async #start(existingOnly: boolean, signal: AbortSignal): Promise<void> {
     signal.throwIfAborted();
     let recovery = existingOnly || !this.input.configuration.instance.enabled || !this.input.configuration.connections.some(connection => connection.enabled);
-    const attachment = existingOnly ? await this.input.provider.acquireExisting(signal)
+    const attachment = existingOnly ? await this.input.provider.acquireExisting(signal).catch(error => {
+      signal.throwIfAborted();
+      if (existingSidecarIsOffline(error)) throw new OpenCodeRuntimeError("opencode_daemon_offline");
+      throw error;
+    })
       : recovery ? await this.input.acquireRecovery(signal) : await this.input.provider.acquire(signal).catch(async error => {
       signal.throwIfAborted();
       if (!isSidecarRevisionChanged(error)) throw error;
@@ -140,6 +144,7 @@ export class OpenCodeRemoteRuntime {
       let value = await call(attachment, { action: recovery ? "lookup_recovery" : "lookup", configuration: this.input.configuration }, signal);
       if (value === null && !recovery && !this.#info) value = await call(attachment, { action: "ensure", configuration: this.input.configuration }, signal);
       signal.throwIfAborted();
+      if (value === null && existingOnly) throw new OpenCodeRuntimeError("opencode_retained_runtime_absent");
       const info = openCodeRuntimeInfoSchema.parse(value);
       if (info.snapshot.state === "cleanup_unproved") throw new OpenCodeRuntimeError("opencode_owned_cleanup_unproved");
       const store = info.snapshot.identity?.nativeStorePath;

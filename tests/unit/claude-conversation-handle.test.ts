@@ -61,6 +61,7 @@ import { ClaudeTranscriptFixture } from "../helpers/claude-native-transcript-fix
 import { createInMemoryOutputArtifactPublisher } from "../helpers/output-artifact-publisher.js";
 import { ConversationProjector } from "../../src/server/conversations/conversation-projector.js";
 import { ThreadMutationGateway } from "../../src/server/conversations/thread-mutation-gateway.js";
+import { rejectedConversationOperationsMigration } from "../../src/server/db/migrations/179-rejected-conversation-operations.js";
 import { ConversationOperationRepository } from "../../src/server/db/repositories/conversation-operation-repository.js";
 import { inspectSupportedRasterImage } from "../../src/server/images/raster-image-inspector.js";
 import type { OutputArtifactPublisher, PublishOutputImageInput } from "../../src/server/output-artifacts/contracts.js";
@@ -4135,6 +4136,13 @@ describe("ClaudeConversationHandle", () => {
         title: "Renamed",
       }),
     ).resolves.toEqual({ outcome: "accepted" });
+    vi.mocked((provider.sdk as ClaudeSdkFacade).getSessionInfo).mockResolvedValueOnce({
+      sessionId: SESSION_ID, cwd: "/another-workspace", summary: "", customTitle: "Renamed", lastModified: 2,
+    });
+    await expect(handle.reconcileAction({
+      applicationOperationId: "unknown-rename", action: "rename", title: "Renamed",
+    })).rejects.toMatchObject({ backendCode: "claude_session_identity_mismatch" });
+    expect(provider.sdk.renameSession).toHaveBeenCalledOnce();
     await handle.close();
   });
 });
@@ -7862,6 +7870,12 @@ describe("Claude manual compaction actions", () => {
       request_fingerprint TEXT, result_code TEXT, result_json TEXT, replayable INTEGER, created_at INTEGER,
       force_reset_at INTEGER, task_contexts_json TEXT DEFAULT '[]', PRIMARY KEY (tenant_id, principal_id, mutation_id)
     )`);
+    database.exec(`CREATE TABLE thread_principal_state (
+      tenant_id TEXT, principal_id TEXT, thread_id TEXT, PRIMARY KEY (tenant_id, principal_id, thread_id)
+    )`);
+    database.prepare("INSERT INTO thread_principal_state VALUES (?, ?, ?)")
+      .run(BINDING.tenantId, BINDING.ownerPrincipalId, BINDING.applicationThreadId);
+    database.exec(rejectedConversationOperationsMigration.sql);
     const operations = new ConversationOperationRepository(database);
     const scope = { tenantId: BINDING.tenantId, principalId: BINDING.ownerPrincipalId };
     let runState = "idle";

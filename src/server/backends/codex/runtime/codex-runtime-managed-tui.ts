@@ -126,6 +126,13 @@ export class CodexRuntimeManagedTuiHosts {
       blockers: unknown ? ["live_terminal", "cleanup_unproven"] : live ? ["live_terminal"] : [] };
   }
 
+  threadBlocksArchive(runtimeId: string, applicationThreadId: string, nativeThreadId: string): boolean {
+    const host = this.#hosts.get(runtimeId);
+    return !!host && (host.cleanupUnproven || host.registry.snapshot().some(resource =>
+      (resource.authority.applicationThreadId === applicationThreadId || resource.authority.backendConversationId === nativeThreadId) &&
+      ["starting", "running", "stopping"].includes(resource.state.lifecycle)));
+  }
+
   /** Reversible admission fencing does not itself change the resource revision. */
   freezeAdmission(runtimeId: string): () => void {
     this.input.getRuntime(runtimeId);

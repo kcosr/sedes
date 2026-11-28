@@ -39,6 +39,7 @@ const blockerLabels: Record<
   fork_origin: ["fork operation", "fork operations"],
   automation_run: ["automation run", "automation runs"],
   conversation_runtime: ["conversation runtime", "conversation runtimes"],
+  archive_recovery: ["archive recovery record", "archive recovery records"],
 };
 
 function runtimeDescription(
@@ -257,6 +258,11 @@ export function ForceResetDialog({
                     {impact.affectedThreads.map((thread) => (
                       <li key={thread.threadId}>
                         <span>{thread.title}</span>
+                        {thread.archiveRecovery && (
+                          <small>{thread.archiveRecovery === "retained_output"
+                            ? "Discards recovery of retained agent output or operation results."
+                            : "Discards the record of unverified agent work."}</small>
+                        )}
                         {thread.runtime && (
                           <small>{runtimeDescription(thread.runtime)}</small>
                         )}

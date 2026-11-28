@@ -1,3 +1,4 @@
+import { ThreadArchiveObligationRepository } from "../../src/server/db/repositories/thread-archive-obligation-repository.js";
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -142,7 +143,7 @@ function fixture(nativeArchive?: {
   const runtimeStates = new Map<string, ThreadRunState>();
   const inventory = new InventoryRepository(database, (_scope, threadId) =>
     runtimeStates.get(threadId) === "running" ? "running-turn" : undefined);
-  const archiveSafe = new Set<string>();
+  const archiveLiveWork = new Set<string>();
   const publishCommitted = vi.fn(async () => undefined);
   const questions = new QuestionRequestRepository(database, inventory);
   const tasks = new TaskRepository(database);
@@ -218,7 +219,7 @@ function fixture(nativeArchive?: {
     runtimes: {
       captureLoadedState: async (_scope, threadId) => {
         const runState = runtimeStates.get(threadId);
-        return runState ? { runState, archiveRetirementSafe: archiveSafe.has(threadId) } : undefined;
+        return runState ? { runState, archiveHasLiveWork: archiveLiveWork.has(threadId) } : undefined;
       },
       runWithRuntimeRetired:
         runWithRuntimeRetired as unknown as ArchivedThreadRuntimeRetirement["runWithRuntimeRetired"],
@@ -266,7 +267,7 @@ function fixture(nativeArchive?: {
     inventory,
     lineage,
     runtimeStates,
-    archiveSafe,
+    archiveLiveWork,
     publishCommitted,
     publishTaskChange,
     deleteExecutionWorkspace,
@@ -402,7 +403,7 @@ describe("thread family archive service", () => {
     const current = fixture();
     try {
       for (const id of [current.rootId, current.childId]) {
-        current.runtimeStates.set(id, "disconnected"); current.archiveSafe.add(id);
+        current.runtimeStates.set(id, "disconnected");
       }
       await expect(current.service.impact(current.scope, current.rootId)).resolves.toMatchObject({
         archiveOnly: { available: true }, archiveAll: { available: true },
@@ -413,20 +414,33 @@ describe("thread family archive service", () => {
       });
       for (const id of [current.rootId, current.childId, current.grandchildId]) {
         expect(current.inventory.getInventory(current.scope, id).inventoryState).toBe("archived");
-        expect(current.runWithRuntimeRetired).toHaveBeenCalledWith(current.scope, id, expect.any(Function), { purpose: "archive" });
-        expect(current.releaseProviderResidency).toHaveBeenCalledWith(current.scope, id, { purpose: "archive" });
+        expect(current.runWithRuntimeRetired).toHaveBeenCalledWith(current.scope, id, expect.any(Function), { purpose: "archive", signal: expect.any(AbortSignal), shouldRetire: expect.any(Function) });
+        expect(current.releaseProviderResidency).toHaveBeenCalledWith(current.scope, id, { purpose: "archive", signal: expect.any(AbortSignal) });
       }
     } finally { current.database.close(); }
   });
 
-  it.each(["disconnected", "reconciling"] as const)("keeps a quarantined thread with a loaded %s runtime blocked", async (state) => {
+  it.each(["idle", "disconnected", "reconciling"] as const)("blocks observed live work on a %s descendant", async state => {
+    const current = fixture();
+    try {
+      current.runtimeStates.set(current.childId, state);
+      current.archiveLiveWork.add(current.childId);
+      await expect(current.service.impact(current.scope, current.rootId)).resolves.toMatchObject({
+        archiveOnly: { available: true }, archiveAll: { available: false },
+      });
+    } finally { current.database.close(); }
+  });
+
+  it.each(["disconnected", "reconciling"] as const)("offers to check a quarantined %s runtime and refuses an inconclusive check", async (state) => {
     const current = fixture();
     try {
       current.database.prepare("UPDATE application_threads SET availability = 'quarantined' WHERE id = ?").run(current.rootId);
       current.runtimeStates.set(current.rootId, state);
       await expect(current.service.impact(current.scope, current.rootId)).resolves.toMatchObject({
-        archiveOnly: { available: false }, archiveAll: { available: false },
+        archiveOnly: { available: true }, archiveAll: { available: true },
       });
+      current.runWithRuntimeRetired.mockRejectedValueOnce(
+        new DomainError("invalid_transition", "The provider could not confirm quiescence.", true));
       await expect(current.service.archive(current.scope, current.rootId, {
         includeDescendants: false, expectedRevision: 0,
         mutationId: `archive-loaded-${state}`, executionWorkspaceDisposition: { kind: "keep" },
@@ -714,6 +728,60 @@ describe("thread family archive service", () => {
     }
   });
 
+  it("rechecks a transient blocker which settled while acquiring the archive fence", async () => {
+    const current = fixture();
+    try {
+      current.runtimeStates.set(current.rootId, "running");
+      expect((await current.service.impact(current.scope, current.rootId)).archiveOnly.available).toBe(false);
+      current.runWithRuntimeRetired.mockImplementation(async (_scope, id, operation) => {
+        current.runtimeStates.delete(id);
+        return operation();
+      });
+      await expect(current.service.archive(current.scope, current.rootId, {
+        expectedRevision: 0, mutationId: "archive-settled", includeDescendants: false,
+        executionWorkspaceDisposition: { kind: "keep" },
+      })).resolves.toEqual([current.rootId]);
+    } finally { current.database.close(); }
+  });
+
+  it("rejects a descendant inventory revision changed after review even when membership and counts match", async () => {
+    const current = fixture();
+    try {
+      const impact = await current.service.impact(current.scope, current.rootId);
+      current.inventory.parkThread(current.scope, current.childId, {
+        mutationId: "park-before-family", expectedRevision: 0, now: 490,
+      });
+      await expect(current.service.archive(current.scope, current.rootId, {
+        expectedRevision: 0, mutationId: "archive-family-after-park", includeDescendants: true,
+        expectedPendingQuestionCount: 0, expectedOpenTaskSnapshot: impact.openTasks.familySnapshot,
+        executionWorkspaceDisposition: { kind: "keep" },
+      })).rejects.toMatchObject({ code: "conflict" });
+      expect(current.inventory.getInventory(current.scope, current.rootId).inventoryState).toBe("active");
+      expect(current.inventory.getInventory(current.scope, current.childId).inventoryState).toBe("parked");
+    } finally { current.database.close(); }
+  });
+
+  it("preserves a question discovered while draining and requests a new family confirmation", async () => {
+    const current = fixture();
+    try {
+      const request = { includeDescendants: true, expectedRevision: 0, mutationId: "archive-question-change",
+        expectedPendingQuestionCount: 0, executionWorkspaceDisposition: { kind: "keep" as const } };
+      current.releaseProviderResidency.mockImplementation(async (_scope, id) => {
+        if (id === current.childId) current.questions.admit(current.scope, id, "retained-question", {
+          questions: [{ title: "Release today?", options: null }],
+        }, 450);
+      });
+      await expect(current.service.archive(current.scope, current.rootId, request)).rejects.toMatchObject({ code: "conflict" });
+      for (const id of [current.rootId, current.childId, current.grandchildId])
+        expect(current.inventory.getInventory(current.scope, id).inventoryState).toBe("active");
+      const reviewed = await current.service.impact(current.scope, current.rootId);
+      expect(reviewed.pendingQuestions).toEqual({ root: 0, descendants: 1 });
+      await current.service.archive(current.scope, current.rootId, { ...request, expectedPendingQuestionCount: 1 });
+      expect(current.questions.list(current.scope, current.childId).requests).toHaveLength(1);
+      await expect(current.service.archive(current.scope, current.rootId, request)).rejects.toMatchObject({ code: "conflict" });
+    } finally { current.database.close(); }
+  });
+
   it("rejects a stale family archive stash count atomically", async () => {
     const current = fixture();
     try {
@@ -998,7 +1066,7 @@ describe("thread family archive service", () => {
           mutationId: "archive-remote-undelivered",
           executionWorkspaceDisposition: { kind: "keep" },
         }),
-      ).rejects.toMatchObject({ code: "invalid_transition", message: expect.stringContaining("Open the thread so its output is applied") });
+      ).rejects.toMatchObject({ code: "invalid_transition", message: expect.stringContaining("pending agent output"), retryable: true });
       expect(current.inventory.getInventory(current.scope, current.rootId)).toMatchObject({ inventoryState: "active" });
       current.releaseProviderResidency.mockResolvedValue(undefined);
       await current.service.archive(current.scope, current.rootId, {
@@ -1084,7 +1152,7 @@ describe("thread family archive service", () => {
 
       await expect(
         current.service.archive(current.scope, current.rootId, input),
-      ).rejects.toThrow("first-publication-failed");
+      ).rejects.toMatchObject({ code: "operation_outcome_uncertain", retryable: true });
       expect(
         current.inventory.getInventory(current.scope, current.rootId),
       ).toMatchObject({ inventoryState: "archived", inventoryRevision: 1 });
@@ -1108,12 +1176,75 @@ describe("thread family archive service", () => {
       });
       await expect(
         current.service.archive(current.scope, current.rootId, input),
-      ).resolves.toEqual([current.rootId]);
+      ).resolves.toEqual([]);
       expect(current.runWithRuntimeRetired).toHaveBeenCalledTimes(2);
       expect(archive).toHaveBeenCalledTimes(2);
     } finally {
       current.database.close();
     }
+  });
+
+  it.each([[false, 15_001], [true, 45_001]] as const)("rolls back all staged writes if synchronous validation exceeds the archive deadline (family %s)", async (family, elapsed) => {
+    const current = fixture();
+    const clock = vi.spyOn(performance, "now").mockReturnValue(1_000);
+    try {
+      const request = {
+        includeDescendants: family, expectedRevision: 0, mutationId: "family-archive-deadline",
+        executionWorkspaceDisposition: { kind: "keep" as const },
+      };
+      vi.spyOn(current.tasks, "assertOpenThreadTaskSnapshot").mockImplementation(() => { clock.mockReturnValue(1_000 + elapsed); });
+      await expect(current.service.archive(current.scope, current.rootId, request))
+        .rejects.toMatchObject({ code: "invalid_transition", retryable: true });
+      for (const id of [current.rootId, current.childId, current.grandchildId]) {
+        expect(current.inventory.getInventory(current.scope, id)).toMatchObject({ inventoryState: "active", inventoryRevision: 0 });
+      }
+      expect(current.inventory.findArchiveThreadsReplay(current.scope, current.rootId, request)).toBeUndefined();
+      expect(current.publishCommitted).not.toHaveBeenCalled();
+    } finally { clock.mockRestore(); current.database.close(); }
+  });
+
+  it("refuses new archive recovery evidence discovered after a family member was prepared", async () => {
+    const current = fixture();
+    try {
+      const obligations = new ThreadArchiveObligationRepository(current.database);
+      const ids = [current.rootId, current.childId, current.grandchildId].sort();
+      current.releaseProviderResidency.mockImplementation(async (_scope, id) => {
+        if (id === ids.at(-1)) obligations.markRetained(current.scope, ids[0]!, "newly-observed-owner");
+      });
+      await expect(current.service.archive(current.scope, current.rootId, {
+        mutationId: "late-archive-evidence", expectedRevision: 0, includeDescendants: true,
+        executionWorkspaceDisposition: { kind: "keep" },
+      })).rejects.toMatchObject({ code: "invalid_transition", retryable: true });
+      for (const id of ids) expect(current.inventory.getInventory(current.scope, id).inventoryState).toBe("active");
+      expect(obligations.read(current.scope, ids[0]!)?.retainedOwner).toBe("newly-observed-owner");
+    } finally { current.database.close(); }
+  });
+
+  it("rechecks a concurrent receipt under the fence before retiring a restored target", async () => {
+    const nativeArchive = vi.fn(async () => undefined);
+    const current = fixture({ archive: nativeArchive });
+    try {
+      const request = {
+        includeDescendants: false, expectedRevision: 0, mutationId: "overlapping-archive",
+        executionWorkspaceDisposition: { kind: "keep" as const },
+      };
+      let admit!: () => void;
+      const admission = new Promise<void>(resolve => { admit = resolve; });
+      current.runWithRuntimeRetired.mockImplementationOnce(async (_scope, _id, operation) => {
+        await admission;
+        return operation();
+      });
+
+      const waiting = current.service.archive(current.scope, current.rootId, request);
+      await expect(current.service.archive(current.scope, current.rootId, request)).resolves.toEqual([current.rootId]);
+      current.inventory.transitionInventory(current.scope, current.rootId, {
+        expectedRevision: 1, mutationId: "restore-before-archive-admission", change: { action: "restore" }, now: 510,
+      });
+      admit();
+      await expect(waiting).resolves.toEqual([]);
+      expect(current.releaseProviderResidency).toHaveBeenCalledTimes(1);
+      expect(nativeArchive).toHaveBeenCalledExactlyOnceWith(current.scope, [current.rootId]);
+    } finally { current.database.close(); }
   });
 
   it("replays archive deletion after the external filesystem effect fails", async () => {
@@ -1601,7 +1732,8 @@ describe("reviewed lifecycle task completion", () => {
           ...input, includeDescendants: action === "archive_family", executionWorkspaceDisposition: { kind: "keep" },
         });
       current.publishTaskChange.mockRejectedValueOnce(new Error("publication interrupted"));
-      await expect(perform()).rejects.toThrow("publication interrupted");
+      if (action === "park") await expect(perform()).rejects.toThrow("publication interrupted");
+      else await expect(perform()).rejects.toMatchObject({ code: "operation_outcome_uncertain", retryable: true });
       expect(current.tasks.get(current.scope, rootTask.id)).toMatchObject({
         scopeKind: "thread", threadId: current.rootId, revision: 1, completedAt: 500, updatedAt: 500,
       });

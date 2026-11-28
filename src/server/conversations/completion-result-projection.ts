@@ -2,7 +2,7 @@ import type { ClassifiedAssistantResult } from "../../shared/protocol/completion
 import type { BackendItem } from "../../shared/protocol/backend.js";
 import type { BoundedText } from "../../shared/protocol/payload.js";
 import { boundText } from "./payload-policy.js";
-import type { ProjectedConversationTimeline } from "./conversation-projector.js";
+import type { ConversationProjector, ProjectedConversationTimeline } from "./conversation-projector.js";
 
 /**
  * Projects the immutable, backend-neutral text carried by an authoritative
@@ -75,4 +75,15 @@ export function projectClassifiedAssistantResult(
     remaining -= Buffer.byteLength(bounded.text, "utf8");
   }
   return result;
+}
+
+export function projectedCompletion(projector: ConversationProjector, backendTurnId: string, timeline = projector.timeline()) {
+  return {
+    ...projectAuthoritativeCompletionResult({
+      backendTurnId,
+      timeline,
+      matchesApplicationTurnId: (backendId, applicationId) => projector.matchesApplicationTurnId(backendId, applicationId),
+    }),
+    classifiedResult: projectClassifiedAssistantResult(projector.assistantItemsForTurn(backendTurnId)),
+  };
 }

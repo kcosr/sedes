@@ -20,6 +20,7 @@ import { OPENCODE_RELEASE, assessOpenCodeRuntimeVersion, OpenCodeRuntimeError, t
 import { OpenCodeInstallationAdvisorySource } from "./opencode-installation-advisories.js";
 import { openCodeRuntimeDiagnostic } from "./opencode-runtime-diagnostic.js";
 import { BackendRuntimeControlRejectedError } from "../runtime-control.js";
+import { OpenCodeInputEvidenceRepository } from "./opencode-input-evidence.js";
 import { OpenCodeThreadRepository } from "./opencode-thread-repository.js";
 import { OpenCodeBackendThreadPersistenceAdapter } from "./opencode-backend-thread-persistence-adapter.js";
 import { OpenCodeBackendDriverFactory } from "./opencode-driver-factory.js";
@@ -47,6 +48,7 @@ const managedTerminals = Object.freeze({
 
 /** Stock OpenCode v2 with private HTTP/SSE protocol and resident runtime ownership. */
 export class OpenCodeBackendModule implements BackendModule {
+  readonly hasDurableArchiveWork = OpenCodeInputEvidenceRepository.hasUnresolved;
   // First-input acceptance and binding commit together; force reset skips bound attempts.
   readonly creationProvenanceRepair = undefined;
   readonly startupPolicy = "connect_provider" as const;
@@ -54,7 +56,7 @@ export class OpenCodeBackendModule implements BackendModule {
   readonly backendKind = "opencode" as const;
   readonly connectionKinds = ["opencode_http"] as const;
   readonly protocolRelease = OPENCODE_RELEASE;
-  readonly remoteRuntimeCapabilities = Object.freeze([{ capabilityId: "opencode_runtime", majorVersion: 6,
+  readonly remoteRuntimeCapabilities = Object.freeze([{ capabilityId: "opencode_runtime", majorVersion: 7,
     operations: Object.freeze(openCodeRuntimeOperations.map(operation => operation.operation)) }]);
   constructor(readonly createNativeRuntime: NativeRuntimeFactory = input => new OpenCodeRuntime(input)) {}
 
@@ -273,7 +275,7 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
           }
         };
       },
-      runtime: async () => await this.#startedNative() });
+      runtime: () => this.#startedNative(), existingRuntime: signal => this.#existingNative(signal) });
     return { driverFactory, persistence, discovery, presentation, actionPersistence, savedAgents, automationExecutionPolicy };
   }
 
@@ -343,6 +345,32 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
     this.#composition = this.#compose(this.#namespace);
   }
 
+  async #existingNative(signal: AbortSignal): Promise<NativeRuntime | undefined> {
+    signal.throwIfAborted();
+    this.#assertOpen();
+    const owner = this.#owner ?? (this.context.sidecarRuntime ? await this.#native() : undefined);
+    if (!owner) {
+      if (this.configuration.connection.ownership === "owned" && !this.#opening) return undefined;
+      throw new OpenCodeRuntimeError("opencode_runtime_owner_unproved");
+    }
+    if (owner instanceof OpenCodeRemoteRuntime) {
+      if (owner.snapshot().state !== "ready") {
+        try { await owner.startRetained(signal); }
+        catch (error) {
+          signal.throwIfAborted();
+          if (error instanceof OpenCodeRuntimeError && ["opencode_retained_runtime_absent", "opencode_daemon_offline"].includes(error.code)) return undefined;
+          throw error;
+        }
+      }
+    } else {
+      if (owner.snapshot().state !== "ready") {
+        if (owner instanceof OpenCodeRuntime && await owner.archiveDaemonUnavailable(signal)) return undefined;
+        throw new OpenCodeRuntimeError("opencode_runtime_owner_unproved");
+      }
+    }
+    this.#assertOpen();
+    return owner;
+  }
   async #startedNative(signal?: AbortSignal): Promise<NativeRuntime> {
     const owner = await this.#native();
     await owner.start(signal);

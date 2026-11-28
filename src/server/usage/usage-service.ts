@@ -174,9 +174,9 @@ export class UsageService implements UsageSink {
     const available=new Set(rows.map(row=>row.turn_id));
     return {threadId,revision:String(this.#state(scope,threadId)?.revision??0n),turns:[...new Set(turnIds)].map(turnId=>({turnId,available:available.has(turnId)}))};
   }
-  registerVisibleTurns(scope: RequestScope, threadId: string, turns: readonly ConversationTurn[]): void {
+  registerVisibleTurns(scope: RequestScope, threadId: string, turns: readonly ConversationTurn[], purpose?: "archive",
+    afterCommit?: (publish: () => void) => void): void {
     if (!this.enabled) return;
-    const failedKey=hash([scope.tenantId,scope.principalId,threadId]);
     try {
       let changes:{threadId:string;revision:string}[]=[];
       this.database.transaction(() => {
@@ -185,8 +185,16 @@ export class UsageService implements UsageSink {
         for(const turn of turns)insert.run(scope.tenantId,scope.principalId,threadId,turn.id,turn.status);
         changes=this.#materialize(scope,threadId);
       })();
-      for(const changed of changes)for(const listener of this.#listeners){try{listener(scope,changed.threadId,changed.revision);}catch{/* Durable reads remain authoritative. */}}
-    } catch(error) { this.#recordFailure(scope,threadId,error); }
+      if (purpose === "archive") return;
+      const publish = () => {
+        for(const changed of changes)for(const listener of this.#listeners){try{listener(scope,changed.threadId,changed.revision);}catch{/* Durable reads remain authoritative. */}}
+      };
+      if (afterCommit) afterCommit(publish);
+      else publish();
+    } catch(error) {
+      if (purpose === "archive" || afterCommit) throw error;
+      this.#recordFailure(scope,threadId,error);
+    }
   }
   #admitBinding(binding: Parameters<UsageSink["open"]>[0]["binding"]) {
     const scope={tenantId:binding.tenantId,principalId:binding.ownerPrincipalId};

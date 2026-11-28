@@ -24,6 +24,15 @@ function observe(api: OpenCodeNativeApi, input: Parameters<OpenCodeNativeApi["ob
 }
 
 describe("OpenCode validated native reads", () => {
+  it("reports an unreachable native socket independently of an HTTP failure", async () => {
+    const refusal = Object.assign(new Error("test refusal"), { code: "ECONNREFUSED" });
+    const client = new OpenCodeHttpClient({ endpoint: "http://127.0.0.1:11011", password: "fixture", fetch: async () => {
+      throw new TypeError("fetch failed", { cause: refusal });
+    } });
+    try { await expect(client.info()).rejects.toMatchObject({ code: "opencode_daemon_offline" }); }
+    finally { client.close(); }
+  });
+
   it("uses the official encoded schema for every message variant and rejects unknown/excess fields", () => {
     const base = { id: "msg_1", time: { created: 1 } };
     const values = [

@@ -1,3 +1,4 @@
+import type { ThreadArchiveObligationRepository } from "../db/repositories/thread-archive-obligation-repository.js";
 import { randomUUID } from "node:crypto";
 import {
   ConversationActorRetirementBusyError,
@@ -22,7 +23,8 @@ import type {
 } from "../../shared/protocol/conversation.js";
 import type { ThreadApplicationActorTargetResolver } from "../conversations/thread-application-service.js";
 import { DomainError } from "../domain/errors.js";
-import { BackendError } from "../backends/contracts.js";
+import { BackendError, type PrepareConversationArchiveInput } from "../backends/contracts.js";
+import type { BackendConversationSnapshot } from "../../shared/protocol/backend.js";
 import { reportBackgroundError } from "../report-background-error.js";
 import type { RequestScope } from "../identity/identity-provider.js";
 import type {
@@ -252,7 +254,17 @@ function canAutomaticallyRelease(runtime: EstablishedRuntime): boolean {
       !runtime.hub.snapshot || runtime.hub.snapshot.interactions.length === 0);
 }
 
+interface ThreadArchiveMaintenance {
+  readonly hasDurableArchiveWork?: (scope: RequestScope, threadId: string) => boolean;
+  readonly archiveObligations?: Pick<ThreadArchiveObligationRepository, "read" | "markRetained" | "markSettled" | "remember" | "clear">;
+  readonly settleArchiveSnapshot?: (
+    scope: RequestScope, threadId: string, snapshot: BackendConversationSnapshot,
+    recoveredCompletionTurnIds: readonly string[],
+  ) => Promise<void>;
+}
+
 export class ThreadRuntimeCoordinator {
+  readonly #archive: ThreadArchiveMaintenance;
   readonly #actors: Pick<
     ConversationActorManager,
     "acquire" | "acquireExistingControl" | "captureUnprojectedGeneration" | "runWithRuntimeRetired" | "runWithRuntimesStopped"
@@ -279,7 +291,7 @@ export class ThreadRuntimeCoordinator {
   #closed = false;
   #closePromise: Promise<void> | undefined;
 
-  constructor(input: {
+  constructor(input: ThreadArchiveMaintenance & {
     readonly actors: Pick<
       ConversationActorManager,
       "acquire" | "acquireExistingControl" | "captureUnprojectedGeneration" | "runWithRuntimeRetired" | "runWithRuntimesStopped"
@@ -299,6 +311,7 @@ export class ThreadRuntimeCoordinator {
     ) => void | Promise<void>;
     readonly isAutomaticModelRetryPending?: (scope: RequestScope, applicationThreadId: string) => boolean;
   }) {
+    this.#archive = input;
     this.#actors = input.actors;
     this.#targets = input.targets;
     this.#bridge = input.bridge;
@@ -501,10 +514,11 @@ export class ThreadRuntimeCoordinator {
     scope: RequestScope,
     applicationThreadId: string,
     operation: () => Promise<Result>,
-    options?: { readonly purpose: "archive" | "provider_replaced" },
+    options?: { readonly purpose: "archive" | "provider_replaced"; readonly signal?: AbortSignal; readonly shouldRetire?: () => boolean },
   ): Promise<Result> {
     return this.#runWithRuntimeMaintenance(
-      scope, applicationThreadId, { kind: options?.purpose ?? "idle" }, operation,
+      scope, applicationThreadId, options?.purpose === "archive" ? { kind: "archive", signal: options.signal, shouldRetire: options.shouldRetire }
+        : { kind: options?.purpose ?? "idle" }, operation,
     );
   }
 
@@ -538,8 +552,11 @@ export class ThreadRuntimeCoordinator {
   async releaseProviderResidency(
     scope: RequestScope,
     applicationThreadId: string,
-    options?: { readonly failurePolicy?: "propagate"; readonly purpose?: "archive" },
+    options?: { readonly failurePolicy?: "propagate"; readonly purpose?: "archive"; readonly signal?: AbortSignal },
   ): Promise<void> {
+    if (options?.purpose === "archive") {
+      return this.#prepareArchive(scope, applicationThreadId, options.signal ?? AbortSignal.timeout(15_000));
+    }
     let target: Awaited<ReturnType<ThreadApplicationActorTargetResolver["resolve"]>>;
     try {
       target = await this.#targets.resolve(scope, applicationThreadId);
@@ -556,7 +573,6 @@ export class ThreadRuntimeCoordinator {
         binding: target.binding,
         workspace: target.workspace,
         opaqueBindingDetail: target.opaqueBindingDetail,
-        ...(options?.purpose === "archive" ? { purpose: "archive" as const } : {}),
       });
     } catch (error) {
       if (options?.failurePolicy === "propagate") {
@@ -571,6 +587,90 @@ export class ThreadRuntimeCoordinator {
     }
     if (outcome === "busy") throw new ThreadRuntimeNotIdleError();
     if (outcome === "undelivered") throw new ThreadProviderOutputUndeliveredError();
+  }
+
+  async #prepareArchive(scope: RequestScope, threadId: string, signal: AbortSignal): Promise<void> {
+    const obligations = this.#archive.archiveObligations;
+    const hasDurableWork = () => this.#archive.hasDurableArchiveWork?.(scope, threadId) === true;
+    const previous = obligations?.read(scope, threadId);
+    let observed = previous !== undefined;
+    let evidenceToken = previous?.evidenceToken;
+    let retainedOwner = previous?.retainedOwner ?? undefined;
+    const markObserved = () => {
+      evidenceToken = obligations?.remember(scope, threadId);
+      observed = true;
+    };
+    const inconclusive = (reason?: string, cause?: unknown) => new DomainError(
+      "invalid_transition",
+      (reason ?? "Sedes could not verify that the thread's agent work and retained output have settled. Try archiving again.") +
+        (observed ? " If the original agent is permanently unavailable, review Force reset to discard its recovery record." : ""),
+      true, { cause });
+    signal.throwIfAborted();
+    let target: Awaited<ReturnType<ThreadApplicationActorTargetResolver["resolve"]>>;
+    try {
+      target = await this.#targets.resolve(scope, threadId);
+    } catch (error) {
+      // Drafts, retired registrations and unavailable history are archivable
+      // while dormant. A remembered obligation or stale authority is evidence
+      // that requires its original provider to establish release.
+      if (!observed && !obligations?.read(scope, threadId) && !hasDurableWork() && error instanceof DomainError &&
+          ["not_found", "runtime_unavailable", "workspace_missing", "invalid_transition"].includes(error.code)) return;
+      throw inconclusive(undefined, error);
+    }
+    signal.throwIfAborted();
+    const prepare = target.driver.prepareArchive;
+    if (!prepare) {
+      if (observed || obligations?.read(scope, threadId) || hasDurableWork()) throw inconclusive();
+      return;
+    }
+    const settle: PrepareConversationArchiveInput["settle"] = async (snapshot, turns) => {
+      signal.throwIfAborted();
+      markObserved();
+      if (!this.#archive.settleArchiveSnapshot) throw new Error("archive_settlement_unavailable");
+      await this.#archive.settleArchiveSnapshot(scope, threadId, snapshot, turns);
+      signal.throwIfAborted();
+    };
+    let result;
+    try {
+      result = await prepare.call(target.driver, { scope: target.scope, binding: target.binding,
+        opaqueBindingDetail: target.opaqueBindingDetail, workspace: target.workspace,
+        signal, markObserved, settle,
+        get retainedOwner() { return retainedOwner; },
+        markRetained(owner) {
+          if (!owner || (retainedOwner !== undefined && retainedOwner !== owner)) throw inconclusive();
+          evidenceToken = obligations?.markRetained(scope, threadId, owner);
+          observed = true;
+          retainedOwner = owner;
+        },
+        markSettled(owner) {
+          if (owner !== retainedOwner) throw inconclusive();
+          evidenceToken = obligations?.markSettled(scope, threadId, owner);
+          retainedOwner = undefined;
+        },
+      });
+    } catch (error) {
+      signal.throwIfAborted();
+      throw inconclusive(undefined, error);
+    }
+    signal.throwIfAborted();
+    switch (result.outcome) {
+      case "released":
+        if (hasDurableWork()) throw inconclusive();
+        if (retainedOwner !== undefined) throw inconclusive("Sedes still needs confirmation from the original session that its retained output was saved.");
+        if (obligations?.read(scope, threadId) && (!evidenceToken || !obligations.clear(scope, threadId, evidenceToken))) {
+          throw inconclusive("New evidence of work appeared while Sedes was preparing this archive. Try archiving again.");
+        }
+        return;
+      case "offline":
+        if (observed || obligations?.read(scope, threadId) || hasDurableWork()) throw inconclusive("The agent is offline and Sedes still needs to verify previously observed work. Reconnect it and try again.");
+        return;
+      case "busy":
+        markObserved();
+        if (result.reason) throw new DomainError("invalid_transition", result.reason);
+        throw new ThreadRuntimeNotIdleError();
+      case "inconclusive":
+        throw inconclusive(result.reason);
+    }
   }
 
   /** Detaches exactly the previewed actor and keeps admission fenced through the operation. */
@@ -661,7 +761,7 @@ export class ThreadRuntimeCoordinator {
     applicationThreadId: string,
     disposition:
       | { readonly kind: "idle" }
-      | { readonly kind: "archive" }
+      | { readonly kind: "archive"; readonly signal?: AbortSignal; readonly shouldRetire?: () => boolean }
       | { readonly kind: "provider_replaced" }
       | {
           readonly kind: "explicit_detach";
@@ -670,11 +770,15 @@ export class ThreadRuntimeCoordinator {
     operation: () => Promise<Result>,
   ): Promise<Result> {
     const key = scopedKey(scope, applicationThreadId);
+    const archiveSignal = disposition.kind === "archive" ? disposition.signal : undefined;
+    const observeOwner = () => this.#archive.archiveObligations?.remember(scope, applicationThreadId);
     while (true) {
+      archiveSignal?.throwIfAborted();
       if (this.#closed) throw new Error("thread_runtime_coordinator_closed");
       const existing = this.#maintenance.get(key);
       if (existing) {
-        await existing;
+        if (archiveSignal) await abortable(Promise.resolve(existing), archiveSignal);
+        else await existing;
         continue;
       }
 
@@ -695,7 +799,8 @@ export class ThreadRuntimeCoordinator {
                 : unprojected === disposition.expected.generation && disposition.expected.runState === "starting"
                   ? { kind: "unprojected_detach", expectedGeneration: unprojected }
                   : { kind: "idle" }
-              : { kind: disposition.kind === "explicit_detach" ? "idle" : disposition.kind };
+              : disposition.kind === "archive" ? { kind: "archive", signal: archiveSignal, observeOwner, shouldRetire: disposition.shouldRetire }
+                : { kind: disposition.kind === "explicit_detach" ? "idle" : disposition.kind };
           return await this.#actors.runWithRuntimeRetired({
             scope,
             applicationThreadId,
@@ -705,6 +810,18 @@ export class ThreadRuntimeCoordinator {
                 if (disposition.kind === "explicit_detach") {
                   await this.#releasePreviewedRuntime(key, actorDisposition.kind === "unprojected_detach" ? undefined : disposition.expected);
                 } else {
+                  if (archiveSignal?.aborted) throw new ConversationActorRetirementStaleError();
+                  if (disposition.kind === "archive") {
+                    const actor = this.#entries.get(key)?.runtime?.actor;
+                    if (actor?.hasObservedArchiveWork) observeOwner();
+                    if (actor?.archiveStateUncertain && archiveSignal) {
+                      try { await actor.waitForArchiveReadiness(archiveSignal); }
+                      catch (error) {
+                        if (archiveSignal.aborted) throw new ConversationActorRetirementStaleError();
+                        throw error;
+                      }
+                    }
+                  }
                   await this.#releaseIdleRuntime(key, disposition.kind);
                 }
               } catch (error) {
@@ -725,7 +842,11 @@ export class ThreadRuntimeCoordinator {
         } catch (error) {
           if (retirementProven) throw error;
           if (error instanceof ConversationActorRetirementBusyError) {
-            error = new ThreadRuntimeNotIdleError();
+            const unknown = disposition.kind === "archive" &&
+              this.#entries.get(key)?.runtime?.actor.archiveStateUncertain;
+            error = unknown ? new DomainError("invalid_transition",
+              "The thread's agent connection has not provided enough evidence that its work has stopped. Reconnect it and try archiving again.", true)
+              : new ThreadRuntimeNotIdleError();
           } else if (error instanceof ConversationActorRetirementStaleError) {
             error = new ThreadRuntimeMaintenanceStaleError();
           } else if (
@@ -734,7 +855,7 @@ export class ThreadRuntimeCoordinator {
             error = new ThreadRuntimeRetirementUnprovenError(error.cause);
           }
           runtimeWasBusy =
-            error instanceof ThreadRuntimeNotIdleError ||
+            error instanceof DomainError || error instanceof ThreadRuntimeNotIdleError ||
             error instanceof ThreadRuntimeMaintenanceStaleError;
           if (
             runtimeWasBusy ||
@@ -1084,7 +1205,7 @@ export class ThreadRuntimeCoordinator {
   ): Promise<{
     readonly runState: ThreadRunState;
     readonly backgroundWork?: NormalizedApplicationThreadSummary["backgroundWork"];
-    readonly archiveRetirementSafe?: boolean;
+    readonly archiveHasLiveWork?: boolean;
   } | undefined> {
     const key = scopedKey(scope, applicationThreadId);
     const entry = this.#entries.get(key);
@@ -1125,7 +1246,7 @@ export class ThreadRuntimeCoordinator {
           this.#isAutomaticModelRetryPending?.(scope, applicationThreadId) === true
           ? "starting" : runState,
         ...(backgroundWork ? { backgroundWork } : {}),
-        ...(options?.purpose === "archive" ? { archiveRetirementSafe: runtime.actor.canRetireForArchive } : {}),
+        ...(options?.purpose === "archive" && runtime.actor.archiveHasLiveWork ? { archiveHasLiveWork: true } : {}),
       };
     } finally {
       this.#release(key, entry);
@@ -1733,7 +1854,7 @@ export class ThreadRuntimeCoordinator {
     if (!canAutomaticallyRelease(runtime)) {
       return;
     }
-    const eviction = this.#dispose(runtime, true);
+    const eviction = this.#dispose(runtime, "automatic");
     entry.eviction = eviction;
     try {
       await eviction;
@@ -1823,7 +1944,7 @@ export class ThreadRuntimeCoordinator {
     }
     const runtime = entry.runtime;
     if (!canAutomaticallyRelease(runtime)) throw new ThreadRuntimeNotIdleError();
-    await this.#dispose(runtime, true);
+    await this.#dispose(runtime, "automatic");
     if (this.#entries.get(key) === entry) this.#entries.delete(key);
   }
 
@@ -1856,7 +1977,7 @@ export class ThreadRuntimeCoordinator {
       if (!(purpose === "archive" ? runtime.actor.canRetireForArchive
         : purpose === "provider_replaced" ? runtime.actor.canRetireAfterProviderReplacement
         : runtime.actor.canEvict)) throw new ThreadRuntimeNotIdleError();
-      await this.#dispose(runtime);
+      await this.#dispose(runtime, purpose === "archive" ? "archive" : "ordinary");
       if (this.#entries.get(key) === entry) this.#entries.delete(key);
     }
   }
@@ -1898,17 +2019,17 @@ export class ThreadRuntimeCoordinator {
     if (this.#entries.get(key) === entry) this.#entries.delete(key);
   }
 
-  #dispose(runtime: EstablishedRuntime, automatic = false): Promise<void> {
+  #dispose(runtime: EstablishedRuntime, purpose: "automatic" | "archive" | "ordinary" = "ordinary"): Promise<void> {
     const existing = this.#disposals.get(runtime);
     if (existing) return existing;
-    const disposal = this.#disposeBindings(runtime, automatic);
+    const disposal = this.#disposeBindings(runtime, purpose);
     // Actor closure and explicit maintenance can reach the same bindings.
     // Share their actual cleanup result, including an unproven failure.
     this.#disposals.set(runtime, disposal);
     return disposal;
   }
 
-  async #disposeBindings(runtime: EstablishedRuntime, automatic: boolean): Promise<void> {
+  async #disposeBindings(runtime: EstablishedRuntime, purpose: "automatic" | "archive" | "ordinary"): Promise<void> {
     if (this.#detached.has(runtime)) return;
     this.#detached.add(runtime);
     // Publish after fencing reads, before asynchronous teardown. A late old
@@ -1944,7 +2065,11 @@ export class ThreadRuntimeCoordinator {
       failures.push(error);
     }
     try {
-      if (automatic && runtime.actor.automaticEviction === "client_detach") runtime.interaction.detach();
+      if (purpose === "archive" || purpose === "automatic" && runtime.actor.automaticEviction === "client_detach") {
+        // Archive never answers or cancels a provider interaction that arrived
+        // during detach. The actor/owner checks still refuse outstanding work.
+        runtime.interaction.detach();
+      }
       else await runtime.interaction.release();
     } catch (error) {
       failures.push(error);

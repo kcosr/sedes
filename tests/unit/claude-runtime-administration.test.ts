@@ -72,7 +72,7 @@ it("reports retained work for a replacement main, live work first, mapped to thi
   for (const sessionId of [unacknowledged, running, settled, unbound]) {
     await host.execute({ ...authority, action: "open", replay: "full", request: {
       queryId: sessionId, sessionId, cwd: "/workspace", launch: "new", enableCanUseTool: false, environment: {} } }, listener);
-    await host.execute({ ...authority, action: "detach", request: { sessionId } }, listener);
+    await host.execute({ ...authority, action: "detach", request: { sessionId, startupProbeUuid: f.sessions.find(session => session.options.sessionId === sessionId)!.startupProbeUuid } }, listener);
   }
   const native = (sessionId: string) => f.sessions.find(session => session.options.sessionId === sessionId)!;
   await host.execute({ ...authority, action: "send", request: { queryId: running, operationId: randomUUID(), content: "Keep working." } }, listener);
@@ -189,7 +189,7 @@ it("preserves an idle stop confirmation across native reads and existing-session
   await f.connection.execute({ ...authority, action: "submission_disposition", request: { sessionId, operationId: randomUUID(), cwd: "/workspace" } });
   await f.connection.execute({ ...authority, action: "attach", replay: "full", request: { sessionId } });
   await f.connection.execute({ ...authority, action: "open", replay: "full", request: { ...request, launch: "resume" } });
-  await f.connection.execute({ ...authority, action: "acknowledge", request: { sessionId, sequence: 0 } });
+  await f.connection.execute({ ...authority, action: "acknowledge", request: { sessionId, startupProbeUuid: f.sessions[0]!.startupProbeUuid, sequence: 0 } });
   expect(await admin.inspect()).toEqual(observed);
   await admin.stop({ expectedRevision: observed.revision, force: false });
   expect(f.runtime.close).toHaveBeenCalledOnce();
@@ -276,7 +276,7 @@ it("preserves an answered permission receipt during automatic shutdown and keeps
   expect(retained.events.map(event => event.payload.kind)).toEqual(["permission_delivered"]);
   expect(retained.failureCode).toBeNull();
   await expect(host.execute({ ...authority, action: "send", request: { queryId: sessionId, operationId: randomUUID(), content: "New work is forbidden." } }, () => {})).rejects.toThrow("claude_persistent_runtime_stopped");
-  await host.execute({ ...authority, action: "acknowledge", request: { sessionId, sequence: retained.events[0]!.sequence } }, () => {});
+  await host.execute({ ...authority, action: "acknowledge", request: { sessionId, startupProbeUuid: retained.startupProbeUuid, sequence: retained.events[0]!.sequence } }, () => {});
   const drained = claudePersistentAttachmentSchema.parse(await host.execute({ ...authority, action: "attach", replay: "full", request: { sessionId } }, () => {}));
   expect(drained).toMatchObject({ failureCode: null, events: [] });
   expect(host.snapshot().blockers).not.toContain("unsettled_outcome");
@@ -375,7 +375,7 @@ it.each(["detach", "evict"] as const)("preserves a confirmed idle stop across cl
   } });
   const admin = (await recoverClaudeRuntimeAdministration({ context: f.context, configuration }))!;
   const confirmed = await admin.inspect();
-  await f.connection.execute({ ...authority, action, request: { sessionId } });
+  await f.connection.execute({ ...authority, action, request: { sessionId, startupProbeUuid: f.sessions[0]!.startupProbeUuid } });
   expect(f.sessions[0]!.close).toHaveBeenCalledTimes(action === "evict" ? 1 : 0);
   expect(await admin.inspect()).toEqual(confirmed);
   await admin.stop({ expectedRevision: confirmed.revision, force: true });
@@ -396,7 +396,7 @@ it("does not let clean idle detachment bless new provider work after confirmatio
   const sessionId = await open();
   const before = f.hosts.inspect(runtimeId);
   await open();
-  await f.connection.execute({ ...authority, action: "detach", request: { sessionId } });
+  await f.connection.execute({ ...authority, action: "detach", request: { sessionId, startupProbeUuid: f.sessions.find(session => session.options.sessionId === sessionId)!.startupProbeUuid } });
   await expect(f.hosts.stop(runtimeId, before.revision, true)).rejects.toThrow("claude_persistent_confirmation_stale");
   expect(f.runtime.close).not.toHaveBeenCalled();
 });
@@ -411,7 +411,7 @@ it("retains failed idle-eviction cleanup evidence and rejects the earlier stop c
   } });
   const before = f.hosts.inspect(runtimeId);
   f.sessions[0]!.close.mockRejectedValueOnce(new Error("cleanup_unproven"));
-  await expect(f.connection.execute({ ...authority, action: "evict", request: { sessionId } })).rejects.toThrow();
+  await expect(f.connection.execute({ ...authority, action: "evict", request: { sessionId, startupProbeUuid: f.sessions.find(session => session.options.sessionId === sessionId)!.startupProbeUuid } })).rejects.toThrow();
   const after = f.hosts.inspect(runtimeId);
   expect(after).toMatchObject({ state: "unknown", blockers: ["cleanup_unproven"] });
   expect(after.revision).not.toBe(before.revision);

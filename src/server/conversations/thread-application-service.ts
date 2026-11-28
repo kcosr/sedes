@@ -1,3 +1,4 @@
+import { hasOutstandingBackgroundActivity } from "../../shared/protocol/background-activity.js";
 import { initialThreadSettingsReady, threadInputDeliveryAvailability } from "./thread-input-readiness.js";
 import { fitApplicationItemsToSnapshot } from "./application-publication-projection.js";
 import type { UsageService } from "../usage/usage-service.js";
@@ -656,6 +657,8 @@ export class ThreadApplicationService {
       queue,
       runState,
       actualRunState,
+      archiveBackgroundWork: actor?.timeline.backgroundActivity?.state === "known" &&
+        hasOutstandingBackgroundActivity(actor.timeline.backgroundActivity),
       parkUntilTurnEnd: actor !== undefined && this.#conversations.currentTurnForParking(scope, applicationThreadId) !== undefined,
       retryPending,
       ...(actor?.timeline.activeTurnId
@@ -984,6 +987,7 @@ function composeCapabilities(input: {
   readonly runState: ThreadRunState;
   /** Presentation may show a retry delay while the provider is already settled. */
   readonly actualRunState: ThreadRunState;
+  readonly archiveBackgroundWork: boolean;
   readonly parkUntilTurnEnd: boolean;
   readonly retryPending?: boolean;
   readonly activeTurnId?: string;
@@ -1193,8 +1197,9 @@ function composeCapabilities(input: {
     operation(
       "archive",
       "Archive",
-      !archived && !mutationBlocked,
-      "An active or already archived thread cannot be archived.",
+      !archived && !inFlight && !input.archiveBackgroundWork && !input.interactions.length &&
+        !input.recovery && !input.queue.length,
+      "An archived thread or a thread with pending work cannot be archived.",
       true,
     ),
     operation(

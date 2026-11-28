@@ -16,7 +16,7 @@ import { parsePiManagedCommand, piManagedConfigurationDigest } from "../rpc/pi-m
 import { createPiNativeSessionProcess } from "../rpc/pi-native-launch.js";
 import {
   DEFAULT_SESSION_EVENT_BYTES, MAXIMUM_SESSION_EVENTS, PiNativeError, type PiNativeRuntimeConfiguration, type PiNativeSessionIdentity,
-  type PiNativePort, type PiNativeAttachInput, type PiNativeAttachment, type PiNativeCatalog,
+  type PiNativePort, type PiNativeMaintenanceTarget, type PiNativeAttachInput, type PiNativeAttachment, type PiNativeCatalog,
   type PiNativeCommand, type PiNativeCreateInput, type PiNativeForkInput, type PiNativeHistory,
   type PiNativeOutcome, type PiNativeEvent, type PiNativeInspection, type PiNativeObservation,
   type PiNativeFailure, type PiNativeRetirement, type PiNativeDrainAttachment, type PiNativeStreamSnapshot,
@@ -77,7 +77,7 @@ export class PiNativeHost implements PiNativePort {
   };
   readonly #sessions = new Map<string, Session>();
   readonly #byFile = new Map<string, Session>();
-  readonly #releasedHandles = new Set<string>();
+  readonly #releasedHandles = new Map<string, { identity: PiNativeSessionIdentity; generation: string }>();
   readonly #catalogs = new Set<CatalogProcess>();
   readonly #catalogReads = new WeakMap<PiNativeHostAuthority, Map<string, Promise<PiNativeCatalog>>>();
   #catalogTail: Promise<void> = Promise.resolve();
@@ -255,14 +255,27 @@ export class PiNativeHost implements PiNativePort {
     finally { session.starting = undefined; }
   }
 
-  async attachForDrain(input: PiNativeSessionIdentity, signal?: AbortSignal, authority = LOCAL_AUTHORITY): Promise<PiNativeDrainAttachment | null> {
-    this.#current(authority, signal);
+  #maintenanceSession(input: PiNativeMaintenanceTarget): Session | undefined {
     const session = this.#byFile.get(input.sessionFile);
+    const expected = input.expectedOwner;
     if (!session) {
       if ([...this.#sessions.values()].some(candidate => candidate.identity.sessionId === input.sessionId)) throw new PiNativeError("pi_native_session_identity_mismatch");
-      return null;
+      if (expected) {
+        const receipt = this.#releasedHandles.get(expected.handleId);
+        if (!receipt || receipt.generation !== expected.generation || !sameSession(receipt.identity, input)) throw new PiNativeError("pi_native_session_retirement_unconfirmed");
+      }
+      return undefined;
     }
-    if (!sameSession(session.identity, input)) throw new PiNativeError("pi_native_session_identity_mismatch");
+    if (!sameSession(session.identity, input) || expected && (session.handleId !== expected.handleId || session.generation !== expected.generation)) {
+      throw new PiNativeError("pi_native_session_identity_mismatch");
+    }
+    return session;
+  }
+
+  async attachForDrain(input: PiNativeMaintenanceTarget, signal?: AbortSignal, authority = LOCAL_AUTHORITY): Promise<PiNativeDrainAttachment | null> {
+    this.#current(authority, signal);
+    const session = this.#maintenanceSession(input);
+    if (!session) return null;
     if (session.starting) throw new PiNativeError("pi_native_session_starting");
     if (session.retiring) {
       await session.retiring;
@@ -289,14 +302,10 @@ export class PiNativeHost implements PiNativePort {
     }
   }
 
-  async attachForControl(input: PiNativeSessionIdentity, signal?: AbortSignal, authority = LOCAL_AUTHORITY): Promise<PiNativeAttachment | null> {
+  async attachForControl(input: PiNativeMaintenanceTarget, signal?: AbortSignal, authority = LOCAL_AUTHORITY): Promise<PiNativeAttachment | null> {
     this.#current(authority, signal);
-    const session = this.#byFile.get(input.sessionFile);
-    if (!session) {
-      if ([...this.#sessions.values()].some(candidate => candidate.identity.sessionId === input.sessionId)) throw new PiNativeError("pi_native_session_identity_mismatch");
-      return null;
-    }
-    if (!sameSession(session.identity, input)) throw new PiNativeError("pi_native_session_identity_mismatch");
+    const session = this.#maintenanceSession(input);
+    if (!session) return null;
     if (session.retiring) { await session.retiring; return this.attachForControl(input, signal, authority); }
     if (session.starting) throw new PiNativeError("pi_native_session_starting");
     if (session.cleanupUnproven) throw new PiNativeError("pi_native_cleanup_unproven");
@@ -542,25 +551,22 @@ export class PiNativeHost implements PiNativePort {
     // the caller applied stable history, retained output, and a visible gap.
     session.continuityLost = false;
   }
-  async retireSession(input: PiNativeSessionIdentity, signal?: AbortSignal, authority = LOCAL_AUTHORITY): Promise<PiNativeRetirement> {
+  async retireSession(input: PiNativeMaintenanceTarget, signal?: AbortSignal, authority = LOCAL_AUTHORITY): Promise<PiNativeRetirement> {
     this.#current(authority, signal);
-    const session = this.#byFile.get(input.sessionFile);
-    if (!session) {
-      if ([...this.#sessions.values()].some(candidate => candidate.identity.sessionId === input.sessionId)) throw new PiNativeError("pi_native_session_identity_mismatch");
-      return "absent";
-    }
-    if (!sameSession(session.identity, input)) throw new PiNativeError("pi_native_session_identity_mismatch");
+    const session = this.#maintenanceSession(input);
+    if (!session) return "absent";
     const result = await this.#retire(session, authority, signal);
     this.#current(authority, signal);
     return result;
   }
   retiredHandleIds(): readonly string[] {
     if (!this.#closed) throw new PiNativeError("pi_native_runtime_not_retired");
-    return [...this.#releasedHandles, ...this.#sessions.keys()];
+    return [...this.#releasedHandles.keys(), ...this.#sessions.keys()];
   }
   detach(): void {
     for (const session of this.#sessions.values()) { session.attached = false; session.draining = false; session.controlOnly = false; this.#abandonTransientOperations(session); this.#wake(session); this.#retireReleased(session); }
   }
+  inspectExisting(signal: AbortSignal): Promise<PiNativeInspection> { return this.inspect(signal); }
   async inspect(signal?: AbortSignal, authority = LOCAL_AUTHORITY): Promise<PiNativeInspection> {
     this.#current(authority, signal);
     return this.snapshot();
@@ -813,8 +819,8 @@ export class PiNativeHost implements PiNativePort {
       // Draining the native streams may expose a final event. Keep that exact
       // evidence even though process cleanup itself is now proven.
       if (session.events.length || session.operations.size || session.continuityLost) return "undelivered";
-      this.#releasedHandles.add(session.handleId);
-      while (this.#releasedHandles.size > 256) this.#releasedHandles.delete(this.#releasedHandles.values().next().value!);
+      this.#releasedHandles.set(session.handleId, { identity: session.identity, generation: session.generation });
+      while (this.#releasedHandles.size > 256) this.#releasedHandles.delete(this.#releasedHandles.keys().next().value!);
       this.#sessions.delete(session.handleId); this.#byFile.delete(session.identity.sessionFile);
       return "retired";
     }).finally(() => { session.retiring = undefined; });

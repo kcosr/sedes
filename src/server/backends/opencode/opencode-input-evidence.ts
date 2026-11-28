@@ -1,4 +1,5 @@
 import { openCodeNativeFactFingerprint } from "./opencode-native-observation-proof.js";
+import type Database from "better-sqlite3";
 import type { RequestScope } from "../../identity/identity-provider.js";
 import { OpenCodeNativeProtocolError, type OpenCodeNativeInboxItem, type OpenCodeNativeMessage } from "./opencode-native-api.js";
 import type { OpenCodeOperationReceipt, OpenCodeThreadRepository } from "./opencode-thread-repository.js";
@@ -78,7 +79,11 @@ export class OpenCodeInputEvidenceRepository {
 
   hasUnresolved(scope: RequestScope, threadId: string): boolean {
     this.operations.getBinding(scope, threadId);
-    return this.operations.database.prepare(`SELECT 1 ${unresolvedInput} LIMIT 1`)
+    return OpenCodeInputEvidenceRepository.hasUnresolved(this.operations.database, scope, threadId);
+  }
+
+  static hasUnresolved(database: Database.Database, scope: RequestScope, threadId: string): boolean {
+    return database.prepare(`SELECT 1 ${unresolvedInput} LIMIT 1`)
       .get(scope.tenantId, scope.principalId, threadId) !== undefined;
   }
 

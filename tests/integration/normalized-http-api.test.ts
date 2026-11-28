@@ -5851,7 +5851,7 @@ describe("normalized HTTP application contract", () => {
         .expect(201);
       created.body.id = created.body.threadId;
 
-      await current
+      const impact = await current
         .withHost(
           request(current.app).get(
             `/api/threads/${created.body.id}/inventory/archive-impact`,
@@ -5890,6 +5890,8 @@ describe("normalized HTTP application contract", () => {
         )
         .send({
           action: "archive_family",
+          expectedPendingQuestionCount: 0,
+          expectedOpenTaskSnapshot: impact.body.openTasks.familySnapshot,
           expectedRevision: 0,
           expectedStashedPromptCount: 0,
           executionWorkspaceDisposition: { kind: "keep" },
@@ -5908,6 +5910,8 @@ describe("normalized HTTP application contract", () => {
         )
         .send({
           action: "archive_family",
+          expectedPendingQuestionCount: 0,
+          expectedOpenTaskSnapshot: impact.body.openTasks.familySnapshot,
           expectedRevision: 0,
           expectedStashedPromptCount: 0,
           executionWorkspaceDisposition: { kind: "keep" },
@@ -6057,6 +6061,8 @@ describe("normalized HTTP application contract", () => {
         .mutate(request(current.app).patch(`/api/threads/${threadId}/pin`))
         .send({ expectedRevision: 0, mutationId: randomUUID() })
         .expect(400);
+      const impact = await current.withHost(request(current.app)
+        .get(`/api/threads/${threadId}/inventory/archive-impact`)).expect(200);
       await current
         .mutate(
           request(current.app).patch(`/api/threads/${threadId}/inventory`),
@@ -6064,11 +6070,13 @@ describe("normalized HTTP application contract", () => {
         .send({
           action: "archive",
           expectedRevision: 0,
+          expectedPendingQuestionCount: 0,
+          expectedOpenTaskSnapshot: impact.body.openTasks.root.snapshot,
           expectedStashedPromptCount: 0,
           executionWorkspaceDisposition: { kind: "keep" },
           mutationId: randomUUID(),
         })
-        .expect(204);
+        .expect(200, { archivedThreadIds: [threadId] });
 
       const mutationId = randomUUID();
       await current
@@ -7139,6 +7147,8 @@ describe("normalized HTTP application contract", () => {
         wakeAcknowledgedAt: null,
         wakeReminderText: "Review the queued idea",
       });
+      const impact = await current.withHost(request(current.app)
+        .get(`/api/threads/${created.body.id}/inventory/archive-impact`)).expect(200);
       await current
         .mutate(
           request(current.app).patch(
@@ -7148,11 +7158,13 @@ describe("normalized HTTP application contract", () => {
         .send({
           action: "archive",
           expectedRevision: 4,
+          expectedPendingQuestionCount: 0,
+          expectedOpenTaskSnapshot: impact.body.openTasks.root.snapshot,
           expectedStashedPromptCount: 1,
           executionWorkspaceDisposition: { kind: "keep" },
           mutationId: randomUUID(),
         })
-        .expect(204);
+        .expect(200, { archivedThreadIds: [created.body.id] });
       await current
         .mutate(
           request(current.app).patch(

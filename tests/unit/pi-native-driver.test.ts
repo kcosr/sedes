@@ -1,3 +1,6 @@
+import { applicationSummaryFixture } from "../support/application-summary-fixture.js";
+import { settleArchiveSnapshot } from "../../src/server/conversations/archive-snapshot-settlement.js";
+import { QuestionRequestRepository } from "../../src/server/db/repositories/question-request-repository.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { PiNativeConversationDriver, serializePiNativeBindingDetail, type PiNativeDriverOptions, type PiNativeOperations } from "../../src/server/backends/pi/native/driver/driver.js";
@@ -148,7 +151,7 @@ class NativeFixture {
       const events = this.queue.splice(0).map(event => ({ ...event, sequence: ++this.sequence })); return { events, throughSequence: this.sequence, retainedAfterSequence: 0, closed: false };
     },
     acknowledgeObservationGap: vi.fn(async () => {}),
-    acknowledge: async () => {}, release: async () => { this.releaseCount++; }, retireSession: vi.fn(async () => "retired" as const), inspect: async () => ({ runtimeId: "runtime", state: "idle", revision: "0", blockers: [], retainedSessions: [] }), stop: async () => {}, close: async () => {},
+    acknowledge: async () => {}, release: async () => { this.releaseCount++; }, retireSession: vi.fn(async () => "retired" as const), inspectExisting: async () => null, inspect: async () => ({ runtimeId: "runtime", state: "idle", revision: "0", blockers: [], retainedSessions: [] }), stop: async () => {}, close: async () => {},
   };
 }
 const drivers: PiNativeConversationDriver[] = [];
@@ -1655,7 +1658,7 @@ describe("native Pi driver", () => {
     });
     fixture.port.acknowledge = vi.fn(async input => { if (draining && input.throughSequence === 2) applied = true; });
     const handle = await driver.attach(conversation);
-    expect(fixture.port.attachForDrain).toHaveBeenCalledWith(native);
+    expect(fixture.port.attachForDrain).toHaveBeenCalledWith(native, undefined);
     expect(fixture.port.attach).toHaveBeenCalledTimes(2);
     expect(environment).toHaveBeenCalledTimes(2);
     expect(fixture.port.acknowledge).toHaveBeenCalled(); await handle.close();
@@ -1677,9 +1680,148 @@ describe("native Pi driver", () => {
       return nativeRequest(input, signal);
     };
     const handle = await driver.attach(conversation);
-    expect(fixture.port.attachForDrain).toHaveBeenCalledWith(native); expect(settings.syncObserved).toHaveBeenCalled();
+    expect(fixture.port.attachForDrain).toHaveBeenCalledWith(native, undefined); expect(settings.syncObserved).toHaveBeenCalled();
     await handle.close();
   });
+  it("archives idle and offline Pi history without creating a session", async () => {
+    const { driver, fixture } = setup();
+    const input = { ...conversation, signal: AbortSignal.timeout(5_000), retainedOwner: undefined,
+      markObserved: vi.fn(), markRetained: vi.fn(), markSettled: vi.fn(), settle: vi.fn(async () => {}) };
+    await expect(driver.prepareArchive(input)).resolves.toEqual({ outcome: "released" });
+    fixture.port.inspectExisting = async () => { throw new PiNativeError("pi_native_archive_probe_offline"); };
+    await expect(driver.prepareArchive(input)).resolves.toEqual({ outcome: "offline" });
+    expect(input.markObserved).not.toHaveBeenCalled();
+    expect(fixture.port.retireSession).not.toHaveBeenCalled(); expect(fixture.port.attach).not.toHaveBeenCalled();
+  });
+
+  it.each(["success", "settlement failure", "replacement"] as const)("protects the original retained Pi generation during archive (%s)", async kind => {
+    const { driver, fixture } = setup();
+    const original = { ...attachment, throughSequence: 1 };
+    fixture.port.inspectExisting = async () => ({ ...await fixture.port.inspect(), retainedSessions: [original] });
+    fixture.port.retireSession = vi.fn().mockResolvedValueOnce("undelivered").mockResolvedValue("absent");
+    fixture.port.attachForDrain = vi.fn(async () => ({ ...original, generation: kind === "replacement" ? "next" : original.generation,
+      closed: true, observationGap: false }));
+    fixture.push({ kind: "companion", payload: { type: "state_changed" } });
+    const order: string[] = [];
+    const input = { ...conversation, signal: AbortSignal.timeout(5_000), retainedOwner: undefined,
+      markObserved: vi.fn(), markRetained: vi.fn(), markSettled: vi.fn(), settle: vi.fn(async () => {
+        order.push("settle");
+        if (kind === "settlement failure") throw new Error("fixture write failed");
+      }) };
+    fixture.port.acknowledge = vi.fn(async () => { expect(order).toContain("settle"); order.push("ack"); });
+    if (kind === "success") {
+      await expect(driver.prepareArchive(input)).resolves.toEqual({ outcome: "released" });
+      expect(input.markSettled).toHaveBeenCalledWith(input.markRetained.mock.calls[0]![0]);
+      expect(order.at(-1)).toBe("ack");
+    } else {
+      await expect(driver.prepareArchive(input)).rejects.toBeDefined();
+      expect(fixture.port.acknowledge).not.toHaveBeenCalled();
+      expect(input.markSettled).not.toHaveBeenCalled();
+      fixture.port.inspectExisting = async () => null;
+      const originalOwner = input.markRetained.mock.calls[0]![0];
+      expect(typeof originalOwner).toBe("string");
+      await expect(driver.prepareArchive({ ...input, retainedOwner: originalOwner })).resolves.toMatchObject({
+        outcome: "inconclusive", reason: expect.stringContaining("original session"),
+      });
+    }
+    const target = { ...native, expectedOwner: { handleId: original.handleId, generation: original.generation } };
+    for (const call of vi.mocked(fixture.port.retireSession).mock.calls) expect(call).toEqual([target, input.signal]);
+    expect(fixture.port.attachForDrain).toHaveBeenCalledWith(target, input.signal);
+    expect(fixture.releaseCount).toBe(1);
+    expect(fixture.port.attach).not.toHaveBeenCalled();
+  });
+  it("lets a normal open settle and acknowledge the pinned Pi generation after an archive write fails", async () => {
+    let marker: string | null = null;
+    const order: string[] = [];
+    const { driver, fixture } = setup({ archiveRecovery: {
+      retainedOwner: () => marker, settle: (_id, owner) => { expect(owner).toBe(marker); order.push("settle"); },
+      acknowledge: (_id, owner) => { expect(owner).toBe(marker); marker = null; order.push("clear"); },
+    } });
+    const retained = { ...attachment, throughSequence: 1 };
+    fixture.port.inspectExisting = async () => ({ ...await fixture.port.inspect(), retainedSessions: [retained] });
+    fixture.port.retireSession = vi.fn(async () => "undelivered" as const);
+    fixture.port.attachForDrain = async () => ({ ...retained, closed: true, observationGap: false });
+    const request = { ...conversation, signal: AbortSignal.timeout(5_000), retainedOwner: undefined,
+      markObserved: vi.fn(), markRetained: (owner: string) => { marker = owner; }, markSettled: vi.fn(),
+      settle: async () => { throw new Error("unavailable DB writer"); } };
+    await expect(driver.prepareArchive(request)).rejects.toThrow("unavailable DB writer");
+    expect(marker).toBeTypeOf("string");
+    fixture.port.attach = vi.fn(async () => retained);
+    fixture.push({ kind: "companion", payload: { type: "state_changed" } });
+    fixture.port.acknowledge = vi.fn(async () => { order.push("ack"); });
+    const handle = await driver.attach(conversation);
+    await vi.waitFor(() => expect(fixture.port.acknowledge).toHaveBeenCalledOnce());
+    expect(order).toEqual(["settle", "ack", "clear"]);
+    expect(marker).toBeNull();
+    const live: BackendConversationEvent[] = [];
+    handle.subscribe(event => live.push(event));
+    fixture.state = { ...fixture.state, entries: [user("later", null), answer("answered", "later")], leafId: "answered" };
+    fixture.push({ kind: "companion", payload: { type: "state_changed" } });
+    await vi.waitFor(() => expect(live.find(event => event.type === "turn_completed")).toMatchObject({ turn: { backendTurnId: "later" } }));
+    expect(order.filter(entry => entry === "settle")).toHaveLength(1);
+    await handle.close();
+    fixture.port.inspectExisting = async () => null;
+    await expect(driver.prepareArchive(request)).resolves.toEqual({ outcome: "released" });
+  });
+
+  it("publishes ordinary completion once when a busy archived target finishes before its next open", async () => {
+    const { database, bindings, inventory, completion, scope, ids } = applicationSummaryFixture(1);
+    const threadId = ids[0]!;
+    const input = { ...conversation, binding: { ...conversation.binding, applicationThreadId: threadId } };
+    const operationId = "operation";
+    let retainedOwner: string | null = null;
+    const publish = vi.fn(() => { expect(database.inTransaction).toBe(false); });
+    const settleAutomation = vi.fn();
+    const deps = { bindings, completion, questions: new QuestionRequestRepository(database, inventory),
+      usage: { registerVisibleTurns: vi.fn() }, recordSubmission: vi.fn(), settleAutomation, publishCompletion: publish };
+    const order: string[] = [];
+    const { driver, fixture } = setup({ archiveRecovery: {
+      retainedOwner: () => retainedOwner,
+      settle(id, owner, snapshot, terminals) {
+        expect(owner).toBe(retainedOwner);
+        expect(terminals).toEqual(["running"]);
+        settleArchiveSnapshot(deps, scope, id, snapshot, terminals, "ordinary");
+        // Redelivery after an ambiguous write/ACK boundary is idempotent.
+        settleArchiveSnapshot(deps, scope, id, snapshot, terminals, "ordinary");
+        order.push("settle");
+      },
+      acknowledge(_id, owner) { expect(owner).toBe(retainedOwner); retainedOwner = null; order.push("clear"); },
+    } });
+    try {
+      bindings.bindDiscoveredConversation(scope, threadId, { backendConversationId: native.sessionId, now: 400 });
+      completion.recordAccepted(scope, threadId, { operationId, backendCorrelation: operationId, acceptedAt: 410 });
+      const initialRevision = inventory.getThread(scope, threadId).thread.revision;
+      const retained = { ...attachment, throughSequence: 1 };
+      fixture.state = { ...fixture.state, isIdle: false, entries: [user("running", null)], leafId: "running",
+        operations: [{ input: { operationId, mutationId: "mutation", reconciliationToken: "token", fingerprint: "a".repeat(64),
+          mode: "submit", text: "Hello" }, phase: "accepted", userEntryId: "running" }] };
+      fixture.port.inspectExisting = async () => ({ ...await fixture.port.inspect(), retainedSessions: [retained] });
+      fixture.port.retireSession = vi.fn(async () => "busy" as const);
+      const archived = vi.fn();
+      await expect(driver.prepareArchive({ ...input, signal: AbortSignal.timeout(5_000), retainedOwner: undefined,
+        markObserved: vi.fn(), markRetained: owner => { retainedOwner = owner; }, markSettled: vi.fn(),
+        settle: archived })).resolves.toMatchObject({ outcome: "busy" });
+      expect(archived).not.toHaveBeenCalled();
+      expect(retainedOwner).toBeTypeOf("string");
+      expect(completion.get(scope, threadId, operationId).attentionCreatedAt).toBeNull();
+      fixture.state = { ...fixture.state, isIdle: true, entries: [...fixture.state.entries, answer("reply", "running")], leafId: "reply" };
+      fixture.push({ kind: "companion", payload: { type: "state_changed" } });
+      fixture.port.attach = async () => retained;
+      fixture.port.acknowledge = vi.fn(async () => {
+        expect(completion.get(scope, threadId, operationId).attentionCreatedAt).toEqual(expect.any(Number));
+        expect(publish).toHaveBeenCalledTimes(1);
+        order.push("ack");
+      });
+      const handle = await driver.attach(input);
+      await vi.waitFor(() => expect(retainedOwner).toBeNull());
+      expect(order).toEqual(["settle", "ack", "clear"]);
+      expect(inventory.getThread(scope, threadId).thread.revision).toBe(initialRevision + 1);
+      expect(publish).toHaveBeenCalledWith(expect.objectContaining({ provenance: "recovered", backendTurnId: "running" }),
+        expect.objectContaining({ changed: true }));
+      await handle.close();
+    } finally { database.close(); }
+  });
+
   it("drains every retained page from a closed process before retirement", async () => {
     const { driver, fixture } = setup(); let acknowledged = 0;
     fixture.port.attachForDrain = vi.fn(async () => ({ ...attachment, observationGap: false, throughSequence: 600, closed: true }));

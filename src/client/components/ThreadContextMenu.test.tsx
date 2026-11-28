@@ -1,3 +1,4 @@
+import { ApiError } from "../api/ApiClient.js";
 import { DefaultThreadProvider, defaultThreadStorageKey } from "../app/default-thread.js";
 // @vitest-environment jsdom
 
@@ -127,12 +128,15 @@ function openTasks(rootTotal = 0, descendantTotal = 0) {
 function deferred<T>(): {
   readonly promise: Promise<T>;
   readonly resolve: (value: T) => void;
+  readonly reject: (reason: Error) => void;
 } {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((accepted) => {
+  let reject!: (reason: Error) => void;
+  const promise = new Promise<T>((accepted, refused) => {
     resolve = accepted;
+    reject = refused;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 function makeStore(): ApplicationClientStore & {
@@ -140,7 +144,7 @@ function makeStore(): ApplicationClientStore & {
   createThreadFromSettings: ReturnType<typeof vi.fn>;
   mutateInventory: ReturnType<typeof vi.fn>;
   setThreadPinned: ReturnType<typeof vi.fn>;
-  archiveThreadFamily: ReturnType<typeof vi.fn>;
+  archiveThreads: ReturnType<typeof vi.fn>;
   getThreadArchiveImpact: ReturnType<typeof vi.fn>;
   getThreadExecutionWorkspace: ReturnType<typeof vi.fn>;
   getThreadForceResetImpact: ReturnType<typeof vi.fn>;
@@ -174,9 +178,7 @@ function makeStore(): ApplicationClientStore & {
     setSearch: vi.fn(),
     mutateInventory: vi.fn().mockResolvedValue(undefined),
     setThreadPinned: vi.fn().mockResolvedValue(undefined),
-    archiveThreadFamily: vi
-      .fn()
-      .mockResolvedValue(["thread-1", "thread-2", "thread-3"]),
+    archiveThreads: vi.fn(async (id, request) => request.action === "archive" ? [id] : [id, "thread-2", "thread-3"]),
     getThreadArchiveImpact: vi.fn().mockResolvedValue({
       descendantCount: 2,
       pendingQuestions: { root: 0, descendants: 0 },
@@ -205,14 +207,14 @@ function makeStore(): ApplicationClientStore & {
       resetBlockers: [{ kind: "queued_input", count: 1 }],
       affectedThreadIds: ["11111111-1111-4111-8111-111111111111"],
     }),
-    renameThread: vi.fn().mockResolvedValue(undefined),
+    renameThread: vi.fn(async (_id, _title, _revision, operationId) => ({ status: "accepted", operationId })),
     updateLineagePlacement: vi.fn().mockResolvedValue(undefined),
   } as unknown as ApplicationClientStore & {
     getSnapshot: ReturnType<typeof vi.fn>;
     createThreadFromSettings: ReturnType<typeof vi.fn>;
     mutateInventory: ReturnType<typeof vi.fn>;
     setThreadPinned: ReturnType<typeof vi.fn>;
-    archiveThreadFamily: ReturnType<typeof vi.fn>;
+    archiveThreads: ReturnType<typeof vi.fn>;
     getThreadArchiveImpact: ReturnType<typeof vi.fn>;
     getThreadExecutionWorkspace: ReturnType<typeof vi.fn>;
     getThreadForceResetImpact: ReturnType<typeof vi.fn>;
@@ -1826,19 +1828,19 @@ describe("ThreadContextMenu actions", () => {
       name: "Archive this thread",
     });
     expect(store.getThreadArchiveImpact).toHaveBeenCalledWith(thread.id);
-    expect(store.mutateInventory).not.toHaveBeenCalledWith(
-      thread,
-      "archive",
-      expect.anything(),
-    );
+    expect(store.archiveThreads).not.toHaveBeenCalledWith(thread.id, expect.objectContaining({ action: "archive" }));
     await userEvent.click(within(dialog).getByRole("button", { name: "Archive" }));
     await waitFor(() =>
-      expect(store.mutateInventory).toHaveBeenCalledWith(thread, "archive", {
-        expectedStashedPromptCount: 0,
-        executionWorkspaceDisposition: { kind: "keep" },
-      }),
+      expect(store.archiveThreads).toHaveBeenCalledWith(
+        thread.id,
+        expect.objectContaining({
+          action: "archive",
+          expectedStashedPromptCount: 0,
+          executionWorkspaceDisposition: { kind: "keep" },
+        }),
+      ),
     );
-    expect(store.archiveThreadFamily).not.toHaveBeenCalled();
+    expect(store.archiveThreads).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ action: "archive_family" }));
   });
 
   it("parks a thread with open tasks without prompting or changing task disposition", async () => {
@@ -1918,15 +1920,19 @@ describe("ThreadContextMenu actions", () => {
 
     await userEvent.click(within(menu).getByRole("menuitem", { name: "Archive" }));
     await waitFor(() =>
-      expect(store.mutateInventory).toHaveBeenCalledWith(thread, "archive", {
-        expectedStashedPromptCount: 0,
-      }),
+      expect(store.archiveThreads).toHaveBeenCalledWith(
+        thread.id,
+        expect.objectContaining({
+          action: "archive",
+          expectedStashedPromptCount: 0,
+        }),
+      ),
     );
     expect(store.getThreadArchiveImpact).toHaveBeenCalledWith(thread.id);
     expect(
       screen.queryByRole("dialog", { name: "Archive this thread" }),
     ).not.toBeInTheDocument();
-    expect(store.archiveThreadFamily).not.toHaveBeenCalled();
+    expect(store.archiveThreads).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ action: "archive_family" }));
     await waitFor(() =>
       expect(
         screen.queryByTestId("thread-context-menu"),
@@ -1966,11 +1972,15 @@ describe("ThreadContextMenu actions", () => {
     expect(store.mutateInventory).not.toHaveBeenCalled();
     await userEvent.click(within(dialog).getByRole("button", { name: "Archive" }));
     await waitFor(() =>
-      expect(store.mutateInventory).toHaveBeenCalledWith(thread, "archive", {
-        expectedStashedPromptCount: 0,
-        openTaskDisposition: "move_to_project",
-        executionWorkspaceDisposition: { kind: "keep" },
-      }),
+      expect(store.archiveThreads).toHaveBeenCalledWith(
+        thread.id,
+        expect.objectContaining({
+          action: "archive",
+          expectedStashedPromptCount: 0,
+          openTaskDisposition: "move_to_project",
+          executionWorkspaceDisposition: { kind: "keep" },
+        }),
+      ),
     );
   });
 
@@ -2028,7 +2038,7 @@ describe("ThreadContextMenu actions", () => {
       await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
       await waitFor(() => expect(dialog).not.toBeInTheDocument());
       expect(store.mutateInventory).not.toHaveBeenCalled();
-      expect(store.archiveThreadFamily).not.toHaveBeenCalled();
+      expect(store.archiveThreads).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ action: "archive_family" }));
 
       await openArchive();
       const reopened = await screen.findByRole("dialog", {
@@ -2044,11 +2054,15 @@ describe("ThreadContextMenu actions", () => {
         within(reopened).getByRole("button", { name: "Archive" }),
       );
       await waitFor(() =>
-        expect(store.mutateInventory).toHaveBeenCalledWith(thread, "archive", {
-          expectedStashedPromptCount: 0,
-          openTaskDisposition: "move_to_project",
-          executionWorkspaceDisposition: { kind: "keep" },
-        }),
+        expect(store.archiveThreads).toHaveBeenCalledWith(
+          thread.id,
+          expect.objectContaining({
+            action: "archive",
+            expectedStashedPromptCount: 0,
+            openTaskDisposition: "move_to_project",
+            executionWorkspaceDisposition: { kind: "keep" },
+          }),
+        ),
       );
     },
   );
@@ -2174,17 +2188,17 @@ describe("ThreadContextMenu actions", () => {
     expect(store.getThreadArchiveImpact).toHaveBeenCalledWith(thread.id);
     await userEvent.click(within(reopened).getByRole("button", { name: "Archive" }));
     await waitFor(() =>
-      expect(store.archiveThreadFamily).toHaveBeenCalledWith(thread, {
-        expectedStashedPromptCount: 3,
-        executionWorkspaceDisposition: { kind: "keep" },
-        openTaskDisposition: "move_to_project",
-      }),
+      expect(store.archiveThreads).toHaveBeenCalledWith(
+        thread.id,
+        expect.objectContaining({
+          action: "archive_family",
+          expectedStashedPromptCount: 3,
+          executionWorkspaceDisposition: { kind: "keep" },
+          openTaskDisposition: "move_to_project",
+        }),
+      ),
     );
-    expect(store.mutateInventory).not.toHaveBeenCalledWith(
-      thread,
-      "archive",
-      expect.anything(),
-    );
+    expect(store.archiveThreads).not.toHaveBeenCalledWith(thread.id, expect.objectContaining({ action: "archive" }));
   });
 
   it("closes the touch sheet before handing archive to its choices dialog", async () => {
@@ -2211,12 +2225,16 @@ describe("ThreadContextMenu actions", () => {
     await userEvent.click(archiveDescendants);
     await userEvent.click(archiveAll);
     await waitFor(() =>
-      expect(store.archiveThreadFamily).toHaveBeenCalledWith(thread, {
-        expectedStashedPromptCount: 0,
-        executionWorkspaceDisposition: { kind: "keep" },
-      }),
+      expect(store.archiveThreads).toHaveBeenCalledWith(
+        thread.id,
+        expect.objectContaining({
+          action: "archive_family",
+          expectedStashedPromptCount: 0,
+          executionWorkspaceDisposition: { kind: "keep" },
+        }),
+      ),
     );
-    expect(store.mutateInventory).not.toHaveBeenCalledWith(thread, "archive");
+    expect(store.archiveThreads).not.toHaveBeenCalledWith(thread.id, expect.objectContaining({ action: "archive" }));
   });
 
   it.each([
@@ -2459,7 +2477,7 @@ describe("sidebar row rename (context menu)", () => {
     const { store, input, thread } = await startRename();
     await userEvent.clear(input);
     await userEvent.type(input, "Sharper title{Enter}");
-    expect(store.renameThread).toHaveBeenCalledWith(thread, "Sharper title");
+    expect(store.renameThread).toHaveBeenCalledWith(thread.id, "Sharper title", thread.threadRevision, expect.any(String));
     await waitFor(() =>
       expect(screen.queryByTestId("thread-row-rename")).toBeNull(),
     );
@@ -2508,20 +2526,19 @@ describe("sidebar row rename (context menu)", () => {
     elsewhere.remove();
   });
 
-  it("reverts the title and surfaces a quiet error when the rename fails", async () => {
+  it("retains the proposal and shows the current title when the rename fails", async () => {
     const { store, input } = await startRename();
     store.renameThread.mockRejectedValueOnce(
-      new Error("The thread could not be renamed."),
+      new ApiError(409, "conflict", "The thread could not be renamed.", false),
     );
     await userEvent.clear(input);
     await userEvent.type(input, "Rejected title{Enter}");
-    await waitFor(() =>
-      expect(screen.queryByTestId("thread-row-rename")).toBeNull(),
-    );
+    await waitFor(() => expect(input).toHaveAttribute("readonly"));
     expect(screen.getByRole("alert")).toHaveTextContent(
       "The thread could not be renamed.",
     );
-    expect(screen.getByText("Review backend contract")).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("Current title: Review backend contract");
+    expect(input).toHaveValue("Rejected title");
   });
 });
 
@@ -2567,9 +2584,13 @@ describe("sidebar row archive control", () => {
     await userEvent.click(screen.getByTestId("thread-row-archive"));
     // No descendants: the button archives directly without opening the
     // choice dropdown.
-    expect(store.mutateInventory).toHaveBeenCalledWith(thread, "archive", {
-      expectedStashedPromptCount: 0,
-    });
+    expect(store.archiveThreads).toHaveBeenCalledWith(
+      thread.id,
+      expect.objectContaining({
+        action: "archive",
+        expectedStashedPromptCount: 0,
+      }),
+    );
     expect(store.getThreadArchiveImpact).toHaveBeenCalledWith(thread.id);
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
     await waitFor(() => expect(window.location.pathname).toBe("/"));
@@ -2600,11 +2621,15 @@ describe("sidebar row archive control", () => {
     await userEvent.click(screen.getByTestId("thread-row-archive"));
 
     await waitFor(() =>
-      expect(store.mutateInventory).toHaveBeenCalledWith(thread, "archive", {
-        expectedStashedPromptCount: 0,
-      }),
+      expect(store.archiveThreads).toHaveBeenCalledWith(
+        thread.id,
+        expect.objectContaining({
+          action: "archive",
+          expectedStashedPromptCount: 0,
+        }),
+      ),
     );
-    expect(store.archiveThreadFamily).not.toHaveBeenCalled();
+    expect(store.archiveThreads).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ action: "archive_family" }));
     expect(
       screen.queryByRole("dialog", { name: "Archive this thread" }),
     ).not.toBeInTheDocument();
@@ -2632,27 +2657,26 @@ describe("sidebar row archive control", () => {
     await act(async () => { pending.resolve(impact); });
     const dialog = await screen.findByRole("dialog", { name: "Archive this thread" });
     expect(within(dialog).getByText(thread.title.text)).toBeVisible();
-    expect(store.mutateInventory).not.toHaveBeenCalled();
-    expect(store.archiveThreadFamily).not.toHaveBeenCalled();
+    expect(store.archiveThreads).not.toHaveBeenCalled();
   });
 
   it("preserves attached archive navigation when its inventory event removes the initiating row", async () => {
     window.history.pushState(null, "", "/threads/thread-1");
     const thread = makeThread();
     const { state, store } = sidebarFixture(thread);
-    const mutation = deferred<void>();
-    store.mutateInventory.mockReturnValueOnce(mutation.promise);
+    const mutation = deferred<string[]>();
+    store.archiveThreads.mockReturnValueOnce(mutation.promise);
     const onNavigate = vi.fn();
     const view = render(<InventorySidebar state={state} store={store}
       selectedThreadId={thread.id} onNavigate={onNavigate} onOpenSettings={() => undefined} />);
     await userEvent.click(screen.getByTestId("thread-row-archive"));
-    await waitFor(() => expect(store.mutateInventory).toHaveBeenCalledOnce());
+    await waitFor(() => expect(store.archiveThreads).toHaveBeenCalledOnce());
     // Inventory publication can arrive before the HTTP mutation response.
     const archivedState = { ...state, visibleThreads: [], snapshot: { ...state.snapshot!, threads: [] } };
     view.rerender(<InventorySidebar state={archivedState} store={store}
       selectedThreadId={thread.id} onNavigate={onNavigate} onOpenSettings={() => undefined} />);
     expect(screen.queryByTestId("thread-row-archive")).toBeNull();
-    await act(async () => { mutation.resolve(); });
+    await act(async () => { mutation.resolve([thread.id]); });
     await waitFor(() => expect(window.location.pathname).toBe("/"));
     expect(onNavigate).toHaveBeenCalledOnce();
   });
@@ -2661,17 +2685,43 @@ describe("sidebar row archive control", () => {
     const thread = makeThread();
     const { state, store } = sidebarFixture(thread);
     let fail!: (error: Error) => void;
-    store.mutateInventory.mockReturnValueOnce(new Promise((_, reject) => { fail = reject; }));
+    store.archiveThreads.mockReturnValueOnce(new Promise((_, reject) => { fail = reject; }));
     const drawer = render(<InventorySidebar state={state} store={store}
       onNavigate={() => undefined} onOpenSettings={() => undefined} />);
     await userEvent.click(screen.getByTestId("thread-row-archive"));
-    await waitFor(() => expect(store.mutateInventory).toHaveBeenCalledOnce());
+    await waitFor(() => expect(store.archiveThreads).toHaveBeenCalledOnce());
     await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
     drawer.unmount();
     await act(async () => { fail(new Error("Archive request failed")); });
     expect(await screen.findByRole("alert")).toHaveTextContent("Archive request failed");
     expect(screen.getByRole("dialog", { name: "Could not archive thread" })).toHaveTextContent(thread.title.text);
   });
+
+  it.each(["still selected", "navigated away"] as const)(
+    "handles a successful explicit retry after a dismissed archive lost its reply (%s)",
+    async (selection) => {
+      const thread = makeThread();
+      window.history.replaceState(null, "", `/threads/${thread.id}`);
+      const { state, store } = sidebarFixture(thread);
+      const first = deferred<string[]>();
+      const retry = deferred<string[]>();
+      store.archiveThreads.mockReturnValueOnce(first.promise).mockReturnValueOnce(retry.promise);
+      const onNavigate = vi.fn();
+      render(<InventorySidebar state={state} store={store} selectedThreadId={thread.id}
+        onNavigate={onNavigate} onOpenSettings={() => undefined} />);
+      await userEvent.click(screen.getByTestId("thread-row-archive"));
+      await waitFor(() => expect(store.archiveThreads).toHaveBeenCalledOnce());
+      await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+      await act(async () => { first.reject(new Error("Lost archive response")); });
+      await userEvent.click(await screen.findByRole("button", { name: "Retry confirmed archive" }));
+      await waitFor(() => expect(store.archiveThreads).toHaveBeenCalledTimes(2));
+      expect(store.archiveThreads.mock.calls[1]).toEqual(store.archiveThreads.mock.calls[0]);
+      if (selection === "navigated away") window.history.replaceState(null, "", "/threads/other");
+      await act(async () => { retry.resolve([thread.id]); });
+      expect(window.location.pathname).toBe(selection === "still selected" ? "/" : "/threads/other");
+      expect(onNavigate).toHaveBeenCalledTimes(selection === "still selected" ? 1 : 0);
+    },
+  );
 
   it("disables family archive when the authoritative impact reports a blocked descendant", async () => {
     const thread = makeThread();
@@ -2716,7 +2766,7 @@ describe("sidebar row archive control", () => {
       "A descendant is running and cannot be archived.",
     );
     await userEvent.click(archive);
-    expect(store.archiveThreadFamily).not.toHaveBeenCalled();
+    expect(store.archiveThreads).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ action: "archive_family" }));
 
     // Archiving only this thread stays available.
     await userEvent.click(
@@ -2727,12 +2777,16 @@ describe("sidebar row archive control", () => {
     expect(archive).toBeEnabled();
     await userEvent.click(archive);
     await waitFor(() =>
-      expect(store.mutateInventory).toHaveBeenCalledWith(thread, "archive", {
-        expectedStashedPromptCount: 0,
-        executionWorkspaceDisposition: { kind: "keep" },
-      }),
+      expect(store.archiveThreads).toHaveBeenCalledWith(
+        thread.id,
+        expect.objectContaining({
+          action: "archive",
+          expectedStashedPromptCount: 0,
+          executionWorkspaceDisposition: { kind: "keep" },
+        }),
+      ),
     );
-    expect(store.archiveThreadFamily).not.toHaveBeenCalled();
+    expect(store.archiveThreads).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ action: "archive_family" }));
   });
 
   it("uses the visible untitled fallback in the archive button name", () => {
@@ -2757,7 +2811,7 @@ describe("sidebar row archive control", () => {
     window.history.pushState(null, "", "/threads/thread-1");
     const thread = makeThread();
     const { state, store } = sidebarFixture(thread);
-    store.mutateInventory.mockRejectedValueOnce(
+    store.archiveThreads.mockRejectedValueOnce(
       new Error("The thread could not be archived."),
     );
     render(
@@ -2811,9 +2865,13 @@ describe("sidebar row archive control", () => {
     );
     // The retried check finds nothing to choose and archives directly.
     await waitFor(() =>
-      expect(store.mutateInventory).toHaveBeenCalledWith(thread, "archive", {
-        expectedStashedPromptCount: 0,
-      }),
+      expect(store.archiveThreads).toHaveBeenCalledWith(
+        thread.id,
+        expect.objectContaining({
+          action: "archive",
+          expectedStashedPromptCount: 0,
+        }),
+      ),
     );
     expect(screen.queryByRole("dialog", { name: "Archive this thread" })).not.toBeInTheDocument();
   });
@@ -2825,7 +2883,7 @@ describe("sidebar row archive control", () => {
     });
     const thread = makeThread();
     const { state, store } = sidebarFixture(thread);
-    store.mutateInventory.mockReturnValue(mutation);
+    store.archiveThreads.mockReturnValue(mutation.then(() => [thread.id]));
     render(
       <InventorySidebar
         state={state}
@@ -2840,7 +2898,7 @@ describe("sidebar row archive control", () => {
     await userEvent.click(archive);
     expect(archive).toBeDisabled();
     fireEvent.click(archive);
-    expect(store.mutateInventory).toHaveBeenCalledTimes(1);
+    expect(store.archiveThreads).toHaveBeenCalledTimes(1);
     resolveMutation();
     await waitFor(() => expect(archive).not.toBeDisabled());
   });
@@ -2877,14 +2935,14 @@ describe("sidebar row archive control", () => {
     await waitFor(() => expect(archive).not.toBeDisabled());
 
     let resolveSecond!: () => void;
-    store.mutateInventory.mockReturnValueOnce(
-      new Promise<void>((resolve) => {
-        resolveSecond = resolve;
+    store.archiveThreads.mockReturnValueOnce(
+      new Promise<string[]>((resolve) => {
+        resolveSecond = () => resolve([thread.id]);
       }),
     );
     await userEvent.click(archive);
     expect(quick).toBeDisabled();
-    expect(store.mutateInventory).toHaveBeenCalledTimes(2);
+    expect(store.archiveThreads).toHaveBeenCalledTimes(1);
     resolveSecond();
     await waitFor(() => expect(quick).not.toBeDisabled());
   });
@@ -2926,14 +2984,18 @@ describe("sidebar row archive control", () => {
     await userEvent.click(within(dialog).getByRole("radio", { name: "Delete" }));
     await userEvent.click(within(dialog).getByRole("button", { name: "Archive" }));
     await waitFor(() =>
-      expect(store.mutateInventory).toHaveBeenCalledWith(thread, "archive", {
-        expectedStashedPromptCount: 1,
-        executionWorkspaceDisposition: {
-          kind: "delete",
-          expectedRevision: 5,
-          operationId: expect.any(String),
-        },
-      }),
+      expect(store.archiveThreads).toHaveBeenCalledWith(
+        thread.id,
+        expect.objectContaining({
+          action: "archive",
+          expectedStashedPromptCount: 1,
+          executionWorkspaceDisposition: {
+            kind: "delete",
+            expectedRevision: 5,
+            operationId: expect.any(String),
+          },
+        }),
+      ),
     );
     await waitFor(() => expect(dialog).not.toBeInTheDocument());
 
@@ -2963,10 +3025,14 @@ describe("sidebar row archive control", () => {
     expect(within(reopened).getByRole("radio", { name: "Delete" })).toBeDisabled();
     await userEvent.click(within(reopened).getByRole("button", { name: "Archive" }));
     await waitFor(() =>
-      expect(store.archiveThreadFamily).toHaveBeenCalledWith(thread, {
-        expectedStashedPromptCount: 3,
-        executionWorkspaceDisposition: { kind: "keep" },
-      }),
+      expect(store.archiveThreads).toHaveBeenCalledWith(
+        thread.id,
+        expect.objectContaining({
+          action: "archive_family",
+          expectedStashedPromptCount: 3,
+          executionWorkspaceDisposition: { kind: "keep" },
+        }),
+      ),
     );
   });
 
@@ -3029,7 +3095,7 @@ describe("sidebar row archive control", () => {
     window.history.pushState(null, "", "/threads/deep-hidden-thread");
     const thread = makeThread();
     const { state, store } = sidebarFixture(thread, { descendantCount: 2 });
-    store.archiveThreadFamily.mockResolvedValueOnce([
+    store.archiveThreads.mockResolvedValueOnce([
       thread.id,
       "deep-hidden-thread",
     ]);
@@ -3054,10 +3120,14 @@ describe("sidebar row archive control", () => {
     );
     await userEvent.click(within(dialog).getByRole("button", { name: "Archive" }));
     await waitFor(() =>
-      expect(store.archiveThreadFamily).toHaveBeenCalledWith(thread, {
-        expectedStashedPromptCount: 0,
-        executionWorkspaceDisposition: { kind: "keep" },
-      }),
+      expect(store.archiveThreads).toHaveBeenCalledWith(
+        thread.id,
+        expect.objectContaining({
+          action: "archive_family",
+          expectedStashedPromptCount: 0,
+          executionWorkspaceDisposition: { kind: "keep" },
+        }),
+      ),
     );
     await waitFor(() => expect(window.location.pathname).toBe("/"));
   });

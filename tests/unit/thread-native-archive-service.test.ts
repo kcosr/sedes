@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { ThreadNativeArchiveService } from "../../src/server/domain/thread-native-archive-service.js";
+import type { ConversationBindingRepository } from "../../src/server/db/repositories/conversation-binding-repository.js";
 import { DomainError } from "../../src/server/domain/errors.js";
 import { BackendError, type NativeConversationArchiveInput, type NativeConversationArchiveResult } from "../../src/server/backends/contracts.js";
 import { PiConversationBackendDriver } from "../../src/server/backends/pi/pi-conversation-driver.js";
@@ -37,12 +38,17 @@ function fixture() {
     driver: { nativeArchive },
   };
   const resolve = vi.fn(async () => target as never);
+  const getBinding = vi.fn<ConversationBindingRepository["getBinding"]>(() => ({
+    ...target.binding,
+    tenantId: scope.tenantId, ownerPrincipalId: scope.principalId, backendInstanceId: "backend",
+    connectionProfileId: "connection", executionEnvironmentId: "environment", createdAt: 1,
+  }));
   const onError = vi.fn();
   const onResult = vi.fn();
   const service = new ThreadNativeArchiveService({
-    inventory: { getInventory }, targets: { resolve }, operations, onError, onResult,
+    inventory: { getInventory }, bindings: { getBinding }, targets: { resolve }, operations, onError, onResult,
   });
-  return { service, nativeArchive, getInventory, target, resolve, operations, onError, onResult,
+  return { service, nativeArchive, getInventory, getBinding, target, resolve, operations, onError, onResult,
     setState: (state: string) => { inventoryState = state; } };
 }
 
@@ -55,6 +61,17 @@ describe("native archive synchronization", () => {
       action: "archive", signal: expect.any(AbortSignal),
     });
     expect(current.onResult).toHaveBeenCalledWith("thread", "archive", { state: "archived", changed: true });
+  });
+
+  it("skips unbound draft archive and restore without resolving a native conversation", async () => {
+    const current = fixture();
+    current.getBinding.mockReturnValue(undefined);
+    await current.service.archive(scope, ["thread"]);
+    current.setState("active");
+    await current.service.restore(scope, "thread");
+    expect(current.resolve).not.toHaveBeenCalled();
+    expect(current.operations.begin).not.toHaveBeenCalled();
+    expect(current.onError).not.toHaveBeenCalled();
   });
 
   it("does not rearchive a restored thread or restore a newly archived thread", async () => {

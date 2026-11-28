@@ -32,6 +32,7 @@ export function ThreadStackActionDialog({
   loading,
   pending,
   requestLocked,
+  confirmedDisposition,
   error,
   onReload,
   onConfirm,
@@ -47,6 +48,7 @@ export function ThreadStackActionDialog({
   readonly pending: boolean;
   /** A first delivery attempt freezes task choices and the mutation id. */
   readonly requestLocked: boolean;
+  readonly confirmedDisposition?: OpenTaskDisposition;
   readonly error: string;
   readonly onReload: () => void;
   readonly onConfirm: (options: {
@@ -123,7 +125,7 @@ export function ThreadStackActionDialog({
                   showOwningThread: true,
                 },
               ]}
-              value={disposition}
+              value={confirmedDisposition ?? disposition}
               onChange={setDisposition}
               disabled={loading || pending || requestLocked}
               threadTitleFor={threadTitleFor}
@@ -164,7 +166,7 @@ export function ThreadStackActionDialog({
             <DialogAlert
               tone="danger"
               action={
-                pending ? undefined : (
+                pending || (action === "archive" && requestLocked) ? undefined : (
                   <Button
                     type="button"
                     variant="outline"

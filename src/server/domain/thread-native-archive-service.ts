@@ -1,6 +1,7 @@
 import type { NativeConversationArchiveResult } from "../backends/contracts.js";
 import { BackendError } from "../backends/contracts.js";
 import type { ThreadApplicationActorTargetResolver } from "../conversations/thread-application-service.js";
+import type { ConversationBindingRepository } from "../db/repositories/conversation-binding-repository.js";
 import type { InventoryRepository } from "../db/repositories/inventory-repository.js";
 import type { NativeArchiveOperationRepository } from "../db/repositories/native-archive-operation-repository.js";
 import type { RequestScope } from "../identity/identity-provider.js";
@@ -14,6 +15,7 @@ import { DomainError } from "./errors.js";
 export class ThreadNativeArchiveService {
   constructor(readonly input: {
     readonly inventory: Pick<InventoryRepository, "getInventory">;
+    readonly bindings: Pick<ConversationBindingRepository, "getBinding">;
     readonly targets: ThreadApplicationActorTargetResolver;
     readonly operations: Pick<NativeArchiveOperationRepository, "hasUncertain" | "begin" | "complete">;
     readonly onError: (threadId: string, error: unknown) => void;
@@ -58,6 +60,7 @@ export class ThreadNativeArchiveService {
       if (this.input.operations.hasUncertain(scope, threadId)) {
         throw new DomainError("operation_outcome_uncertain", "Native archive synchronization still needs recovery before another native change.");
       }
+      if (!this.input.bindings.getBinding(scope, threadId)) return;
       const target = await this.input.targets.resolve(scope, threadId);
       if (!target.driver.nativeArchive) return;
       signal.throwIfAborted();

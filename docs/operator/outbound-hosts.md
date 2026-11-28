@@ -163,10 +163,10 @@ connector management and pairing retain their existing protocols. See
 | Terminals | Persistent sidecar-owned terminals reconnect with retained output when native PTY support is available. Missing native assets omit terminal support without disabling Files or provider connections. |
 | Codex | Provider connection and execution run through the persistent sidecar. Managed TUI additionally requires native PTY support and its authorization on the host. |
 | Pi SDK | The Pi SDK stays on the Sedes server; the paired host supplies remote workspace operations. Pi is not installed or executed remotely by this feature. |
-| Pi | On Linux/macOS, the installed stable Pi 1.4.0 or newer CLI and native authentication, configuration, MCP servers, and sessions run on the persistent sidecar host. Files, attachments, and CLI tools require their own grants. |
+| Pi | On Linux/macOS, the installed stable Pi 1.4.0 or newer CLI and native authentication, configuration, MCP servers, and sessions run on the persistent sidecar host. Upgrade the sidecar and server together for `pi_native_runtime` capability 4. Files, attachments, and CLI tools require their own grants. |
 | Claude | On Linux/macOS with Node.js 24.18+, the pinned Agent SDK and authenticated Claude Code installation run through the persistent sidecar. Native Windows Claude is unsupported. Files, attachments, and CLI tools require their own grants. |
 | OpenCode v2 | On Linux, stable stock `opencode2` 2.3.0 or newer (tested through 2.3.0) runs as a Sedes-owned daemon or an external loopback HTTP/SSE server through the persistent sidecar. Native paths/authentication stay on the host. Agent tools require their explicit grant; no separate MCP helper install is needed. |
-| Antigravity | On Linux/macOS, the persistent sidecar owns the stock `agy acp` process. Native authentication and SQLite history stay on the host. The sidecar must advertise `antigravity_runtime` capability 6. Files, attachments, and Sedes agent tools require their own grants. |
+| Antigravity | On Linux/macOS, the persistent sidecar owns the stock `agy acp` process. Native authentication and SQLite history stay on the host. The sidecar must advertise `antigravity_runtime` capability 7. Files, attachments, and Sedes agent tools require their own grants. |
 | Grok | Remote execution remains intentionally unsupported; its current backend requires a local environment. |
 
 See the [Codex](backends/codex.md), [Claude](backends/claude.md), [OpenCode](backends/opencode.md), [Antigravity](backends/antigravity.md),

@@ -1,3 +1,4 @@
+import { ThreadArchiveObligationRepository } from "../../../db/repositories/thread-archive-obligation-repository.js";
 import { ConnectionDriverCache } from "../../connection-driver-cache.js";
 import { NO_BACKEND_ACCOUNT_USAGE } from "../../backend-account-usage.js";
 import { PiInstallationAdvisorySource } from "./installation-advisories.js";
@@ -118,6 +119,7 @@ class PiNativeModuleRuntime implements BackendModuleRuntime {
       cli: context.agentToolCli, sourceCapabilities: context.agentToolSourceCapabilities,
       remote: context.environmentOperations.environmentKind !== "local" });
     const repository = new PiNativeThreadRepository(context.database);
+    const obligations = new ThreadArchiveObligationRepository(context.database);
     const preferences = new ConnectionSettingPreferenceRepository(context.database);
     const resolveDefaults = (connection: AgentConnectionProfile) => {
       const current = context.targetDefinition?.(connection.templateId);
@@ -153,6 +155,11 @@ class PiNativeModuleRuntime implements BackendModuleRuntime {
         const existing = this.#drivers.get(connection.id);
         if (existing?.connection.configurationRevision === connection.configurationRevision) return existing;
         const driver = new PiNativeConversationDriver({ instance: this.instance, connection, port,
+          ...(context.settleRetainedArchiveSnapshot ? { archiveRecovery: {
+            retainedOwner: threadId => obligations.read(context.scope, threadId)?.retainedOwner,
+            settle: context.settleRetainedArchiveSnapshot,
+            acknowledge: (threadId, owner) => { obligations.settleIfRetained(context.scope, threadId, owner); },
+          } } : {}),
           claimNativeSession: (scope, input) => new PiSessionClaims(context.database).reserve(scope, input),
           modelPolicy: prepared.modelPolicy, operations: repository, usage: context.usage, agentTools: this.#agentTools,
           outputArtifacts: context.outputArtifacts, resolveThreadEnvironment: createThreadEnvironmentResolver(context),
@@ -295,6 +302,8 @@ class PreparedPiNativeModule implements PreparedBackendModule {
 }
 
 export class PiNativeBackendModule implements BackendModule {
+  readonly hasDurableArchiveWork: NonNullable<BackendModule["hasDurableArchiveWork"]> = (database, scope, threadId) =>
+    new PiNativeThreadRepository(database).hasUnresolvedOperations(scope, threadId);
   readonly backendKind = "pi_native" as const;
   readonly connectionKinds = ["pi_rpc"] as const;
   readonly protocolRelease = PI_NATIVE_PROTOCOL_RELEASE;

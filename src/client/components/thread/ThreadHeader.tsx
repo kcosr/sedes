@@ -1,3 +1,5 @@
+import { leaveArchivedThread } from "../../operations/thread-archive.js";
+import { useThreadRename, ThreadRenameEditor } from "../../operations/thread-rename.js";
 import { ThreadEnvironmentVariables } from "../environment-variables/ThreadEnvironmentVariables.js";
 import { runThreadCreation, runThreadFork } from "../../operations/thread-creation.js";
 import {
@@ -143,6 +145,8 @@ const noEnvironments: NormalizedApplicationSnapshot["environments"] = [];
 function selectHeaderApplication(state: ApplicationClientState) {
   return {
     snapshot: state.snapshot,
+    connection: state.connection,
+    authoritative: state.authoritative,
     pendingThreadConfigurationCopySourceIds:
       state.pendingThreadConfigurationCopySourceIds,
   };
@@ -222,8 +226,8 @@ export const ThreadHeader = memo(function ThreadHeader({
   const mobileLayout = useMediaQuery(SIDEBAR_NAV_MEDIA_QUERY);
   const narrowHeader = useMediaQuery(NARROW_HEADER_MEDIA_QUERY);
   const navigationControls = useContext(NavigationControlsContext);
-  const [renaming, setRenaming] = useState(false);
-  const [title, setTitle] = useState(snapshot.thread.title.text);
+  const titleEdit = useThreadRename(applicationStore, snapshot.thread, "header");
+  const renaming = Boolean(titleEdit.edit);
   const [mobileToolsOpen, setMobileToolsOpen] = useState(false);
   useEffect(() => {
     if (findOpen) setMobileToolsOpen(true);
@@ -259,8 +263,6 @@ export const ThreadHeader = memo(function ThreadHeader({
       snapshot.thread.id,
     );
   const showUnavailableConnection = useDelayedUnavailableConnection(connection);
-  const renameRequest = useRef<Promise<void> | undefined>(undefined);
-  const cancelRename = useRef(false);
   /** Focus target when the snooze / session-stats dialogs close — they are
       opened from menu rows that unmount with the menu. */
   const actionsTrigger = useRef<HTMLButtonElement>(null);
@@ -425,15 +427,17 @@ export const ThreadHeader = memo(function ThreadHeader({
   );
   // Archive directly when the authoritative impact leaves nothing to decide;
   // otherwise the choices dialog opens with that impact.
+  const archiveDisabled = application.connection !== "connected" || !application.authoritative ||
+    inventoryPending || actionPending || archive?.available !== true;
   const archiveAction = useArchiveThreadAction({
     thread: applicationThreadSummary,
     store: applicationStore,
     descendantCount: familyDescendantCount,
-    disabled: disabled || archive?.available !== true,
+    disabled: archiveDisabled,
     onPendingChange: setInventoryPending,
-    onArchived: () => {
+    onArchived: (_choice, ids) => {
       setActionsOpen(false);
-      navigate("/");
+      if (!leaveArchivedThread(ids)) return;
       if (mobileLayout) navigationControls?.openDrawer();
     },
     returnFocusRef: actionsTrigger,
@@ -452,37 +456,10 @@ export const ThreadHeader = memo(function ThreadHeader({
   const variableForkNeedsRecovery = latestFork.attempt?.phase === "request_failed" || latestFork.attempt?.phase === "recovery_required";
   const latestForkUnavailableDescriptionId = `latest-fork-unavailable-${snapshot.thread.id}`;
   useEffect(() => {
-    if (!renaming) setTitle(snapshot.thread.title.text);
-  }, [renaming, snapshot.thread.title.text]);
-
-  useEffect(() => {
     if (renaming || !restoreTitleFocus.current) return;
     restoreTitleFocus.current = false;
     titleTrigger.current?.focus();
   }, [renaming]);
-
-  const submitRename = (): Promise<void> => {
-    if (cancelRename.current) {
-      cancelRename.current = false;
-      return Promise.resolve();
-    }
-    if (renameRequest.current) return renameRequest.current;
-    const next = title.trim();
-    const request = (async () => {
-      if (next && next !== snapshot.thread.title.text) {
-        await store.perform({ action: "rename", title: next });
-      }
-      setRenaming(false);
-    })();
-    renameRequest.current = request;
-    void request
-      .finally(() => {
-        if (renameRequest.current === request)
-          renameRequest.current = undefined;
-      })
-      .catch(() => undefined);
-    return request;
-  };
 
   const mutateInventory = async (
     action:
@@ -490,7 +467,6 @@ export const ThreadHeader = memo(function ThreadHeader({
       | "unpark"
       | "snooze"
       | "wake"
-      | "archive"
       | "restore",
     options?: {
       readonly snoozedUntil?: string;
@@ -509,7 +485,6 @@ export const ThreadHeader = memo(function ThreadHeader({
         options,
       );
       setActionsOpen(false);
-      if (action === "archive") navigate("/");
     } catch (error) {
       setInventoryError(
         error instanceof Error
@@ -615,44 +590,15 @@ export const ThreadHeader = memo(function ThreadHeader({
             backend={snapshot.capabilities.backend}
             mobile={mobileLayout}
             title={renaming ? (
-              <form
-                className="rename-form"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  restoreTitleFocus.current = true;
-                  void submitRename().catch(() => undefined);
-                }}
-              >
-                <label className="sr-only" htmlFor="thread-title">
-                  Thread title
-                </label>
-                <input
-                  id="thread-title"
-                  autoFocus
-                  maxLength={240}
-                  value={title}
-                  onChange={(event) => setTitle(event.target.value)}
-                  onBlur={() => void submitRename().catch(() => undefined)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Escape") {
-                      cancelRename.current = true;
-                      setTitle(snapshot.thread.title.text);
-                      restoreTitleFocus.current = true;
-                      setRenaming(false);
-                    }
-                  }}
-                />
-              </form>
+              <ThreadRenameEditor rename={titleEdit} className="rename-form"
+                onKeyboardFinish={() => { restoreTitleFocus.current = true; }} />
             ) : rename ? (
               <button
                 ref={titleTrigger}
                 className="title-button"
                 disabled={disabled || !rename.available}
                 title={rename.unavailableReason?.text}
-                onClick={() => {
-                  cancelRename.current = false;
-                  setRenaming(true);
-                }}
+                onClick={titleEdit.begin}
               >
                 <h1>{snapshot.thread.title.text || "Untitled thread"}</h1>
               </button>
@@ -1077,13 +1023,13 @@ export const ThreadHeader = memo(function ThreadHeader({
                   <DropdownMenuSeparator />
                   {snapshot.thread.inventoryState !== "archived" && (
                     <DropdownMenuItem
-                      disabled={disabled || archive?.available !== true}
+                      disabled={archiveDisabled}
                       title={archive?.unavailableReason?.text}
                       onSelect={() => closeActionsBefore(archiveAction.start)}
                     >
                       <Archive aria-hidden="true" />
                       Archive
-                      {(disabled || archive?.available !== true) && (
+                      {archiveDisabled && (
                         <ReasonShortcut reason={disabled ? busyReason : "Unavailable"} />
                       )}
                     </DropdownMenuItem>

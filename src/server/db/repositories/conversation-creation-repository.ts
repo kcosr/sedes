@@ -28,6 +28,8 @@ import {
 import { activateParkedThread } from "./parked-thread-activation.js";
 import { ThreadCompletionCallbackRepository } from "./thread-completion-callback-repository.js";
 
+type InitialRenameState = "not_sent" | "uncertain" | "accepted";
+
 export type CreationAttemptPhase =
   | "prepared"
   | "external_call_started"
@@ -756,6 +758,41 @@ export class ConversationCreationRepository {
         limit,
       ) as ConversationCreationAttemptRow[];
     return rows.map((row) => this.#hydrate(scope, row));
+  }
+
+  captureInitialRename(
+    scope: RequestScope, threadId: string, attemptId: string,
+    input: { readonly applicationOperationId: string; readonly title: string },
+  ): { readonly state: InitialRenameState; readonly title: string } {
+    // Freeze the submitted title for every subsequent status check, even if
+    // discovery refreshes the application's title while this attempt recovers.
+    const row = this.database.prepare(`
+      UPDATE conversation_creation_attempts SET
+        initial_rename_operation_id = coalesce(initial_rename_operation_id, ?),
+        initial_rename_title = coalesce(initial_rename_title, ?)
+      WHERE tenant_id = ? AND owner_principal_id = ? AND application_thread_id = ? AND attempt_id = ?
+        AND creation_kind = 'first_input' AND provisional_backend_conversation_id IS NOT NULL
+        AND force_reset_at IS NULL
+        AND phase IN ('conversation_identified', 'recovery_required')
+        AND (initial_rename_operation_id IS NULL OR initial_rename_operation_id = ?)
+      RETURNING initial_rename_state AS state, initial_rename_title AS title
+    `).get(input.applicationOperationId, input.title, scope.tenantId, scope.principalId, threadId, attemptId,
+      input.applicationOperationId) as { state: InitialRenameState; title: string } | undefined;
+    if (!row) throw new DomainError("conflict", "The first-send rename no longer belongs to this creation attempt.");
+    return row;
+  }
+
+  transitionInitialRename(
+    scope: RequestScope, threadId: string, attemptId: string, operationId: string,
+    expected: InitialRenameState, next: InitialRenameState,
+  ): void {
+    const result = this.database.prepare(`
+      UPDATE conversation_creation_attempts SET initial_rename_state = ?
+      WHERE tenant_id = ? AND owner_principal_id = ? AND application_thread_id = ? AND attempt_id = ?
+        AND force_reset_at IS NULL AND phase IN ('conversation_identified', 'recovery_required')
+        AND initial_rename_operation_id = ? AND initial_rename_state = ?
+    `).run(next, scope.tenantId, scope.principalId, threadId, attemptId, operationId, expected);
+    if (result.changes !== 1) throw new DomainError("conflict", "The first-send rename changed during recovery.");
   }
 
   markExternalCallStarted(

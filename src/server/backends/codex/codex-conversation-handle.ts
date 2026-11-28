@@ -204,17 +204,15 @@ import {
   type CodexSettingsObservationReceipt,
 } from "./codex-observed-execution-settings.js";
 import { serializeCodexSubmissionRetryAnchor } from "./codex-submission-retry-anchor.js";
+import { bindingMismatch, codexError, mapCodexReadError } from "./codex-read-errors.js";
 import {
   assertCodexHistoryMode,
-  bindingMismatch,
   codexContextExcerptMutationFingerprint,
-  codexError,
   codexSteerTargetUnavailable,
   codexTaskContextMutationFingerprint,
   conversationClosed,
   mapCodexInteractionError,
   mapCodexMutationError,
-  mapCodexReadError,
   mutationOutcomeUnknown,
   projectionCancelled,
 } from "./codex-conversation-errors.js";
@@ -2313,6 +2311,7 @@ export class CodexConversationHandle implements ConversationHandle {
       const thread = this.#assertMutableProjection();
       switch (input.action) {
         case "rename": {
+          let dispatched = false;
           try {
             const inspected = await this.#client.requestWithReceipt(
               codexThreadReadMethod,
@@ -2334,6 +2333,7 @@ export class CodexConversationHandle implements ConversationHandle {
             if (inspected.result.thread.name === input.title) {
               return { accepted: true };
             }
+            dispatched = true;
             const response = await this.#client.requestWithReceipt(
               codexThreadSetNameMethod,
               { threadId: thread.id, name: input.title },
@@ -2346,7 +2346,7 @@ export class CodexConversationHandle implements ConversationHandle {
             };
             return { accepted: true };
           } catch (error) {
-            throw mapCodexMutationError(error, "rename");
+            throw dispatched ? mapCodexMutationError(error, "rename", true) : mapCodexReadError(error);
           }
         }
         case "compact": {
@@ -2456,7 +2456,7 @@ export class CodexConversationHandle implements ConversationHandle {
         };
         return response.result.thread.name === input.title
           ? { outcome: "accepted" }
-          : { outcome: "not_applied" };
+          : { outcome: "unknown" };
       } catch (error) {
         throw mapCodexReadError(error);
       }

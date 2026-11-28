@@ -25,7 +25,7 @@ User-facing changes are collected here before release. See the
 
 - Native Pi reduces round trips before sending a message on an attached thread.
   Drain retained native Pi work using the currently installed main and sidecar
-  before upgrading both to native Pi runtime capability **3**.
+  before upgrading both to native Pi runtime capability **4**.
   See [native Pi setup](docs/operator/backends/pi-native.md).
   ([#143](https://github.com/kcosr/sedes/pull/143))
 
@@ -53,8 +53,9 @@ User-facing changes are collected here before release. See the
   ([#121](https://github.com/kcosr/sedes/pull/121))
 
 - Upgrade the server and browser/packaged clients together for client protocol
-  **187**. Upgrade Claude sidecars with the server for
-  `claude_persistent_runtime@7`. Rebuild Android and Electron clients for native voice snapshot **17**
+  **188**. Upgrade Claude, Antigravity, and Codex sidecars with the server
+  for `claude_persistent_runtime@8`, `antigravity_runtime@7`, and the Codex
+  check for an unopened thread’s activity. Rebuild Android and Electron clients for native voice snapshot **17**
   and the early reply subscription for progress updates and final answers. See
   [early reply playback](docs/operator/clients/voice.md#early-reply-playback).
   ([#165](https://github.com/kcosr/sedes/pull/165), [#169](https://github.com/kcosr/sedes/pull/169))
@@ -91,7 +92,7 @@ User-facing changes are collected here before release. See the
   ([#116](https://github.com/kcosr/sedes/pull/116), [#123](https://github.com/kcosr/sedes/pull/123))
 
 - Upgrade OpenCode to stable stock **2.3.0 or newer** on every execution host.
-  Update the server and OpenCode sidecars together for private runtime protocol **6**. See
+  Update the server and OpenCode sidecars together for private runtime protocol **7**. See
   [OpenCode setup](docs/operator/backends/opencode.md).
   ([#93](https://github.com/kcosr/sedes/pull/93), [#123](https://github.com/kcosr/sedes/pull/123), [#134](https://github.com/kcosr/sedes/pull/134), [#176](https://github.com/kcosr/sedes/pull/176))
 
@@ -190,7 +191,7 @@ User-facing changes are collected here before release. See the
   Bound threads support Sedes-local titles that survive native rediscovery;
   Antigravity displays its official brand mark and reasoning effort labels such
   as **Extra High**. Codex Saved Agents use the same reasoning labels as threads.
-  Upgrade Antigravity execution sidecars with the server for runtime capability **6**.
+  Upgrade Antigravity execution sidecars with the server for runtime capability **7**.
   See [Antigravity setup](docs/operator/backends/antigravity.md).
   ([#144](https://github.com/kcosr/sedes/pull/144), [#168](https://github.com/kcosr/sedes/pull/168), [#172](https://github.com/kcosr/sedes/pull/172))
 
@@ -253,7 +254,7 @@ User-facing changes are collected here before release. See the
   backends can share session storage without importing duplicate threads. See
   [native Pi setup and limits](docs/operator/backends/pi-native.md). Pi 1.5.0 is
   qualified on Linux x64; newer stable releases remain available with an installation
-  warning. Remote execution requires native Pi runtime capability **3**. The
+  warning. Remote execution requires native Pi runtime capability **4**. The
   embedded Pi SDK remains pinned separately.
   ([#124](https://github.com/kcosr/sedes/pull/124), [#133](https://github.com/kcosr/sedes/pull/133))
 
@@ -508,6 +509,12 @@ User-facing changes are collected here before release. See the
   ([#81](https://github.com/kcosr/sedes/pull/81))
 
 ### Fixed
+
+- Archive and Rename now finish from the sidebar even when a different chat is
+  open. Archive saves retained backend updates first, and Rename keeps an
+  unconfirmed edit available to check after a lost reply.
+  See [organizing threads](docs/user/organize-work.md#archive-finished-work).
+  ([#177](https://github.com/kcosr/sedes/pull/177))
 
 - OpenCode threads can stream replies and reopen saved history when OpenCode
   reports the first-token timestamp. See [OpenCode compatibility](docs/operator/backends/opencode.md).

@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { attachmentDiagnostic, type AttachmentDiagnosticFields } from "../../../diagnostics/attachment-diagnostics.js";
 import type { BackendRuntimeAdministration } from "../../module.js";
 import type { VerifiedCodexRuntimeVersion } from "../codex-release-guard.js";
-import { isSidecarRevisionChanged, type SidecarRuntimeProvider, type SidecarRuntimeLease } from "../../../sidecar/runtime-channel.js";
+import { existingSidecarIsOffline, isSidecarRevisionChanged, type SidecarRuntimeProvider, type SidecarRuntimeLease } from "../../../sidecar/runtime-channel.js";
 import type { ProviderTransportScope } from "../../../provider-protocol/transport/assured-framed-transport.js";
 import { CodexSharedClientFacade, type CodexReadyClientGeneration } from "../codex-client-facade.js";
 import type { CodexServerRequestRouter } from "../codex-server-request-router.js";
@@ -104,6 +104,45 @@ export class CodexRemoteRuntimeSupervisor {
           }
         },
       }),
+      inspectExistingArchive: async ({ applicationThreadId, connectionProfileId, threadId, workspace, signal, markObserved }) => {
+        signal.throwIfAborted();
+        const target = this.#lookupConfiguration.connections.find(connection => connection.id === connectionProfileId && connection.enabled);
+        if (!target) return { outcome: "inconclusive" };
+        let lease: SidecarRuntimeLease;
+        try { lease = await this.input.provider.acquireExisting(signal); }
+        catch (error) {
+          signal.throwIfAborted();
+          if (existingSidecarIsOffline(error)) return { outcome: this.#lookupConfiguration.connection.ownership === "external" ? "inconclusive" : "offline" };
+          throw error;
+        }
+        const connection = new CodexSidecarRuntimeConnection(lease.channel);
+        try {
+          const runtimeId = await connection.lookup(this.#lookupConfiguration, signal);
+          if (!runtimeId) {
+            const previous = this.#retainedIdentity;
+            if (previous && this.input.receipts.pending({ scope: this.#scope, runtimeId: previous.runtimeId })
+              .some(receipt => receipt.correlation.applicationThreadId === applicationThreadId)) {
+              markObserved();
+              return { outcome: "inconclusive" };
+            }
+            if (this.#lookupConfiguration.connection.ownership === "owned") return { outcome: "offline" };
+            const outcome = await connection.inspectUnregisteredExternalArchive(this.#lookupConfiguration, connectionProfileId, threadId, workspace, signal)
+              .catch(error => { markObserved(); throw error; });
+            signal.throwIfAborted();
+            if (outcome === "busy" || outcome === "inconclusive") markObserved();
+            return { outcome };
+          }
+          markObserved();
+          const previous = this.#retainedIdentity;
+          if (previous && (runtimeId !== previous.runtimeId || lease.serviceIncarnation !== previous.serviceIncarnation)) {
+            return { outcome: "inconclusive" };
+          }
+          const authority = { scope: this.#scope, runtimeId, controllerId: String(lease.controllerEpoch) };
+          const outcome = await connection.prepareThreadArchive(authority, { applicationThreadId, threadId, workspace, targetId: target.templateId }, signal);
+          signal.throwIfAborted();
+          return { outcome };
+        } finally { connection.close(); lease.release(); }
+      },
       pendingInitialization: () => this.#connecting,
       replacedServiceReceiptsPending: applicationThreadId => this.#replacedServiceReceiptsPending(applicationThreadId),
       current: () => this.#current, latestGeneration: () => this.#generation,

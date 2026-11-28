@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { chmod, copyFile, mkdtemp, realpath, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -144,6 +145,8 @@ describe("Antigravity execution host", () => {
     await f.host.release({ handleId: first.handleId });
     const retry = await f.host.attach(input);
     expect(retry.generation).not.toBe(first.generation);
+    const originOwner = createHash("sha256").update(JSON.stringify([input.sessionId, input.cwd, first.handleId, first.generation])).digest("hex");
+    expect(await f.host.probeArchiveOwner(input)).toMatchObject({ handleId: retry.handleId, inheritedOwners: [originOwner] });
     expect(retry.retainedOperationIds).toContain(cancel.operationId);
     expect(await f.host.request({ handleId: retry.handleId, ...cancel })).toEqual(original);
     expect((await f.host.attachExisting(input))?.pendingPermissions).toHaveLength(1);
@@ -160,6 +163,55 @@ describe("Antigravity execution host", () => {
     });
     await f.host.close();
     expect(f.host.snapshot().retainedSessions).toEqual([]);
+  });
+  it.each(["before retire", "during peer close"] as const)("preserves the generation when native history advances %s without an ACP event", async point => {
+    const f = await fixture();
+    const identity = { sessionId: "4c8ece79-6741-451f-8aa5-e01d576ed055", cwd: f.cwd };
+    const { handleId, generation } = await f.host.attach(identity);
+    const expected = { ...identity, handleId, generation };
+    const original = "a".repeat(64), updated = "b".repeat(64);
+    const snapshot = (revision: string) => ({ ...identity, native: { steps: [], executions: [], revision } });
+    await drain(f.host, handleId);
+    if (point === "during peer close") f.readHistory.mockResolvedValueOnce(snapshot(original));
+    f.readHistory.mockResolvedValue(snapshot(updated));
+    expect(await f.host.retireSession({ ...identity, expected, settledNativeRevision: original })).toBe("undelivered");
+    expect(await f.host.probeArchiveOwner(identity)).toMatchObject(expected);
+    const state = await f.host.readArchiveState(expected);
+    expect(state).toMatchObject({ state: "idle", history: { native: { revision: updated } } });
+    // Closure may deliver its own process-closed notification on the retained generation.
+    if (state.state === "idle" && state.throughSequence > state.acknowledged) {
+      const page = await f.host.observe({ handleId, afterSequence: state.acknowledged });
+      await f.host.acknowledge({ handleId, throughSequence: page.throughSequence });
+    }
+    expect(await f.host.retireSession({ ...identity, expected, settledNativeRevision: updated })).toBe("retired");
+  });
+  it("keeps ordinary-acknowledged prompts out of archive receipt replay even while their events remain", async () => {
+    const f = await fixture();
+    const identity = { sessionId: "4c8ece79-6741-451f-8aa5-e01d576ed055", cwd: f.cwd };
+    const { handleId, generation } = await f.host.attach(identity);
+    const owner = { ...identity, handleId, generation };
+    expect(await f.host.readArchiveState(owner)).toMatchObject({ state: "idle", operations: [] });
+    vi.spyOn(AntigravityAcpConnection.prototype, "prompt").mockRejectedValueOnce(new AcpRemoteError(-32602));
+    const operationId = "ordinary-op";
+    await f.host.request({ handleId, operationId, command: { type: "prompt", prompt: [] } });
+    expect(await settled(f.host, handleId, operationId)).toMatchObject({ status: "failed", failure: { delivery: "rejected" } });
+    await f.host.acknowledgeOperation({ handleId, operationId });
+    expect(await f.host.readArchiveState(owner)).toMatchObject({ state: "idle", operations: [], deliveredOperationIds: [operationId] });
+    await drain(f.host, handleId);
+    expect(await f.host.readArchiveState(owner)).toMatchObject({ state: "idle", operations: [], deliveredOperationIds: [] });
+    await f.host.release({ handleId });
+    const ownerKey = createHash("sha256").update(JSON.stringify([identity.sessionId, identity.cwd, handleId, generation])).digest("hex");
+    expect(await f.host.readRetiredArchive({ ...identity, ownerKey })).toMatchObject({ operations: [] });
+  });
+  it("reports a pending creation even after a normal consumer drains and closes the ACP session", async () => {
+    const f = await fixture(), operationId = "unacknowledged";
+    const identity = await f.host.create({ cwd: f.cwd, operationId });
+    const attached = (await f.host.attachExisting(identity))!;
+    await drain(f.host, attached.handleId);
+    await f.host.release({ handleId: attached.handleId });
+    expect(await f.host.probeArchiveOwner(identity)).toEqual({ ...identity, pendingCreation: operationId });
+    await f.host.acknowledgeCreation({ ...identity, operationId });
+    expect(await f.host.probeArchiveOwner(identity)).toBeNull();
   });
   it("retires a proven-closed native session despite passive cache eviction failure", async () => {
     const f = await fixture(), identity = await f.host.create({ cwd: f.cwd, operationId: "create" });
@@ -805,7 +857,7 @@ describe("Antigravity execution host", () => {
   it("bounds acknowledged identities without replay and reserves capacity for Stop", async () => {
     const f = await fixture(), identity = await f.host.create({ cwd: f.cwd, operationId: "creation" }); const { handleId } = await f.host.attach(identity);
     const configure = vi.spyOn(AntigravityAcpConnection.prototype, "setConfig").mockResolvedValue({ configOptions: [] });
-    const input = (index: number) => ({ handleId, operationId: `setting:${index}`, command: { type: "set_config" as const, configId: "model", value: "fixture" } });
+    const input = (index: number) => ({ handleId, operationId: `setting:${index}`, command: { type: "set_config" as const, origin: "session_configuration" as const, configId: "model", value: "fixture" } });
     for (let index = 0; index < 4096; index++) { await f.host.request(input(index)); await f.host.acknowledgeOperation({ handleId, operationId: input(index).operationId }); }
     await expect(f.host.request(input(4096))).rejects.toMatchObject({ code: "antigravity_operation_receipt_capacity", delivery: "not_sent" });
     expect(await f.host.request(input(0))).toMatchObject({ status: "completed" }); expect(configure).toHaveBeenCalledTimes(4096);
@@ -893,7 +945,7 @@ describe("Antigravity execution host", () => {
   it("settles an uncertain config setter only after a fresh exact native postcondition", async () => {
     const f = await fixture(), identity = await f.host.create({ cwd: f.cwd, operationId: "creation" }), attachment = await f.host.attach(identity), { handleId } = attachment;
     vi.spyOn(AntigravityAcpConnection.prototype, "setConfig").mockRejectedValueOnce(new AcpDeliveryError("acp_binding_request_deadline", "sent_outcome_unknown"));
-    const command = { type: "set_config" as const, configId: "model", value: "fixture-model" };
+    const command = { type: "set_config" as const, origin: "session_configuration" as const, configId: "model", value: "fixture-model" };
     await f.host.request({ handleId, operationId: "setting", command });
     expect(await settled(f.host, handleId, "setting")).toMatchObject({ status: "failed", failure: { delivery: "sent_outcome_unknown" } });
     // A cached value equal to the postcondition is not a new observation.
@@ -910,8 +962,8 @@ describe("Antigravity execution host", () => {
   it("recovers cleanup receipts beyond the ordinary unacknowledged operation capacity", async () => {
     const f = await fixture(), identity = await f.host.create({ cwd: f.cwd, operationId: "creation" }), { handleId } = await f.host.attach(identity);
     vi.spyOn(AntigravityAcpConnection.prototype, "setConfig").mockResolvedValue({ configOptions: [] });
-    for (let index = 0; index < 512; index++) await f.host.request({ handleId, operationId: `setting:${index}`, command: { type: "set_config", configId: "model", value: "fixture" } });
-    await expect(f.host.request({ handleId, operationId: "overflow", command: { type: "set_config", configId: "model", value: "fixture" } })).rejects.toMatchObject({ code: "antigravity_operation_capacity" });
+    for (let index = 0; index < 512; index++) await f.host.request({ handleId, operationId: `setting:${index}`, command: { type: "set_config", origin: "session_configuration", configId: "model", value: "fixture" } });
+    await expect(f.host.request({ handleId, operationId: "overflow", command: { type: "set_config", origin: "session_configuration", configId: "model", value: "fixture" } })).rejects.toMatchObject({ code: "antigravity_operation_capacity" });
     await f.host.request({ handleId, operationId: "stop", command: { type: "cancel" } }); await settled(f.host, handleId, "stop");
     const attachment = await f.host.attachExisting(identity);
     expect(attachment?.retainedOperationIds).toHaveLength(513); expect(antigravityAttachmentSchema.safeParse(attachment).success).toBe(true);
@@ -919,7 +971,7 @@ describe("Antigravity execution host", () => {
   it("uses exact native mode observations and preserves definite setter rejection", async () => {
     const f = await fixture(), identity = await f.host.create({ cwd: f.cwd, operationId: "creation" }), { handleId } = await f.host.attach(identity);
     vi.spyOn(AntigravityAcpConnection.prototype, "setMode").mockRejectedValueOnce(new AcpDeliveryError("acp_binding_request_deadline", "sent_outcome_unknown"));
-    await f.host.request({ handleId, operationId: "mode", command: { type: "set_mode", modeId: "plan" } });
+    await f.host.request({ handleId, operationId: "mode", command: { type: "set_mode", origin: "session_configuration", modeId: "plan" } });
     expect(await settled(f.host, handleId, "mode")).toMatchObject({ status: "failed" });
     f.emit({ sessionId: identity.sessionId, update: { sessionUpdate: "current_mode_update", currentModeId: "default" } });
     expect(await f.host.outcome({ handleId, operationId: "mode" })).toMatchObject({ status: "failed" });
@@ -927,7 +979,7 @@ describe("Antigravity execution host", () => {
     expect(await f.host.outcome({ handleId, operationId: "mode" })).toMatchObject({ status: "completed" });
     expect((await f.host.attachExisting(identity))?.setup.session.modes?.currentModeId).toBe("plan");
     vi.spyOn(AntigravityAcpConnection.prototype, "setConfig").mockRejectedValueOnce(new AcpRemoteError(-32602));
-    await f.host.request({ handleId, operationId: "rejected", command: { type: "set_config", configId: "model", value: "fixture-model" } });
+    await f.host.request({ handleId, operationId: "rejected", command: { type: "set_config", origin: "session_configuration", configId: "model", value: "fixture-model" } });
     expect(await settled(f.host, handleId, "rejected")).toMatchObject({ status: "failed", failure: { delivery: "rejected" } });
     f.emit({ sessionId: identity.sessionId, update: { sessionUpdate: "config_option_update", configOptions: (await f.host.attachExisting(identity))!.setup.session.configOptions! } });
     expect(await f.host.outcome({ handleId, operationId: "rejected" })).toMatchObject({ status: "failed", failure: { delivery: "rejected" } });

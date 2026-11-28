@@ -477,6 +477,7 @@ describe("backend-normalized application adapters", () => {
       const beforeBulk = events.length;
       await bulk.transition(current.scope, {
         action: "archive", targets: impact.targets, mutationId: "bulk-group-archive",
+        expectedPendingQuestionCount: impact.pendingQuestionCount, expectedOpenTaskSnapshot: impact.openTasks.snapshot,
         expectedStashedPromptCount: 0, expectedOpenTaskCount: 0,
       });
       await assertCurrent(0);

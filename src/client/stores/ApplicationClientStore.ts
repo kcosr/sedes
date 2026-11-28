@@ -327,7 +327,6 @@ export class ApplicationClientStore {
       | "unpark"
       | "snooze"
       | "wake"
-      | "archive"
       | "restore",
     options?: {
       readonly snoozedUntil?: string;
@@ -335,20 +334,13 @@ export class ApplicationClientStore {
       readonly openTaskDisposition?: OpenTaskDisposition;
       readonly expectedOpenTaskSnapshot?: string;
       readonly expectedStashedPromptCount?: number;
-      readonly executionWorkspaceDisposition?:
-        | { readonly kind: "keep" }
-        | {
-            readonly kind: "delete";
-            readonly expectedRevision: number;
-            readonly operationId: string;
-          };
     },
   ): Promise<void> {
     if (action === "snooze" && !options?.snoozedUntil) {
       throw new Error("A snooze deadline is required.");
     }
     if (
-      (action === "archive" || action === "park") &&
+      action === "park" &&
       options?.expectedStashedPromptCount === undefined
     ) {
       throw new Error(
@@ -367,23 +359,17 @@ export class ApplicationClientStore {
               : {}),
           }
         : {}),
-      ...((action === "archive" || action === "park") &&
+      ...(action === "park" &&
       options?.openTaskDisposition
         ? { openTaskDisposition: options.openTaskDisposition }
         : {}),
-      ...((action === "archive" || action === "park") &&
+      ...(action === "park" &&
       options?.expectedOpenTaskSnapshot !== undefined
         ? { expectedOpenTaskSnapshot: options.expectedOpenTaskSnapshot }
         : {}),
-      ...((action === "archive" || action === "park") &&
+      ...(action === "park" &&
       options?.expectedStashedPromptCount !== undefined
         ? { expectedStashedPromptCount: options.expectedStashedPromptCount }
-        : {}),
-      ...(action === "archive"
-        ? {
-            executionWorkspaceDisposition:
-              options?.executionWorkspaceDisposition ?? { kind: "keep" },
-          }
         : {}),
     });
   }
@@ -441,11 +427,9 @@ export class ApplicationClientStore {
         : {
             action: "archive",
             ...confirmed,
+            expectedPendingQuestionCount: impact.pendingQuestionCount,
             expectedOpenTaskCount: impact.openTasks.total,
-            ...(impact.openTasks.total > 0 &&
-            options.openTaskDisposition === "complete"
-              ? { expectedOpenTaskSnapshot: impact.openTasks.snapshot }
-              : {}),
+            expectedOpenTaskSnapshot: impact.openTasks.snapshot,
             ...(impact.openTasks.total > 0 && options.openTaskDisposition
               ? { openTaskDisposition: options.openTaskDisposition }
               : {}),
@@ -512,31 +496,8 @@ export class ApplicationClientStore {
     );
   }
 
-  async archiveThreadFamily(
-    thread: NormalizedApplicationThreadSummary,
-    options: {
-      readonly expectedStashedPromptCount: number;
-      readonly openTaskDisposition?: OpenTaskDisposition;
-      readonly expectedOpenTaskSnapshot?: string;
-      readonly executionWorkspaceDisposition: Extract<
-        InventoryTransitionRequest,
-        { action: "archive_family" }
-      >["executionWorkspaceDisposition"];
-    },
-  ): Promise<readonly string[]> {
-    const result = await this.api.archiveThreads(thread.id, {
-      action: "archive_family",
-      expectedRevision: thread.inventoryRevision,
-      expectedStashedPromptCount: options.expectedStashedPromptCount,
-      executionWorkspaceDisposition: options.executionWorkspaceDisposition,
-      mutationId: crypto.randomUUID(),
-      ...(options.expectedOpenTaskSnapshot !== undefined
-        ? { expectedOpenTaskSnapshot: options.expectedOpenTaskSnapshot }
-        : {}),
-      ...(options?.openTaskDisposition
-        ? { openTaskDisposition: options.openTaskDisposition }
-        : {}),
-    });
+  async archiveThreads(threadId: string, request: Extract<InventoryTransitionRequest, { action: "archive" | "archive_family" }>) {
+    const result = await this.api.archiveThreads(threadId, request);
     return result.archivedThreadIds;
   }
 
@@ -605,21 +566,12 @@ export class ApplicationClientStore {
   }
 
   /**
-   * Renames a thread from inventory context (sidebar rows) without spinning
-   * up its ThreadClientStore: the server accepts rename as a thread
-   * operation, and the summary's `threadRevision` is the freshest revision
-   * the application stream knows. The summary carries no per-operation
-   * capabilities, so feasibility stays server-checked — callers surface a
-   * rejection non-destructively instead of pre-filtering.
+   * The shared title editor captures the revision when editing starts and
+   * reuses the submitted title, revision and mutation ID to check its outcome.
    */
-  async renameThread(
-    thread: NormalizedApplicationThreadSummary,
-    title: string,
-  ): Promise<void> {
-    await this.api.operateThread(thread.id, {
-      kind: "perform",
-      mutationId: crypto.randomUUID(),
-      expectedThreadRevision: thread.threadRevision,
+  renameThread(threadId: string, title: string, expectedThreadRevision: number, mutationId: string) {
+    return this.api.operateThread(threadId, {
+      kind: "perform", mutationId, expectedThreadRevision,
       operation: { action: "rename", title },
     });
   }

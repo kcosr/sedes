@@ -24,6 +24,7 @@ import { ClaudeManagedRuntimeOwner } from "./claude-managed-runtime-owner.js";
 import { ClaudePersistentRuntimeClient } from "./runtime/claude-remote-runtime-client.js";
 import { claudePersistentRuntimeOperations } from "./runtime/claude-sidecar-runtime.js";
 import { recoverClaudeRuntimeAdministration } from "./runtime/claude-runtime-administration.js";
+import { ThreadArchiveObligationRepository } from "../../db/repositories/thread-archive-obligation-repository.js";
 import type { ClaudeRuntimeClient } from "./claude-runtime-client.js";
 import { ClaudeSavedAgentBackendAdapter } from "./claude-saved-agent-adapter.js";
 import { ClaudeModelEffortCatalog } from "./claude-model-effort-catalog.js";
@@ -58,7 +59,13 @@ const productionDependencies: ClaudeBackendModuleDependencies = Object.freeze({
   }) => {
     if (context.environmentOperations.environmentKind !== "local") {
       if (!context.sidecarRuntime) throw new Error("claude_sidecar_runtime_required");
+      const archiveObligations = new ThreadArchiveObligationRepository(context.database);
       const client = new ClaudePersistentRuntimeClient({
+        ...(context.settleRetainedArchiveSnapshot ? { archiveObserver: {
+          retained: (threadId: string) => archiveObligations.read(context.scope, threadId)?.retainedOwner,
+          settle: context.settleRetainedArchiveSnapshot,
+          release: (threadId: string, owner: string) => { archiveObligations.settleIfRetained(context.scope, threadId, owner); },
+        } } : {}),
         scope: { ...context.scope, backendInstanceId: context.instance.id,
           executionEnvironmentId: context.environmentChannel.executionEnvironmentId },
         sidecarRuntime: context.sidecarRuntime,
@@ -477,7 +484,7 @@ export class ClaudeBackendModule implements BackendModule {
   readonly creationProvenanceRepair = undefined;
   readonly startupPolicy = "composition_only" as const;
   readonly remoteRuntimeCapabilities = Object.freeze([Object.freeze({
-    capabilityId: "claude_persistent_runtime", majorVersion: 7,
+    capabilityId: "claude_persistent_runtime", majorVersion: 8,
     operations: Object.freeze(claudePersistentRuntimeOperations.map(operation => operation.operation)),
   })]);
   readonly backendKind = "claude_agent_sdk" as const;

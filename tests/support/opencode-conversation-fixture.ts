@@ -10,7 +10,7 @@ import { NO_USAGE_SINK } from "../../src/server/usage/contracts.js";
 import Database from "better-sqlite3";
 import { vi } from "vitest";
 import type { SessionMessageInfo } from "@opencode/client";
-import type { AgentBackendInstance, AgentConnectionProfile, ConversationBinding, ConversationHandle } from "../../src/server/backends/contracts.js";
+import type { AttachConversationInput, AgentBackendInstance, AgentConnectionProfile, ConversationBinding, ConversationHandle } from "../../src/server/backends/contracts.js";
 import { OpenCodeConversationBackendDriver } from "../../src/server/backends/opencode/opencode-conversation-driver.js";
 import type { OpenCodeConversationRuntime } from "../../src/server/backends/opencode/opencode-conversation-context.js";
 import { OpenCodeHttpClient } from "../../src/server/backends/opencode/opencode-http-client.js";
@@ -137,7 +137,7 @@ export function createOpenCodeConversationFixture(input: {
   const context = { scope, instance, connection, repository, settings, catalog, modelPolicy, executionEnvironment, skills, usage: new OpenCodeUsageAccounting(NO_USAGE_SINK),
     attachmentProvenanceKey: Buffer.alloc(32, 7), outputArtifacts: { findImage: () => undefined,
       publishImage: async (): Promise<import("../../src/server/output-artifacts/contracts.js").OutputImageArtifactDescriptor> => { throw new Error("unexpected image publication"); } },
-    tools: { admit: async () => {}, release: () => {}, diagnostic: () => undefined, gatewayAction: () => undefined, cliAdmission: () => null }, nativeNamespaceKey: namespace, runtime: async () => runtime };
+    tools: { admit: async () => {}, release: () => {}, diagnostic: () => undefined, gatewayAction: () => undefined, cliAdmission: () => null }, nativeNamespaceKey: namespace, runtime: async () => runtime, existingRuntime: async () => runtime.snapshot().state === "ready" ? runtime : undefined };
   const driver = new OpenCodeConversationBackendDriver(context);
   const attached = vi.spyOn(driver, "attach");
   const environmentRelease = vi.fn(async () => undefined);
@@ -153,4 +153,9 @@ export function createOpenCodeConversationFixture(input: {
   const handle = async (): Promise<ConversationHandle> => attached.mock.results[0]!.value;
   const interrupts = () => wire.requests.filter(request => request.pathname.endsWith("/interrupt"));
   return { wire, client, port: host.acquire(openCodeRuntimeTarget(target)), host, hostHooks, adapter, setHostTools: (tools: OpenCodeHostAgentTools) => { hostTools = tools; }, runtime, context, database, repository, driver, manager, target, acquire, handle, attached, environmentRelease, interrupts, dispose };
+}
+
+export function openCodeArchiveInput(target: Pick<AttachConversationInput, "scope" | "workspace" | "binding" | "opaqueBindingDetail">) {
+  return { ...target, signal: new AbortController().signal, retainedOwner: undefined,
+    markObserved: vi.fn(), markRetained: vi.fn(), markSettled: vi.fn(), settle: vi.fn(async () => {}) };
 }

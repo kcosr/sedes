@@ -1120,22 +1120,79 @@ describe("ThreadRuntimeCoordinator", () => {
     }
   });
 
+  it.each(["fence", "provider"] as const)("times out waiting for a target's %s without a late inventory commit", async (stage) => {
+    vi.useFakeTimers();
+    try {
+      const entered = deferred<void>(), unblock = deferred<void>(), cleaned = deferred<void>();
+      const commit = vi.fn(async () => "committed");
+      const archive = runWithArchivedThreadRuntimesRetired({
+        scope, threadIds: ["unopened"], purpose: "archive",
+        runtimes: {
+          async runWithRuntimeRetired(_scope, _id, operation) {
+            try {
+              if (stage === "fence") { entered.resolve(); await unblock.promise; }
+              return await operation();
+            } finally { cleaned.resolve(); }
+          },
+          async releaseProviderResidency() {
+            if (stage === "provider") { entered.resolve(); await unblock.promise; }
+          },
+        }, operation: commit,
+      });
+      const refused = expect(archive).rejects.toMatchObject({ code: "invalid_transition", retryable: true });
+      await entered.promise;
+      await vi.advanceTimersByTimeAsync(15_000);
+      await refused;
+      unblock.resolve();
+      await cleaned.promise;
+      expect(commit).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("bounds cumulative family preparation while leaving the postcommit native phase its own budget", async () => {
+    vi.useFakeTimers();
+    try {
+      const runtimes = {
+        async runWithRuntimeRetired<Result>(_scope: typeof scope, _id: string, operation: () => Promise<Result>) { return operation(); },
+        async releaseProviderResidency() { await new Promise(resolve => setTimeout(resolve, 12_000)); },
+      };
+      const commit = vi.fn(async (beginCommit: () => void) => {
+        beginCommit();
+        await new Promise(resolve => setTimeout(resolve, 50_000));
+      });
+      const wholeFamily = runWithArchivedThreadRuntimesRetired({ scope, threadIds: ["a", "b", "c", "d"],
+        runtimes, purpose: "archive", operation: commit });
+      const refused = expect(wholeFamily).rejects.toMatchObject({ code: "invalid_transition" });
+      await vi.advanceTimersByTimeAsync(45_000);
+      await refused;
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(commit).not.toHaveBeenCalled();
+      const single = runWithArchivedThreadRuntimesRetired({ scope, threadIds: ["a"], runtimes,
+        purpose: "archive", operation: commit });
+      await vi.advanceTimersByTimeAsync(62_000);
+      await expect(single).resolves.toBeUndefined();
+      expect(commit).toHaveBeenCalledOnce();
+    } finally { vi.useRealTimers(); }
+  });
+
   it("passes archive-only proof and provider recheck through the same fenced retirement", async () => {
     const current = resettableActor({ generation: "archive-generation", runState: "disconnected", canRetireForArchive: true });
     const release = vi.fn(async (_input: unknown) => "released" as const);
+    const prepare = vi.fn(async (_input: unknown) => ({ outcome: "released" } as const));
     const { coordinator } = resetCoordinator([current.actor], 60_000, threadId => ({
-      ...runtimeTarget(threadId), driver: { releaseConversationResidency: release },
+      ...runtimeTarget(threadId), driver: { releaseConversationResidency: release, prepareArchive: prepare },
     } as unknown as AcquireConversationActorInput));
     const acquired = await coordinator.acquire(scope, "archive-incomplete");
     try {
       expect(await coordinator.captureLoadedState(scope, "archive-incomplete")).toEqual({ runState: "disconnected" });
       expect(await coordinator.captureLoadedState(scope, "archive-incomplete", { purpose: "archive" }))
-        .toEqual({ runState: "disconnected", archiveRetirementSafe: true });
+        .toEqual({ runState: "disconnected" });
       await expect(coordinator.runWithRuntimeRetired(scope, "archive-incomplete", async () => undefined))
         .rejects.toBeInstanceOf(ThreadRuntimeNotIdleError);
       const commit = vi.fn(async () => {
         expect(current.close).toHaveBeenCalledOnce();
-        expect(release).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ purpose: "archive" }));
+        expect(prepare).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ signal: expect.any(AbortSignal) }));
+        expect(release).not.toHaveBeenCalled();
         return "archived";
       });
       await expect(runWithArchivedThreadRuntimesRetired({ scope, threadIds: ["archive-incomplete"], runtimes: coordinator, purpose: "archive",

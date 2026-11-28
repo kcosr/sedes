@@ -9,7 +9,7 @@ import { antigravityTerminatedExecutionHeads } from "../../src/server/backends/a
 it("recovers a rejected permission and queued steer using exact native disposition or explicit Stop", async () => {
   const f = await localFixture();
   try {
-    await command(f.host, f.attachment.handleId, { type: "set_mode", modeId: "default" });
+    await command(f.host, f.attachment.handleId, { type: "set_mode", origin: "session_configuration", modeId: "default" });
     const operationId = randomUUID(), steerId = randomUUID();
     const scope: AntigravitySubmissionScope = { key: randomBytes(32), binding: {
       version: 1, sessionId: f.identity.sessionId, canonicalWorkspacePath: f.cwd,

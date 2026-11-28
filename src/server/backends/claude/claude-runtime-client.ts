@@ -63,6 +63,11 @@ export interface ClaudeRuntimeProbeResult {
   readonly terminalCommandNames: readonly string[];
 }
 
+export type ClaudeArchiveSnapshotSink = (
+  snapshot: import("../../../shared/protocol/backend.js").BackendConversationSnapshot,
+  completedTurnIds: readonly string[],
+) => void;
+
 export interface ClaudeRuntimeSessionOptions {
   /** Host authority checked after worker initialization, before opening the native query. */
   readonly assertLaunchAdmission?: () => void;
@@ -98,6 +103,7 @@ export interface ClaudeRuntimeSessionOptions {
   ) => void;
   readonly onVersionAssessmentFailed?: () => void;
   readonly onMessage: (message: SDKMessage, evidence?: {
+    readonly archiveOwnerEvent?: boolean;
     readonly consumedTurnRootUuid?: string;
     /** Retained delivery captured before this main-side attachment was live. */
     readonly completionProvenance?: "recovered";
@@ -186,12 +192,37 @@ export interface ClaudeOwnedRuntimeSession extends ClaudeRuntimeSession {
   cancelQueuedInput(operationId: string, input?: Pick<InterruptConversationInput, "deadlineAt" | "signal">): Promise<boolean>;
 }
 
+/** Read-only replay using one already admitted query and its scoped history. */
+export interface ClaudeArchiveRecoveryCut {
+  createSession(options: ClaudeRuntimeSessionOptions): ClaudeRuntimeSession;
+  readHistory(): Promise<readonly SessionMessage[]>;
+}
+
 /**
  * Semantic Claude runtime boundary. Implementations may cross a process or SSH
  * carrier, but SDK Query objects, callbacks, streams, and filesystem helpers do
  * not cross this interface.
  */
 export interface ClaudeRuntimeClient {
+  /** Apply only the pinned, unloaded owner’s exact retained cut before ordinary delivery. */
+  recoverArchiveBeforeOpen?(input: {
+    readonly sessionId: string;
+    readonly cwd: string;
+    readonly applicationThreadId: string;
+    apply(cut: ClaudeArchiveRecoveryCut, settle: ClaudeArchiveSnapshotSink): Promise<void>;
+  }): Promise<void>;
+  /** Observe and apply only an existing application-bound query on its original host. */
+  prepareArchive?(input: {
+    readonly sessionId: string;
+    readonly applicationThreadId: string;
+    readonly cwd: string;
+    readonly signal: AbortSignal;
+    readonly retainedOwner: string | undefined;
+    markObserved(): void;
+    markRetained(owner: string): void;
+    markSettled(owner: string): void;
+    apply(cut: ClaudeArchiveRecoveryCut): Promise<void>;
+  }): Promise<"released" | "busy" | "offline">;
   /** An observation ID only rechecks membership against the resident worker’s unexpired sample. */
   readAccountUsage(signal: AbortSignal, observationId?: string): Promise<ClaudeAccountUsageObservation | null>;
   startupEnvironmentState?(): Promise<"not_started" | "started" | "unknown">;

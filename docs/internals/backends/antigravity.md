@@ -206,7 +206,7 @@ receipt exists. The final execution governs a multi-execution turn; trailing
 native inputs proven unstarted do not advance the executed head. The same proof
 settles background continuations and retires retained ACP tools only when no
 newer activity invalidates it. A failed or cancelled tool step alone is
-insufficient. Capability 6 of `antigravity_runtime` carries the diagnostic
+insufficient. Capability 7 of `antigravity_runtime` carries the diagnostic
 classification, the `failed` child state and the child ID from a qualified
 system failure notice (`failedSubagentSessionId`). Remote peers negotiate this
 capability before opening a runtime.
@@ -321,6 +321,46 @@ response fences preventing a stale attachment from reopening a resolved request.
 After an SSH recovery attachment, selected permission options reacquire normal
 configuration-checked authority on the same retained runtime. Cancel decisions
 remain available through the retained control path.
+
+## Sidebar archive preparation
+
+Archive probes the bound session on the existing execution host. A retained
+owner is identified by session, workspace, handle and generation. Sedes pins
+that identity durably before claiming the session for maintenance. A clean
+session retires directly. Retained output requires a fresh native history
+projection, usage capture, application settlement, and exact acknowledgements
+for the event cursor and the independent operation receipts. Pending prompts
+and permissions block archive. Unreadable history, missing event ranges and
+unproved operation results leave the inventory active.
+
+The host preserves each command's kind, fingerprint and configuration origin.
+Completed prompt and Steer receipts require signed terminal history and the
+durable completion row. Controls require their native and scoped application
+dispositions. A known unsent queued prompt retains its ordinary retry policy.
+A creation receipt can outlive its ACP peer. Sedes verifies the scoped bound
+creation before acknowledging it. Submission configuration requires proof of
+the selected native value. Archive claims release even after a failed read or acknowledgement. All
+archive calls use existing-only transport and perform no provider commands.
+
+The ordinary observer can settle a pinned cut before attaching or releasing
+its native peer. Its terminal callbacks cover only signed inputs identified in
+that cut and preserve normal activity, attention, and completion delivery.
+An ordinary operation acknowledgement can precede delivery of its journal
+event. Archive acknowledges the remaining event without replaying the already
+delivered operation. Maintenance acknowledgements retain their replay evidence
+until the host confirms the cut. Sedes clears the exact pin only after committing application
+facts and confirming the original generation's acknowledgements. An archive
+that loses its final retirement reply can therefore recover across a host
+restart. The host records receipt origins during a failed-load handoff after
+the old event cursor is acknowledged, so a successor can settle those
+same operations. Abrupt disappearance before settlement remains inconclusive.
+
+Clean retirement also keeps bounded metadata for a prior generation. A digest
+of its normalized history prefix permits replay after later appends. Rewriting
+the captured facts invalidates that proof. An exact signed terminal turn and
+its durable result settle a lost prompt callback. Definitively rejected controls
+use the saved scoped application rejection, including its translated command.
+The private `antigravity_runtime` sidecar capability is version 7.
 
 ## Cross-backend audit
 

@@ -837,7 +837,7 @@ describe("ApplicationClientStore bulk inventory", () => {
     });
   });
 
-  it.each(["park", "archive"] as const)(
+  it.each(["park"] as const)(
     "passes the reviewed completion snapshot to a single-thread %s",
     async (action) => {
       const api = {
@@ -870,10 +870,8 @@ describe("ApplicationClientStore bulk inventory", () => {
         .mockResolvedValue({ archivedThreadIds: ["thread-a", "thread-b"] }),
     } as unknown as ApiClient;
     const store = new ApplicationClientStore(api, {} as EventStreamTransport);
-    const thread = { id: "thread-a", inventoryRevision: 3 } as Parameters<
-      ApplicationClientStore["archiveThreadFamily"]
-    >[0];
-    await store.archiveThreadFamily(thread, {
+    await store.archiveThreads("thread-a", {
+      action: "archive_family", mutationId: crypto.randomUUID(), expectedRevision: 3, expectedPendingQuestionCount: 0,
       expectedStashedPromptCount: 0,
       openTaskDisposition: "complete",
       expectedOpenTaskSnapshot: "b".repeat(64),

@@ -1,7 +1,7 @@
 import { assessPiRuntimeVersion, type VerifiedPiRuntimeVersion } from "../runtime-release.js";
 import { z } from "zod";
-import { isSidecarRevisionChanged, type SidecarRuntimeLease, type SidecarRuntimeProvider } from "../../../../sidecar/runtime-channel.js";
-import { PiNativeError, type PiNativePort, type PiNativeRuntimeConfiguration, type PiNativeInspection, type PiNativeSessionIdentity, type PiNativeAttachment } from "../port.js";
+import { existingSidecarIsOffline, isSidecarRevisionChanged, type SidecarRuntimeLease, type SidecarRuntimeProvider } from "../../../../sidecar/runtime-channel.js";
+import { PiNativeError, type PiNativePort, type PiNativeRuntimeConfiguration, type PiNativeInspection, type PiNativeSessionIdentity, type PiNativeMaintenanceTarget, type PiNativeAttachment } from "../port.js";
 import { piNativeCommandIsReadOnly } from "../command-policy.js";
 import {
   piNativeHostCommandSchema, piNativeHostCommandLane, piNativeRuntimeOperations,
@@ -100,7 +100,7 @@ export class PiNativeRemotePort implements PiNativePort {
       const { sessionId, sessionFile, cwd } = retained;
       const schema = retained.mode === "drain" ? piNativeDrainAttachmentSchema : piNativeAttachmentSchema;
       const restored = schema.nullable().parse(await this.#call(attachment.lease,
-        { action: retained.mode === "drain" ? "attach_for_drain" : "attach_for_control", runtimeId: attachment.runtimeId, input: { sessionId, sessionFile, cwd } }, signal));
+        { action: retained.mode === "drain" ? "attach_for_drain" : "attach_for_control", runtimeId: attachment.runtimeId, input: { sessionId, sessionFile, cwd, expectedOwner: { handleId: value.handleId, generation: retained.generation } } }, signal));
       if (!restored || restored.handleId !== value.handleId || restored.generation !== retained.generation)
         throw new PiNativeError("pi_native_session_identity_mismatch", "sent_outcome_unknown");
       attachment.recoveries.add(value.handleId);
@@ -140,7 +140,7 @@ export class PiNativeRemotePort implements PiNativePort {
   async attachForControl(input: Parameters<PiNativePort["attachForControl"]>[0], signal?: AbortSignal) {
     return this.#attachForRecovery(input, "control", value => piNativeAttachmentSchema.nullable().parse(value), signal);
   }
-  async #attachForRecovery<T extends PiNativeAttachment>(input: PiNativeSessionIdentity, mode: "drain" | "control", parse: (value: unknown) => T | null, signal?: AbortSignal): Promise<T | null> {
+  async #attachForRecovery<T extends PiNativeAttachment>(input: PiNativeMaintenanceTarget, mode: "drain" | "control", parse: (value: unknown) => T | null, signal?: AbortSignal): Promise<T | null> {
     const combined = signal ? AbortSignal.any([signal, this.#lifetime.signal]) : this.#lifetime.signal;
     let owner: Attachment;
     try {
@@ -151,7 +151,7 @@ export class PiNativeRemotePort implements PiNativePort {
     }
     const { sessionId, sessionFile, cwd } = input;
     const attachment = parse(await this.#call(owner.lease,
-      { action: mode === "drain" ? "attach_for_drain" : "attach_for_control", runtimeId: owner.runtimeId, input: { sessionId, sessionFile, cwd } }, combined));
+      { action: mode === "drain" ? "attach_for_drain" : "attach_for_control", runtimeId: owner.runtimeId, input: { sessionId, sessionFile, cwd, ...(input.expectedOwner && { expectedOwner: input.expectedOwner }) } }, combined));
     if (attachment) {
       this.#handles.add(attachment.handleId);
       this.#recoveryHandles.set(attachment.handleId, { sessionId, sessionFile, cwd, generation: attachment.generation, mode });
@@ -228,7 +228,29 @@ export class PiNativeRemotePort implements PiNativePort {
     if (inspection.runtimeId !== this.#identity?.runtimeId) throw new PiNativeError("pi_native_runtime_incarnation_changed", "sent_outcome_unknown");
     return inspection;
   }
+  async inspectExisting(signal: AbortSignal): Promise<PiNativeInspection | null> {
+    try {
+      return await this.#withExistingRuntime(signal, async (lease, runtimeId, combined) => {
+        const inspection = piNativeInspectionSchema.parse(await this.#call(lease, { action: "inspect", runtimeId, input: {} }, combined));
+        if (inspection.runtimeId !== runtimeId) throw new PiNativeError("pi_native_runtime_incarnation_changed");
+        return inspection;
+      });
+    } catch (error) {
+      signal.throwIfAborted();
+      if (existingSidecarIsOffline(error)) throw new PiNativeError("pi_native_archive_probe_offline");
+      throw error;
+    }
+  }
   async retireSession(input: Parameters<PiNativePort["retireSession"]>[0], signal?: AbortSignal) {
+    const result = await this.#withExistingRuntime(signal, async (lease, runtimeId, combined) => {
+      const { sessionId, sessionFile, cwd } = input;
+      return piNativeRetirementSchema.parse(await this.#call(lease, { action: "retire_session", runtimeId, input: { sessionId, sessionFile, cwd, ...(input.expectedOwner && { expectedOwner: input.expectedOwner }) } }, combined));
+    });
+    if (result === null && input.expectedOwner) throw new PiNativeError("pi_native_retained_runtime_missing");
+    return result ?? "absent";
+  }
+  async #withExistingRuntime<T>(signal: AbortSignal | undefined,
+    inspect: (lease: SidecarRuntimeLease, runtimeId: string, signal: AbortSignal) => Promise<T>): Promise<T | null> {
     signal?.throwIfAborted();
     if (this.#closed) throw new PiNativeError("pi_native_remote_port_closed");
     const combined = signal ? AbortSignal.any([signal, this.#lifetime.signal]) : this.#lifetime.signal;
@@ -238,11 +260,10 @@ export class PiNativeRemotePort implements PiNativePort {
       if (this.#identity && lease.serviceIncarnation !== this.#identity.serviceIncarnation) throw new PiNativeError("pi_native_runtime_incarnation_changed", "sent_outcome_unknown");
       if (!piNativeRuntimeOperations.every(operation => lease.channel.supportsOperation(operation))) throw new PiNativeError("pi_native_remote_runtime_unsupported");
       const value = await this.#call(lease, { action: "lookup_retained", backendInstanceId: this.input.configuration.backendInstanceId }, combined);
-      if (value === null) return "absent" as const;
+      if (value === null) return null;
       const { runtimeId } = runtimeSchema.parse(value);
       if (this.#identity && runtimeId !== this.#identity.runtimeId) throw new PiNativeError("pi_native_runtime_incarnation_changed", "sent_outcome_unknown");
-      const { sessionId, sessionFile, cwd } = input;
-      return piNativeRetirementSchema.parse(await this.#call(lease, { action: "retire_session", runtimeId, input: { sessionId, sessionFile, cwd } }, combined));
+      return await inspect(lease, runtimeId, combined);
     } finally { lease.release(); }
   }
   async startupEnvironmentState(): Promise<"not_started" | "started" | "unknown"> {

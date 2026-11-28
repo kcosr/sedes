@@ -1,3 +1,5 @@
+import { codexOperationThreadId, codexPendingRequestThreadId } from "./codex-runtime-event-order.js";
+import { releaseCodexThreadResidency } from "../codex-thread-residency.js";
 import { codexEnvironmentFingerprintInput } from "./codex-runtime-environment-fingerprint.js";
 import { CodexRuntimeSessions } from "./codex-runtime-sessions.js";
 import type { VerifiedCodexRuntimeVersion } from "../codex-release-guard.js";
@@ -17,7 +19,7 @@ import {
 } from "./codex-runtime-protocol.js";
 
 type Pending = { request: CodexRuntimePendingRequest; resolve(value: unknown): void; reject(error: Error): void };
-type Operation = { fingerprint: string; outcome: CodexRuntimeOutcome; bytes: number; generation: number; dispatched: boolean };
+type Operation = { threadId?: string; fingerprint: string; outcome: CodexRuntimeOutcome; bytes: number; generation: number; dispatched: boolean };
 
 /** Supervisor/RPC ownership survives every upstream attachment. No transcript
  * journal: notification subscribers may disappear; receipts and live requests
@@ -164,7 +166,7 @@ export class CodexRuntimeHost implements CodexRuntimeConnection {
     if (client.lifecycleSnapshot().generation !== input.generation || client.lifecycleSnapshot().state !== "ready") throw new CodexRpcDeliveryError({ code: "codex_runtime_generation_unavailable", delivery: "not_sent", generation: input.generation, method: input.method });
     const inputBytes = Buffer.byteLength(JSON.stringify(params), "utf8");
     if (this.#operations.size >= this.#maximumOperations || this.#retainedBytes + this.#pendingBytes + inputBytes > this.#maximumBytes) throw new CodexRpcDeliveryError({ code: "codex_runtime_receipt_capacity_exceeded", delivery: "not_sent", generation: input.generation, method: input.method });
-    const operation: Operation = { fingerprint, bytes: inputBytes, generation: input.generation, dispatched: false, outcome: { status: "pending", operationId: input.operationId, method: input.method } };
+    const operation: Operation = { threadId: codexOperationThreadId(input.method, params), fingerprint, bytes: inputBytes, generation: input.generation, dispatched: false, outcome: { status: "pending", operationId: input.operationId, method: input.method } };
     this.#operations.set(input.operationId, operation);
     this.#revision++;
     this.#retainedBytes += operation.bytes;
@@ -343,6 +345,29 @@ export class CodexRuntimeHost implements CodexRuntimeConnection {
   pendingOutcomeCount(): number { return this.#operations.size; }
   pendingInteractionCount(): number { return this.#pending.size; }
   activity() { return this.#sessions?.activity() ?? "unknown"; }
+  async prepareThreadArchive(threadId: string, workspace: string, signal: AbortSignal, assertCurrent: () => void) {
+    const client = this.#getClient();
+    const ready = client.currentReadyGeneration();
+    const hasObligations = () => {
+      const blocksTarget = (owner: string | undefined) => !owner || owner === threadId;
+      return [...this.#operations.values()].some(operation => blocksTarget(operation.threadId)) ||
+        [...this.#pending.values()].some(({ request }) => blocksTarget(codexPendingRequestThreadId(request)));
+    };
+    if (!ready || !this.#accepting || this.#abandoning) return "inconclusive" as const;
+    this.#reads++;
+    try {
+      const outcome = await releaseCodexThreadResidency(ready, () => client.lifecycleSnapshot(), threadId, workspace, {
+        signal, markObserved() {},
+        beforeUnsubscribe: () => {
+          assertCurrent();
+          if (!this.#accepting || hasObligations()) throw new Error("codex_runtime_archive_evidence_changed");
+        },
+        onUnsubscribe: generation => this.#sessions?.unsubscribe(threadId, generation),
+      });
+      return outcome === "released" && hasObligations() ? "inconclusive" : outcome;
+    } finally { this.#reads--; this.#retryIdle(); }
+  }
+
   async prepareRestart(): Promise<void> {
     // Refresh invalidates its previous evidence before issuing native reads.
     // Any unsupported/incomplete/error result remains explicitly unknown.

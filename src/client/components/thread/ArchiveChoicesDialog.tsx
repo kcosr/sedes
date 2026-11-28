@@ -82,8 +82,8 @@ export function useArchiveThreadAction({
         onArchived: (choice, ids) => {
           // Archiving can remove its own row before the HTTP response. The
           // operation owner controls dismissal; row unmount is not dismissal.
-          if (current.current.thread.id === thread.id && current.current.store === store) {
-            current.current.onArchived?.(choice, ids);
+          if (current.current.store === store) {
+            choiceProps.onArchived?.(choice, ids);
           }
         },
       });
@@ -145,7 +145,7 @@ export function ArchiveChoicesDialog({
   const displayedDescendantCount =
     choices.impact?.descendantCount ?? choiceProps.descendantCount;
   const hasDescendants = displayedDescendantCount > 0;
-  const [archiveDescendants, setArchiveDescendants] = useState(false);
+  const [archiveDescendants, setArchiveDescendants] = useState(choices.confirmedFamily);
   const descendantsId = useId();
 
   const choice = hasDescendants && archiveDescendants ? "all" : "only";
@@ -183,31 +183,33 @@ export function ArchiveChoicesDialog({
           </DialogDescription>
         </DialogHeader>
         <DialogBody>
-          {hasDescendants && (
-            <div className="flex items-center gap-2">
-              <Checkbox
-                id={descendantsId}
-                checked={archiveDescendants}
-                disabled={choices.loading || pending}
-                onCheckedChange={(checked) =>
-                  setArchiveDescendants(checked === true)
-                }
-              />
-              <Label htmlFor={descendantsId}>
-                Archive child and descendant forks
-              </Label>
-            </div>
-          )}
-          <ArchiveQuestionWarning choices={choices} scope={choice} />
-          <ArchiveStashedPromptWarning choices={choices} scope={choice} />
-          <ArchiveTaskDisposition
-            choices={choices}
-            includeDescendants={choice === "all"}
-          />
-          <ArchiveExecutionWorkspaceDisposition
-            choices={choices}
-            includeDescendants={choice === "all"}
-          />
+          <fieldset disabled={choices.confirmedRetry || pending} className="contents">
+            {hasDescendants && (
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id={descendantsId}
+                  checked={archiveDescendants}
+                  disabled={choices.loading || pending}
+                  onCheckedChange={(checked) =>
+                    setArchiveDescendants(checked === true)
+                  }
+                />
+                <Label htmlFor={descendantsId}>
+                  Archive child and descendant forks
+                </Label>
+              </div>
+            )}
+            <ArchiveQuestionWarning choices={choices} scope={choice} />
+            <ArchiveStashedPromptWarning choices={choices} scope={choice} />
+            <ArchiveTaskDisposition
+              choices={choices}
+              includeDescendants={choice === "all"}
+            />
+            <ArchiveExecutionWorkspaceDisposition
+              choices={choices}
+              includeDescendants={choice === "all"}
+            />
+          </fieldset>
           {choices.error ? (
             <DialogAlert
               id={reasonId}
@@ -217,9 +219,10 @@ export function ArchiveChoicesDialog({
                   type="button"
                   variant="outline"
                   size="sm"
-                  onClick={() => void choices.load()}
+                  disabled={pending}
+                  onClick={choices.confirmedRetry ? archive : () => void choices.load()}
                 >
-                  Retry
+                  {choices.confirmedRetry ? "Retry confirmed archive" : "Retry"}
                 </Button>
               }
             >
@@ -242,7 +245,7 @@ export function ArchiveChoicesDialog({
           </Button>
           <Button
             type="button"
-            disabled={Boolean(selectedReason) || pending || choiceProps.disabled}
+            disabled={choices.confirmedRetry || Boolean(selectedReason) || pending || choiceProps.disabled}
             aria-describedby={selectedReason ? reasonId : undefined}
             onClick={archive}
           >

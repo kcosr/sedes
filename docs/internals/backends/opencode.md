@@ -79,7 +79,7 @@ the most queued data must resnapshot. Retention exhaustion for unacknowledged
 critical evidence prevents new ordinary work while preserving the independent
 control path.
 
-The persistent sidecar advertises major 6 of the private `opencode_runtime`
+The persistent sidecar advertises major 7 of the private `opencode_runtime`
 capability under sidecar wire protocol 18 on Linux. Its registry owns the same
 runtime/host used locally; SSH and outbound
 carriers share typed operations and the bounded runtime body channel. Carrier
@@ -134,7 +134,7 @@ absolute executable override is supplied. Sedes never searches for the older
 
 The 2.3.0 profile uses one strict schema for native history and events. It
 recognizes the optional assistant first-token timestamp and the associated
-native event. The remote carrier uses capability `opencode_runtime@6`.
+native event. The remote carrier uses capability `opencode_runtime@7`.
 The runtime floor is 2.3.0. Stock 2.2.6 emits a global `credential.updated`
 event with empty data when a credential changes. The current schema requires
 `integrationID` and `credentialID`. Native event validation precedes thread
@@ -372,6 +372,11 @@ prefix; appending later turns preserves an older cursor, while changing its
 prefix or owner invalidates it. Missing active execution alone cannot settle an
 unfinished period: an orphan remains disconnected/in-progress until native
 terminal evidence arrives. Settings-only suffixes do not claim running ownership.
+
+A disconnected local daemon is eligible for the offline archive exception
+after its owned process has exited or its configured external loopback endpoint
+refuses a fresh connection. The external check sends no credentials.
+HTTP errors, timeouts, and identity changes leave activity unconfirmed.
 
 Historical settlement and archive safety are separate. A synchronized handle can
 authorize archive retirement of an inactive unfinished period when its current

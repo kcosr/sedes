@@ -237,6 +237,10 @@ export interface BackendModuleRuntime {
 }
 
 export interface BackendModuleRuntimeContext {
+  /** Apply facts from an ordinary observer that inherited the exact outstanding archive owner. */
+  readonly settleRetainedArchiveSnapshot?: (threadId: string, owner: string,
+    snapshot: import("../../shared/protocol/backend.js").BackendConversationSnapshot, recoveredCompletionTurnIds: readonly string[]) => void;
+
   /** Current target configuration after live reconciliation. */
   readonly targetDefinition?: (templateId: string) => import("../../shared/protocol/configuration-admin.js").ConfigurationTarget | undefined;
   readonly assertNativeOwner?: (backendInstanceId: string) => void;
@@ -344,6 +348,8 @@ export interface BackendRuntimeDiagnostic {
  * they are not discovered or downloaded at runtime.
  */
 export interface BackendModule {
+  /** Scoped provider receipts that still need recovery even when the configured runtime is disabled/offline. */
+  hasDurableArchiveWork?(database: Database.Database, scope: RequestScope, threadId: string): boolean;
   /** Omitted when this backend has no reachable abandoned-creation binding to repair. */
   readonly creationProvenanceRepair?: import("./creation-provenance-repair.js").BackendCreationProvenanceRepairAdapter;
   /** Provider I/O starts only after HTTP and host carriers are ready. */

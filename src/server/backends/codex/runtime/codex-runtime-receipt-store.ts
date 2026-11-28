@@ -218,6 +218,12 @@ export class CodexRuntimeReceiptStore implements CodexRuntimeReceiptSink {
     }).immediate();
   }
 
+  hasPendingForThread(scope: Pick<ProviderTransportScope, "tenantId" | "principalId">, threadId: string): boolean {
+    return this.database.prepare(`SELECT 1 FROM codex_runtime_receipts
+      WHERE tenant_id = ? AND principal_id = ? AND application_thread_id = ? AND state != 'reconciled' LIMIT 1`)
+      .get(scope.tenantId, scope.principalId, threadId) !== undefined;
+  }
+
   pending(authority: CodexRuntimeReceiptAuthority): readonly CodexRuntimeReceipt[] {
     return (this.database.prepare(`SELECT ${columns} FROM codex_runtime_receipts WHERE ${where}
       AND state != 'reconciled' ORDER BY operation_id`).all(...key(authority)) as Row[]).map(receipt);

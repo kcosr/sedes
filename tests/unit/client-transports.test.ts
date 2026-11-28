@@ -1202,6 +1202,8 @@ describe("ApiClient normalized contract", () => {
     await expect(
       client.archiveThreads(threadId, {
         action: "archive_family",
+        expectedPendingQuestionCount: 0,
+        expectedOpenTaskSnapshot: "a".repeat(64),
         expectedRevision: 0,
         expectedStashedPromptCount: 0,
         executionWorkspaceDisposition: { kind: "keep" },

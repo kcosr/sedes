@@ -23,6 +23,7 @@ import { DomainError } from "./errors.js";
 import type { InventoryService } from "./inventory-service.js";
 import type { TaskChangePublisher } from "./task-service.js";
 import {
+  finishCommittedArchive,
   runWithArchivedThreadRuntimesRetired,
   type ArchivedThreadRuntimeRetirement,
 } from "./thread-runtime-archive-retirement.js";
@@ -152,25 +153,26 @@ export class ThreadBulkInventoryService {
     scope: RequestScope,
     input: BulkInventoryMutationRequest,
   ): Promise<BulkInventoryMutationResult> {
+    const startedAt = performance.now();
     const now = this.input.now?.() ?? Date.now();
     const replay = this.input.inventory.findBulkInventoryReplay(scope, input);
+    const stillArchived = (id: string) => this.input.inventory.getInventory(scope, id).inventoryState === "archived";
     if (replay) {
-      if (input.action === "archive") {
-        const archivedThreadIds = replay.states
-          .filter(({ inventoryState }) => inventoryState === "archived")
-          .map(({ threadId }) => threadId);
+      if (input.action === "archive") return finishCommittedArchive(async () => {
+        const archivedThreadIds = replay.changedThreadIds.filter(stillArchived);
         await runWithArchivedThreadRuntimesRetired({
-          purpose: "archive",
-          scope,
-          threadIds: archivedThreadIds,
-          runtimes: this.input.runtimes,
-          operation: async () => {
-            if (archivedThreadIds.length > 0) {
-              await this.input.nativeArchive?.archive(scope, archivedThreadIds);
-            }
+          purpose: "archive", scope, threadIds: archivedThreadIds, runtimes: this.input.runtimes,
+          startedAt, replay: { readThreadIds: () => replay.changedThreadIds, isArchived: stillArchived },
+          operation: async (beginCommit) => {
+            beginCommit();
+            const currentIds = archivedThreadIds.filter(stillArchived);
+            if (currentIds.length > 0) await this.input.nativeArchive?.archive(scope, currentIds);
           },
         });
-      }
+        const currentStates = replay.changedThreadIds.map(id => this.input.inventory.getInventory(scope, id));
+        await this.#publish(scope, currentStates, replay.movedTaskIds, now);
+        return { changedThreadIds: replay.changedThreadIds.filter(stillArchived) };
+      });
       await this.#publish(scope, replay.states, replay.movedTaskIds, now);
       return { changedThreadIds: [...replay.changedThreadIds] };
     }
@@ -185,17 +187,17 @@ export class ThreadBulkInventoryService {
         "Every thread in the stack already has the requested inventory state.",
       );
     }
-    const blocked =
-      input.action === "unpark"
-        ? new Map<string, BulkInventoryBlockerReason>()
-        : (await this.#inspectThreads(scope, affectedThreadIds, true, input.action === "archive")).blocked;
     const disposition =
       input.action === "archive"
         ? (input.openTaskDisposition ?? "keep")
         : "keep";
-    const transition = async () =>
-      this.input.inventory.bulkInventoryTransition(scope, {
+    const transition = async (beginCommit?: () => void) => {
+      const blocked = input.action === "unpark" ? new Map<string, BulkInventoryBlockerReason>()
+        : (await this.#inspectThreads(scope, affectedThreadIds, true, input.action === "archive")).blocked;
+      beginCommit?.();
+      return this.input.inventory.bulkInventoryTransition(scope, {
         ...input,
+        beforeCommit: beginCommit,
         blockedThreadIds: new Set(blocked.keys()),
         now,
         ...(input.action === "archive"
@@ -227,20 +229,34 @@ export class ThreadBulkInventoryService {
                 ),
             }),
       });
+    };
     const result =
       input.action === "archive"
         ? await runWithArchivedThreadRuntimesRetired({
             purpose: "archive",
+            startedAt,
+            replay: {
+              readThreadIds: () => this.input.inventory.findBulkInventoryReplay(scope, input)?.changedThreadIds,
+              isArchived: stillArchived,
+            },
             scope,
             threadIds: affectedThreadIds,
             runtimes: this.input.runtimes,
-            operation: async () => {
-              const committed = await transition();
-              await this.input.nativeArchive?.archive(scope, affectedThreadIds);
+            operation: async (beginCommit) => {
+              const committed = await transition(beginCommit);
+              await finishCommittedArchive(async () => {
+                const archived = committed.changedThreadIds.filter(stillArchived);
+                if (archived.length) await this.input.nativeArchive?.archive(scope, archived);
+              });
               return committed;
             },
           })
         : await transition();
+    if (input.action === "archive") return finishCommittedArchive(async () => {
+      await this.#publish(scope, result.states, result.movedTaskIds, now);
+      return { changedThreadIds: result.changedThreadIds.filter(id =>
+        this.input.inventory.getInventory(scope, id).inventoryState === "archived") };
+    });
     await this.#publish(scope, result.states, result.movedTaskIds, now);
     return { changedThreadIds: [...result.changedThreadIds] };
   }
@@ -324,7 +340,8 @@ export class ThreadBulkInventoryService {
               : summary.backingState,
             loaded?.runState,
           );
-          if (BLOCKED_RUN_STATES.has(state) && !(forArchive && state === "disconnected" && loaded?.archiveRetirementSafe === true)) {
+          const uncertain = state === "disconnected" || state === "reconciling";
+          if ((forArchive && loaded?.archiveHasLiveWork) || (BLOCKED_RUN_STATES.has(state) && !(forArchive && uncertain))) {
             blocked.set(threadId, state === "running" ? "running" : "active");
           }
         }),

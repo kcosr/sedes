@@ -184,6 +184,9 @@ export type EnvironmentProcessClosure = Readonly<{
 export type EnvironmentProcessWriteDelivery =
   "not_sent" | "sent_outcome_unknown";
 
+/** The configured endpoint was positively absent or refused the connection. */
+export class EnvironmentEndpointUnreachableError extends Error {}
+
 export class EnvironmentProcessWriteError extends Error {
   readonly delivery: EnvironmentProcessWriteDelivery;
 

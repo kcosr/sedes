@@ -8,6 +8,7 @@ import { SidecarRuntimeChannel } from "../../src/server/sidecar/runtime-channel.
 import { PersistentSidecarServiceRegistry } from "../../src/server/sidecar/persistent-sidecar-service-registry.js";
 import { CodexRuntimeHost } from "../../src/server/backends/codex/runtime/codex-runtime-host.js";
 import type { CodexRuntimeHostRegistry } from "../../src/server/backends/codex/runtime/codex-runtime-host-registry.js";
+import { runtimeLaunchDigest } from "../../src/server/backends/provider-launch-digest.js";
 import { CodexSidecarRuntimeConnection, codexRuntimeEnsureOperation, codexRuntimeLookupOperation, registerCodexRuntimeHost } from "../../src/server/backends/codex/runtime/codex-sidecar-runtime.js";
 import { recoverCodexRuntimeAdministration } from "../../src/server/backends/codex/runtime/codex-runtime-administration.js";
 import { BackendRuntimeControlRejectedError } from "../../src/server/backends/runtime-control.js";
@@ -782,6 +783,60 @@ it("separates slow response-body decoding from the command RPC wait", async () =
   } finally { vi.restoreAllMocks(); vi.unstubAllEnvs(); await f.close(); f.host.dispose(); }
 });
 
+it("inspects only a retained target over the sidecar wire and requires its current target grant", async () => {
+  const host = new CodexRuntimeHost({ scope, runtimeId: "archive-runtime" });
+  const inspect = vi.spyOn(host, "prepareThreadArchive").mockResolvedValue("released");
+  const attach = vi.spyOn(host, "attach"), ensure = vi.fn();
+  const services = new PersistentSidecarServiceRegistry({ scope: { tenantId: scope.tenantId, principalId: scope.principalId, executionEnvironmentId: scope.executionEnvironmentId, installationId: "installation" },
+    buildId: "test", artifactSha256: "a".repeat(64), runtimeWireVersion: 1, configuration });
+  const blocked = vi.fn(() => false), parked = vi.fn(() => false);
+  const overrides = {
+    ensure, getRuntime: () => ({ supervisor: { snapshot: () => ({ cleanupUncertainty: false }) } }),
+    managedTui: { threadBlocksArchive: blocked }, canReplaceParkedLaunch: parked,
+  } as unknown as Partial<CodexRuntimeHostRegistry>;
+  const f = await attachment(host, services, overrides);
+  const authority = { scope, runtimeId: host.runtimeId, controllerId: String(f.epoch) };
+  const request = { applicationThreadId: "app", targetId: "template", threadId: "native", workspace: "/workspace" };
+  const signal = AbortSignal.timeout(5000);
+  try {
+    await expect(f.connection.prepareThreadArchive(authority, { ...request, targetId: "unauthorized" }, signal))
+      .rejects.toMatchObject({ code: "backend_policy_denied" });
+    expect(inspect).not.toHaveBeenCalled();
+    await expect(f.connection.prepareThreadArchive(authority, request, signal)).resolves.toBe("released");
+    expect(inspect).toHaveBeenCalledWith("native", "/workspace", expect.any(AbortSignal), expect.any(Function));
+    blocked.mockReturnValue(true);
+    await expect(f.connection.prepareThreadArchive(authority, request, signal)).resolves.toBe("busy");
+    expect(inspect).toHaveBeenCalledOnce();
+    expect(attach).not.toHaveBeenCalled();
+    expect(ensure).not.toHaveBeenCalled();
+  } finally { await f.close(); host.dispose(); }
+});
+
+it("checks the scoped configured external endpoint and target grant before probing an empty registry", async () => {
+  const external = { ...runtimeConfiguration, instance: { ...runtimeConfiguration.instance, enabled: true },
+    connections: runtimeConfiguration.connections.map(profile => ({ ...profile, enabled: true })) };
+  const host = new CodexRuntimeHost({ scope, runtimeId: "unregistered" });
+  const services = new PersistentSidecarServiceRegistry({ scope: { tenantId: scope.tenantId, principalId: scope.principalId,
+    executionEnvironmentId: scope.executionEnvironmentId, installationId: "installation" }, buildId: "test", artifactSha256: "a".repeat(64),
+    runtimeWireVersion: 1, configuration });
+  const probe = vi.fn<CodexRuntimeHostRegistry["inspectUnregisteredExternalArchive"]>(async (_config, _target, _epoch, _signal, check) => {
+    check(); return "busy";
+  });
+  const ensure = vi.fn();
+  const f = await attachment(host, services, { lookup: async () => undefined, inspectUnregisteredExternalArchive: probe, ensure },
+    "normal", runtimeLaunchDigest.codex_app_server(external));
+  const inspect = (config = external, profile = "connection") => f.connection.inspectUnregisteredExternalArchive(config, profile, "native", "/workspace", AbortSignal.timeout(2_000));
+  try {
+    await expect(inspect({ ...external, connection: { ...external.connection,
+      channel: { ...external.connection.channel, socketPath: "/different.sock" } } })).rejects.toMatchObject({ code: "backend_policy_denied" });
+    await expect(inspect(external, "ungranted")).rejects.toMatchObject({ code: "backend_policy_denied" });
+    expect(probe).not.toHaveBeenCalled();
+    await expect(inspect()).resolves.toBe("busy");
+    expect(probe).toHaveBeenCalledWith(external, { threadId: "native", workspace: "/workspace" }, f.epoch, expect.any(AbortSignal), expect.any(Function));
+    expect(ensure).not.toHaveBeenCalled();
+  } finally { await f.close(); host.dispose(); }
+});
+
 async function diagnosticAttachment() {
   const native = new CodexSharedClientFacade({ current: () => undefined, latestGeneration: () => 1, retireGeneration: async () => {} });
   native.updateLifecycle({ state: "ready", generation: 1 });
@@ -798,9 +853,8 @@ const runtimeConfiguration = {
     connection: { ownership: "external" as const, channel: { type: "unix_websocket" as const, socketPath: "/provider/codex.sock" } },
   };
 
-async function attachment(host: CodexRuntimeHost, services: PersistentSidecarServiceRegistry, overrides: Partial<CodexRuntimeHostRegistry> = {}, mode: "normal" | "recovery" = "normal") {
+async function attachment(host: CodexRuntimeHost, services: PersistentSidecarServiceRegistry, overrides: Partial<CodexRuntimeHostRegistry> = {}, mode: "normal" | "recovery" = "normal", digest = "a".repeat(64)) {
   const pair = transportPair();
-  const digest = "a".repeat(64);
   const epoch = attachFixturePolicy(services, configuration, mode, { roots: [], capabilities: [], backends: [
     { id: scope.backendInstanceId, kind: "codex_app_server", generation: 1, launchDigest: digest, targets: [{ id: "template", generation: 1 }] },
   ] });

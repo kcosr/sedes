@@ -18,6 +18,7 @@ import { copyCodexSubmissionCorrelationKey } from "./codex-submission-correlatio
 import {
   CodexConversationBackendDriver,
   CodexConversationOwnershipRegistry,
+  type CodexConversationDriverInput,
 } from "./codex-conversation-driver.js";
 import type { CodexExecutionSettingsProvider } from "./codex-conversation-handle.js";
 import type { CodexGoalSessionRegistry } from "./codex-goal-session.js";
@@ -42,6 +43,7 @@ export class CodexBackendDriverFactory implements BackendDriverFactory {
   readonly #resolveThreadEnvironment: ThreadEnvironmentResolver;
   readonly #usageSink: UsageSink;
   readonly #nativeNamespace: string;
+  readonly #inspectExternalArchive: CodexConversationDriverInput["inspectExternalArchive"];
   readonly #client: CodexSharedClientFacade;
   readonly #serverRequests: CodexServerRequestRouter;
   readonly #toolProvenanceKey: Uint8Array;
@@ -73,6 +75,7 @@ export class CodexBackendDriverFactory implements BackendDriverFactory {
     readonly scope: RequestScope;
     readonly resolveThreadEnvironment?: ThreadEnvironmentResolver;
     readonly instance: AgentBackendInstance;
+    readonly inspectExternalArchive?: CodexConversationDriverInput["inspectExternalArchive"];
     readonly client: CodexSharedClientFacade;
     readonly serverRequests: CodexServerRequestRouter;
     readonly toolProvenanceKey: Uint8Array;
@@ -97,6 +100,7 @@ export class CodexBackendDriverFactory implements BackendDriverFactory {
     this.#usageSink = input.usageSink;
     this.#nativeNamespace = input.nativeNamespace;
     this.#client = input.client;
+    this.#inspectExternalArchive = input.inspectExternalArchive;
     this.#serverRequests = input.serverRequests;
     this.#toolProvenanceKey = copyCodexSubmissionCorrelationKey(
       input.toolProvenanceKey,
@@ -174,6 +178,7 @@ export class CodexBackendDriverFactory implements BackendDriverFactory {
         instance: this.instance,
         connection,
         client: this.#client,
+        inspectExternalArchive: this.#inspectExternalArchive,
         serverRequests: this.#serverRequests,
         ownership: this.ownership,
         toolProvenanceKey: copyCodexSubmissionCorrelationKey(
@@ -206,7 +211,9 @@ export class CodexBackendDriverFactory implements BackendDriverFactory {
       get(target, property) {
         const value = Reflect.get(target, property, target);
         if (typeof value !== "function") return value;
-        if (property === "health") return value.bind(target);
+        // Archive borrows or inspects an existing owner and manages its own
+        // lease. The generic activity wrapper wakes parked provider processes.
+        if (property === "health" || property === "prepareArchive") return value.bind(target);
         return (...args: unknown[]) => residency.run(async () => {
           const result: unknown = await Reflect.apply(value, target, args);
           if (property === "create") {

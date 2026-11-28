@@ -829,6 +829,7 @@ test("archived threads honor the shared sidebar scope and search", async ({
     const thread = normalizedApplicationSnapshotSchema
       .parse(await (await page.request.get("/api/application/snapshot")).json())
       .threads.find(({ id }) => id === threadId)!;
+    const impact = await (await page.request.get(`/api/threads/${threadId}/inventory/archive-impact`)).json();
     const archived = await page.request.patch(
       `/api/threads/${threadId}/inventory`,
       {
@@ -837,12 +838,15 @@ test("archived threads honor the shared sidebar scope and search", async ({
           action: "archive",
           expectedRevision: thread.inventoryRevision,
           expectedStashedPromptCount: 0,
+          expectedPendingQuestionCount: 0,
+          expectedOpenTaskSnapshot: impact.openTasks.root.snapshot,
           mutationId: randomUUID(),
           executionWorkspaceDisposition: { kind: "keep" },
         },
       },
     );
-    expect(archived.status(), await archived.text()).toBe(204);
+    expect(archived.status(), await archived.text()).toBe(200);
+    expect(await archived.json()).toEqual({ archivedThreadIds: [threadId] });
     return threadId;
   };
   const primaryTitle = `Archived on the primary target ${suffix}`;

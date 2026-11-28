@@ -13,7 +13,7 @@ const secondThreadId = "10000000-0000-4000-8000-000000000002";
 
 describe("bulk inventory protocol", () => {
   it("advances the browser protocol fence", () => {
-    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(187);
+    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(188);
   });
 
   it.each([["park", "settle"], ["unpark", "unsettle"]] as const)(
@@ -117,6 +117,8 @@ describe("bulk inventory protocol", () => {
         action: "archive",
         targets,
         expectedStashedPromptCount: 3,
+        expectedPendingQuestionCount: 1,
+        expectedOpenTaskSnapshot: "a".repeat(64),
         expectedOpenTaskCount: 4,
         openTaskDisposition: "move_to_project",
         mutationId: "20000000-0000-4000-8000-000000000003",
@@ -133,14 +135,14 @@ describe("bulk inventory protocol", () => {
     for (const action of ["park", "archive", "archive_family"]) {
       const request = {
         ...common, action, expectedRevision: 0,
-        ...(action === "park" ? {} : { executionWorkspaceDisposition: { kind: "keep" } }),
+        ...(action === "park" ? {} : { expectedPendingQuestionCount: 0, executionWorkspaceDisposition: { kind: "keep" } }),
       };
       expect(inventoryTransitionSchema.safeParse(request).success).toBe(false);
       expect(inventoryTransitionSchema.safeParse({ ...request, expectedOpenTaskSnapshot: "a".repeat(64) }).success).toBe(true);
       expect(inventoryTransitionSchema.safeParse({ ...request, expectedOpenTaskSnapshot: "not-a-snapshot" }).success).toBe(false);
     }
     const bulkArchive = {
-      ...common, action: "archive", expectedOpenTaskCount: 0,
+      ...common, action: "archive", expectedPendingQuestionCount: 0, expectedOpenTaskCount: 0,
       targets: [{ threadId: firstThreadId, expectedRevision: 0 }, { threadId: secondThreadId, expectedRevision: 0 }],
     };
     expect(bulkInventoryMutationRequestSchema.safeParse(bulkArchive).success).toBe(false);
@@ -209,6 +211,8 @@ describe("bulk inventory protocol", () => {
       action: "archive",
       targets,
       expectedStashedPromptCount: Number.MAX_SAFE_INTEGER,
+      expectedPendingQuestionCount: Number.MAX_SAFE_INTEGER,
+      expectedOpenTaskSnapshot: "a".repeat(64),
       expectedOpenTaskCount: 10_000,
       openTaskDisposition: "move_to_project",
       mutationId: "20000000-0000-4000-8000-000000000004",

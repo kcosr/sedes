@@ -44,13 +44,13 @@ export async function newSession(port: AntigravityPort, cwd: string, created?: (
   await port.acknowledgeCreation({ ...identity, operationId });
   const model = select(attachment, "model");
   expect(flatten(model.options).map(option => option.value)).toContain(selected.modelId);
-  const modelResult = await command(port, attachment.handleId, { type: "set_config", configId: model.id, value: selected.modelId });
+  const modelResult = await command(port, attachment.handleId, { type: "set_config", origin: "session_configuration", configId: model.id, value: selected.modelId });
   const configs = (modelResult as { configOptions: AntigravityAttachment["setup"]["session"]["configOptions"] }).configOptions;
   const thinking = configs?.filter(option => option.category === "thought_level");
   if (thinking?.length) {
     if (thinking.length !== 1 || thinking[0]!.type !== "select") throw new Error("LIVE_ANTIGRAVITY_BLOCKER: invalid native thinking selector");
     expect(flatten(thinking[0]!.options).map(option => option.value)).toContain(selected.thinkingLevel);
-    await command(port, attachment.handleId, { type: "set_config", configId: thinking[0]!.id, value: selected.thinkingLevel });
+    await command(port, attachment.handleId, { type: "set_config", origin: "session_configuration", configId: thinking[0]!.id, value: selected.thinkingLevel });
   }
   return { identity, attachment };
 }

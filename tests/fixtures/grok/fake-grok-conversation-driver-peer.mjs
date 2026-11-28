@@ -497,6 +497,10 @@ input.on("line", async (line) => {
       input.close();
       return;
     }
+    if (session.renameBehavior === "internal_error_after_apply") {
+      send({ jsonrpc: "2.0", id: message.id, error: { code: -32603, message: "internal error" } });
+      return;
+    }
     send({ jsonrpc: "2.0", id: message.id, result: { success: true } });
     return;
   }

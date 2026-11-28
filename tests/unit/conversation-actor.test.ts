@@ -1088,6 +1088,29 @@ describe("turn throughput capability admission", () => {
 });
 
 describe("ConversationActorManager", () => {
+  it.each(["idle", "running"] as const)("records only positive provider work from a loaded %s archive target", async state => {
+    const { manager, handle, driver } = fixture(undefined, undefined, 60_000);
+    Object.assign(driver, { prepareArchive: async () => ({ outcome: "released" }) });
+    handle.establishmentSnapshots[0] = snapshot(state);
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    try {
+      expect(acquired.actor.hasObservedArchiveWork).toBe(state === "running");
+      acquired.release();
+      const observeOwner = vi.fn();
+      const retirement = manager.runWithRuntimeRetired({
+        scope, applicationThreadId: binding.applicationThreadId, disposition: { kind: "archive", observeOwner },
+        detachCoordinatorRuntime: async () => {}, operation: async () => undefined,
+      });
+      if (state === "idle") {
+        await expect(retirement).resolves.toBeUndefined();
+        expect(observeOwner).not.toHaveBeenCalled();
+      } else {
+        await expect(retirement).rejects.toThrow();
+        expect(observeOwner).toHaveBeenCalled();
+      }
+    } finally { acquired.release(); await manager.close(); }
+  });
+
   it("retires incomplete history for archive only when the backend proves current quiescence", async () => {
     const { manager, handle, driver } = fixture(undefined, undefined, 60_000);
     handle.establishmentSnapshots[0] = snapshot("disconnected");
@@ -1321,7 +1344,7 @@ describe("ConversationActorManager", () => {
     current.handle.close.mockImplementation(async () => { await hostStopped; await originalClose(); });
     const stopOwnedResources = vi.fn(async () => {
       expect(current.handle.close).not.toHaveBeenCalled();
-      await expect(runtime.actor.usage()).rejects.toThrow("conversation_actor_operation_unavailable");
+      await expect(runtime.actor.usage()).rejects.toMatchObject({ backendCode: "conversation_actor_operation_unavailable", crossedSubmissionBoundary: false });
       releaseHost();
     });
     let finish!: () => void;
@@ -1592,12 +1615,13 @@ describe("ConversationActorManager", () => {
     current.handle.usage.mockImplementationOnce(async () => { await pendingRead; return {}; });
     const active = runtime.actor.usage();
     await vi.waitFor(() => expect(current.handle.usage).toHaveBeenCalledOnce());
-    const queued = runtime.actor.usage();
-    const rejected = expect(queued).rejects.toThrow("conversation_actor_operation_unavailable");
+    const queued = runtime.actor.perform({ applicationOperationId: "initial-title", action: "rename", title: "Initial title" });
+    const rejected = expect(queued).rejects.toMatchObject({ backendCode: "conversation_actor_operation_unavailable", crossedSubmissionBoundary: false });
     await current.coordinator.runWithRuntimesStopped(scope, [binding.applicationThreadId], async () => { releaseRead(); }, async () => undefined);
     await active;
     await rejected;
     expect(current.handle.usage).toHaveBeenCalledOnce();
+    expect(current.handle.perform).not.toHaveBeenCalled();
     runtime.release();
     await current.coordinator.close();
     await current.manager.close();

@@ -1,8 +1,9 @@
 import type { SessionMessageInfo } from "@opencode/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { OpenCodeBackendModule } from "../../src/server/backends/opencode/opencode-backend-module.js";
 import { OpenCodeInputEvidenceRepository } from "../../src/server/backends/opencode/opencode-input-evidence.js";
 import { OpenCodeRuntimeError } from "../../src/server/backends/opencode/opencode-release.js";
-import { createOpenCodeConversationFixture, scope, threadID } from "../support/opencode-conversation-fixture.js";
+import { openCodeArchiveInput, createOpenCodeConversationFixture, scope, threadID } from "../support/opencode-conversation-fixture.js";
 
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => { vi.restoreAllMocks(); for (const close of cleanups.splice(0).reverse()) await close(); });
@@ -48,7 +49,7 @@ describe("OpenCode archive retirement of incomplete imported history", () => {
     const f = fixture();
     await expect(f.driver.releaseConversationResidency(f.target)).resolves.toBe("busy");
     f.wire.requests.length = 0;
-    await expect(f.driver.releaseConversationResidency({ ...f.target, purpose: "archive" })).resolves.toBe("released");
+    await expect(f.driver.prepareArchive(openCodeArchiveInput(f.target))).resolves.toEqual({ outcome: "released" });
     expect(f.wire.messages).toEqual(orphan);
     expect(f.wire.requests.every(request => request.method === "GET")).toBe(true);
     expect(f.wire.requests.some(request => request.pathname.endsWith("/message"))).toBe(false);
@@ -65,9 +66,9 @@ describe("OpenCode archive retirement of incomplete imported history", () => {
     expect(actor.canRetireForArchive).toBe(true);
     expect((await f.handle()).archiveRetirementSafe).toBe(true);
     acquired.release();
-    const operation = vi.fn(async () => f.driver.releaseConversationResidency({ ...f.target, purpose: "archive" }));
+    const operation = vi.fn(async () => f.driver.prepareArchive(openCodeArchiveInput(f.target)));
     await expect(f.manager.runWithRuntimeRetired({ scope, applicationThreadId: threadID, disposition: { kind: "archive" },
-      detachCoordinatorRuntime: async () => {}, operation })).resolves.toBe("released");
+      detachCoordinatorRuntime: async () => {}, operation })).resolves.toEqual({ outcome: "released" });
     expect(operation).toHaveBeenCalledOnce(); expect(actor.closed).toBe(true);
     expect(f.wire.messages).toEqual(orphan); expect(f.interrupts()).toEqual([]);
     const restored = await f.acquire();
@@ -78,10 +79,20 @@ describe("OpenCode archive retirement of incomplete imported history", () => {
 
   it.each(blockers)("refuses both loaded and unloaded archive when native %s work remains", async kind => {
     const f = fixture(); block(f, kind);
-    await expect(f.driver.releaseConversationResidency({ ...f.target, purpose: "archive" })).resolves.toBe("busy");
+    await expect(f.driver.prepareArchive(openCodeArchiveInput(f.target))).resolves.toEqual({ outcome: "busy" });
     const acquired = await f.acquire();
     expect((await f.handle()).archiveRetirementSafe).toBe(false);
-    expect(acquired.actor.canRetireForArchive).toBe(false); acquired.release();
+    acquired.release();
+    // An unloaded or disconnected actor may hand off to the fenced native
+    // archive check. Its current inbox/activity must still block the commit.
+    let committed = false;
+    await expect(f.manager.runWithRuntimeRetired({ scope, applicationThreadId: threadID, disposition: { kind: "archive" },
+      detachCoordinatorRuntime: async () => {}, operation: async () => {
+        const result = await f.driver.prepareArchive(openCodeArchiveInput(f.target));
+        if (result.outcome !== "released") throw new Error("retirement blocked");
+        committed = true;
+      } })).rejects.toBeDefined();
+    expect(committed).toBe(false);
     expect(f.interrupts()).toEqual([]);
   });
 
@@ -91,16 +102,37 @@ describe("OpenCode archive retirement of incomplete imported history", () => {
     expect(handle.archiveRetirementSafe).toBe(true);
     unresolvedInput(f);
     expect(handle.archiveRetirementSafe).toBe(false);
-    await expect(f.driver.releaseConversationResidency({ ...f.target, purpose: "archive" })).resolves.toBe("busy");
+    await expect(f.driver.prepareArchive(openCodeArchiveInput(f.target))).resolves.toEqual({ outcome: "busy" });
+  });
+
+  it("allows a dormant offline thread without starting the daemon and checks durable input before probing it", async () => {
+    const f = fixture(), request = openCodeArchiveInput(f.target);
+    const probe = vi.spyOn(f.driver.input, "existingRuntime").mockResolvedValue(undefined);
+    await expect(f.driver.prepareArchive(request)).resolves.toEqual({ outcome: "offline" });
+    expect(request.markObserved).not.toHaveBeenCalled();
+    unresolvedInput(f);
+    const module = new OpenCodeBackendModule();
+    expect(module.hasDurableArchiveWork(f.database, scope, threadID)).toBe(true);
+    expect(module.hasDurableArchiveWork(f.database, { ...scope, principalId: "foreign" }, threadID)).toBe(false);
+    await expect(f.driver.prepareArchive(request)).resolves.toEqual({ outcome: "busy" });
+    expect(probe).toHaveBeenCalledTimes(1); expect(f.runtime.start).not.toHaveBeenCalled();
+    expect(request.markObserved).toHaveBeenCalledOnce();
+  });
+  it("accepts an exact missing session only after verifying the existing owner", async () => {
+    const f = fixture(), request = openCodeArchiveInput(f.target);
+    f.wire.setResponse(`/api/session/${f.wire.sessionID}`, 404,
+      { _tag: "SessionNotFoundError", sessionID: f.wire.sessionID, message: "fixture missing" });
+    await expect(f.driver.prepareArchive(request)).resolves.toEqual({ outcome: "released" });
+    expect(f.runtime.start).not.toHaveBeenCalled(); expect(f.runtime.assertCurrent).toHaveBeenCalledOnce();
   });
 
   it("reads activity after inbox so promotion cannot combine an empty inbox with old inactivity", async () => {
     const f = fixture(), hold = f.wire.hold(`/api/session/${f.wire.sessionID}/inbox`);
-    const release = f.driver.releaseConversationResidency({ ...f.target, purpose: "archive" });
+    const release = f.driver.prepareArchive(openCodeArchiveInput(f.target));
     await hold.entered;
     expect(f.wire.requests.some(request => request.pathname === "/api/session/active")).toBe(false);
     block(f, "active"); hold.release();
-    await expect(release).resolves.toBe("busy");
+    await expect(release).resolves.toEqual({ outcome: "busy" });
   });
 
   it.each(["read failure", "malformed inventory", "runtime replacement"])("keeps archive closed after %s", async failure => {
@@ -108,7 +140,7 @@ describe("OpenCode archive retirement of incomplete imported history", () => {
     if (failure === "read failure") f.wire.setResponse(`/api/session/${f.wire.sessionID}/inbox`, 503, {});
     if (failure === "malformed inventory") f.wire.setResponse("/api/session/active", 200, { data: { broken: { type: "idle" } } });
     if (failure === "runtime replacement") vi.mocked(f.runtime.assertCurrent).mockRejectedValue(new OpenCodeRuntimeError("opencode_runtime_identity_changed"));
-    await expect(f.driver.releaseConversationResidency({ ...f.target, purpose: "archive" })).resolves.toBe("busy");
+    await expect(f.driver.prepareArchive(openCodeArchiveInput(f.target))).rejects.toBeDefined();
     expect(f.runtime.snapshot().references).toBe(0); expect(f.interrupts()).toEqual([]);
   });
 

@@ -14,6 +14,7 @@ import { antigravityTerminatedExecutionHeads, antigravityNativeTerminalOutcome }
 import { antigravityCommandSchema, antigravityAgentToolsSchema, antigravityHistoryReadSchema } from "../sidecar/wire.js";
 import type { AntigravityNativeHistoryReader } from "../native-history.js";
 import { AntigravityError, type AntigravityPort, type AntigravityRuntimeConfiguration, type AntigravityIdentity,
+  type AntigravityArchiveOperation, type AntigravityRetiredArchive, type AntigravityArchiveOwner, type AntigravityArchiveProbe, type AntigravityArchiveState, type AntigravityCommand,
   type AntigravitySetup, type AntigravityAttachment, type AntigravityEvent, type AntigravityOutcome,
   type AntigravityHistory, type AntigravityInspection, type AntigravityFailure } from "../port.js";
 
@@ -21,11 +22,15 @@ export interface AntigravityHostAuthority { assertCurrent(): void; assertAdmissi
 const localAuthority: AntigravityHostAuthority = { assertCurrent() {}, assertAdmission() {} };
 type Permission = { request: RequestPermissionRequest; openedAt: string; resolve(value: RequestPermissionResponse): void };
 type SetterPostcondition = { kind: "config"; id: string; valueFingerprint: string; after: number } | { kind: "mode"; valueFingerprint: string; after: number };
-type Operation = { fingerprint: string; outcome: AntigravityOutcome; postcondition?: SetterPostcondition };
+type Operation = { originOwner: string; archiveProof?: AntigravityArchiveOperation; sessionConfiguration: boolean; kind: AntigravityCommand["type"]; fingerprint: string; outcome: AntigravityOutcome; postcondition?: SetterPostcondition };
 type CancellationResult = { settledOperationIds: readonly string[]; nativeRevision: string };
 type Cancellation = { captured: Set<string>; operations: Set<string>; result?: CancellationResult };
 type Creation = { fingerprint: string; result: Promise<AntigravityIdentity>; identity?: AntigravityIdentity; crossed: boolean };
 type OpenHandlers = { authorizeSession(id: string): boolean; update(notification: SessionNotification): void; permission(request: RequestPermissionRequest, signal?: AbortSignal): Promise<RequestPermissionResponse> };
+type ArchiveHistoryCut = { stepCount: number; executionCount: number; fingerprint: string };
+function historyFingerprint(native: AntigravityHistory["native"]): string {
+  return digest([native.parentSessionId, native.executorReceiptsOmitted, native.steps, native.executions]);
+}
 type NativeEvidence = {
   readonly revision: string;
   readonly activity: ReturnType<typeof antigravityNativeActivity>;
@@ -38,6 +43,7 @@ type Session = {
   loadPermissionChanged?: () => void;
   loadFailed?: true;
   peer: AntigravityAcpConnection; transport: OwnedNdjsonStdioTransport; events: AntigravityEvent[]; sequence: number; offered: number; acknowledged: number;
+  archiveOperationIds?: Set<string>; archiveCreation?: string; inheritedOwners?: string[];
   retainedAfter: number; eventBytes: number; attached: boolean; closed: boolean; cleanupUnproven: boolean;
   activePrompts: Set<string>; tools: Set<string>; permissions: Map<string, Permission>;
   cancelledPrompts: Set<string>;
@@ -70,6 +76,9 @@ export class AntigravityHost implements AntigravityPort {
   readonly #ephemeral = new Set<AntigravityAcpConnection>();
   readonly #failedEphemeral = new Set<AntigravityAcpConnection>();
   readonly #released = new Set<string>();
+  readonly #archiveRetirements = new Map<string, { identity: AntigravityIdentity; revision: string; cut: ArchiveHistoryCut; bytes: number;
+    setup: AntigravitySetup; operations: AntigravityRetiredArchive["operations"]; creation?: string }>();
+  #archiveRetirementBytes = 0;
   readonly #pendingWork = new Set<Promise<void>>();
   readonly #orphanedTransports = new Set<OwnedNdjsonStdioTransport>();
   readonly #launchControllers = new Set<AbortController>();
@@ -310,6 +319,14 @@ export class AntigravityHost implements AntigravityPort {
       if (replacing) {
         // Preserve the exact operation IDs and dispositions, including an
         // unproven Stop. The new peer must never redispatch those commands.
+        // A replacement is an exact handoff only after closure, delivery of
+        // every old event, and transfer of every known receipt and tombstone.
+        if (replacing.sequence !== replacing.acknowledged || [...replacing.operations.values()].some(op => op.outcome.status === "pending"))
+          throw new AntigravityError("antigravity_archive_owner_changed");
+        const original = digest([replacing.identity.sessionId, replacing.identity.cwd, replacing.handleId, replacing.generation]);
+        session.inheritedOwners = [...(replacing.inheritedOwners ?? []), original].slice(-64);
+        session.archiveOperationIds = replacing.archiveOperationIds;
+        session.archiveCreation = replacing.archiveCreation;
         session.operations = replacing.operations;
         session.tombstones = replacing.tombstones;
         session.receiptBytes = replacing.receiptBytes;
@@ -436,8 +453,105 @@ export class AntigravityHost implements AntigravityPort {
     session.attached = true; return this.#attachment(session);
   }
   hasRetainedSession(input: AntigravityIdentity): boolean { return !!this.#find(input); }
-  async attachExisting(input: AntigravityIdentity, signal?: AbortSignal, authority = localAuthority) {
-    this.#current(authority, signal); const session = this.#find(input); if (!session) return null;
+  #pendingArchiveCreation(identity: AntigravityIdentity): string | undefined {
+    const id = this.#creationOrigins.get(JSON.stringify([identity.sessionId, identity.cwd]));
+    return id && this.#creating.has(id) ? id : undefined;
+  }
+  async probeArchiveOwner(input: AntigravityIdentity, signal?: AbortSignal, authority = localAuthority): Promise<AntigravityArchiveProbe | null> {
+    this.#current(authority, signal);
+    const session = this.#find(input);
+    const pendingCreation = this.#pendingArchiveCreation(input);
+    if (!session) return pendingCreation ? { ...input, pendingCreation } : null;
+    return { ...session.identity, handleId: session.handleId, generation: session.generation, attached: session.attached,
+      ...(session.inheritedOwners?.length ? { inheritedOwners: session.inheritedOwners } : {}), retainedOutput: session.sequence > session.acknowledged || session.operations.size > 0 || pendingCreation !== undefined };
+  }
+  #archiveOwner(expected: AntigravityArchiveOwner): Session {
+    const session = this.#find(expected);
+    if (!session || session.handleId !== expected.handleId || session.generation !== expected.generation)
+      throw new AntigravityError("antigravity_archive_owner_changed");
+    return session;
+  }
+  async readRetiredArchive(input: AntigravityIdentity & { readonly ownerKey: string }, signal?: AbortSignal, authority = localAuthority): Promise<AntigravityRetiredArchive | null> {
+    this.#current(authority, signal);
+    const proof = this.#archiveRetirements.get(input.ownerKey);
+    if (!proof || proof.identity.sessionId !== input.sessionId || proof.identity.cwd !== input.cwd) return null;
+    const history = await this.#readNative(proof.identity, signal);
+    this.#current(authority, signal);
+    if (history.sessionId !== input.sessionId || history.cwd !== input.cwd) return null;
+    let recovered = history;
+    if (history.native.revision !== proof.revision) {
+      const original = { ...history.native, steps: history.native.steps.slice(0, proof.cut.stepCount),
+        executions: history.native.executions.slice(0, proof.cut.executionCount), revision: proof.revision };
+      if (historyFingerprint(original) !== proof.cut.fingerprint) return null;
+      recovered = { ...history, native: original };
+    }
+    return { ownerKey: input.ownerKey, history: recovered, setup: proof.setup, operations: proof.operations, ...(proof.creation ? { creation: proof.creation } : {}) };
+  }
+  #rememberArchiveCreation(session: Session) {
+    const creation = this.#pendingArchiveCreation(session.identity);
+    if (creation) session.archiveCreation = creation;
+  }
+  #archiveOperation(session: Session, operationId: string, operation: Operation): AntigravityArchiveOperation {
+    return { operationId, kind: operation.kind, commandFingerprint: operation.fingerprint, sessionConfiguration: operation.sessionConfiguration,
+      originOwner: operation.originOwner,
+      setterConfirmed: operation.postcondition !== undefined && this.#setterProof(session, operation) !== undefined };
+  }
+  async releaseArchiveClaim(input: AntigravityArchiveOwner, signal?: AbortSignal, authority = localAuthority) {
+    this.#current(authority, signal);
+    if (this.#released.has(input.handleId)) return;
+    this.#archiveOwner(input).attached = false;
+  }
+  async confirmArchiveCut(input: Parameters<AntigravityPort["confirmArchiveCut"]>[0], signal?: AbortSignal, authority = localAuthority) {
+    this.#current(authority, signal);
+    const session = this.#archiveOwner(input);
+    const history = await this.#readNative(session.identity, signal);
+    this.#current(authority, signal); this.#archiveOwner(input);
+    if (history.sessionId !== session.identity.sessionId || history.cwd !== session.identity.cwd)
+      throw new AntigravityError("antigravity_archive_state_unknown");
+    this.#applyNative(session, history);
+    const confirmed = session.sequence === input.throughSequence && session.acknowledged === input.throughSequence &&
+      history.native.revision === input.nativeRevision && !session.operations.size && !this.#pendingArchiveCreation(session.identity) && !this.#busy(session);
+    if (confirmed) session.archiveOperationIds?.clear();
+    return confirmed;
+  }
+  async readArchiveState(input: AntigravityArchiveOwner, signal?: AbortSignal, authority = localAuthority): Promise<AntigravityArchiveState> {
+    this.#current(authority, signal);
+    const session = this.#archiveOwner(input);
+    if (session.activePrompts.size || session.permissions.size || session.canceling || session.loadPermissionChanged ||
+        [...session.operations.values()].some(operation => operation.outcome.status === "pending")) return { state: "busy" };
+    this.#rememberArchiveCreation(session);
+    const sequence = session.sequence;
+    const epoch = session.cancelDrain ? undefined : this.#cancellationReadEpoch(session);
+    const history = await this.#readNative(session.identity, signal);
+    this.#current(authority, signal); this.#archiveOwner(input);
+    if (history.sessionId !== input.sessionId || history.cwd !== input.cwd) return { state: "unproven" };
+    this.#applyNative(session, history, epoch);
+    if (session.sequence !== sequence) return { state: "changed" };
+    if (session.nativeUnknown || session.retainedAfter > session.acknowledged) return { state: "unproven" };
+    if (this.#busy(session)) return { state: "busy" };
+    const creation = this.#pendingArchiveCreation(input);
+    const operations = [...session.operations].map(([id, operation]) => this.#archiveOperation(session, id, operation));
+    for (const id of session.archiveOperationIds ?? []) {
+      const receipt = session.tombstones.get(id)?.archiveProof;
+      if (!receipt) return { state: "unproven" };
+      operations.push(receipt);
+    }
+    // The journal and the receipt inventory have independent ACKs. An event
+    // can remain after its ordinary consumer has finished the operation.
+    const delivered = new Set<string>();
+    for (const event of session.events) {
+      if (event.kind !== "operation" || event.sequence <= session.acknowledged || session.operations.has(event.operationId) ||
+          session.archiveOperationIds?.has(event.operationId)) continue;
+      if (!session.tombstones.has(event.operationId)) return { state: "unproven" };
+      delivered.add(event.operationId);
+    }
+    return { state: "idle", acknowledged: session.acknowledged, throughSequence: sequence, history, setup: session.setup,
+      ...(creation ? { pendingCreation: creation } : {}), operations, deliveredOperationIds: [...delivered] };
+  }
+  async attachExisting(input: Parameters<AntigravityPort["attachExisting"]>[0], signal?: AbortSignal, authority = localAuthority) {
+    this.#current(authority, signal); const session = input.expected ? this.#archiveOwner(input.expected) : this.#find(input); if (!session) return null;
+    if (session.identity.sessionId !== input.sessionId || session.identity.cwd !== input.cwd) throw new AntigravityError("antigravity_archive_owner_changed");
+    if (input.expected) this.#rememberArchiveCreation(session);
     session.attached = true; return this.#attachment(session);
   }
   #attachment(session: Session): AntigravityAttachment {
@@ -485,7 +599,9 @@ export class AntigravityHost implements AntigravityPort {
     const nativeFrontier = command.type === "steer"
       ? session.activePrompts.size ? -1 : session.nativeEvidence?.terminalExecutionIndex ?? -1
       : session.nativeHeadIndex;
-    const operation: Operation = { fingerprint, outcome: { status: "pending" },
+    const operation: Operation = { originOwner: digest([session.identity.sessionId, session.identity.cwd, session.handleId, session.generation]),
+      sessionConfiguration: (command.type === "set_config" || command.type === "set_mode") && command.origin === "session_configuration",
+      kind: command.type, fingerprint, outcome: { status: "pending" },
       ...(command.type === "set_config" ? { postcondition: { kind: "config" as const, id: command.configId, valueFingerprint: digest(command.value), after: session.configurationObservation } } : {}),
       ...(command.type === "set_mode" ? { postcondition: { kind: "mode" as const, valueFingerprint: digest(command.modeId), after: session.modeObservation } } : {}) };
     session.operations.set(input.operationId, operation); this.#revision++;
@@ -550,9 +666,16 @@ export class AntigravityHost implements AntigravityPort {
     if (!value) throw new AntigravityError("antigravity_operation_unknown", "sent_outcome_unknown"); return value.outcome;
   }
   async acknowledgeOperation(input: Parameters<AntigravityPort["acknowledgeOperation"]>[0], signal?: AbortSignal, authority = localAuthority) {
-    this.#current(authority, signal); const session = this.#get(input.handleId); const operation = session.operations.get(input.operationId);
+    this.#current(authority, signal);
+    const session = this.#get(input.handleId);
+    if (input.archiveGeneration !== undefined && input.archiveGeneration !== session.generation) throw new AntigravityError("antigravity_archive_owner_changed");
+    const operation = session.operations.get(input.operationId);
     if (!operation) { if (session.tombstones.has(input.operationId)) return; throw new AntigravityError("antigravity_operation_unknown"); }
     if (operation.outcome.status === "pending") throw new AntigravityError("antigravity_operation_pending");
+    if (input.archiveGeneration !== undefined) {
+      operation.archiveProof = this.#archiveOperation(session, input.operationId, operation);
+      (session.archiveOperationIds ??= new Set()).add(input.operationId);
+    }
     session.operations.delete(input.operationId); session.tombstones.set(input.operationId, operation);
     this.#revision++;
   }
@@ -653,15 +776,24 @@ export class AntigravityHost implements AntigravityPort {
   async release(input: Parameters<AntigravityPort["release"]>[0], signal?: AbortSignal, authority = localAuthority) {
     this.#current(authority, signal); if (this.#released.has(input.handleId)) return;
     const session = this.#get(input.handleId); session.attached = false;
-    await this.#refreshNative(session);
-    if (!this.#busy(session) && !session.operations.size && session.sequence === session.acknowledged) await this.#retire(session);
+    const history = await this.#refreshNative(session);
+    if (!this.#busy(session) && !session.operations.size && session.sequence === session.acknowledged) await this.#retire(session, true, undefined, history);
   }
-  async retireSession(input: AntigravityIdentity, signal?: AbortSignal, authority = localAuthority) {
-    this.#current(authority, signal); const session = this.#find(input); if (!session) return "absent" as const;
-    await this.#refreshNative(session);
+  async retireSession(input: Parameters<AntigravityPort["retireSession"]>[0], signal?: AbortSignal, authority = localAuthority) {
+    this.#current(authority, signal); const session = input.expected ? this.#archiveOwner(input.expected) : this.#find(input); if (!session) return "absent" as const;
+    if (session.identity.sessionId !== input.sessionId || session.identity.cwd !== input.cwd) throw new AntigravityError("antigravity_archive_owner_changed");
+    const history = await this.#refreshNative(session, false, signal);
+    this.#current(authority, signal);
+    if (input.expected) {
+      this.#archiveOwner(input.expected);
+      if (session.nativeUnknown || !session.nativeRevision) throw new AntigravityError("antigravity_archive_state_unknown");
+      if (this.#pendingArchiveCreation(session.identity) ||
+          input.settledNativeRevision !== undefined && input.settledNativeRevision !== session.nativeRevision) return "undelivered" as const;
+    }
     if (this.#busy(session)) return "busy" as const;
     if (session.sequence > session.acknowledged || session.operations.size) return "undelivered" as const;
-    await this.#retire(session); return "retired" as const;
+    const cut = input.expected && session.nativeRevision ? { owner: input.expected, revision: session.nativeRevision, signal, authority } : undefined;
+    return await this.#retire(session, true, cut, history) ? "retired" as const : "undelivered" as const;
   }
   #busy(session: Session) { return Boolean(session.loadPermissionChanged || session.canceling || session.activePrompts.size || session.tools.size || session.permissions.size || session.nativeActive || session.nativeUnknown || [...session.operations.values()].some(value => value.outcome.status === "pending")); }
   #cancelSession(session: Session, operationId: string): Promise<CancellationResult> {
@@ -757,7 +889,10 @@ export class AntigravityHost implements AntigravityPort {
     const epoch = !session.cancelDrain || completeDrain ? this.#cancellationReadEpoch(session) : undefined;
     try {
       const history = await this.#readNative(session.identity, signal);
-      signal?.throwIfAborted(); this.#applyNative(session, history, epoch);
+      signal?.throwIfAborted();
+      if (history.sessionId !== session.identity.sessionId || history.cwd !== session.identity.cwd)
+        throw new AntigravityError("antigravity_native_state_unavailable");
+      this.#applyNative(session, history, epoch); return history;
     }
     catch { if (!session.nativeUnknown) this.#revision++; session.nativeUnknown = true; session.nativeReadable = false; }
   }
@@ -779,10 +914,58 @@ export class AntigravityHost implements AntigravityPort {
     if (!this.#sessions.delete(session.handleId)) return;
     this.#released.add(session.handleId); while (this.#released.size > 4096) this.#released.delete(this.#released.values().next().value!); this.#revision++;
   }
-  async #retire(session: Session) {
+  #rememberCleanRetirement(session: Session, history: AntigravityHistory) {
+    // Keep a digest of the original native cut. Appended turns do not prevent
+    // replay, while edits inside the cut require separate application proof.
+    const ids = session.archiveOperationIds ?? [];
+    const operations: { operation: AntigravityArchiveOperation; outcome: AntigravityOutcome }[] = [];
+    for (const id of ids) {
+      const receipt = session.tombstones.get(id);
+      if (!receipt?.archiveProof || receipt.outcome.status === "pending") return;
+      const value = receipt.outcome;
+      const outcome: AntigravityOutcome = value.status === "failed" ? value : { status: "completed",
+        result: (value.result as { stopReason?: unknown } | null)?.stopReason === "cancelled" ? { stopReason: "cancelled" } : {},
+        ...(value.cancelledAtNativeRevision ? { cancelledAtNativeRevision: value.cancelledAtNativeRevision } : {}) };
+      operations.push({ operation: receipt.archiveProof, outcome });
+    }
+    const ownKey = digest([session.identity.sessionId, session.identity.cwd, session.handleId, session.generation]);
+    const bytes = Buffer.byteLength(JSON.stringify([session.setup, operations, session.identity])) + 256;
+    if (bytes > 16 * 1024 * 1024) return;
+    const cut = { stepCount: history.native.steps.length, executionCount: history.native.executions.length, fingerprint: historyFingerprint(history.native) };
+    for (const key of [...(session.inheritedOwners ?? []), ownKey]) {
+      if (this.#archiveRetirements.has(key)) continue;
+      while (this.#archiveRetirements.size >= 64 || this.#archiveRetirementBytes + bytes > 16 * 1024 * 1024) {
+        const [oldest, record] = this.#archiveRetirements.entries().next().value!;
+        this.#archiveRetirementBytes -= record.bytes; this.#archiveRetirements.delete(oldest);
+      }
+      this.#archiveRetirementBytes += bytes;
+      this.#archiveRetirements.set(key, { identity: session.identity, revision: history.native.revision, cut, bytes, setup: session.setup,
+        operations, ...(session.archiveCreation ? { creation: session.archiveCreation } : {}) });
+    }
+  }
+  async #retire(session: Session, clean = false, cut?: {
+    owner: AntigravityArchiveOwner; revision: string; signal?: AbortSignal; authority: AntigravityHostAuthority;
+  }, history?: AntigravityHistory) {
+    const frontier = session.sequence;
     await this.#closeSessionPeer(session, "retire");
+    if (cut) {
+      this.#current(cut.authority, cut.signal); this.#archiveOwner(cut.owner);
+      const final = await this.#readNative(session.identity, cut.signal);
+      this.#current(cut.authority, cut.signal); this.#archiveOwner(cut.owner);
+      if (final.sessionId !== session.identity.sessionId || final.cwd !== session.identity.cwd)
+        throw new AntigravityError("antigravity_archive_state_unknown");
+      this.#applyNative(session, final); history = final;
+      if (final.native.revision !== cut.revision || this.#pendingArchiveCreation(session.identity)) return false;
+    }
+    // A final native update while the peer was closing belongs to the
+    // retained generation. The expected transport-close notice alone has no
+    // remaining application effect once owned process cleanup is proven.
+    if (clean && (session.retainedAfter > frontier || session.operations.size || this.#busy(session) ||
+        session.events.some(event => event.sequence > frontier && (event.kind !== "failure" || event.failure.code !== "antigravity_process_closed")))) return false;
+    if (clean && history) this.#rememberCleanRetirement(session, history);
     this.#forgetHandle(session);
     await this.#forgetHistory(session.identity);
+    return true;
   }
   async #closeEphemeral(peer: AntigravityAcpConnection) {
     try { await peer.close(); this.#ephemeral.delete(peer); this.#failedEphemeral.delete(peer); }

@@ -581,8 +581,8 @@ contract rather than an inferred inverse operation.
 Provider-history, workspace, or environment unavailability alone is not active
 work and must not fabricate a disconnected runtime to block archival. Use
 observed runtime activity and durable unresolved-operation evidence for single,
-family, and bulk archive admission; loaded disconnected or reconciling runtimes
-remain blockers. This shared rule applies to every backend above.
+family, and bulk archive admission. A disconnected or reconciling actor can enter
+fenced preparation to prove whether its existing owner can retire. This shared rule applies to every backend above.
 
 When an inventory action also completes Tasks, bind confirmation to the full
 scoped open-Task set and its revisions, not only the displayed bounded list or
@@ -716,33 +716,48 @@ invalidate the selected transcript's stable capture.
 Regression coverage must prove paging, lookup, scope denial, cleanup,
 archive/restore generation changes, and absence of execution side effects.
 
-Provider residency can outlive Sedes' handle, as a Claude query owned by a
-persistent sidecar service does. A backend with such residency implements the
-optional driver method `releaseConversationResidency`. Inside each thread's
-retired fence, archive calls it for a thread with a bound, enabled target. The
-method must report `busy` rather than stop outstanding provider work, and
-`busy` refuses the archive before commit. Retained provider output that no
-runtime has applied is not work: the method first applies it as attaching
-would, and reports `undelivered` only if it still holds the residency. That
-also refuses the archive, with a message to open the thread so its output is
-applied, rather than one claiming the thread is active. An unreachable provider is logged
-and left to the provider's own residency limit. Missing runtime registrations
-are typed `runtime_unavailable` domain failures, so a retired backend does not
-prevent application-owned archival of its old threads. Strict policy refresh
-still propagates that failure. This shared resolution rule applies to all
-compiled backends. Claude implements residency release through
-the persistent `retire` command, and its local worker owns no residency beyond
-the handle. Codex implements it by validating native idle state, unsubscribing,
-and invalidating persistent attach metadata. Its native thread may stay loaded
-until the next configuration-bearing resume; this releases Sedes' subscription,
-not another external client's subscription. Pi and Grok omit the method because
-retiring their handles releases what they hold for the thread.
+For a bound thread, an archive operation owns its preparation independently of
+any browser subscription. Under the retirement fence, the backend's optional
+`prepareArchive` probes existing ownership, preserves a scoped record when
+it observes an owner or retained obligation, and proves release. An unreachable
+provider can be skipped for dormant inventory only if Sedes has no evidence
+of an outstanding obligation. A probe failure after observing an owner, an
+unconfirmed acknowledgment, or an ambiguous operation keeps the thread
+unarchived. An active turn, permission or managed terminal reports busy.
+Preparation has a 15-second per-target and 45-second aggregate budget. Fenced
+cleanup can finish after a timeout, but that request cannot commit later.
 
-Native agent-tool edits and presentation changes call the same residency seam
-inside the retirement fence, including when no local actor exists. Unlike
-archive cleanup, this path propagates target-resolution and provider-release
-errors and leaves the saved policy unchanged. With an unchanged CLI surface
-and mode, access edits continue to use live admission without retirement.
+An idle, fully loaded application actor carries no archive obligation by itself.
+Each positive observation or retained owner record receives a new evidence token.
+Archive checks that token when applying a release proof and checks for remaining
+records in the inventory transaction. For a permanently lost owner, an explicit
+Force reset can discard the previewed recovery record with a warning about
+unsaved output. A new observation invalidates the preview. Replaying the reset
+receipt leaves later observations intact.
+
+For persistent Claude, Antigravity and native Pi, process retained output on
+the exact existing owner. Apply scoped submissions, terminal facts and backend
+operation receipts before acknowledging them. Use the same stable operation,
+turn and item identities as normal observation. Recovery can make a completion
+callback eligible for ordinary delivery. It must not dispatch a prompt, start
+a new provider session, or wake the thread. Never acknowledge a message after
+its consumer closes without proving that the application committed it.
+A definite rejection releases the ordinary operation ID for retry. Sedes
+retains the original rejected action, interrupt, or interaction response
+under its thread and principal so a later host acknowledgement can be
+matched to the command that actually failed.
+Recheck the authorized scope, inventory revisions, questions, stashes and task
+snapshot before the atomic inventory write. A failed family request can leave
+durable recovered output on an earlier member.
+
+Codex checks its existing native thread and releases its subscription when
+safe. An inactive, unmaterialized rollout must retain its only in-memory copy.
+OpenCode checks unresolved local input before probing the existing service.
+Pi SDK, local Claude and Grok release handle-owned resources during ordinary
+retirement. Tool-policy and presentation changes require confirmed release via
+`releaseConversationResidency`; the dormant archive exception applies only to
+inventory. With an unchanged CLI surface and mode, access edits continue to
+use live admission without retirement.
 
 If policy and preference meet, document precedence explicitly. Installation
 policy is a ceiling; principal or thread state may select only admitted values.
@@ -2550,6 +2565,11 @@ the exact native identity is durably associated with the creating thread and
 before first input. A response proves acceptance; a proved-unsent request may
 be attempted later; a sent request with a lost response remains unresolved and
 must be reconciled from authoritative native title metadata before any retry.
+When the reply to Rename is lost, retain the original mutation ID, title and
+revision. A different current native title is ambiguous after an external edit.
+Only definitive evidence that the original write never applied permits another
+native dispatch. Check a completed receipt before validating current revision or
+binding, including a local draft that became bound after the rename.
 Persist the application title only after provider acceptance is proved and
 fence that write by the expected application-thread revision. Native titles,
 operation caches, and reconciliation reads remain bound to the exact tenant,
@@ -3508,7 +3528,7 @@ exact-target interrupt. An authoritative idle observation accepts a no-op.
 A stale native target is nonapplication; old-turn disappearance alone never
 proves command acceptance. Drivers record operation/generation evidence before
 effects. Persistent Claude owner evidence survives main-client replacement;
-`claude_runtime@4` and `claude_persistent_runtime@7` are required, without
+`claude_runtime@4` and `claude_persistent_runtime@8` are required, without
 older-contract parsers.
 
 The deadline includes pending-input withdrawal and carrier/SDK acknowledgement.

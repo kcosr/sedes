@@ -33,8 +33,8 @@ export type AntigravityCommand =
   | { readonly type: "prompt"; readonly prompt: PromptRequest["prompt"] }
   | { readonly type: "steer"; readonly prompt: PromptRequest["prompt"] }
   | { readonly type: "cancel" }
-  | { readonly type: "set_config"; readonly configId: string; readonly value: string }
-  | { readonly type: "set_mode"; readonly modeId: string }
+  | { readonly type: "set_config"; readonly origin: "session_configuration" | "thread_action"; readonly configId: string; readonly value: string }
+  | { readonly type: "set_mode"; readonly origin: "session_configuration" | "thread_action"; readonly modeId: string }
   | { readonly type: "permission"; readonly requestId: string; readonly response: RequestPermissionResponse };
 export type AntigravityFailure = { readonly code: string; readonly delivery: "not_sent" | "sent_outcome_unknown" | "rejected" };
 export type AntigravityOutcome =
@@ -72,6 +72,35 @@ export interface AntigravityObservation {
   readonly retainedAfterSequence: number;
   readonly closed: boolean;
 }
+export interface AntigravityArchiveOwner extends AntigravityIdentity {
+  readonly handleId: string;
+  readonly generation: string;
+}
+export type AntigravityArchiveProbe =
+  | (AntigravityArchiveOwner & { readonly retainedOutput: boolean; readonly attached: boolean; readonly inheritedOwners?: readonly string[] })
+  | (AntigravityIdentity & { readonly pendingCreation: string });
+export interface AntigravityArchiveOperation {
+  readonly operationId: string;
+  readonly kind: AntigravityCommand["type"];
+  /** Setters must prove the exact native target value independently of response delivery. */
+  readonly setterConfirmed: boolean;
+  readonly commandFingerprint: string;
+  /** Stable across an exact host handoff to a successor generation. */
+  readonly originOwner: string;
+  readonly sessionConfiguration: boolean;
+}
+export type AntigravityArchiveState =
+  | { readonly state: "busy" | "unproven" | "changed" }
+  | { readonly state: "idle"; readonly acknowledged: number; readonly throughSequence: number;
+      readonly pendingCreation?: string; readonly operations: readonly AntigravityArchiveOperation[]; readonly deliveredOperationIds: readonly string[];
+      readonly history: AntigravityHistory; readonly setup: AntigravitySetup };
+export interface AntigravityRetiredArchive {
+  readonly ownerKey: string;
+  readonly history: AntigravityHistory;
+  readonly setup: AntigravitySetup;
+  readonly operations: readonly { readonly operation: AntigravityArchiveOperation; readonly outcome: AntigravityOutcome }[];
+  readonly creation?: string;
+}
 export interface AntigravityInspection {
   readonly runtimeId: string;
   readonly state: "idle" | "active" | "unknown";
@@ -91,14 +120,19 @@ export interface AntigravityPort {
   /** Null proves the exact requested native revision is still current. */
   readHistory(input: AntigravityIdentity & { readonly knownRevision?: string }, signal?: AbortSignal): Promise<AntigravityHistory | null>;
   attach(input: AntigravityIdentity & { readonly executionEnvironment?: EnvironmentVariableOverrides; readonly agentTools?: AntigravityAgentTools }, signal?: AbortSignal): Promise<AntigravityAttachment>;
-  attachExisting(input: AntigravityIdentity, signal?: AbortSignal): Promise<AntigravityAttachment | null>;
+  probeArchiveOwner(input: AntigravityIdentity, signal?: AbortSignal): Promise<AntigravityArchiveProbe | null>;
+  readRetiredArchive(input: AntigravityIdentity & { readonly ownerKey: string }, signal?: AbortSignal): Promise<AntigravityRetiredArchive | null>;
+  releaseArchiveClaim(input: AntigravityArchiveOwner, signal?: AbortSignal): Promise<void>;
+  confirmArchiveCut(input: AntigravityArchiveOwner & { throughSequence: number; nativeRevision: string }, signal?: AbortSignal): Promise<boolean>;
+  readArchiveState(input: AntigravityArchiveOwner, signal?: AbortSignal): Promise<AntigravityArchiveState>;
+  attachExisting(input: AntigravityIdentity & { readonly expected?: AntigravityArchiveOwner }, signal?: AbortSignal): Promise<AntigravityAttachment | null>;
   request(input: { readonly handleId: string; readonly operationId: string; readonly command: AntigravityCommand }, signal?: AbortSignal): Promise<AntigravityOutcome>;
   outcome(input: { readonly handleId: string; readonly operationId: string }, signal?: AbortSignal): Promise<AntigravityOutcome>;
-  acknowledgeOperation(input: { readonly handleId: string; readonly operationId: string }, signal?: AbortSignal): Promise<void>;
+  acknowledgeOperation(input: { readonly handleId: string; readonly operationId: string; readonly archiveGeneration?: string }, signal?: AbortSignal): Promise<void>;
   observe(input: { readonly handleId: string; readonly afterSequence: number }, signal?: AbortSignal): Promise<AntigravityObservation>;
   acknowledge(input: { readonly handleId: string; readonly throughSequence: number }, signal?: AbortSignal): Promise<void>;
   release(input: { readonly handleId: string }, signal?: AbortSignal): Promise<void>;
-  retireSession(input: AntigravityIdentity, signal?: AbortSignal): Promise<"retired" | "absent" | "busy" | "undelivered">;
+  retireSession(input: AntigravityIdentity & { readonly expected?: AntigravityArchiveOwner; readonly settledNativeRevision?: string }, signal?: AbortSignal): Promise<"retired" | "absent" | "busy" | "undelivered">;
   inspect(signal?: AbortSignal): Promise<AntigravityInspection>;
   stop(input: { readonly expectedRevision: string; readonly force: boolean }, signal?: AbortSignal): Promise<void>;
   close(): Promise<void>;

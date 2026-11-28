@@ -18,6 +18,7 @@ export const piNativeConfigurationSchema = z.strictObject({
   startupEnvironmentVariables: environmentVariableOverridesSchema.optional(),
 });
 export const piNativeIdentitySchema = z.strictObject({ sessionId: id, sessionFile: hostPath, cwd: hostPath });
+const maintenanceTarget = piNativeIdentitySchema.extend({ expectedOwner: z.strictObject({ handleId: id, generation: id }).optional() });
 export const piNativeSessionDirectorySchema = hostPath;
 const create = z.strictObject({ cwd: hostPath, sessionId: id, operationId: id, title: z.string().max(4096).optional() });
 const fork = z.strictObject({ cwd: hostPath, sourceSessionId: id, sourceSessionFile: hostPath,
@@ -42,21 +43,21 @@ export const piNativeHostCommandSchema = z.discriminatedUnion("action", [
   command("list", z.strictObject({ cwd: hostPath, cursor: id.optional(), limit: z.number().int().min(1).max(500).optional() })),
   command("history", piNativeIdentitySchema),
   command("attach", piNativeIdentitySchema.extend({ executionEnvironment: environmentVariableOverridesSchema.optional(), agentToolEnvironment: piNativeAgentToolEnvironmentSchema.optional() })),
-  command("attach_for_drain", piNativeIdentitySchema),
-  command("attach_for_control", piNativeIdentitySchema),
+  command("attach_for_drain", maintenanceTarget),
+  command("attach_for_control", maintenanceTarget),
   command("request", operation.extend({ command: nativeCommand, retainOutcome: z.boolean() })),
   command("outcome", operation), command("acknowledge_operation", operation),
   command("abandon_observation", operation),
   command("observe", handle.extend({ afterSequence: position })),
   command("acknowledge", handle.extend({ throughSequence: position })),
   command("acknowledge_observation_gap", handle.extend({ generation: id, throughSequence: position })),
-  command("release", handle), command("retire_session", piNativeIdentitySchema), command("inspect", z.strictObject({})),
+  command("release", handle), command("retire_session", maintenanceTarget), command("inspect", z.strictObject({})),
   command("stop", z.strictObject({ expectedRevision: id, force: z.boolean() })),
 ]);
 export type PiNativeHostCommand = z.infer<typeof piNativeHostCommandSchema>;
 export type PiNativeHostCommandInput = PiNativeHostCommand extends infer Command
   ? Command extends PiNativeHostCommand ? Omit<Command, "serviceIncarnation" | "controllerEpoch"> : never : never;
-const capability = { capabilityId: "pi_native_runtime", majorVersion: 3 } as const;
+const capability = { capabilityId: "pi_native_runtime", majorVersion: 4 } as const;
 export const piNativeExecuteOperation = { ...capability, operation: "runtime.execute", requestSchema: sidecarRuntimeBodySchema,
   responseSchema: sidecarRuntimeBodySchema, lane: "operation", maximumDeadlineMilliseconds: 120_000,
 } satisfies SidecarOperationDefinition<z.infer<typeof sidecarRuntimeBodySchema>, z.infer<typeof sidecarRuntimeBodySchema>>;

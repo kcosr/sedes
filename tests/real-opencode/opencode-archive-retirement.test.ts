@@ -4,7 +4,7 @@ import { z } from "zod";
 import { OpenCodeHttpClient } from "../../src/server/backends/opencode/opencode-http-client.js";
 import { OpenCodeNativeApi } from "../../src/server/backends/opencode/opencode-native-api.js";
 import { createOpenCodeNativePortFixture } from "../helpers/opencode-native-port-fixture.js";
-import { createOpenCodeConversationFixture, scope, threadID } from "../support/opencode-conversation-fixture.js";
+import { openCodeArchiveInput, createOpenCodeConversationFixture, scope, threadID } from "../support/opencode-conversation-fixture.js";
 import { startOpencodeModelFixture } from "../support/opencode-model-fixture.js";
 import { RUN_REAL_OPENCODE, startOpencodeNativeFixture } from "../support/opencode-native-fixture.js";
 
@@ -42,7 +42,7 @@ it.runIf(RUN_REAL_OPENCODE)("archives an inactive imported orphan through stock 
     const api = new OpenCodeNativeApi(createOpenCodeNativePortFixture(client, { directory: native.workspace, sessionID }));
     await expect(api.getActivity(sessionID, native.workspace)).resolves.toMatchObject({ active: false, activeChildren: [], shells: [] });
     await expect(current.driver.releaseConversationResidency(current.target)).resolves.toBe("busy");
-    await expect(current.driver.releaseConversationResidency({ ...current.target, purpose: "archive" })).resolves.toBe("released");
+    await expect(current.driver.prepareArchive(openCodeArchiveInput(current.target))).resolves.toEqual({ outcome: "released" });
 
     acquired = await current.acquire();
     const actor = acquired.actor, snapshot = await actor.captureSnapshotState();
@@ -52,8 +52,8 @@ it.runIf(RUN_REAL_OPENCODE)("archives an inactive imported orphan through stock 
     acquired.release(); acquired = undefined;
     const fixture = current;
     await expect(current.manager.runWithRuntimeRetired({ scope, applicationThreadId: threadID, disposition: { kind: "archive" },
-      detachCoordinatorRuntime: async () => {}, operation: () => fixture.driver.releaseConversationResidency({ ...fixture.target, purpose: "archive" }) }))
-      .resolves.toBe("released");
+      detachCoordinatorRuntime: async () => {}, operation: () => fixture.driver.prepareArchive(openCodeArchiveInput(fixture.target)) }))
+      .resolves.toEqual({ outcome: "released" });
     expect(actor.closed).toBe(true);
     acquired = await current.acquire();
     expect(acquired.actor.timeline.runState).toBe("disconnected");

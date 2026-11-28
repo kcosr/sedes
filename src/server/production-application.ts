@@ -4,6 +4,9 @@ import { canonicalLocalWorkspaceRoots } from "./execution/local-workspace-roots.
 import { ThreadAppliedToolPolicySetRepository } from "./db/repositories/thread-applied-tool-policy-set-repository.js";
 import { ToolPolicyRepository } from "./db/repositories/tool-policy-repository.js";
 import { ToolPolicyService } from "./tool-policies/tool-policy-service.js";
+import type { BackendConversationSnapshot } from "../shared/protocol/backend.js";
+import { settleArchiveSnapshot } from "./conversations/archive-snapshot-settlement.js";
+import { ThreadArchiveObligationRepository } from "./db/repositories/thread-archive-obligation-repository.js";
 import { performCompletionFollowUp } from "./conversations/authoritative-completion-follow-up.js";
 import type { AutomaticModelRetryService } from "./conversations/automatic-model-retry-service.js";
 import { createAutomaticModelRetryRuntime } from "./conversations/automatic-model-retry-runtime.js";
@@ -149,8 +152,8 @@ import { WorkspaceFileRootRepository } from "./db/repositories/workspace-file-ro
 import { WorkspaceFileLinkedWorktreeRepository } from "./db/repositories/workspace-file-linked-worktree-repository.js";
 import { WorkspaceDiffReviewRepository } from "./db/repositories/workspace-diff-review-repository.js";
 import { TaskRepository } from "./db/repositories/task-repository.js";
-import { QueuedInputRepository } from "./db/repositories/queued-input-repository.js";
-import { SubmissionCompletionRepository, type UnresolvedSubmissionThread } from "./db/repositories/submission-completion-repository.js";
+import { DEFAULT_QUEUE_RETRY_POLICY, QueuedInputRepository } from "./db/repositories/queued-input-repository.js";
+import { SubmissionCompletionRepository, type SubmissionCompletionObservationResult, type UnresolvedSubmissionThread } from "./db/repositories/submission-completion-repository.js";
 import { ThreadLineageRepository } from "./db/repositories/thread-lineage-repository.js";
 import { ThreadCompletionCallbackRepository } from "./db/repositories/thread-completion-callback-repository.js";
 import { ThreadAgentToolPolicyRepository } from "./db/repositories/thread-agent-tool-policy-repository.js";
@@ -453,6 +456,7 @@ export async function startProductionApplication(
   let automationDispatcher: AutomationDispatcher | undefined;
   let queueDispatcher: QueuedInputDispatcher | undefined;
   let mutations: ThreadMutationGateway | undefined;
+  let observeAutomationTurns: AutomationTurnSettlementObserver | undefined;
   let runtimes: ThreadRuntimeCoordinator | undefined;
   let interactions: InteractionBroker | undefined;
   let actors: ConversationActorManager | undefined;
@@ -504,6 +508,7 @@ export async function startProductionApplication(
 
     const identity = new SingleUserIdentityProvider<ExpressRequest>(database);
     const scope = identity.getScope();
+    const archiveObligations = new ThreadArchiveObligationRepository(database);
     const usage = new UsageService(database, { enabled: config.experimentalUsageEnabled });
     if (usage.enabled) {
       usage.recoverInterruptedCapture();
@@ -1103,6 +1108,13 @@ export async function startProductionApplication(
           prepared,
           context: {
             database: database!, scope, usage,
+            settleRetainedArchiveSnapshot(threadId, owner, snapshot, turns) {
+              if (archiveObligations.read(scope, threadId)?.retainedOwner !== owner) return;
+              if (bindings.getBinding(scope, threadId)?.backendInstanceId !== backendId) {
+                throw new Error("archive_settlement_unavailable");
+              }
+              applyArchiveSnapshot(scope, threadId, snapshot, turns, "ordinary");
+            },
             assertNativeOwner: ownerId => configurationRepository.assertNativeOwner(scope, environmentId, "antigravity", ownerId),
             confirmNativeOwner: (ownerId, expectedOwner) => configurationRepository.confirmNativeOwner(scope, environmentId, "antigravity", ownerId, expectedOwner),
             executionEnvironmentVariables: (threadId) => environmentVariables.effective(scope, threadId),
@@ -1242,6 +1254,7 @@ export async function startProductionApplication(
       () => applicationSnapshots?.flush(),
       { mode: "ownership_critical" },
     );
+    const questionRepository = new QuestionRequestRepository(database, inventoryRepository);
     let questions: QuestionRequestService | undefined;
     const blockingRequests = new BlockingRequestInventory(inventoryRepository, (eventScope, state) => {
       threadRuntimeFollowUp.defer(() => inventory.publishCommitted(eventScope, [state], state.stateChangedAt));
@@ -1462,7 +1475,42 @@ export async function startProductionApplication(
       agentToolSources,
     );
 
+    function applyArchiveSnapshot(
+      scope: RequestScope,
+      threadId: string,
+      snapshot: BackendConversationSnapshot,
+      recoveredCompletionTurnIds: readonly string[],
+      purpose: "archive" | "ordinary" = "archive",
+    ): void {
+      const queue = queueDispatcher;
+      const gateway = mutations;
+      const automation = observeAutomationTurns;
+      if (!queue || !gateway || !automation) throw new Error("archive_settlement_unavailable");
+      settleArchiveSnapshot({
+        bindings, completion, questions: questionRepository, usage,
+        recordSubmission: correlation => {
+          if (!queue.recordObservedSubmission(scope, threadId, correlation)) {
+            gateway.recordObservedDraftSteer(scope, threadId, correlation);
+          }
+        },
+        settleAutomation: (record, turn, afterCommit) => automation.observe(scope, threadId, record, turn,
+          purpose === "archive" ? "archive" : undefined, afterCommit),
+        publishCompletion: (input, observation) => {
+          const resolveVoice = terminalVoice.observe(scope, threadId, input);
+          publishAuthoritativeCompletion(scope, threadId, input, observation, resolveVoice);
+          queue.schedulePendingDispatch(scope, threadId);
+        },
+      }, scope, threadId, snapshot, recoveredCompletionTurnIds, purpose);
+    }
     runtimes = new ThreadRuntimeCoordinator({
+      archiveObligations,
+      hasDurableArchiveWork: (scope, threadId) => {
+        const binding = bindings.getBinding(scope, threadId);
+        if (!binding) return false;
+        const { kind } = backendConfiguration.getBackend(scope, binding.backendInstanceId);
+        return compiledBackendModuleCatalog.requireModule(kind).hasDurableArchiveWork?.(bindings.database, scope, threadId) === true;
+      },
+      settleArchiveSnapshot: async (scope, threadId, snapshot, turns) => applyArchiveSnapshot(scope, threadId, snapshot, turns),
       isAutomaticModelRetryPending: (eventScope, threadId) => automaticModelRetries?.isPending(eventScope, threadId) === true,
       actors,
       targets: actorTargets,
@@ -1531,11 +1579,7 @@ export async function startProductionApplication(
           }
         },
       },
-      retryPolicy: {
-        maximumRetries: 5,
-        baseDelayMilliseconds: 1_000,
-        maximumDelayMilliseconds: 60_000,
-      },
+      retryPolicy: DEFAULT_QUEUE_RETRY_POLICY,
       isDispatchBlocked: (eventScope, applicationThreadId, purpose) =>
         inventoryRepository.isWorkspaceRemoved(eventScope, inventoryRepository.getThread(eventScope, applicationThreadId).thread.workspaceId) ||
         operationRepository.hasBlockingThreadOperation(
@@ -1572,7 +1616,7 @@ export async function startProductionApplication(
     });
     resources.defer("automatic retry activity subscription", unsubscribeAutomaticRetryActivity);
     questions = new QuestionRequestService({
-      repository: new QuestionRequestRepository(database, inventoryRepository),
+      repository: questionRepository,
       inventory: inventoryRepository,
       queue: queueRepository,
     gateway: queueGateway,
@@ -1849,6 +1893,7 @@ export async function startProductionApplication(
     threadSnapshots = activeThreadSnapshots;
     const nativeArchive = new ThreadNativeArchiveService({
       inventory: inventoryRepository,
+      bindings,
       targets: actorTargets,
       operations: new NativeArchiveOperationRepository(database),
       onError: (threadId, error) =>
@@ -1962,7 +2007,6 @@ export async function startProductionApplication(
         "Thread force-reset publication",
       ),
     });
-    let observeAutomationTurns: AutomationTurnSettlementObserver | undefined;
     const reportAutomationTurnError = reportBackgroundError(
       "Automation turn settlement",
     );
@@ -1979,6 +2023,19 @@ export async function startProductionApplication(
         resolveVoice();
         throw error;
       }
+      publishAuthoritativeCompletion(eventScope, applicationThreadId, input, observation, resolveVoice);
+      if (observation) {
+        try {
+          observeAutomationTurns?.observe(eventScope, applicationThreadId, observation.record, input);
+        } catch (error) {
+          reportAutomationTurnError(error);
+        }
+      }
+    };
+    function publishAuthoritativeCompletion(
+      eventScope: RequestScope, applicationThreadId: string, input: Parameters<AuthoritativeCompletionObserver>[2],
+      observation: SubmissionCompletionObservationResult | undefined, resolveVoice: ReturnType<TurnVoiceCompletion["observe"]>,
+    ): void {
       const observed = observation?.record;
       resolveVoice(observed ? () => notificationLifecycle.completion(eventScope, observed, input.provenance,
         input.voiceSubscriberWatermark, input.responseVoice) : undefined);
@@ -1986,17 +2043,6 @@ export async function startProductionApplication(
         automaticModelRetries?.onCompletion(eventScope, applicationThreadId, input);
       }
       if (!observation || !observed) return;
-      try {
-        observeAutomationTurns?.observe(
-          eventScope,
-          applicationThreadId,
-          observed,
-          input,
-        );
-      } catch (error) {
-        // Run history is an observer; it must never break completion.
-        reportAutomationTurnError(error);
-      }
       threadRuntimeFollowUp.defer(() => performCompletionFollowUp({
         deliverCallbacks: () => completionCallbackDispatcher.deliverReady(eventScope),
         publishCompletion: () => activeThreadSnapshots.publishChanged(eventScope, applicationThreadId, observation.changed),
@@ -2012,7 +2058,7 @@ export async function startProductionApplication(
           },
         ),
       }));
-    };
+    }
     const attention = new ThreadAttentionService({
       acknowledgeAutomationRun: (scope, threadId, runId, outcome) => {
         automations.acknowledgeThreadRun(scope, threadId, runId, outcome);

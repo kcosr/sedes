@@ -55,6 +55,10 @@ export type CodexLifecycleListener = (
   snapshot: CodexClientLifecycleSnapshot,
 ) => void;
 
+type ExistingArchiveInspection = (input: {
+  applicationThreadId: string; connectionProfileId: string; threadId: string; workspace: string; signal: AbortSignal; markObserved(): void;
+}) => Promise<{ outcome: "released" | "busy" | "offline" | "inconclusive" }>;
+
 /**
  * Stable, profile-shared client identity over replaceable daemon generations.
  *
@@ -64,6 +68,7 @@ export type CodexLifecycleListener = (
  * façade's continuation runs.
  */
 export class CodexSharedClientFacade {
+  readonly inspectExistingArchive?: ExistingArchiveInspection;
   readonly persistentSessions: CodexPersistentSessionAccess | undefined;
   readonly residency: RetainedRuntimeLifecycle | undefined;
   readonly #current: () => CodexReadyClientGeneration | undefined;
@@ -87,6 +92,7 @@ export class CodexSharedClientFacade {
   constructor(input: {
     readonly residency?: RetainedRuntimeLifecycle;
     readonly persistentSessions?: CodexPersistentSessionAccess;
+    readonly inspectExistingArchive?: ExistingArchiveInspection;
     readonly current: () => CodexReadyClientGeneration | undefined;
     readonly pendingInitialization?: () => Promise<void> | undefined;
     readonly replacedServiceReceiptsPending?: (applicationThreadId: string) => boolean;
@@ -97,6 +103,7 @@ export class CodexSharedClientFacade {
     ) => Promise<void>;
     readonly onListenerError?: (error: unknown) => void;
   }) {
+    this.inspectExistingArchive = input.inspectExistingArchive;
     this.persistentSessions = input.persistentSessions;
     this.residency = input.residency;
     this.#current = input.current;
@@ -221,6 +228,11 @@ export class CodexSharedClientFacade {
   dispatchContinuity(): string {
     const current = this.#current();
     return current?.dispatchContinuity ?? `local:${this.#lifecycle.generation}`;
+  }
+
+  /** Read the existing generation without waking an idle app-server. */
+  currentReadyGeneration(): CodexReadyClientGeneration | undefined {
+    return this.#lifecycle.state === "ready" ? this.#current() : undefined;
   }
 
   lifecycleSnapshot(): CodexClientLifecycleSnapshot {

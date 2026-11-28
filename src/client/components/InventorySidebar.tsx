@@ -1,3 +1,5 @@
+import { archiveImpactChanged, getThreadArchiveOperations, leaveArchivedThread } from "../operations/thread-archive.js";
+import { useThreadRename, ThreadRenameEditor } from "../operations/thread-rename.js";
 import { openThreadRoute } from "../workspace-panels/thread-panel-navigation.js";
 import { House } from "lucide-react";
 import { canUseDefaultThread, useDefaultThread } from "../app/default-thread.js";
@@ -400,6 +402,49 @@ function keyboardEventInsideOtherDialog(
   if (!(target instanceof Element)) return false;
   const dialog = target.closest('[role="dialog"], [role="alertdialog"]');
   return dialog !== null && !(sidebar !== null && dialog.contains(sidebar));
+}
+
+function DefaultThreadRow({ thread, store, threadRegistry, selected, onNavigate }: {
+  thread: NormalizedApplicationThreadSummary;
+  store: ApplicationClientStore;
+  threadRegistry?: ThreadStoreRegistry;
+  selected: boolean;
+  onNavigate: (options?: { readonly keepDrawerOpen?: boolean }) => void;
+}) {
+  const edit = useThreadRename(store, thread, "default");
+  const link = useRef<HTMLButtonElement>(null);
+  const restoreFocus = useRef(false);
+  const touch = useTouchDensity();
+  const threadDrag = useThreadDrag();
+  useEffect(() => {
+    if (edit.edit || !restoreFocus.current) return;
+    restoreFocus.current = false;
+    link.current?.focus();
+  }, [edit.edit]);
+  return (
+    <ThreadContextMenu thread={thread} store={store} threadRegistry={threadRegistry} onNavigate={onNavigate} onRename={edit.begin} disabled={Boolean(edit.edit)}>
+      <div className={`thread-row compact ${selected ? "selected" : ""} ${thread.attention.unseenCompletion ? "flat-row-unseen" : ""}`}
+        data-thread-id={thread.id} data-testid="default-thread-row"
+        data-thread-drop-kind="thread"
+        draggable={!edit.edit && !touch && threadDrag !== undefined}
+        onDragStart={(event) => {
+          if (matchesTouchDensity()) { event.preventDefault(); return; }
+          event.stopPropagation(); threadDrag?.beginThreadDrag(thread.id, event.dataTransfer);
+        }}
+        onDragEnd={() => threadDrag?.endThreadDrag()}>
+        {edit.edit ? (
+          <ThreadRenameEditor rename={edit} sidebar className="thread-row-link thread-row-rename"
+            onKeyboardFinish={() => { restoreFocus.current = true; }} />
+        ) : (
+          <button ref={link} className="thread-row-link" aria-current={selected ? "page" : undefined}
+            onClick={() => { openThreadRoute(thread.id); onNavigate(); }}>
+            <DefaultThreadIndicator thread={thread} />
+            <span className="thread-title flat-row-title">{thread.title.text || "Untitled thread"}</span>
+          </button>
+        )}
+      </div>
+    </ThreadContextMenu>
+  );
 }
 
 /** Keep the compact default row on the same status ladder as other threads. */
@@ -1798,23 +1843,8 @@ export function InventorySidebar({
           {defaultThreadId && (
             <section className="inventory-shelf default-thread-section" aria-label="Default thread">
               {usableDefault ? (
-                <ThreadContextMenu thread={usableDefault} store={store} threadRegistry={threadRegistry} onNavigate={onNavigate}>
-                  <div className={`thread-row compact ${selectedThreadId === usableDefault.id ? "selected" : ""} ${usableDefault.attention.unseenCompletion ? "flat-row-unseen" : ""}`}
-                    data-thread-id={usableDefault.id} data-testid="default-thread-row"
-                    data-thread-drop-kind="thread"
-                    draggable={!touch && threadDrag !== undefined}
-                    onDragStart={(event) => {
-                      if (matchesTouchDensity()) { event.preventDefault(); return; }
-                      event.stopPropagation(); threadDrag?.beginThreadDrag(usableDefault.id, event.dataTransfer);
-                    }}
-                    onDragEnd={() => threadDrag?.endThreadDrag()}>
-                    <button className="thread-row-link" aria-current={selectedThreadId === usableDefault.id ? "page" : undefined}
-                      onClick={() => { openThreadRoute(usableDefault.id); onNavigate(); }}>
-                      <DefaultThreadIndicator thread={usableDefault} />
-                      <span className="thread-title flat-row-title">{usableDefault.title.text || "Untitled thread"}</span>
-                    </button>
-                  </div>
-                </ThreadContextMenu>
+                <DefaultThreadRow thread={usableDefault} store={store} threadRegistry={threadRegistry}
+                  selected={selectedThreadId === usableDefault.id} onNavigate={onNavigate} />
               ) : (
                 <button className="default-thread-unavailable" disabled={defaultThread?.resolving} onClick={(event) => onOpenSettings(event.currentTarget, "general")}>
                   <House size={16} aria-hidden="true" /> {defaultThread?.resolving ? "Loading default thread…" : "Default thread unavailable — choose another"}
@@ -2861,6 +2891,8 @@ function ThreadStackItem({
   const unparkCount = entry.members.filter(
     ({ inventoryState }) => inventoryState === "parked",
   ).length;
+  const archives = getThreadArchiveOperations(store);
+  const stackKey = JSON.stringify([entry.stackBy, entry.stackId]);
   const rosterId = `thread-stack-roster-${entry.stackBy}-${entry.stackId}`;
 
   const loadStackImpact = (
@@ -2890,16 +2922,25 @@ function ThreadStackItem({
       });
   };
   const requestStackAction = (action: BulkInventoryAction) => {
-    const threadIds = Object.freeze(entry.members.map(({ id }) => id));
+    const prior = action === "archive" ? archives.stack(stackKey) : undefined;
+    const threadIds = prior?.request.targets.map(target => target.threadId)
+      ?? Object.freeze(entry.members.map(({ id }) => id));
     requestedStackAction.current = { action, threadIds };
-    confirmedMutation.current = undefined;
+    confirmedMutation.current = prior?.request;
     stackSurfaceInteractionOpen.current = true;
     setStackMenuOpen(false);
     setOpen(false);
     onDismissPeek();
     setStackAction(action);
     setStackActionOpen(true);
-    loadStackImpact(action, threadIds);
+    if (prior) {
+      setStackImpact(prior.impact);
+      setStackImpactLoading(false);
+      setStackRequestLocked(true);
+      setStackActionError("The previous archive is awaiting confirmation. Retry to check the same request.");
+    } else {
+      loadStackImpact(action, threadIds);
+    }
   };
   const openRosterFromMenu = () => {
     setAutoFocusMembers(true);
@@ -2924,20 +2965,23 @@ function ThreadStackItem({
     setStackRequestLocked(true);
     setStackMutationPending(true);
     setStackActionError("");
-    void store
-      .mutateBulkInventory(request)
-      .then((result) => {
+    const sent = request.action === "archive"
+      ? archives.submitStack(stackKey, stackImpact, request)
+      : store.mutateBulkInventory(request);
+    void sent.then((result) => {
         setStackActionOpen(false);
-        if (
-          request.action === "archive" &&
-          selectedThreadId &&
-          result.changedThreadIds.includes(selectedThreadId)
-        ) {
-          navigate("/");
+        if (request.action === "archive" && leaveArchivedThread(result.changedThreadIds)) {
           onNavigate({ keepDrawerOpen: true });
         }
       })
-      .catch((error: unknown) => setStackActionError(messageFrom(error)))
+      .catch((error: unknown) => {
+        if (archiveImpactChanged(error)) reloadStackImpact();
+        else if (request.action === "archive" && !archives.stack(stackKey)) {
+          confirmedMutation.current = undefined;
+          setStackRequestLocked(false);
+        }
+        setStackActionError(messageFrom(error));
+      })
       .finally(() => setStackMutationPending(false));
   };
 
@@ -3205,6 +3249,7 @@ function ThreadStackItem({
         loading={stackImpactLoading}
         pending={stackMutationPending}
         requestLocked={stackRequestLocked}
+        confirmedDisposition={confirmedMutation.current?.action === "archive" ? confirmedMutation.current.openTaskDisposition : undefined}
         error={stackActionError}
         onReload={reloadStackImpact}
         onConfirm={confirmStackAction}
@@ -3684,14 +3729,8 @@ function FlatRowItemContent(
   const [parkChoicesOpen, setParkChoicesOpen] = useState(false);
   const [parkImpact, setParkImpact] = useState<ThreadArchiveImpact>();
   const [snoozeOpen, setSnoozeOpen] = useState(false);
-  // Inline rename mirrors the project-view ThreadRow's contract: the row
-  // swaps to an autofocused input, Enter/blur commit, Escape cancels, and the
-  // keyboard paths restore focus to the row link afterwards.
-  const [renaming, setRenaming] = useState(false);
-  const [renameTitle, setRenameTitle] = useState("");
-  const [renameError, setRenameError] = useState("");
-  const renamePending = useRef(false);
-  const cancelRename = useRef(false);
+  const titleEdit = useThreadRename(store, thread, `flat:${containerTestId ?? containerTag}:${stackGroupId ?? stackProjectId ?? ""}`);
+  const renaming = Boolean(titleEdit.edit);
   const restoreRowFocus = useRef(false);
   const listItem = useRef<HTMLElement | null>(null);
   /**
@@ -3710,35 +3749,6 @@ function FlatRowItemContent(
     restoreRowFocus.current = false;
     listItem.current?.querySelector<HTMLElement>(".flat-row-link")?.focus();
   }, [renaming]);
-  const beginRename = () => {
-    cancelRename.current = false;
-    setRenameTitle(thread.title.text);
-    setRenameError("");
-    setRenaming(true);
-  };
-  const commitRename = () => {
-    if (cancelRename.current) {
-      cancelRename.current = false;
-      return;
-    }
-    if (renamePending.current) return;
-    const next = renameTitle.trim();
-    if (!next || next === thread.title.text) {
-      setRenaming(false);
-      return;
-    }
-    renamePending.current = true;
-    void store
-      .renameThread(thread, next)
-      .then(() => setRenaming(false))
-      .catch((error: unknown) => {
-        setRenaming(false);
-        setRenameError(messageFrom(error));
-      })
-      .finally(() => {
-        renamePending.current = false;
-      });
-  };
   const quickAction =
     thread.inventoryState === "snoozed"
       ? ("wake" as const)
@@ -3758,11 +3768,8 @@ function FlatRowItemContent(
       actionPending.current = pending;
       setPendingAction(pending ? "archive" : undefined);
     },
-    onArchived: () => {
-      if (selected) {
-        navigate("/");
-        onNavigate({ keepDrawerOpen: true });
-      }
+    onArchived: (_choice, ids) => {
+      if (leaveArchivedThread(ids)) onNavigate({ keepDrawerOpen: true });
     },
     returnFocusRef: rowLink,
   });
@@ -3874,14 +3881,8 @@ function FlatRowItemContent(
       data-density="compact"
       data-selected={selected ? "true" : "false"}
     >
-      <form
-        className="flat-row-link thread-row-rename"
-        onSubmit={(event) => {
-          event.preventDefault();
-          restoreRowFocus.current = true;
-          commitRename();
-        }}
-      >
+      <ThreadRenameEditor rename={titleEdit} sidebar className="flat-row-link thread-row-rename"
+        onKeyboardFinish={() => { restoreRowFocus.current = true; }}>
         <span
           className="flat-row-glyph"
           data-glyph={renameGlyphVisible ? renameGlyphKind : undefined}
@@ -3889,27 +3890,7 @@ function FlatRowItemContent(
         >
           {renameGlyphVisible ? flatRowGlyphIcon(renameGlyphKind) : null}
         </span>
-        <label className="sr-only" htmlFor={`flat-row-title-${thread.id}`}>
-          Thread title
-        </label>
-        <input
-          id={`flat-row-title-${thread.id}`}
-          data-testid="thread-row-rename"
-          autoFocus
-          maxLength={240}
-          value={renameTitle}
-          onChange={(event) => setRenameTitle(event.target.value)}
-          onBlur={commitRename}
-          onKeyDown={(event) => {
-            if (event.key === "Escape") {
-              event.stopPropagation();
-              cancelRename.current = true;
-              restoreRowFocus.current = true;
-              setRenaming(false);
-            }
-          }}
-        />
-      </form>
+      </ThreadRenameEditor>
     </div>
   ) : (
     <FlatThreadRow
@@ -3986,16 +3967,8 @@ function FlatRowItemContent(
         thread={thread}
         store={store}
         onNavigate={onNavigate}
-        onRename={beginRename}
+        onRename={titleEdit.begin}
         disabled={renaming}
-        onAction={(action) => {
-          // Archiving the open thread leaves the workspace view, matching
-          // the project-view row's context menu behavior.
-          if (action === "archive" && selected) {
-            navigate("/");
-            onNavigate({ keepDrawerOpen: true });
-          }
-        }}
         returnFocusRef={rowLink}
         origin={lineage.origin}
         sourceTitle={lineage.sourceTitle}
@@ -4024,11 +3997,6 @@ function FlatRowItemContent(
         onSnooze={(options) => store.mutateInventory(thread, "snooze", options)}
         returnFocusRef={rowLink}
       />
-      {renameError && (
-        <p className="thread-row-error" role="alert">
-          {renameError}
-        </p>
-      )}
       {actionError && (
         <p className="thread-row-error" role="alert">
           {actionError}
@@ -4483,11 +4451,8 @@ function ThreadRow({
   const quickSwitchHint = useSidebarQuickSwitchHint(thread.id);
   const threadDrag = useThreadDrag();
   const touch = useTouchDensity();
-  const [renaming, setRenaming] = useState(false);
-  const [renameTitle, setRenameTitle] = useState("");
-  const [renameError, setRenameError] = useState("");
-  const renamePending = useRef(false);
-  const cancelRename = useRef(false);
+  const titleEdit = useThreadRename(store, thread, `project:${kind ?? "thread"}`);
+  const renaming = Boolean(titleEdit.edit);
   const rowLink = useRef<HTMLButtonElement>(null);
   const inventoryActionPending = useRef(false);
   const [pinPending, setPinPending] = useState(false);
@@ -4511,14 +4476,8 @@ function ThreadRow({
       inventoryActionPending.current = pending;
       setPendingInventoryAction(pending ? "archive" : undefined);
     },
-    onArchived: (_choice, archivedThreadIds) => {
-      if (
-        selected ||
-        (selectedThreadId && archivedThreadIds.includes(selectedThreadId))
-      ) {
-        navigate("/");
-        onNavigate({ keepDrawerOpen: true });
-      }
+    onArchived: (_choice, ids) => {
+      if (leaveArchivedThread(ids)) onNavigate({ keepDrawerOpen: true });
     },
     returnFocusRef: rowLink,
   });
@@ -4673,46 +4632,11 @@ function ThreadRow({
         <TerminalIcon size={14} strokeWidth={2} />
       </StatusChip>
     ) : undefined;
-  const beginRename = () => {
-    cancelRename.current = false;
-    setRenameTitle(thread.title.text);
-    setRenameError("");
-    setRenaming(true);
-  };
   useEffect(() => {
     if (renaming || !restoreRowFocus.current) return;
     restoreRowFocus.current = false;
     rowLink.current?.focus();
   }, [renaming]);
-  /**
-   * Mirrors ThreadHeader's rename form contract (Enter/blur commit, Escape
-   * cancels) but delivers through the application store, so it works for
-   * threads that are not open. The summary exposes no rename capability, so
-   * a rejection surfaces as a quiet row error and the title reverts.
-   */
-  const commitRename = () => {
-    if (cancelRename.current) {
-      cancelRename.current = false;
-      return;
-    }
-    if (renamePending.current) return;
-    const next = renameTitle.trim();
-    if (!next || next === thread.title.text) {
-      setRenaming(false);
-      return;
-    }
-    renamePending.current = true;
-    void store
-      .renameThread(thread, next)
-      .then(() => setRenaming(false))
-      .catch((error: unknown) => {
-        setRenaming(false);
-        setRenameError(messageFrom(error));
-      })
-      .finally(() => {
-        renamePending.current = false;
-      });
-  };
   const row = (
     <div
       className={`thread-row ${selected ? "selected" : ""} ${compact ? "compact" : ""}`}
@@ -4728,37 +4652,11 @@ function ThreadRow({
       onDragEnd={() => threadDrag?.endThreadDrag()}
     >
       {renaming ? (
-        <form
-          className="thread-row-link thread-row-rename"
-          onSubmit={(event) => {
-            event.preventDefault();
-            restoreRowFocus.current = true;
-            commitRename();
-          }}
-        >
+        <ThreadRenameEditor rename={titleEdit} sidebar className="thread-row-link thread-row-rename"
+          onKeyboardFinish={() => { restoreRowFocus.current = true; }}>
           {glyph}
           {brandMark}
-          <label className="sr-only" htmlFor={`thread-row-title-${thread.id}`}>
-            Thread title
-          </label>
-          <input
-            id={`thread-row-title-${thread.id}`}
-            data-testid="thread-row-rename"
-            autoFocus
-            maxLength={240}
-            value={renameTitle}
-            onChange={(event) => setRenameTitle(event.target.value)}
-            onBlur={commitRename}
-            onKeyDown={(event) => {
-              if (event.key === "Escape") {
-                event.stopPropagation();
-                cancelRename.current = true;
-                restoreRowFocus.current = true;
-                setRenaming(false);
-              }
-            }}
-          />
-        </form>
+        </ThreadRenameEditor>
       ) : (
         <button
           ref={rowLink}
@@ -5060,26 +4958,8 @@ function ThreadRow({
         thread={thread}
         store={store}
         onNavigate={onNavigate}
-        onRename={beginRename}
+        onRename={titleEdit.begin}
         disabled={renaming}
-        onAction={(action) => {
-          // Archiving the open thread leaves the workspace view, matching
-          // the thread-actions menu's archive behavior.
-          if (action === "archive" && selected) {
-            navigate("/");
-            onNavigate({ keepDrawerOpen: true });
-          }
-        }}
-        onArchiveFamily={(archivedThreadIds) => {
-          if (
-            !selected &&
-            selectedThreadId &&
-            archivedThreadIds.includes(selectedThreadId)
-          ) {
-            navigate("/");
-            onNavigate({ keepDrawerOpen: true });
-          }
-        }}
         returnFocusRef={rowLink}
         origin={origin}
         sourceTitle={sourceTitle}
@@ -5105,11 +4985,6 @@ function ThreadRow({
         onSnooze={(options) => store.mutateInventory(thread, "snooze", options)}
         returnFocusRef={rowLink}
       />
-      {renameError && (
-        <p className="thread-row-error" role="alert">
-          {renameError}
-        </p>
-      )}
       {quickActionError && (
         <p className="thread-row-error" role="alert">
           {quickActionError}

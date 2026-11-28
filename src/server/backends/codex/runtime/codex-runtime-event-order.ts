@@ -28,6 +28,24 @@ const threadMethods = new Set<CodexClientRequestMethod>([
   "turn/start", "turn/steer", "turn/interrupt", "turn/settings/update",
 ]);
 
+export function codexOperationThreadId(method: CodexClientRequestMethod, params: unknown): string | undefined {
+  return threadMethods.has(method) ? stringMember(params, "threadId") : undefined;
+}
+
+export function codexPendingRequestThreadId(request: CodexRuntimePendingRequest): string | undefined {
+  let threadId: string | undefined;
+  switch (request.method) {
+    case "applyPatchApproval":
+    case "execCommandApproval": threadId = stringMember(request.params, "conversationId"); break;
+    case "item/commandExecution/requestApproval":
+    case "item/fileChange/requestApproval":
+    case "item/permissions/requestApproval":
+    case "item/tool/requestUserInput":
+    case "mcpServer/elicitation/request": threadId = stringMember(request.params, "threadId"); break;
+  }
+  return threadId;
+}
+
 /** Native threads are independent ordering domains within one Codex runtime.
  * A global event joins every preceding thread tail, and later thread events
  * follow it. Affinity is transport scheduling only, never authorization. */
@@ -61,7 +79,7 @@ export class CodexRuntimeEventOrder {
   commandAffinity(command: CodexRuntimeCommand): EventAffinity {
     switch (command.action) {
       case "submit": return catalogMethods.has(command.input.method) ? catalogAffinity
-        : threadMethods.has(command.input.method) ? stringMember(command.input.params, "threadId") : undefined;
+        : codexOperationThreadId(command.input.method, command.input.params);
       case "reattach_thread": return command.threadId;
       case "outcome": return this.#operations.get(command.operationId);
       case "respond": return this.#requests.get(codexRuntimeRequestKey(command.input.generation, command.input.requestId));
@@ -82,16 +100,7 @@ export class CodexRuntimeEventOrder {
   acknowledge(operationId: string): void { this.#operations.delete(operationId); }
 
   rememberRequest(request: CodexRuntimePendingRequest): string | undefined {
-    let threadId: string | undefined;
-    switch (request.method) {
-      case "applyPatchApproval":
-      case "execCommandApproval": threadId = stringMember(request.params, "conversationId"); break;
-      case "item/commandExecution/requestApproval":
-      case "item/fileChange/requestApproval":
-      case "item/permissions/requestApproval":
-      case "item/tool/requestUserInput":
-      case "mcpServer/elicitation/request": threadId = stringMember(request.params, "threadId"); break;
-    }
+    const threadId = codexPendingRequestThreadId(request);
     if (threadId !== undefined) {
       const key = codexRuntimeRequestKey(request.generation, request.id);
       if (this.#requests.size < 128 || this.#requests.has(key)) this.#requests.set(key, threadId);

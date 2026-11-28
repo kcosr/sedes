@@ -46,6 +46,7 @@ function fakePort() {
     catalog: vi.fn(unused), create: vi.fn(unused), fork: vi.fn(unused), reconcileFork: vi.fn(unused), listSessions: vi.fn(unused),
     readHistory: vi.fn(unused), attach: vi.fn(unused), attachForDrain: vi.fn(unused), attachForControl: vi.fn(unused), request: vi.fn(unused), outcome: vi.fn(unused),
     acknowledgeOperation: vi.fn(unused), abandonObservation: vi.fn(unused), observe: vi.fn(unused), acknowledge: vi.fn(unused), acknowledgeObservationGap: vi.fn(unused), release: vi.fn(unused),
+    inspectExisting: vi.fn(async () => null),
     inspect: vi.fn(async (): Promise<PiNativeInspection> => ({ runtimeId: "runtime", revision: "revision-1",
       state: "idle", blockers: [], retainedSessions: [] })),
     stop: vi.fn(async () => undefined), retireSession: vi.fn(unused), close: vi.fn(async () => undefined),

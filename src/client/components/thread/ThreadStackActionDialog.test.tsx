@@ -86,15 +86,13 @@ describe("ThreadStackActionDialog", () => {
       <ThreadStackActionDialog
         {...initial}
         requestLocked
-        error="Open tasks changed."
+        error="The archive response was lost."
       />,
     );
     expect(screen.getByRole("radio", { name: "Complete all" })).toBeDisabled();
     expect(screen.getByRole("radio", { name: "Complete all" })).toBeChecked();
-    await userEvent.click(
-      screen.getByRole("button", { name: "Refresh impact" }),
-    );
-    expect(initial.onReload).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("button", { name: "Refresh impact" })).toBeNull();
+    expect(initial.onReload).not.toHaveBeenCalled();
     const refreshed = makeImpact();
     refreshed.openTasks.items = [
       { id: "task-2", title: "Review deployment", threadId: "thread-2" },

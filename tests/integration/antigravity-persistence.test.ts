@@ -1,7 +1,13 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { chmod, copyFile, mkdtemp, realpath, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { ThreadMutationGateway } from "../../src/server/conversations/thread-mutation-gateway.js";
+import { AntigravityArchiveReceipts } from "../../src/server/backends/antigravity/archive-receipts.js";
+import type { AntigravityArchiveOperation, AntigravityCommand, AntigravitySetup } from "../../src/server/backends/antigravity/port.js";
 import { antigravityAdministration } from "../../src/server/backends/antigravity/runtime-administration.js";
+import { DEFAULT_QUEUE_RETRY_POLICY, QueuedInputRepository } from "../../src/server/db/repositories/queued-input-repository.js";
 import { SubmissionCompletionRepository } from "../../src/server/db/repositories/submission-completion-repository.js";
 import type { AntigravityAttachment, AntigravityInspection, AntigravityPort } from "../../src/server/backends/antigravity/port.js";
 import { ConversationOperationRepository } from "../../src/server/db/repositories/conversation-operation-repository.js";
@@ -16,7 +22,15 @@ import { AntigravityThreadPersistence } from "../../src/server/backends/antigrav
 import { AntigravityThreadPresentation } from "../../src/server/backends/antigravity/thread-presentation.js";
 import { AntigravityThreadRepository } from "../../src/server/backends/antigravity/thread-repository.js";
 import { compiledBackendModuleCatalog } from "../../src/server/backends/compiled-module-catalog.js";
-import type { BackendCatalog } from "../../src/server/backends/contracts.js";
+import { settleArchiveSnapshot } from "../../src/server/conversations/archive-snapshot-settlement.js";
+import { AntigravityDriver } from "../../src/server/backends/antigravity/driver.js";
+import { AntigravityHost } from "../../src/server/backends/antigravity/host/native-host.js";
+import { buildAntigravityPrompt } from "../../src/server/backends/antigravity/submission.js";
+import { LocalEnvironmentChannelProvider } from "../../src/server/execution/local-environment-channel.js";
+import { ThreadArchiveObligationRepository } from "../../src/server/db/repositories/thread-archive-obligation-repository.js";
+import { QuestionRequestRepository } from "../../src/server/db/repositories/question-request-repository.js";
+import type { AntigravityHistory } from "../../src/server/backends/antigravity/port.js";
+import type { BackendCatalog, PrepareConversationArchiveInput } from "../../src/server/backends/contracts.js";
 import { compileBackendModelPolicy } from "../../src/server/backends/model-policy.js";
 import { ConversationCreationTransaction, type ResolvedSavedAgentBackendConfiguration } from "../../src/server/backends/saved-agent-adapter.js";
 import { SavedAgentBackendAdapterRegistry } from "../../src/server/backends/saved-agent-adapter-registry.js";
@@ -72,12 +86,12 @@ describe("Antigravity persistence", () => {
     } finally { database.close(); }
   });
 
-  function renameGatewayFixture(backingState: "unbound" | "bound" | "creating" | "creation_unknown") {
+  function renameGatewayFixture(backingState: "unbound" | "bound" | "creating" | "creation_unknown", cwd = "/tmp/rename-gateway") {
     const { database, scope } = savedAgentDatabase();
     const connection = antigravityConnection({ database, scope });
     const inventory = new InventoryRepository(database);
     const workspace = inventory.upsertWorkspace(scope, {
-      environmentId: connection.executionEnvironmentId, canonicalPath: "/tmp/rename-gateway", displayName: "Project",
+      environmentId: connection.executionEnvironmentId, canonicalPath: cwd, displayName: "Project",
       project: { kind: "new", name: "Project" }, available: true, trustState: "trusted", environmentConfigurationRevision: 0, now: 230,
     });
     const bindings = new ConversationBindingRepository(database);
@@ -101,8 +115,218 @@ describe("Antigravity persistence", () => {
     });
     const request = { kind: "perform" as const, mutationId: randomUUID(), expectedThreadRevision: settings.target(scope, thread.id).revision,
       operation: { action: "rename" as const, title: "Local name" } };
-    return { database, scope, thread, settings, inventory, gateway, operations, action, persist, persistImplementation, prepare, acquire, request };
+    return { database, scope, thread, workspace, settings, inventory, gateway, operations, action, persist, persistImplementation, prepare, acquire, request };
   }
+
+  it.each(["archive retry", "ordinary open and restart", "busy then ordinary open"] as const)("settles a detached native host prompt in SQLite before its ACK and recovers a lost ACK reply through %s", async recovery => {
+    const cwd = await realpath(await mkdtemp(path.join(tmpdir(), "sedes-antigravity-archive-")));
+    const f = renameGatewayFixture("bound", cwd);
+    const bindings = new ConversationBindingRepository(f.database);
+    const binding = bindings.getBinding(f.scope, f.thread.id)!;
+    const profiles = new BackendConfigurationRepository(f.database);
+    const connection = profiles.getProfile(f.scope, binding.connectionProfileId);
+    const instance = profiles.getBackend(f.scope, binding.backendInstanceId);
+    const identity = { sessionId: binding.backendConversationId, cwd };
+    const executablePath = path.join(cwd, "agy");
+    const channels = new LocalEnvironmentChannelProvider({ scope: f.scope, executionEnvironmentId: connection.executionEnvironmentId, environment: process.env });
+    const native: AntigravityHistory["native"] = { revision: "a".repeat(64), executions: [], steps: [] };
+    const host = new AntigravityHost({ configuration: { ...f.scope, backendInstanceId: instance.id, executionEnvironmentId: connection.executionEnvironmentId,
+      executablePath, initializationTimeoutMs: 5000 }, channels, environment: process.env,
+      history: { read: async requested => ({ ...requested, native }), forget: async () => {}, close: async () => {} } });
+    const key = Buffer.alloc(32, 7);
+    const obligations = new ThreadArchiveObligationRepository(f.database);
+    const completion = new SubmissionCompletionRepository(f.database);
+    const questions = new QuestionRequestRepository(f.database, f.inventory);
+    const settle = (snapshot: Parameters<PrepareConversationArchiveInput["settle"]>[0], ids: readonly string[], purpose: "archive" | "ordinary" = "archive") =>
+      settleArchiveSnapshot({ bindings, completion, questions, usage: { registerVisibleTurns() {} },
+        recordSubmission() {}, settleAutomation() {} }, f.scope, f.thread.id, snapshot, ids, purpose);
+    const driver = new AntigravityDriver({ scope: f.scope, instance: { ...instance, enabled: true }, connection: { ...connection, enabled: true },
+      settings: f.settings, port: host, correlationKey: key, nativeNamespaceKey: "test-profile", modelPolicy: compileBackendModelPolicy({ type: "catalog" }, "model_effort"),
+      archiveObserver: { retained: () => obligations.read(f.scope, f.thread.id)?.retainedOwner,
+        settle: (_thread, _owner, snapshot, ids) => settle(snapshot, ids, "ordinary"),
+        release: (thread, owner) => { expect(obligations.settleIfRetained(f.scope, thread, owner)).toBe(true); } },
+      archiveReceipts: new AntigravityArchiveReceipts(f.database, f.action) });
+    try {
+      await copyFile(new URL("../fixtures/antigravity/fake-antigravity-acp-peer.mjs", import.meta.url), executablePath);
+      await chmod(executablePath, 0o755);
+      const attached = await host.attach(identity);
+      const id = randomUUID();
+      const detail = driver.nativeBinding(identity.sessionId, cwd);
+      const prompt = await buildAntigravityPrompt({ binding: detail, key }, { applicationOperationId: id, mutationId: id,
+        reconciliationToken: id, source: { kind: "user" }, text: "Archive this run", contextExcerpts: [], taskContexts: [], attachments: [] });
+      if (prompt[0]?.type !== "text") throw new Error("missing fixture prompt");
+      await host.request({ handleId: attached.handleId, operationId: id, command: { type: "prompt", prompt } });
+      await vi.waitFor(async () => expect(await host.outcome({ handleId: attached.handleId, operationId: id })).toMatchObject({ status: "completed" }));
+      native.steps.push(
+        { index: 0, type: 14, status: 3, hasSubtrajectory: false, user: { text: prompt[0].text }, executionId: "execution" },
+        { index: 1, type: 15, status: 3, hasSubtrajectory: false, response: { text: "Archived answer", thinking: "", stopReason: 2, toolCalls: [] }, executionId: "execution" });
+      native.revision = "b".repeat(64);
+      host.detach();
+      completion.recordAccepted(f.scope, f.thread.id, { operationId: id, backendCorrelation: id, acceptedAt: 245 });
+      const savedOwner = () => obligations.read(f.scope, f.thread.id)?.retainedOwner ?? undefined;
+      const input: PrepareConversationArchiveInput = { scope: f.scope, workspace: { canonicalPath: cwd, authorityRevision: 0, summary: {
+        id: f.workspace.id, displayName: "Project", displayPath: cwd, availability: "available", trustState: "trusted", revision: 0, environmentId: connection.executionEnvironmentId } },
+        binding: { ...binding, createdAt: new Date(binding.createdAt).toISOString() }, opaqueBindingDetail: serializeAntigravityBinding(detail),
+        signal: AbortSignal.timeout(8000), get retainedOwner() { return savedOwner(); }, markObserved() { obligations.remember(f.scope, f.thread.id); },
+        markRetained(owner) { obligations.markRetained(f.scope, f.thread.id, owner); }, markSettled(owner) { obligations.markSettled(f.scope, f.thread.id, owner); },
+        async settle(snapshot, ids) { settle(snapshot, ids); } };
+      if (recovery === "busy then ordinary open") {
+        const revision = f.settings.target(f.scope, f.thread.id).revision;
+        native.steps[1]!.status = 2; native.revision = "c".repeat(64);
+        expect(await driver.prepareArchive(input)).toMatchObject({ outcome: "busy" });
+        expect(savedOwner()).toEqual(expect.any(String)); expect(completion.get(f.scope, f.thread.id, id).completionOutcome).toBeNull();
+        native.steps[1]!.status = 3; native.revision = "d".repeat(64);
+        const ordinary = await driver.attach(input);
+        try {
+          expect(completion.get(f.scope, f.thread.id, id)).toMatchObject({ completionOutcome: "completed", attentionCreatedAt: expect.any(Number) });
+          expect(f.settings.target(f.scope, f.thread.id).revision).toBe(revision + 1);
+          expect(savedOwner()).toBeUndefined();
+        } finally { await ordinary.close(); }
+        return;
+      }
+      const ack = host.acknowledgeOperation.bind(host);
+      const lost = vi.spyOn(host, "acknowledgeOperation").mockImplementationOnce(async (...args) => {
+        expect(completion.get(f.scope, f.thread.id, id)).toMatchObject({ completionOutcome: "completed", assistantResult: { text: "Archived answer" }, attentionCreatedAt: null });
+        await ack(...args);
+        throw new Error("ACK reply lost");
+      });
+      const attach = vi.spyOn(host, "attach");
+      const dispatch = vi.spyOn(host, "request");
+      expect((await driver.prepareArchive(input)).outcome).toBe("inconclusive");
+      expect(savedOwner()).toEqual(expect.any(String));
+      expect(lost).toHaveBeenCalledTimes(1);
+      if (recovery === "ordinary open and restart") {
+        const ordinary = await driver.attach(input);
+        expect(savedOwner()).toBeUndefined();
+        await ordinary.close(); await host.close();
+        native.revision = "c".repeat(64);
+        const restarted = new AntigravityHost(host.input);
+        const afterRestart = new AntigravityDriver({ ...driver.input, port: restarted });
+        try { await expect(afterRestart.prepareArchive(input)).resolves.toEqual({ outcome: "released" }); }
+        finally { await afterRestart.close(); await restarted.close(); }
+      } else {
+        await expect(driver.prepareArchive(input)).resolves.toEqual({ outcome: "released" });
+        expect(await host.probeArchiveOwner(identity)).toBeNull();
+      }
+      expect(savedOwner()).toBeUndefined();
+      // The receipt ACK reached the host, while its retained operation event
+      // still needed the same committed disposition on the second request.
+      expect(lost).toHaveBeenCalledTimes(2);
+      expect(completion.get(f.scope, f.thread.id, id)).toMatchObject({ completionOutcome: "completed", assistantResult: { text: "Archived answer" },
+        attentionCreatedAt: recovery === "ordinary open and restart" ? expect.any(Number) : null });
+      expect(attach).toHaveBeenCalledTimes(recovery === "ordinary open and restart" ? 1 : 0); expect(dispatch).not.toHaveBeenCalled();
+    } finally { await driver.close(); await host.close(); channels.close(); f.database.close(); await rm(cwd, { recursive: true, force: true }); }
+  });
+
+  it("requires exact durable dispositions for all six retained archive receipt kinds and replays committed results", () => {
+    const f = renameGatewayFixture("bound");
+    try {
+      const binding = new ConversationBindingRepository(f.database).getBinding(f.scope, f.thread.id)!;
+      const target = { scope: f.scope, binding: { ...binding, createdAt: new Date(binding.createdAt).toISOString() }, opaqueBindingDetail: "bound detail" };
+      const store = new AntigravityArchiveReceipts(f.database, f.action);
+      const complete = { status: "completed" as const, result: {} };
+      const proof = (operationId: string, cmd: AntigravityCommand): AntigravityArchiveOperation => ({ operationId, originOwner: "original", kind: cmd.type,
+        commandFingerprint: createHash("sha256").update(JSON.stringify(cmd)).digest("hex"),
+        setterConfirmed: cmd.type === "set_config" || cmd.type === "set_mode", sessionConfiguration: "origin" in cmd && cmd.origin === "session_configuration" });
+      const setup: AntigravitySetup = { initialize: { protocolVersion: 1 }, session: { configOptions: [
+        { id: "model", name: "Model", type: "select", category: "model", currentValue: "model", options: [{ value: "model", name: "Model" }] },
+        { id: "think", name: "Reasoning", type: "select", category: "thought_level", currentValue: "low", options: [{ value: "low", name: "Low" }] },
+      ] } };
+      const completions = new SubmissionCompletionRepository(f.database);
+      for (const type of ["prompt", "steer"] as const) {
+        const id = randomUUID(), retained = proof(id, { type, prompt: [] });
+        completions.recordAccepted(f.scope, f.thread.id, { operationId: id, backendCorrelation: id, acceptedAt: 245 });
+        expect(store.apply(target, retained, complete, true, setup)).toBe(false);
+        completions.observeCompletion(f.scope, f.thread.id, id, { completionIdentity: id, createAttention: false, observedAt: 250,
+          finalized: { applicationTurnId: randomUUID(), outcome: "completed", result: { text: "Done" }, classifiedResult: null } });
+        expect(store.apply(target, retained, complete, false, setup)).toBe(false);
+        expect(store.apply(target, retained, complete, true, setup)).toBe(true);
+      }
+      // A signed terminal input plus the finalized application result settles a lost ACP reply.
+      const uncertain = randomUUID(), uncertainInput = proof(uncertain, { type: "prompt", prompt: [] });
+      const lostReply = { status: "failed" as const, failure: { code: "antigravity_process_closed", delivery: "sent_outcome_unknown" as const } };
+      completions.recordAccepted(f.scope, f.thread.id, { operationId: uncertain, backendCorrelation: uncertain, acceptedAt: 245 });
+      expect(store.apply(target, uncertainInput, lostReply, true, setup)).toBe(false);
+      completions.observeCompletion(f.scope, f.thread.id, uncertain, { completionIdentity: uncertain, createAttention: false, observedAt: 250,
+        finalized: { applicationTurnId: randomUUID(), outcome: "completed", result: { text: "Done" }, classifiedResult: null } });
+      expect(store.apply(target, uncertainInput, lostReply, false, setup)).toBe(false);
+      expect(store.apply(target, uncertainInput, lostReply, true, setup)).toBe(true);
+
+      const stop = randomUUID();
+      f.operations.prepareInterrupt(f.scope, f.thread.id, { operationId: stop, now: 250 });
+      f.operations.markInterruptStarted(f.scope, stop);
+      expect(store.apply(target, proof(stop, { type: "cancel" }), complete, false, setup)).toBe(true);
+      expect(f.operations.findInterrupt(f.scope, stop)?.state).toBe("accepted");
+
+      const permission = randomUUID();
+      f.operations.prepareRecoverableInteractionResponse(f.scope, f.thread.id, { operationId: permission, interactionId: "pending",
+        response: { kind: "cancel" }, backendResponse: { applicationOperationId: permission, interactionId: "native", kind: "cancel" }, now: 250 });
+      f.operations.markInteractionResponseStarted(f.scope, permission);
+      const response = { outcome: { outcome: "cancelled" as const } };
+      expect(store.apply(target, proof(permission, { type: "permission", requestId: "elsewhere", response }), complete, false, setup)).toBe(false);
+      expect(store.apply(target, proof(permission, { type: "permission", requestId: "native", response }), complete, false, setup)).toBe(true);
+      expect(f.operations.findInteractionResponse(f.scope, permission)?.state).toBe("accepted");
+
+      const setting = randomUUID();
+      const request = { operation: { action: "set_setting" as const, settingId: "model" as const, value: encodeAntigravityModelSetting(binding.connectionProfileId, "model", "low") },
+        mutationId: setting, expectedThreadRevision: f.settings.target(f.scope, f.thread.id).revision, expectedSettingsRevision: f.settings.get(f.scope, f.thread.id).revision, now: 250 };
+      f.operations.prepareBackendAction(f.scope, f.thread.id, request); f.operations.markBackendActionStarted(f.scope, setting);
+      expect(store.apply(target, proof(setting, { type: "set_config", origin: "thread_action", configId: "wrong", value: "model" }), complete, false, setup)).toBe(false);
+      const setConfig = proof(setting, { type: "set_config", origin: "thread_action", configId: "model", value: "model" });
+      expect(store.apply(target, setConfig, complete, false, setup)).toBe(true);
+      expect(store.apply(target, setConfig, complete, false, setup)).toBe(true);
+      expect(f.operations.findBackendAction(f.scope, setting)?.state).toBe("accepted");
+      expect(f.settings.get(f.scope, f.thread.id)).toMatchObject({ modelId: "model", thinkingLevel: "low", revision: request.expectedSettingsRevision + 1 });
+
+      const mode = proof(randomUUID(), { type: "set_mode", origin: "session_configuration", modeId: "plan" });
+      expect(store.apply(target, { ...mode, setterConfirmed: false }, complete, false, setup)).toBe(false);
+      expect(store.apply(target, mode, { status: "failed", failure: { code: "lost", delivery: "sent_outcome_unknown" } }, false, setup)).toBe(false);
+      expect(store.apply(target, mode, complete, false, setup)).toBe(true);
+      const count = f.database.prepare("SELECT COUNT(*) AS n FROM mutation_receipts WHERE operation_kind = 'antigravity_archive_receipt'").get();
+      expect(count).toEqual({ n: 7 });
+
+      const queue = new QueuedInputRepository(f.database);
+      const queuedId = randomUUID();
+      const queued = queue.enqueue(f.scope, f.thread.id, { mutationId: queuedId, text: "Try again", contextExcerpts: [], attachmentIds: [], taskReferences: [],
+        source: { kind: "direct_input", resolvedDeliveryMode: "submit", expectedThreadRevision: f.settings.target(f.scope, f.thread.id).revision }, now: 300 });
+      expect(queue.claimHead(f.scope, f.thread.id, "retry anchor", 301)?.id).toBe(queued.item.id);
+      const before = Date.now();
+      const failed = { status: "failed" as const, failure: { code: "transport", delivery: "not_sent" as const } };
+      const attempt = proof(queuedId, { type: "prompt", prompt: [] });
+      expect(store.apply(target, attempt, failed, false, setup)).toBe(true);
+      const retry = queue.get(f.scope, f.thread.id, queued.item.id);
+      expect(retry).toMatchObject({ state: "retry_wait", retryCount: 1 });
+      expect(retry.nextAttemptAt).toBeGreaterThanOrEqual(before + DEFAULT_QUEUE_RETRY_POLICY.baseDelayMilliseconds);
+      expect(store.apply(target, attempt, failed, false, setup)).toBe(true);
+      expect(queue.get(f.scope, f.thread.id, queued.item.id)).toEqual(retry);
+
+      const rejected = randomUUID();
+      f.operations.prepareInterrupt(f.scope, f.thread.id, { operationId: rejected, now: 250 });
+      f.operations.markInterruptStarted(f.scope, rejected);
+      const rejection = { status: "failed" as const, failure: { code: "antigravity_request_rejected", delivery: "rejected" as const } };
+      expect(store.apply(target, proof(rejected, { type: "cancel" }), rejection, false, setup)).toBe(true);
+      expect(f.operations.findInterrupt(f.scope, rejected)).toBeUndefined();
+      expect(store.apply(target, proof(rejected, { type: "cancel" }), rejection, false, setup)).toBe(true);
+      const expired = randomUUID(), nativeRejection = randomUUID(), rejectedPermission = randomUUID();
+      f.operations.prepareInterrupt(f.scope, f.thread.id, { operationId: expired, now: 251 });
+      f.operations.markInterruptStarted(f.scope, expired); f.operations.expireInterrupts(f.scope, Number.MAX_SAFE_INTEGER, f.thread.id);
+      expect(store.apply(target, proof(expired, { type: "cancel" }), lostReply, false, setup)).toBe(false);
+      expect(store.apply(target, proof(expired, { type: "cancel" }), complete, false, setup)).toBe(true);
+      f.operations.prepareInterrupt(f.scope, f.thread.id, { operationId: nativeRejection, now: 251 });
+      f.operations.markInterruptStarted(f.scope, nativeRejection); f.operations.rejectInterruptProvenNotApplied(f.scope, nativeRejection);
+      expect(store.apply(target, proof(nativeRejection, { type: "cancel" }), complete, false, setup)).toBe(false);
+      expect(store.apply(target, proof(nativeRejection, { type: "cancel" }), rejection, false, setup)).toBe(true);
+      f.operations.prepareRecoverableInteractionResponse(f.scope, f.thread.id, { operationId: rejectedPermission, interactionId: "pending2",
+        response: { kind: "cancel" }, backendResponse: { applicationOperationId: rejectedPermission, interactionId: "right", kind: "cancel" }, now: 251 });
+      f.operations.markInteractionResponseStarted(f.scope, rejectedPermission); f.operations.rejectInteractionResponseProvenNotApplied(f.scope, rejectedPermission);
+      expect(store.apply(target, proof(rejectedPermission, { type: "permission", requestId: "wrong", response }), rejection, false, setup)).toBe(false);
+      expect(store.apply(target, proof(rejectedPermission, { type: "permission", requestId: "right", response }), rejection, false, setup)).toBe(true);
+      // The inheriting generation replays the original scoped application disposition.
+      const inherited = { ...proof(rejectedPermission, { type: "permission", requestId: "right", response }), originOwner: "original" };
+      expect(store.apply(target, inherited, rejection, false, setup)).toBe(true);
+
+    } finally { f.database.close(); }
+  });
 
   it("acknowledges only terminal retained operations with matching durable thread evidence before upgrade", async () => {
     const { database, scope } = savedAgentDatabase();

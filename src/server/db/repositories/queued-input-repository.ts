@@ -114,6 +114,12 @@ export type QueueRetryPolicy = {
   readonly maximumDelayMilliseconds: number;
 };
 
+export const DEFAULT_QUEUE_RETRY_POLICY: QueueRetryPolicy = {
+  maximumRetries: 5,
+  baseDelayMilliseconds: 1_000,
+  maximumDelayMilliseconds: 60_000,
+};
+
 export const MAXIMUM_ACTIVE_QUEUED_INPUTS = 500;
 
 const storedAutomaticRetryOriginSchema = z.strictObject({

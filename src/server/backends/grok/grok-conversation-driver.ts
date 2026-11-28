@@ -2118,7 +2118,7 @@ class GrokConversationHandle implements ConversationHandle {
       }
       return session.title === nativeTitle
         ? { outcome: "accepted" }
-        : { outcome: "not_applied" };
+        : { outcome: "unknown" };
     } catch (error) {
       if (error instanceof BackendError) throw error;
       if (this.#lifecycle.closed) {
@@ -2507,6 +2507,19 @@ function renameReplayMismatch(): BackendError {
 
 function mapRenameError(error: unknown): BackendError {
   if (error instanceof BackendError) return error;
+  // Request validation fails before execution. A provider handler can return
+  // an internal error after it has already changed the title.
+  if ((error instanceof AcpDeliveryError && error.delivery !== "not_sent") ||
+      (error instanceof AcpRemoteError && ![-32700, -32600, -32601, -32602].includes(error.remoteCode))) {
+    return grokError(
+      "submission_unknown",
+      "Grok may have applied the title, but Sedes could not confirm it safely.",
+      "grok_rename_outcome_unknown",
+      false,
+      error,
+      true,
+    );
+  }
   if (error instanceof AcpRemoteError) {
     return grokError(
       error.remoteCode === -32601 ? "incompatible_protocol" : "rejected",
@@ -2521,22 +2534,12 @@ function mapRenameError(error: unknown): BackendError {
     );
   }
   if (error instanceof AcpDeliveryError) {
-    if (error.delivery === "not_sent") {
-      return grokError(
-        "unavailable",
-        "Grok was unavailable before the rename was sent.",
-        "grok_rename_not_sent",
-        true,
-        error,
-      );
-    }
     return grokError(
-      "submission_unknown",
-      "Grok may have applied the title, but Sedes could not confirm it safely.",
-      "grok_rename_outcome_unknown",
-      false,
-      error,
+      "unavailable",
+      "Grok was unavailable before the rename was sent.",
+      "grok_rename_not_sent",
       true,
+      error,
     );
   }
   if (error instanceof AcpBindingError) {

@@ -1,3 +1,5 @@
+import { prepareAntigravityArchive, settleObservedAntigravityArchive } from "./archive-preparation.js";
+import type { AntigravityArchiveReceipts } from "./archive-receipts.js";
 import { randomUUID } from "node:crypto";
 import { backendConversationSnapshotSchema, type BackendCapabilityDocument } from "../../../shared/protocol/backend.js";
 import type { EnvironmentVariableOverrides } from "../../../shared/protocol/environment-variables.js";
@@ -7,7 +9,7 @@ import type { UsageSink } from "../../usage/contracts.js";
 import { BackendError, type AgentBackendInstance, type AgentConnectionProfile, type AttachConversationInput,
   type BackendCatalogContext, type ConversationBackendDriver, type ConversationHistoryReader,
   type CreateConversationInput, type DiscoverConversationsInput, type ReadConversationInput,
-  type ReconcileSubmissionInput, type ReleaseConversationResidencyInput, type SubmissionReconciliation } from "../contracts.js";
+  type PrepareConversationArchiveInput, type ReconcileSubmissionInput, type ReleaseConversationResidencyInput, type SubmissionReconciliation } from "../contracts.js";
 import type { CompiledBackendModelPolicy } from "../model-policy.js";
 import { parseAntigravityBinding, serializeAntigravityBinding, type AntigravityBinding } from "./binding.js";
 import { antigravityCapabilities, antigravityCatalog } from "./catalog.js";
@@ -29,6 +31,12 @@ export interface AntigravityDriverInput {
   readonly nativeNamespaceKey: string;
   readonly correlationKey: Uint8Array;
   readonly usage?: UsageSink;
+  readonly archiveObserver?: {
+    retained(threadId: string): string | null | undefined;
+    settle(threadId: string, owner: string, snapshot: import("../../../shared/protocol/backend.js").BackendConversationSnapshot, turns: readonly string[]): void;
+    release(threadId: string, owner: string): void;
+  };
+  readonly archiveReceipts?: Pick<AntigravityArchiveReceipts, "apply" | "creationBound">;
   readonly agentTools?: AntigravityAgentToolService;
   readonly modeCatalog?: { observe(setup: AntigravitySetup): void };
   readonly executionEnvironmentVariables?: (applicationThreadId: string) => EnvironmentVariableOverrides;
@@ -151,6 +159,9 @@ export class AntigravityDriver implements ConversationBackendDriver {
   async attach(input: AttachConversationInput) {
     const detail = this.validate(input);
     this.input.settings.assertConnection(input.scope, input.binding.applicationThreadId, this.connection);
+    // A failed-load peer can be replaced by a normal attach. Preserve the
+    // original generation's durable facts before this admission if it is idle.
+    await settleObservedAntigravityArchive(this, input);
     const attachment = await this.input.port.attach({ sessionId: detail.sessionId, cwd: detail.canonicalWorkspacePath,
       ...await this.#launch(input.binding.applicationThreadId, input.workspace.summary.id) }).catch(error => { throw antigravityReadError(error); });
     const handle = new AntigravityHandle(this, input, detail, attachment);
@@ -230,6 +241,7 @@ export class AntigravityDriver implements ConversationBackendDriver {
     } catch { /* Lost authority is uncertainty, never permission to resend. */ }
     return { status: "unresolved", diagnostic: boundDisplayText("Antigravity has not yet provided exact durable acceptance evidence. The message has not been resent.") };
   }
+  prepareArchive(input: PrepareConversationArchiveInput) { return prepareAntigravityArchive(this, input); }
   async releaseConversationResidency(input: ReleaseConversationResidencyInput) {
     const detail = this.validate(input);
     const retained = await this.input.port.attachExisting({ sessionId: detail.sessionId, cwd: detail.canonicalWorkspacePath });

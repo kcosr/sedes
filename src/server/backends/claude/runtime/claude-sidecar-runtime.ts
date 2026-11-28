@@ -11,7 +11,7 @@ import { claudePersistentCommandSchema, claudePersistentConfigurationSchema, cla
   type ClaudePersistentCommand, type ClaudePersistentConfiguration, type ClaudePersistentEvent } from "./claude-persistent-runtime-wire.js";
 import type { ClaudePersistentRuntimeRegistry } from "./claude-persistent-runtime-registry.js";
 
-const capability = { capabilityId: "claude_persistent_runtime", majorVersion: 7 } as const;
+const capability = { capabilityId: "claude_persistent_runtime", majorVersion: 8 } as const;
 const stopRefusals = new Map<string, BackendRuntimeControlRejectedError["reason"]>([
   ["claude_persistent_confirmation_stale", "confirmation_stale"],
   ["claude_persistent_restart_blocked", "blocked"],
@@ -153,8 +153,8 @@ export class ClaudeSidecarRuntimeConnection {
   async ensure(configuration: ClaudePersistentConfiguration): Promise<string> {
     return (await this.channel.call(claudePersistentRuntimeEnsureOperation, configuration)).runtimeId;
   }
-  async lookup(configuration: ClaudePersistentConfiguration, controllerEpoch: number): Promise<string | undefined> {
-    return (await this.channel.call(claudePersistentRuntimeLookupOperation, { configuration, controllerEpoch })).runtimeId ?? undefined;
+  async lookup(configuration: ClaudePersistentConfiguration, controllerEpoch: number, signal?: AbortSignal): Promise<string | undefined> {
+    return (await this.channel.call(claudePersistentRuntimeLookupOperation, { configuration, controllerEpoch }, { signal })).runtimeId ?? undefined;
   }
   async inspect(input: z.infer<typeof administrationRequestSchema>) {
     return await this.channel.call(claudePersistentRuntimeInspectOperation, input);

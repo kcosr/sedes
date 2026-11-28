@@ -846,8 +846,8 @@ export interface ConversationBackendDriver {
     input: ReconcileSubmissionInput,
   ): Promise<SubmissionReconciliation>;
   /**
-   * Release provider-owned residency (a service-owned remote query) for a
-   * conversation Sedes has no runtime for, such as one being archived.
+   * Release provider-owned residency for strict maintenance, such as changing
+   * tool exposure after retiring the local conversation handle.
    * Backends whose provider state never outlives a handle omit this. It must
    * never stop outstanding provider work: it reports `busy` instead. It first
    * applies retained provider output no runtime has applied, and reports
@@ -856,6 +856,9 @@ export interface ConversationBackendDriver {
   releaseConversationResidency?(
     input: ReleaseConversationResidencyInput,
   ): Promise<"released" | "busy" | "undelivered">;
+  /** Inspect only the bound, existing provider owner while archive admission is fenced.
+   * Omitted by backends whose ownership ends with the Sedes handle. */
+  prepareArchive?(input: PrepareConversationArchiveInput): Promise<ConversationArchivePreparation>;
   /**
    * Optional provider-owned archive synchronization. Inventory remains owned
    * by Sedes; inspection and archived-history reads never restore execution.
@@ -884,9 +887,24 @@ export interface ReleaseConversationResidencyInput {
   readonly binding: ConversationBinding;
   readonly workspace: ValidatedWorkspace;
   readonly opaqueBindingDetail: string;
-  /** Archive may distinguish current native work from incomplete history. */
-  readonly purpose?: "archive";
 }
+
+export interface PrepareConversationArchiveInput extends ReleaseConversationResidencyInput {
+  readonly signal: AbortSignal;
+  /** Persist positive evidence before the next fallible read or acknowledgement. */
+  markObserved(): void;
+  /** Opaque identity of the specific generation known to hold unapplied output. */
+  readonly retainedOwner: string | undefined;
+  markRetained(owner: string): void;
+  /** Requires proof that this generation's retained facts were applied and acknowledged. */
+  markSettled(owner: string): void;
+  /** Commit scoped application effects. Only backend-proven terminal turns may be included. */
+  settle(snapshot: BackendConversationSnapshot, recoveredCompletionTurnIds: readonly string[]): Promise<void>;
+}
+
+export type ConversationArchivePreparation =
+  | { readonly outcome: "released" | "offline" }
+  | { readonly outcome: "busy" | "inconclusive"; readonly reason?: string };
 
 export interface BackendErrorShape {
   readonly category:

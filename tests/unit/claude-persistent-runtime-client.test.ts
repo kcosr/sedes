@@ -30,7 +30,7 @@ function setup(input: { nativeDefault?: boolean; supportsRuntime?: boolean; runt
   const carriers: { lost: ReturnType<typeof deferred<void>>; release: ReturnType<typeof vi.fn> }[] = [];
   const acquire = vi.fn(async (_signal?: AbortSignal, _options?: { existingOnly?: boolean }) => {
     const lost = deferred<void>(); const release = vi.fn(); carriers.push({ lost, release });
-    return { channel: { assertReady: vi.fn(), supportsOperation: (operation: { majorVersion: number }) => input.supportsRuntime !== false && operation.majorVersion === (input.runtimeMajor ?? 7) } as unknown as SidecarRuntimeChannel, controllerEpoch: carriers.length, serviceIncarnation: "service", closed: lost.promise, release };
+    return { channel: { assertReady: vi.fn(), supportsOperation: (operation: { majorVersion: number }) => input.supportsRuntime !== false && operation.majorVersion === (input.runtimeMajor ?? 8) } as unknown as SidecarRuntimeChannel, controllerEpoch: carriers.length, serviceIncarnation: "service", closed: lost.promise, release };
   });
   const client = new ClaudePersistentRuntimeClient({ scope: { tenantId: "tenant", principalId: "principal", executionEnvironmentId: "remote", backendInstanceId: "claude" }, sidecarRuntime: { acquireExisting: async () => { throw new Error("unused_existing_carrier_admission"); }, acquire }, executablePath: "/bin/claude", ...(input.nativeDefault ? {} : { configDirectory: "/config" }), initializationTimeoutMs: 1000 });
   const options: ClaudeRuntimeSessionOptions = { executablePath: "/bin/claude", initializationTimeoutMs: 1000, sessionId: SESSION_ID, cwd: "/work", launch: "new", environment: {}, onMessage: vi.fn() };
@@ -89,9 +89,25 @@ it("acknowledges replay only after asynchronous message application and suppress
   expect(onMessage).toHaveBeenCalledOnce();
   expect(connection.execute.mock.calls.some(([command]) => command.action === "acknowledge")).toBe(false);
   applied.resolve();
-  await vi.waitFor(() => expect(connection.execute).toHaveBeenCalledWith(expect.objectContaining({ action: "acknowledge", request: { sessionId: SESSION_ID, sequence: 1 } })));
+  await vi.waitFor(() => expect(connection.execute).toHaveBeenCalledWith(expect.objectContaining({ action: "acknowledge", request: { sessionId: SESSION_ID, startupProbeUuid: PROBE_ID, sequence: 1 } })));
   connection.listener!(event);
   expect(onMessage).toHaveBeenCalledOnce();
+  await client.close();
+});
+
+it("retains a message when its handle closes during asynchronous application", async () => {
+  const { client, options } = setup();
+  const applying = deferred<void>();
+  const onMessage = vi.fn(() => applying.promise);
+  const session = client.createSession({ ...options, onMessage });
+  await session.start();
+  const connection = connectionState.instances[0]!;
+  connection.listener!({ sequence: 1, sessionId: SESSION_ID, payload: {kind:"message",message:{type:"system",subtype:"status"}} });
+  await vi.waitFor(() => expect(onMessage).toHaveBeenCalledOnce());
+  await session.close({ reason: "evicted" });
+  applying.resolve();
+  await session.flushMessages!();
+  expect(connection.execute.mock.calls.some(([command]) => command.action === "acknowledge")).toBe(false);
   await client.close();
 });
 
@@ -406,7 +422,7 @@ it("keeps permission waits across carrier loss and commits delivery only after t
   expect(onPermissionResponseDelivered).toHaveBeenCalledOnce();
   expect(second.execute.mock.calls.some(([command]) => command.action === "acknowledge" && command.request.sequence === 2)).toBe(false);
   deliveredGate.resolve(); await vi.advanceTimersByTimeAsync(0);
-  expect(second.execute).toHaveBeenCalledWith(expect.objectContaining({ action: "acknowledge", request: { sessionId: SESSION_ID, sequence: 2 } }));
+  expect(second.execute).toHaveBeenCalledWith(expect.objectContaining({ action: "acknowledge", request: { sessionId: SESSION_ID, startupProbeUuid: PROBE_ID, sequence: 2 } }));
   await client.close();
 });
 
@@ -555,10 +571,10 @@ it.each(["permission_failed", "permission_delivered"] as const)("settles an unan
   expect(session.closed).toBe(false);
   expect(onFailure).not.toHaveBeenCalled();
   expect(connection.execute.mock.calls.some(([command]) => command.action === "respond_permission")).toBe(false);
-  await vi.waitFor(() => expect(connection.execute).toHaveBeenCalledWith(expect.objectContaining({ action: "acknowledge", request: { sessionId: SESSION_ID, sequence: 1 } })));
+  await vi.waitFor(() => expect(connection.execute).toHaveBeenCalledWith(expect.objectContaining({ action: "acknowledge", request: { sessionId: SESSION_ID, startupProbeUuid: PROBE_ID, sequence: 1 } })));
   // A request queued before its settlement acknowledgement cannot reopen UI.
   connection.listener!({ ...permission, sequence: 3 });
-  await vi.waitFor(() => expect(connection.execute).toHaveBeenCalledWith(expect.objectContaining({ action: "acknowledge", request: { sessionId: SESSION_ID, sequence: 3 } })));
+  await vi.waitFor(() => expect(connection.execute).toHaveBeenCalledWith(expect.objectContaining({ action: "acknowledge", request: { sessionId: SESSION_ID, startupProbeUuid: PROBE_ID, sequence: 3 } })));
   expect(bridge.pendingCount()).toBe(0);
 
   session.send({ operationId: PROBE_ID, content: "Continue after provider cancellation" });
@@ -698,7 +714,7 @@ it("leaves the omitted SSH native store unresolved despite main-server environme
   await client.close();
 });
 
-it.each([undefined, 2, 3, 4, 5, 6])("fails closed when Claude runtime support is absent or uses an old major (%s)", async runtimeMajor => {
+it.each([undefined, 2, 3, 4, 5, 6, 7])("fails closed when Claude runtime support is absent or uses an old major (%s)", async runtimeMajor => {
   const { client, carriers, options } = setup(runtimeMajor === undefined ? { supportsRuntime: false } : { runtimeMajor });
   await expect(client.createSession(options).start()).rejects.toThrow("claude_remote_runtime_unsupported");
   expect(connectionState.instances).toHaveLength(0);

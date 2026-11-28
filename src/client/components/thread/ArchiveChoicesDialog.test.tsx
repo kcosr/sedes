@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { ApiError } from "../../api/ApiClient.js";
 import {
   act,
   cleanup,
@@ -66,7 +67,7 @@ function emptyOpenTasks() {
 
 function makeStore(): ApplicationClientStore & {
   mutateInventory: ReturnType<typeof vi.fn>;
-  archiveThreadFamily: ReturnType<typeof vi.fn>;
+  archiveThreads: ReturnType<typeof vi.fn>;
   getThreadArchiveImpact: ReturnType<typeof vi.fn>;
 } {
   const state = { connection: "connected", authoritative: true, snapshot: { threads: [] } };
@@ -74,9 +75,7 @@ function makeStore(): ApplicationClientStore & {
     subscribe: () => () => undefined,
     getSnapshot: () => state,
     mutateInventory: vi.fn().mockResolvedValue(undefined),
-    archiveThreadFamily: vi
-      .fn()
-      .mockResolvedValue(["thread-1", "thread-2", "thread-3"]),
+    archiveThreads: vi.fn(async (id, request) => request.action === "archive" ? [id] : [id, "thread-2", "thread-3"]),
     getThreadArchiveImpact: vi.fn().mockResolvedValue({
       descendantCount: 2,
       pendingQuestions: { root: 0, descendants: 0 },
@@ -88,7 +87,7 @@ function makeStore(): ApplicationClientStore & {
     }),
   } as unknown as ApplicationClientStore & {
     mutateInventory: ReturnType<typeof vi.fn>;
-    archiveThreadFamily: ReturnType<typeof vi.fn>;
+    archiveThreads: ReturnType<typeof vi.fn>;
     getThreadArchiveImpact: ReturnType<typeof vi.fn>;
   };
   render(<ThreadArchiveOperationHost store={store} />);
@@ -204,17 +203,17 @@ describe("ArchiveChoicesDialog", () => {
     ).toBeVisible();
     await userEvent.click(screen.getByRole("button", { name: "Archive" }));
 
-    expect(store.mutateInventory).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "thread-1" }),
-      "archive",
-      {
+    expect(store.archiveThreads).toHaveBeenCalledWith(
+      "thread-1",
+      expect.objectContaining({
+        action: "archive",
         expectedStashedPromptCount: 0,
         executionWorkspaceDisposition: {
           kind: "delete",
           expectedRevision: 7,
           operationId: expect.any(String),
         },
-      },
+      }),
     );
   });
 
@@ -250,15 +249,15 @@ describe("ArchiveChoicesDialog", () => {
     await waitFor(() => expect(archiveOnly).not.toBeDisabled());
     await userEvent.click(archiveOnly);
 
-    expect(store.mutateInventory).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "thread-1" }),
-      "archive",
-      {
+    expect(store.archiveThreads).toHaveBeenCalledWith(
+      "thread-1",
+      expect.objectContaining({
+        action: "archive",
         expectedStashedPromptCount: 0,
         executionWorkspaceDisposition: { kind: "keep" },
-      },
+      }),
     );
-    expect(store.archiveThreadFamily).not.toHaveBeenCalled();
+    expect(store.archiveThreads).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ action: "archive_family" }));
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
     expect(onArchived).toHaveBeenCalledWith("only", ["thread-1"]);
   });
@@ -301,12 +300,13 @@ describe("ArchiveChoicesDialog", () => {
     await userEvent.click(checkbox);
     await userEvent.click(archiveAll);
 
-    expect(store.archiveThreadFamily).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "thread-1" }),
-      {
+    expect(store.archiveThreads).toHaveBeenCalledWith(
+      "thread-1",
+      expect.objectContaining({
+        action: "archive_family",
         expectedStashedPromptCount: 0,
         executionWorkspaceDisposition: { kind: "keep" },
-      },
+      }),
     );
     await waitFor(() =>
       expect(onArchived).toHaveBeenCalledWith("all", [
@@ -330,22 +330,22 @@ describe("ArchiveChoicesDialog", () => {
     expect(checkbox).not.toBeChecked();
     await userEvent.click(screen.getByRole("button", { name: "Archive" }));
 
-    expect(store.mutateInventory).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "thread-1" }),
-      "archive",
-      {
+    expect(store.archiveThreads).toHaveBeenCalledWith(
+      "thread-1",
+      expect.objectContaining({
+        action: "archive",
         expectedStashedPromptCount: 0,
         executionWorkspaceDisposition: { kind: "keep" },
-      },
+      }),
     );
-    expect(store.archiveThreadFamily).not.toHaveBeenCalled();
+    expect(store.archiveThreads).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ action: "archive_family" }));
   });
 
   it("updates the stash warning and confirmed count with the descendant choice", async () => {
     const store = makeStore();
     store.getThreadArchiveImpact.mockResolvedValue({
       descendantCount: 2,
-      pendingQuestions: { root: 0, descendants: 0 },
+      pendingQuestions: { root: 1, descendants: 2 },
       stashedPrompts: { root: 2, descendants: 3 },
       openTasks: emptyOpenTasks(),
       executionWorkspace: { kind: "direct" },
@@ -373,13 +373,35 @@ describe("ArchiveChoicesDialog", () => {
     ).toBeVisible();
     await userEvent.click(screen.getByRole("button", { name: "Archive" }));
 
-    expect(store.archiveThreadFamily).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "thread-1" }),
-      {
+    expect(store.archiveThreads).toHaveBeenCalledWith(
+      "thread-1",
+      expect.objectContaining({
+        action: "archive_family",
         expectedStashedPromptCount: 5,
+        expectedPendingQuestionCount: 3,
+        expectedOpenTaskSnapshot: "b".repeat(64),
         executionWorkspaceDisposition: { kind: "keep" },
-      },
+      }),
     );
+  });
+
+  it("keeps the confirmed scope and exact request across an uncertain result and remount", async () => {
+    const store = makeStore();
+    store.archiveThreads.mockRejectedValueOnce(new TypeError("Lost response")).mockResolvedValueOnce([]);
+    const onArchived = vi.fn();
+    const first = await renderChoices(store, { descendantCount: 2, onArchived });
+    await userEvent.click(screen.getByRole("checkbox", { name: "Archive child and descendant forks" }));
+    await userEvent.click(screen.getByRole("button", { name: "Archive" }));
+    expect(await screen.findByRole("button", { name: "Retry confirmed archive" })).toBeEnabled();
+    first.unmount();
+    await renderChoices(store, { descendantCount: 2, onArchived });
+    const family = screen.getByRole("checkbox", { name: "Archive child and descendant forks" });
+    expect(family).toBeChecked();
+    expect(family).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "Retry confirmed archive" }));
+    await waitFor(() => expect(onArchived).toHaveBeenCalledExactlyOnceWith("all", []));
+    expect(store.archiveThreads.mock.calls).toHaveLength(2);
+    expect(store.archiveThreads.mock.calls[1]).toEqual(store.archiveThreads.mock.calls[0]);
   });
 
   it("shows bounded duplicate task summaries and updates the set with the descendant choice", async () => {
@@ -479,7 +501,7 @@ describe("ArchiveChoicesDialog", () => {
         archiveOnly: { available: true },
         archiveAll: { available: true },
       });
-    store.mutateInventory.mockRejectedValueOnce(new Error("Revision conflict"));
+    store.archiveThreads.mockRejectedValueOnce(new ApiError(409, "conflict", "Revision conflict", false));
     await renderChoices(store, { descendantCount: 0 });
 
     const archiveOnly = await screen.findByRole("button", { name: "Archive" });
@@ -547,18 +569,23 @@ describe("ArchiveChoicesDialog", () => {
         executionWorkspaceDisposition: { kind: "keep" },
       };
       if (includeDescendants) {
-        expect(store.archiveThreadFamily).toHaveBeenCalledWith(
-          makeThread(),
-          confirmation,
+        expect(store.archiveThreads).toHaveBeenCalledWith(
+          makeThread().id,
+          expect.objectContaining({
+            action: "archive_family",
+            ...confirmation,
+          }),
         );
-        expect(store.mutateInventory).not.toHaveBeenCalled();
+        expect(store.archiveThreads).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ action: "archive" }));
       } else {
-        expect(store.mutateInventory).toHaveBeenCalledWith(
-          makeThread(),
-          "archive",
-          confirmation,
+        expect(store.archiveThreads).toHaveBeenCalledWith(
+          makeThread().id,
+          expect.objectContaining({
+            action: "archive",
+            ...confirmation,
+          }),
         );
-        expect(store.archiveThreadFamily).not.toHaveBeenCalled();
+        expect(store.archiveThreads).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ action: "archive_family" }));
       }
     },
   );
@@ -581,23 +608,17 @@ describe("ArchiveChoicesDialog", () => {
     store.getThreadArchiveImpact
       .mockResolvedValueOnce(taskImpact("c".repeat(64), "Old task title"))
       .mockResolvedValueOnce(taskImpact("d".repeat(64), "New task title"));
-    store.mutateInventory.mockRejectedValueOnce(new Error("Open tasks changed."));
+    store.archiveThreads.mockRejectedValueOnce(new ApiError(409, "conflict", "Open tasks changed.", false));
     await renderChoices(store, { descendantCount: 2 });
     await screen.findByText("Old task title");
     await userEvent.click(screen.getByRole("radio", { name: "Complete all" }));
     await userEvent.click(screen.getByRole("button", { name: "Archive" }));
     expect(await screen.findByText("New task title")).toBeVisible();
     expect(screen.getByRole("alert")).toHaveTextContent("Open tasks changed.");
-    expect(store.mutateInventory).toHaveBeenCalledTimes(1);
+    expect(store.archiveThreads).toHaveBeenCalledTimes(1);
     await userEvent.click(screen.getByRole("button", { name: "Archive" }));
-    expect(store.mutateInventory).toHaveBeenLastCalledWith(
-      makeThread(),
-      "archive",
-      expect.objectContaining({
-        openTaskDisposition: "complete",
-        expectedOpenTaskSnapshot: "d".repeat(64),
-      }),
-    );
+    expect(store.archiveThreads).toHaveBeenLastCalledWith(makeThread().id, expect.objectContaining({ action: "archive", openTaskDisposition: "complete",
+        expectedOpenTaskSnapshot: "d".repeat(64), }));
   });
 });
 
@@ -644,9 +665,9 @@ describe("ArchiveChoicesDialog as a form dialog", () => {
     const onOpenChange = vi.fn();
     const store = makeStore();
     let finish!: () => void;
-    store.mutateInventory.mockReturnValue(
-      new Promise<void>((resolve) => {
-        finish = resolve;
+    store.archiveThreads.mockReturnValue(
+      new Promise<string[]>((resolve) => {
+        finish = () => resolve(["thread-1"]);
       }),
     );
     render(
@@ -728,10 +749,12 @@ describe("useArchiveThreadAction", () => {
     render(<ArchiveAction store={store} onArchived={onArchived} />);
     await userEvent.click(screen.getByRole("button", { name: "Archive…" }));
     await waitFor(() => expect(onArchived).toHaveBeenCalledWith("only", ["thread-1"]));
-    expect(store.mutateInventory).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "thread-1" }),
-      "archive",
-      { expectedStashedPromptCount: 0 },
+    expect(store.archiveThreads).toHaveBeenCalledWith(
+      "thread-1",
+      expect.objectContaining({
+        action: "archive",
+        expectedStashedPromptCount: 0,
+      }),
     );
     expect(screen.queryByRole("dialog", { name: "Archive this thread" })).toBeNull();
   });
@@ -744,7 +767,7 @@ describe("useArchiveThreadAction", () => {
     const dialog = await screen.findByRole("dialog", { name: "Archive this thread" });
     expect(within(dialog).getByRole("checkbox", { name: "Archive child and descendant forks" })).not.toBeChecked();
     expect(store.getThreadArchiveImpact).toHaveBeenCalledTimes(1);
-    expect(store.mutateInventory).not.toHaveBeenCalled();
+    expect(store.archiveThreads).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ action: "archive" }));
     await userEvent.click(within(dialog).getByRole("button", { name: "Archive" }));
     await waitFor(() => expect(onArchived).toHaveBeenCalledWith("only", ["thread-1"]));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Archive this thread" })).toBeNull());

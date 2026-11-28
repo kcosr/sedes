@@ -25,12 +25,15 @@ macOS remain unqualified by this evidence.
 `native/pi-native-backend-module.ts` prepares one execution-environment-owned
 runtime. Local execution uses `PiNativeHost`; SSH and outbound execution use
 the same host behind `PiNativeRemotePort`. The persistent sidecar advertises
-`pi_native_runtime` major version 3. The response envelope carries the last
+`pi_native_runtime` major version 4. Archive retirement and retained-output drain check the requested
+native handle and generation on the execution host before changing the session.
+A previously retired handle can prove its matching generation through the
+host’s bounded cleanup receipts. The response envelope carries the last
 observed admitted executable version, or explicit null when none is known.
 Pending or cancelled probes preserve the prior observation; positive rejection,
 executable replacement, and confirmed retirement clear it. Main assesses the
 version against its compiled tested-through release. Capability negotiation
-requires version 3 before admitting provider operations.
+requires version 4 before admitting provider operations.
 There is no remote-to-local fallback.
 Windows is excluded because the managed companion uses a Unix-domain socket.
 
@@ -408,6 +411,13 @@ replacement or a failed control read. Their response buttons may still appear,
 but recovery rejects those responses. The shared Stop descriptor does not depend
 on whether new input is supported; an idle session without an active turn does
 not advertise Stop merely because retained obligations remain.
+
+When a normal open recovers an interrupted archive, it applies the initial
+snapshot with ordinary completion semantics. A turn that finished while
+detached produces its usual activity, attention, and completion notification.
+The open clears the exact retained-owner marker after acknowledging the event
+prefix and native operations present at attachment. A missing or replaced
+owner cannot discharge a marker whose original output remains unconfirmed.
 
 Attached drivers acknowledge durable event prefixes during a run after applying
 the authenticated companion snapshot. A message or tool-progress prefix remains

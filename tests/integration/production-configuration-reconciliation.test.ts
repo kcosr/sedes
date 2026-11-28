@@ -384,6 +384,10 @@ describe("production configuration reconciliation", () => {
     }
     try {
       let current = await createPeer(); carriers.push(current);
+      // createPeer already installed the host policy on the framed service.
+      // Scope saved and periodic policy delivery to that same fixture.
+      vi.spyOn(SidecarRuntimeOwner.prototype, "retryPolicy").mockResolvedValue();
+      vi.spyOn(SidecarRuntimeOwner.prototype, "synchronizePolicy").mockResolvedValue();
       const inspectService = vi.spyOn(SidecarRuntimeOwner.prototype, "inspectService").mockImplementation(async () => current.services.status());
       vi.spyOn(SidecarRuntimeOwner.prototype, "connect").mockImplementation(async () => current.services.status());
       vi.spyOn(SidecarRuntimeOwner.prototype, "acquireOperation").mockImplementation(async () => current.lease());

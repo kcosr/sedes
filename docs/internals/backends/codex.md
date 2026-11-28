@@ -355,6 +355,22 @@ mode. Native forks inherit the source thread's provider-owned mode.
 
 ## History and event projection
 
+Sidebar Archive on a remote Codex runtime borrows the existing carrier and calls
+`runtime.lookup` and `codex_runtime/1 runtime.prepare_thread_archive`. The host
+checks the current controller and target policy, native workspace, terminal,
+turn, goal and materialized history before releasing that thread's subscription.
+A parked owned process can provide existing cleanup proof. A carrier loss after
+observing the runtime keeps the thread visible until the host can verify it.
+An external app-server can survive a missing sidecar registration or an
+unavailable local supervisor. Sedes connects to the configured external endpoint
+to read the target without creating a native session or changing subscriptions.
+With an empty remote registry this uses `codex_runtime/1 runtime.inspect_external_archive`.
+A verified absence of the configured Unix socket or a refused native connection
+can establish that the endpoint is offline. If Sedes cannot reach the sidecar,
+authenticate the connection, or verify the endpoint identity, archive remains
+pending until it can inspect the thread. Sidecars need the archive operations
+to support these checks.
+
 Archived threads use a dedicated history reader instead of an execution
 handle. Opening, paging, and locating turns issue only `thread/read`,
 `thread/turns/list`, and `thread/items/list`; they never resume a native

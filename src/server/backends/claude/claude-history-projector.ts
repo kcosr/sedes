@@ -377,6 +377,27 @@ export function assertClaudeHistorySession(
   }
 }
 
+/** Maintenance needs the complete assistant output, even outside the display window. */
+export function* projectClaudeArchiveCompletions(
+  messages: unknown,
+  completed: ReadonlySet<string>,
+  terminalReceipts: readonly ClaudeTerminalReceiptOverride[],
+  authentication: ClaudeHistoryAuthentication,
+): Generator<BackendConversationSnapshot> {
+  const timeline = buildTimeline(messages, terminalReceipts, authentication);
+  for (const id of completed) {
+    const turn = timeline.turnsById[id];
+    if (!turn || turn.status === "in_progress") throw new Error("claude_archive_terminal_unconfirmed");
+    // Completion stores assistant output, terminal correlation and question
+    // facts. Large tool results elsewhere in the turn are not inputs to it.
+    const itemIds = turn.orderedBackendItemIds.filter(itemId => timeline.itemsById[itemId]?.semanticKind === "assistant_message");
+    yield backendConversationSnapshotSchema.parse({
+      orderedBackendTurnIds: [id], turnsById: { [id]: { ...turn, orderedBackendItemIds: itemIds } },
+      itemsById: Object.fromEntries(itemIds.map(itemId => [itemId, timeline.itemsById[itemId]])), runState: "idle",
+    });
+  }
+}
+
 export function projectClaudeLatestSnapshot(
   value: unknown,
   terminalReceipts: readonly ClaudeTerminalReceiptOverride[] = [],

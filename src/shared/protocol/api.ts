@@ -473,6 +473,7 @@ export const inventoryTransitionSchema = z.discriminatedUnion("action", [
   }),
   z.strictObject({
     action: z.literal("archive"),
+    expectedPendingQuestionCount: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
     expectedRevision: z.number().int().nonnegative(),
     expectedStashedPromptCount: z
       .number()
@@ -481,11 +482,12 @@ export const inventoryTransitionSchema = z.discriminatedUnion("action", [
       .max(Number.MAX_SAFE_INTEGER),
     mutationId: mutationIdSchema,
     openTaskDisposition: openTaskDispositionSchema.optional(),
-    expectedOpenTaskSnapshot: openTaskSnapshotSchema.optional(),
+    expectedOpenTaskSnapshot: openTaskSnapshotSchema,
     executionWorkspaceDisposition: executionWorkspaceArchiveDispositionSchema,
   }),
   z.strictObject({
     action: z.literal("archive_family"),
+    expectedPendingQuestionCount: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
     expectedRevision: z.number().int().nonnegative(),
     expectedStashedPromptCount: z
       .number()
@@ -494,7 +496,7 @@ export const inventoryTransitionSchema = z.discriminatedUnion("action", [
       .max(Number.MAX_SAFE_INTEGER),
     mutationId: mutationIdSchema,
     openTaskDisposition: openTaskDispositionSchema.optional(),
-    expectedOpenTaskSnapshot: openTaskSnapshotSchema.optional(),
+    expectedOpenTaskSnapshot: openTaskSnapshotSchema,
     executionWorkspaceDisposition: executionWorkspaceArchiveDispositionSchema,
   }),
   z.strictObject({
@@ -674,6 +676,7 @@ export const bulkInventoryImpactSchema = z
 export type BulkInventoryImpact = z.infer<typeof bulkInventoryImpactSchema>;
 
 const confirmedBulkInventoryCountsSchema = {
+  expectedPendingQuestionCount: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   expectedStashedPromptCount: z
     .number()
     .int()
@@ -685,7 +688,7 @@ const confirmedBulkInventoryCountsSchema = {
     .nonnegative()
     .max(MAXIMUM_BULK_INVENTORY_OPEN_TASKS),
   openTaskDisposition: openTaskDispositionSchema.optional(),
-  expectedOpenTaskSnapshot: openTaskSnapshotSchema.optional(),
+  expectedOpenTaskSnapshot: openTaskSnapshotSchema,
 };
 
 export const bulkInventoryMutationRequestSchema = z.discriminatedUnion(
@@ -726,7 +729,6 @@ export type BulkInventoryMutationRequest = z.infer<
 export const bulkInventoryMutationResultSchema = z.strictObject({
   changedThreadIds: z
     .array(threadIdSchema)
-    .min(1)
     .max(MAXIMUM_BULK_INVENTORY_TARGETS)
     .refine(
       (threadIds) => new Set(threadIds).size === threadIds.length,
@@ -869,6 +871,7 @@ export const threadForceResetBlockerKindSchema = z.enum([
   "fork_origin",
   "automation_run",
   "conversation_runtime",
+  "archive_recovery",
 ]);
 export type ThreadForceResetBlockerKind = z.infer<
   typeof threadForceResetBlockerKindSchema
@@ -897,6 +900,7 @@ export const threadForceResetWarningSchema = z.strictObject({
     "provider_side_effects_may_remain",
     "native_fork_orphan_may_remain",
     "provider_activity_may_reappear",
+    "unapplied_archive_output_may_be_lost",
   ]),
   message: z.string().min(1).max(500),
 });
@@ -913,6 +917,7 @@ const forceResetFingerprintSchema = z
 export const threadForceResetAffectedThreadSchema = z.strictObject({
   threadId: threadIdSchema,
   title: z.string().min(1).max(240),
+  archiveRecovery: z.enum(["observed_work", "retained_output"]).optional(),
   /** The loaded runtime the reset would replace, if any. */
   runtime: z
     .strictObject({
@@ -927,7 +932,7 @@ export const threadForceResetImpactSchema = z.strictObject({
   resettable: z.boolean(),
   blockers: threadForceResetBlockerSummariesSchema,
   affectedThreads: z.array(threadForceResetAffectedThreadSchema).min(1).max(10_000),
-  warnings: z.array(threadForceResetWarningSchema).max(4),
+  warnings: z.array(threadForceResetWarningSchema).max(5),
 });
 export type ThreadForceResetImpact = z.infer<
   typeof threadForceResetImpactSchema
@@ -952,7 +957,7 @@ export type ThreadForceResetResult = z.infer<
 >;
 
 export const threadArchiveMutationResultSchema = z.strictObject({
-  archivedThreadIds: z.array(threadIdSchema).min(1).max(10_000),
+  archivedThreadIds: z.array(threadIdSchema).max(10_000),
 });
 export type ThreadArchiveMutationResult = z.infer<
   typeof threadArchiveMutationResultSchema

@@ -52,6 +52,7 @@ import {
 import {
   queuedInputPresentationSchema,
   respondToQuestionResultSchema,
+  type InventoryTransitionRequest,
   type ListComposerSkillsQuery,
   type QueuedInputPresentation,
   type RespondToQuestionResult,
@@ -2579,7 +2580,7 @@ export class ApiClient {
 
   archiveThreads(
     threadId: string,
-    mutation: unknown,
+    mutation: Extract<InventoryTransitionRequest, { action: "archive" | "archive_family" }>,
   ): Promise<ThreadArchiveMutationResult> {
     return this.#mutation(
       `/api/threads/${encodeURIComponent(threadId)}/inventory`,

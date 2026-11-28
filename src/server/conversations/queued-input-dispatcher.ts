@@ -1099,7 +1099,7 @@ export class QueuedInputDispatcher {
           // Defer runtime acquisition until after the actor's authoritative
           // observer chain has drained, otherwise idle eviction can wait on an
           // observer that is itself waiting for that eviction.
-          this.#schedulePendingDispatch(scope, applicationThreadId);
+          this.schedulePendingDispatch(scope, applicationThreadId);
         }
         return observed;
       });
@@ -1114,58 +1114,64 @@ export class QueuedInputDispatcher {
     return this.#track(async () => {
       await this.#requireRecovery(scope);
       return this.#serialize(scope, applicationThreadId, async () => {
-        const head = this.#repository.listActiveHeads(scope).find(item => item.applicationThreadId === applicationThreadId);
-        if (head?.state === "uncertain" && head.deliveryMode === "submit" && head.mutationId === backendCorrelation) {
-          this.#repository.markAccepted(scope, applicationThreadId, head.id, {
-            expectedState: "uncertain", acceptedAt: this.#clock.now(), backendCorrelation,
-          });
-          this.#scheduleSubmissionPublication(scope, applicationThreadId);
-          return true;
-        }
-        const receipt = this.#operations.findAwaitingSteerSubmission(
-          scope,
-          applicationThreadId,
-          backendCorrelation,
-        );
-        if (!receipt) return false;
-        if (
-          receipt.source !== "queued_input" ||
-          receipt.applicationOperationId !== backendCorrelation
-        ) {
-          return false;
-        }
-        const acceptedAt = this.#clock.now();
-        this.#repository.database
-          .transaction(() => {
-            this.#operations.acceptSteer(scope, receipt.mutationId, acceptedAt);
-            this.#completion.recordAccepted(scope, applicationThreadId, {
-              operationId: receipt.applicationOperationId,
-              acceptedAt,
-              backendCorrelation,
-              attachmentIds: receipt.attachments.map(({ id }) => id),
-            });
-            this.#repository.acceptSteered(
-              scope,
-              applicationThreadId,
-              receipt.queuedInputId,
-              {
-                steerOperationId: receipt.mutationId,
-                expectedState:
-                  receipt.state === "failed_unknown"
-                    ? "failed"
-                    : receipt.state === "pending_materialization"
-                      ? "dispatching"
-                      : "uncertain",
-                acceptedAt,
-                backendCorrelation,
-              },
-            );
-          })
-          .immediate();
-        this.#scheduleSubmissionPublication(scope, applicationThreadId);
-        return true;
+        const changed = this.recordObservedSubmission(scope, applicationThreadId, backendCorrelation);
+        if (changed) this.#scheduleSubmissionPublication(scope, applicationThreadId);
+        return changed;
       });
     });
+  }
+
+  /** Called under ordinary queue serialization or the exclusive archive fence. */
+  recordObservedSubmission(scope: RequestScope, applicationThreadId: string, backendCorrelation: string): boolean {
+    const queued = this.#repository.findByMutationId(scope, applicationThreadId, backendCorrelation);
+    if (queued?.state === "uncertain" && queued.deliveryMode === "submit" &&
+        this.#repository.listActiveHeads(scope).some(head => head.applicationThreadId === applicationThreadId && head.id === queued.id)) {
+      this.#repository.markAccepted(scope, applicationThreadId, queued.id, {
+        expectedState: "uncertain", acceptedAt: this.#clock.now(), backendCorrelation,
+      });
+      return true;
+    }
+    const receipt = this.#operations.findAwaitingSteerSubmission(
+      scope,
+      applicationThreadId,
+      backendCorrelation,
+    );
+    if (!receipt) return false;
+    if (
+      receipt.source !== "queued_input" ||
+      receipt.applicationOperationId !== backendCorrelation
+    ) {
+      return false;
+    }
+    const acceptedAt = this.#clock.now();
+    this.#repository.database
+      .transaction(() => {
+        this.#operations.acceptSteer(scope, receipt.mutationId, acceptedAt);
+        this.#completion.recordAccepted(scope, applicationThreadId, {
+          operationId: receipt.applicationOperationId,
+          acceptedAt,
+          backendCorrelation,
+          attachmentIds: receipt.attachments.map(({ id }) => id),
+        });
+        this.#repository.acceptSteered(
+          scope,
+          applicationThreadId,
+          receipt.queuedInputId,
+          {
+            steerOperationId: receipt.mutationId,
+            expectedState:
+              receipt.state === "failed_unknown"
+                ? "failed"
+                : receipt.state === "pending_materialization"
+                  ? "dispatching"
+                  : "uncertain",
+            acceptedAt,
+            backendCorrelation,
+          },
+        );
+      })
+      .immediate();
+    return true;
   }
 
   close(): Promise<void> {
@@ -1377,7 +1383,7 @@ export class QueuedInputDispatcher {
           conversationAcquired = true;
           debugDispatch?.("withConversation acquire", dispatchStart);
           if (!conversation.authoritativelySettled) {
-            this.#schedulePendingDispatch(scope, applicationThreadId);
+            this.schedulePendingDispatch(scope, applicationThreadId);
             return;
           }
           const anchorStart = Date.now();
@@ -1555,7 +1561,7 @@ export class QueuedInputDispatcher {
       if (!(error instanceof QueuedInputConversationAcquisitionError)) {
         throw error;
       }
-      this.#schedulePendingDispatch(scope, applicationThreadId);
+      this.schedulePendingDispatch(scope, applicationThreadId);
     }
     this.#scheduleRequestedSteerHead(scope, applicationThreadId);
   }
@@ -1785,7 +1791,7 @@ export class QueuedInputDispatcher {
       return;
     }
     if (this.#isDispatchBlocked(scope, item.applicationThreadId, "steer")) {
-      this.#schedulePendingDispatch(scope, item.applicationThreadId);
+      this.schedulePendingDispatch(scope, item.applicationThreadId);
       return;
     }
     const key = threadKey(scope, item.applicationThreadId);
@@ -1808,7 +1814,7 @@ export class QueuedInputDispatcher {
       .catch((error: unknown) => {
         if (error instanceof QueuedInputConversationAcquisitionError) {
           deferredRetryScheduled = true;
-          this.#schedulePendingDispatch(scope, item.applicationThreadId);
+          this.schedulePendingDispatch(scope, item.applicationThreadId);
           return;
         }
         if (
@@ -1816,7 +1822,7 @@ export class QueuedInputDispatcher {
           error.code === "operation_outcome_uncertain"
         ) {
           deferredRetryScheduled = true;
-          this.#schedulePendingDispatch(scope, item.applicationThreadId);
+          this.schedulePendingDispatch(scope, item.applicationThreadId);
           return;
         }
         if (isSteerTargetUnavailable(error)) {
@@ -1846,7 +1852,7 @@ export class QueuedInputDispatcher {
           // Yield through the retry scheduler instead of recursively filling
           // the microtask queue and starving every HTTP request.
           if (next?.id === item.id) {
-            this.#schedulePendingDispatch(scope, item.applicationThreadId);
+            this.schedulePendingDispatch(scope, item.applicationThreadId);
           } else {
             this.#scheduleRequestedSteerHead(scope, item.applicationThreadId);
           }
@@ -1914,7 +1920,8 @@ export class QueuedInputDispatcher {
     }
   }
 
-  #schedulePendingDispatch(
+  /** A committed completion may release the next input without blocking its current observer. */
+  schedulePendingDispatch(
     scope: RequestScope,
     applicationThreadId: string,
   ): void {
@@ -1940,7 +1947,7 @@ export class QueuedInputDispatcher {
         void this.onAuthoritativeSettled(scope, applicationThreadId).catch(
           (error) => {
             if (error instanceof QueuedInputConversationAcquisitionError) {
-              this.#schedulePendingDispatch(scope, applicationThreadId);
+              this.schedulePendingDispatch(scope, applicationThreadId);
             }
           },
         );
@@ -1960,7 +1967,7 @@ export class QueuedInputDispatcher {
       void this.#track(() => this.#serialize(scope, applicationThreadId, async () => {
         await this.#emitQueueChanged(scope, applicationThreadId);
         this.#scheduleCurrentHead(scope, applicationThreadId);
-        this.#schedulePendingDispatch(scope, applicationThreadId);
+        this.schedulePendingDispatch(scope, applicationThreadId);
       })).catch(() => undefined);
     });
     this.#observationPublicationTimers.set(key, timer);

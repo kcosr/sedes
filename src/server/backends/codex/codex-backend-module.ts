@@ -1,3 +1,4 @@
+import { inspectExternalCodexThread } from "./runtime/codex-external-archive-inspection.js";
 import { ConversationCreationProvenanceRepository } from "../../db/repositories/conversation-creation-provenance-repository.js";
 import type { EnvironmentVariableOverrides } from "../../../shared/protocol/environment-variables.js";
 import { attachmentDiagnostic } from "../../diagnostics/attachment-diagnostics.js";
@@ -357,6 +358,13 @@ class CodexBackendModuleRuntime implements BackendModuleRuntime {
       resolveThreadEnvironment: createThreadEnvironmentResolver(input.context),
       scope: input.context.scope,
       instance: input.context.instance,
+      inspectExternalArchive: input.prepared.configuration.connection.ownership === "external" && !input.context.sidecarRuntime
+        ? request => {
+          const connection = input.prepared.configuration.connection;
+          if (connection.ownership !== "external") throw new Error("codex_external_configuration_changed");
+          return inspectExternalCodexThread(runtimeScope, input.context.environmentChannel, connection,
+            { threadId: request.binding.backendConversationId, workspace: request.workspace.canonicalPath }, request.signal, request.markObserved);
+        } : undefined,
       client: this.#supervisor.client,
       serverRequests: this.#serverRequests,
       toolProvenanceKey: copyCodexSubmissionCorrelationKey(
@@ -1380,9 +1388,12 @@ function externalDiscoveryNamespaceKey(
 }
 
 export class CodexBackendModule implements BackendModule {
+  readonly hasDurableArchiveWork: NonNullable<BackendModule["hasDurableArchiveWork"]> = (database, scope, threadId) =>
+    new ProviderFeatureMutationRepository(database).hasUnresolved(scope, threadId) ||
+    new CodexRuntimeReceiptStore(database).hasPendingForThread(scope, threadId);
   readonly creationProvenanceRepair = codexCreationProvenanceRepair;
   readonly startupPolicy = "composition_only" as const;
-  readonly remoteRuntimeCapabilities = Object.freeze([{ capabilityId: "codex_runtime", majorVersion: 1, operations: ["runtime.ensure", "runtime.lookup", "runtime.execute"] }, codexManagedTuiCapability]);
+  readonly remoteRuntimeCapabilities = Object.freeze([{ capabilityId: "codex_runtime", majorVersion: 1, operations: ["runtime.ensure", "runtime.lookup", "runtime.execute", "runtime.prepare_thread_archive", "runtime.inspect_external_archive"] }, codexManagedTuiCapability]);
   readonly backendKind = "codex_app_server" as const;
   readonly connectionKinds = ["codex_app_server"] as const;
   readonly protocolRelease = CODEX_APP_SERVER_RELEASE;

@@ -10,7 +10,7 @@ import type { BackgroundActivity } from "../../../../shared/protocol/background-
 import { z } from "zod";
 import type { CanUseTool, SDKMessage, SDKSessionInfo } from "@anthropic-ai/claude-agent-sdk";
 import type { EnvironmentChannelScope } from "../../../execution/environment-channel.js";
-import { isSidecarRevisionChanged, type SidecarRuntimeLease, type SidecarRuntimeProvider } from "../../../sidecar/runtime-channel.js";
+import { existingSidecarIsOffline, isSidecarRevisionChanged, type SidecarRuntimeLease, type SidecarRuntimeProvider } from "../../../sidecar/runtime-channel.js";
 import type { ClaudeRuntimeClient, ClaudeRuntimeForkOptions, ClaudeRuntimeForkResult, ClaudeRuntimeProbeInput, ClaudeRuntimeProbeResult, ClaudeRuntimeSession, ClaudeRuntimeSessionOptions, ClaudeSubmissionDisposition } from "../claude-runtime-client.js";
 import { claudeForkLaunchFailure } from "../claude-fork-launch.js";
 import { SidecarOperationError } from "../../../../internal/sidecar-protocol/operation-registry.js";
@@ -18,7 +18,7 @@ import type { ClaudeSdkSessionInitialization } from "../claude-sdk-session.js";
 import { verifyClaudeRuntimeVersion } from "../claude-release-guard.js";
 import { resolveClaudeSafeSkills, type ClaudeSafeSkill } from "../claude-skills.js";
 import * as worker from "../worker/claude-runtime-v4.js";
-import { CLAUDE_PERSISTENT_MAXIMUM_SESSIONS, claudePersistentCompactResponseSchema, claudePersistentCompactDispositionResponseSchema, claudePersistentOpenRequestSchema, claudePersistentRetireResponseSchema, claudePersistentSubmissionDispositionResponseSchema, claudePersistentConfigurationSchema, claudePersistentAttachmentSchema, claudePersistentSendResponseSchema, type ClaudePersistentConfiguration, type ClaudePersistentCommand, type ClaudePersistentEvent } from "./claude-persistent-runtime-wire.js";
+import { CLAUDE_PERSISTENT_MAXIMUM_SESSIONS, claudeArchivePreparationSchema, claudePersistentCompactResponseSchema, claudePersistentCompactDispositionResponseSchema, claudePersistentOpenRequestSchema, claudePersistentRetireResponseSchema, claudePersistentSubmissionDispositionResponseSchema, claudePersistentConfigurationSchema, claudePersistentAttachmentSchema, claudePersistentSendResponseSchema, type ClaudePersistentConfiguration, type ClaudePersistentCommand, type ClaudePersistentEvent } from "./claude-persistent-runtime-wire.js";
 import { ClaudeSidecarRuntimeConnection, claudePersistentRuntimeOperations } from "./claude-sidecar-runtime.js";
 import { CLAUDE_CONTEXT_USAGE_TIMEOUT_MS } from "../claude-context-usage.js";
 
@@ -33,6 +33,8 @@ interface CachedCompaction {
 }
 
 /** Main owns subscriptions; the authenticated sidecar owns persistent SDK queries. */
+const archiveOwnerSchema = z.tuple([z.string(), z.string().uuid(), z.string().uuid(), z.number().int().nonnegative()]);
+
 export class ClaudePersistentRuntimeClient implements ClaudeRuntimeClient {
   readonly #sessions = new Map<string, PersistentSession>();
   readonly #controller = new AbortController();
@@ -52,6 +54,11 @@ export class ClaudePersistentRuntimeClient implements ClaudeRuntimeClient {
     readonly startupEnvironmentVariables?: EnvironmentVariableOverrides;
     readonly readLaunchConfiguration?: () => ClaudePersistentConfiguration | undefined;
     readonly initializationTimeoutMs: number;
+    readonly archiveObserver?: {
+      retained(threadId: string): string | null | undefined;
+      settle(threadId: string, owner: string, ...facts: Parameters<import("../claude-runtime-client.js").ClaudeArchiveSnapshotSink>): void;
+      release(threadId: string, owner: string): void;
+    };
     readonly onBackgroundError?: (error: unknown) => void;
   }) {
     claudePersistentConfigurationSchema.parse({ ...input.scope, executablePath: input.executablePath, configDirectory: input.configDirectory, startupEnvironmentVariables: input.startupEnvironmentVariables, initializationTimeoutMs: input.initializationTimeoutMs });
@@ -125,6 +132,115 @@ export class ClaudePersistentRuntimeClient implements ClaudeRuntimeClient {
   async retireSession(input: { readonly sessionId: string; readonly cwd: string }): Promise<"retired" | "absent" | "busy" | "undelivered"> {
     if (this.#sessions.has(input.sessionId)) return "busy";
     return claudePersistentRetireResponseSchema.parse(await this.execute({ action: "retire", request: input })).outcome;
+  }
+  async recoverArchiveBeforeOpen(input: Parameters<NonNullable<ClaudeRuntimeClient["recoverArchiveBeforeOpen"]>>[0]): Promise<void> {
+    const observer = this.input.archiveObserver;
+    const retained = observer?.retained(input.applicationThreadId);
+    if (!observer || !retained) return;
+    // The host can adopt the earlier cut and continue delivering a newer turn.
+    // Unproven effects stay in the journal for a subsequent maintenance attempt.
+    try {
+      await this.#prepareArchive({
+        ...input, retainedOwner: retained, signal: AbortSignal.timeout(15_000),
+        markObserved() {}, markRetained() {}, markSettled: owner => observer.release(input.applicationThreadId, owner),
+        apply: cut => input.apply(cut, (snapshot, turns) => observer.settle(input.applicationThreadId, retained, snapshot, turns)),
+      }, true);
+    } catch (error) { this.report(error); }
+  }
+  async prepareArchive(input: Parameters<NonNullable<ClaudeRuntimeClient["prepareArchive"]>>[0]): Promise<"released" | "busy" | "offline"> {
+    return this.#prepareArchive(input, false);
+  }
+
+  async #prepareArchive(input: Parameters<NonNullable<ClaudeRuntimeClient["prepareArchive"]>>[0], recoveryOnly: boolean): Promise<"released" | "busy" | "offline"> {
+    this.#assertOpen();
+    if (this.#sessions.has(input.sessionId)) return "busy";
+    const signal = AbortSignal.any([input.signal, this.#controller.signal]);
+    let lease: SidecarRuntimeLease;
+    try { lease = await this.input.sidecarRuntime.acquireExisting(signal); }
+    catch (error) {
+      signal.throwIfAborted();
+      // No per-query evidence has been observed here. A previously recorded
+      // obligation makes even this offline result inconclusive to the caller.
+      if (error instanceof Error && error.message === "sidecar_service_absent" && !input.retainedOwner) return "released";
+      if (existingSidecarIsOffline(error)) return "offline";
+      throw error;
+    }
+    try {
+      signal.throwIfAborted();
+      lease.channel.assertReady();
+      if (!claudePersistentRuntimeOperations.every(operation => lease.channel.supportsOperation(operation))) throw new Error("claude_remote_runtime_unsupported");
+      const connection = new ClaudeSidecarRuntimeConnection(lease.channel, this.input.scope.backendInstanceId);
+      const runtimeId = await connection.lookup(this.#lastConfiguration ?? this.#capturedConfiguration(), lease.controllerEpoch, signal);
+      if (!runtimeId) {
+        if (input.retainedOwner) throw new Error("claude_archive_owner_changed");
+        return "released";
+      }
+      if (this.#retainedIdentity && (this.#retainedIdentity.runtimeId !== runtimeId ||
+          this.#retainedIdentity.serviceIncarnation !== lease.serviceIncarnation)) throw new Error("claude_archive_owner_changed");
+      const authority = { runtimeId, controllerEpoch: lease.controllerEpoch };
+      const binding = { sessionId: input.sessionId, cwd: input.cwd, applicationThreadId: input.applicationThreadId };
+      const previousOwner = input.retainedOwner && archiveOwnerSchema.parse(JSON.parse(input.retainedOwner));
+      if (previousOwner && (previousOwner[0] !== lease.serviceIncarnation || previousOwner[1] !== runtimeId)) throw new Error("claude_archive_owner_changed");
+      let observedOwner = input.retainedOwner;
+      let expectedStartupProbeUuid: string | undefined;
+      let expectedGeneration = previousOwner ? { startupProbeUuid: previousOwner[2], throughSequence: previousOwner[3] } : undefined;
+      const prepare = async (applied?: Extract<ClaudePersistentCommand, {action: "archive_prepare"}>["request"]["applied"]) => {
+        signal.throwIfAborted();
+        return claudeArchivePreparationSchema.parse(await connection.execute({ ...authority, action: "archive_prepare",
+          request: { ...binding, expectedStartupProbeUuid, expectedGeneration, ...(applied ? { applied } : {}) } }, { signal }));
+      };
+      let observation = await prepare();
+      while (observation.outcome !== "released" && observation.outcome !== "busy" && observation.outcome !== "absent") {
+        if (observation.outcome === "settled") {
+          if (!observedOwner || !expectedGeneration) throw new Error("claude_archive_settlement_unproven");
+          input.markSettled(observedOwner);
+          expectedGeneration = undefined;
+          expectedStartupProbeUuid = undefined;
+          observedOwner = undefined;
+          if (recoveryOnly) {
+            // The durable owner marker has been cleared. This existing query
+            // check also allows the host to forget the confirmed cut receipt.
+            await prepare();
+            return "released";
+          }
+          observation = await prepare();
+          continue;
+        }
+        if (observation.outcome === "found") {
+          observedOwner = JSON.stringify([lease.serviceIncarnation, runtimeId, observation.startupProbeUuid, observation.throughSequence]);
+          input.markRetained(observedOwner);
+          expectedGeneration = { startupProbeUuid: observation.startupProbeUuid, throughSequence: observation.throughSequence };
+          expectedStartupProbeUuid = undefined;
+          observation = await prepare();
+          continue;
+        }
+        if (observation.outcome === "idle") {
+          input.markObserved();
+          expectedStartupProbeUuid = observation.startupProbeUuid;
+          observation = await prepare();
+          continue;
+        }
+        const { cut } = observation;
+        if (!expectedGeneration || cut.startupProbeUuid !== expectedGeneration.startupProbeUuid ||
+            cut.throughSequence !== expectedGeneration.throughSequence) throw new Error("claude_archive_owner_changed");
+        const outstanding = new Set(observation.outstandingSequences);
+        if (cut.queryId !== binding.sessionId || !cut.reattached) throw new Error("claude_archive_cut_invalid");
+        await input.apply({
+          createSession: options => new PersistentSession(this, options, { cut, signal, outstanding }),
+          readHistory: () => readClaudeSessionHistory(async page => {
+            signal.throwIfAborted();
+            const result = await connection.execute({ ...authority, action: "archive_history",
+              request: { ...binding, startupProbeUuid: cut.startupProbeUuid, page } }, { signal });
+            return worker.claudeRuntimeSessionMessagesResponseSchema.parse(result) as ClaudeHistoryPage;
+          }, { maintenance: true }),
+        });
+        observation = await prepare({ startupProbeUuid: cut.startupProbeUuid, throughSequence: cut.throughSequence,
+          sequences: [...outstanding] });
+      }
+      if (observation.outcome === "busy") input.markObserved();
+      if (observedOwner && observation.outcome !== "busy") throw new Error("claude_archive_owner_changed");
+      return observation.outcome === "absent" ? "released" : observation.outcome;
+    } finally { lease.release(); }
   }
   async listSessions(options: Parameters<ClaudeRuntimeClient["listSessions"]>[0], environment: Readonly<Record<string, string | undefined>>) {
     assertEmptyEnvironment(environment);
@@ -346,8 +462,10 @@ class PersistentSession implements ClaudeRuntimeSession {
   readonly #settledPermissions = new Set<string>();
   readonly #compactions = new Map<string, CachedCompaction>();
   #observedThrough = 0;
+  #archiveThrough: number | undefined;
   readonly #sequenceWaiters = new Set<{ through: number; resolve(): void; reject(error: unknown): void }>();
-  constructor(readonly client: ClaudePersistentRuntimeClient, readonly options: ClaudeRuntimeSessionOptions) {}
+  constructor(readonly client: ClaudePersistentRuntimeClient, readonly options: ClaudeRuntimeSessionOptions,
+    readonly archive?: { readonly cut: z.infer<typeof claudePersistentAttachmentSchema>; readonly signal: AbortSignal; readonly outstanding: ReadonlySet<number> }) {}
   get lifetime() { return "persistent_service" as const; }
   get closed() { return this.#closed; }
   get started() { return this.#started; }
@@ -359,6 +477,33 @@ class PersistentSession implements ClaudeRuntimeSession {
   get startupProbeUuid() { return this.#startupProbeUuid; }
   get safeSkills() { return this.#safeSkills; }
   async flushMessages(): Promise<void> {
+    if (this.archive) {
+      if (this.archive.cut.failureCode === "claude_persistent_event_capacity_exceeded") throw new Error("claude_archive_output_incomplete");
+      // Apply the entire captured cut in provider order. The caller still has
+      // to commit the application projection before the host accepts any ACK.
+      for (const event of this.archive.cut.events) {
+        this.archive.signal.throwIfAborted();
+        if (this.#closed) throw new Error("claude_archive_delivery_closed");
+        if (event.sessionId !== this.options.sessionId || event.sequence > this.archive.cut.throughSequence) throw new Error("claude_archive_cut_invalid");
+        const payload = event.payload;
+        if (payload.kind === "message") {
+          const applied = await this.options.onMessage(payload.message as SDKMessage, {
+            archiveOwnerEvent: this.archive.outstanding.has(event.sequence),
+            completionProvenance: "recovered", consumedTurnRootUuid: payload.consumedTurnRootUuid,
+          });
+          if (applied === false || this.#closed) throw new Error("claude_archive_event_unapplied");
+        } else if (payload.kind === "permission") {
+          throw new Error("claude_archive_permission_pending");
+        } else if (payload.kind === "permission_delivered" || payload.kind === "permission_failed") {
+          const identity = { requestId: payload.requestId, toolUseID: payload.toolUseID };
+          if (payload.kind === "permission_delivered") await this.options.onPermissionResponseDelivered?.(identity);
+          else await this.options.onPermissionResponseDeliveryFailed?.({ ...identity, error: new Error("claude_permission_response_not_adopted") });
+        } else if (payload.kind === "failed" && payload.code !== this.archive.cut.failureCode) {
+          throw new Error("claude_archive_failure_unproven");
+        }
+      }
+      return;
+    }
     await this.#delivery;
     await Promise.all([...this.#acknowledgements]);
     if (this.#deliveryFailure !== undefined) throw this.#deliveryFailure;
@@ -366,6 +511,17 @@ class PersistentSession implements ClaudeRuntimeSession {
   async start() {
     this.#assertOpen();
     this.#started = true;
+    if (this.archive) {
+      this.archive.signal.throwIfAborted();
+      const { cut } = this.archive;
+      this.#reattached = true;
+      this.#initialization = cut.initialization as ClaudeSdkSessionInitialization;
+      this.#startupProbeUuid = cut.startupProbeUuid;
+      this.#backgroundActivity = cut.backgroundActivity;
+      this.#pendingBackgroundTaskIds = cut.pendingBackgroundTaskIds;
+      this.#confirmedEffort = cut.confirmedEffort;
+      return this.#initialization;
+    }
     return this.attach(await this.client.attachment());
   }
   attach(attachment: Attachment): Promise<ClaudeSdkSessionInitialization> {
@@ -415,11 +571,11 @@ class PersistentSession implements ClaudeRuntimeSession {
       }, { cause: error });
     }
     const response = claudePersistentAttachmentSchema.parse(opened);
+    if (response.queryId !== options.sessionId) throw new Error("claude_runtime_query_identity_mismatch");
     if (this.#closed) {
-      await this.client.execute({ action: this.#evicted ? "evict" : "detach", request: { sessionId: options.sessionId } }, attachment).catch(() => undefined);
+      await this.client.execute({ action: this.#evicted ? "evict" : "detach", request: { sessionId: options.sessionId, startupProbeUuid: response.startupProbeUuid } }, attachment).catch(() => undefined);
       throw new Error("claude_persistent_session_closed");
     }
-    if (response.queryId !== options.sessionId) throw new Error("claude_runtime_query_identity_mismatch");
     if (this.client.current() !== attachment) throw new Error("claude_persistent_attachment_lost");
     verifyClaudeRuntimeVersion(response.initialization.cliRelease, options);
     if (this.#initialization && !response.reattached) {
@@ -445,6 +601,13 @@ class PersistentSession implements ClaudeRuntimeSession {
     this.#initialization = response.initialization as ClaudeSdkSessionInitialization;
     const previousOwner = this.#startupProbeUuid;
     this.#startupProbeUuid = response.startupProbeUuid;
+    const retained = this.options.applicationThreadId && this.client.input.archiveObserver?.retained(this.options.applicationThreadId);
+    this.#archiveThrough = undefined;
+    if (retained) {
+      const [incarnation, runtimeId, generation, through] = archiveOwnerSchema.parse(JSON.parse(retained));
+      if (incarnation === attachment.lease.serviceIncarnation && runtimeId === attachment.runtimeId &&
+          generation === response.startupProbeUuid) this.#archiveThrough = through;
+    }
     if (previousOwner !== undefined && previousOwner !== this.#startupProbeUuid) {
       this.options.onControlAuthorityChanged?.();
     }
@@ -660,6 +823,7 @@ class PersistentSession implements ClaudeRuntimeSession {
     this.#permissionSelection = permissionMode;
   }
   async #execute(command: Command) {
+    if (this.archive) throw new Error("claude_archive_read_only");
     this.#assertOpen();
     const attachment = await this.client.attachment();
     await this.attach(attachment);
@@ -669,14 +833,15 @@ class PersistentSession implements ClaudeRuntimeSession {
   async close(options?: { readonly reason: "evicted" }) {
     if (this.#closed) return;
     this.#closed = true;
+    if (this.archive) return;
     for (const waiter of this.#sequenceWaiters) waiter.reject(new ClaudeRuntimeCompactError("claude_compact_attachment_closed", true));
     this.#evicted = options?.reason === "evicted";
     if (this.#evicted) await this.#opening?.promise.catch(() => undefined);
     for (const controller of this.#permissionControllers.values()) controller.abort();
     const attachment = this.client.current();
     try {
-      if (attachment && this.#started && attachment.runtimeId === this.#runtimeIdentity) {
-        await this.client.execute({ action: options?.reason === "evicted" ? "evict" : "detach", request: { sessionId: this.options.sessionId } }, attachment);
+      if (attachment && this.#started && this.#startupProbeUuid && attachment.runtimeId === this.#runtimeIdentity) {
+        await this.client.execute({ action: options?.reason === "evicted" ? "evict" : "detach", request: { sessionId: this.options.sessionId, startupProbeUuid: this.#startupProbeUuid } }, attachment);
       }
     } catch (error) {
       if (!this.#evicted) throw error;
@@ -708,8 +873,9 @@ class PersistentSession implements ClaudeRuntimeSession {
       return;
     }
     const receivedAttachment = this.#attached;
+    const receivedOwner = this.#startupProbeUuid;
     this.#delivery = this.#delivery.then(async () => {
-      if (this.#closed) return;
+      if (this.#closed || receivedOwner !== this.#startupProbeUuid) return;
       const payload = event.payload;
       if (payload.kind === "message") {
         const message = payload.message as SDKMessage;
@@ -727,7 +893,7 @@ class PersistentSession implements ClaudeRuntimeSession {
         // accounting write retains only this original in the existing host
         // journal; later events and provider work continue normally. Existing
         // reattachment replays the unacknowledged evidence.
-        if (committed === false) return;
+        if (committed === false || this.#closed || receivedOwner !== this.#startupProbeUuid) return;
       } else if (payload.kind === "failed") {
         this.#deliveryFailure = retainedQueryFailure(payload.code);
         this.#failure(this.#deliveryFailure);
@@ -744,7 +910,7 @@ class PersistentSession implements ClaudeRuntimeSession {
         this.#permissionControllers.get(payload.requestId)?.abort();
       }
       this.#rememberDelivered(event.sequence);
-      await this.#pipelineAck(event.sequence);
+      await this.#pipelineAck(event.sequence, receivedOwner);
     }).catch(error => {
       this.#deliveryFailure = error;
       this.#failure(error);
@@ -794,9 +960,9 @@ class PersistentSession implements ClaudeRuntimeSession {
   }
   /** Apply events strictly in order without one sidecar round trip each. ACKs
    * name exact sequences, so their completion order does not matter. */
-  async #pipelineAck(sequence: number): Promise<void> {
+  async #pipelineAck(sequence: number, owner: string | undefined): Promise<void> {
     await this.client.acquireAcknowledgement();
-    const acknowledgement: Promise<void> = this.#ack(sequence)
+    const acknowledgement: Promise<void> = this.#ack(sequence, owner)
       .catch(error => this.client.report(error))
       .finally(() => {
         this.client.releaseAcknowledgement();
@@ -809,10 +975,14 @@ class PersistentSession implements ClaudeRuntimeSession {
     // later successful deliveries. The service bounds outstanding journal entries.
     this.#delivered.add(sequence);
   }
-  async #ack(sequence: number) {
+  async #ack(sequence: number, owner = this.#startupProbeUuid) {
     const attachment = this.client.current();
-    if (!attachment) return;
-    await this.client.execute({ action: "acknowledge", request: { sessionId: this.options.sessionId, sequence } }, attachment);
+    if (!attachment || !owner || owner !== this.#startupProbeUuid) return;
+    // A pinned owner whose maintenance read failed can still be viewed and
+    // accept new prompts. The original cut remains unacknowledged for recovery.
+    if (this.#archiveThrough !== undefined && sequence <= this.#archiveThrough) return;
+    await this.client.execute({ action: "acknowledge", request: { sessionId: this.options.sessionId, startupProbeUuid: owner, sequence } }, attachment);
+    if (this.#startupProbeUuid !== owner) return;
     this.#delivered.delete(sequence);
     this.#acknowledged.add(sequence);
     // Same-session attachments request only unacknowledged originals. Keep a
@@ -820,7 +990,7 @@ class PersistentSession implements ClaudeRuntimeSession {
     if (this.#acknowledged.size > 8192) this.#acknowledged.delete(this.#acknowledged.values().next().value!);
   }
   #assertOpen(): void { if (this.#closed) throw new Error("claude_persistent_session_closed"); }
-  #assertReady(): void { this.#assertOpen(); if (!this.#initialization) throw new Error("claude_runtime_session_not_ready"); }
+  #assertReady(): void { this.#assertOpen(); if (this.archive) throw new Error("claude_archive_read_only"); if (!this.#initialization) throw new Error("claude_runtime_session_not_ready"); }
   #failure(error: unknown): void { try { this.options.onFailure?.(error); } catch (observerError) { this.client.report(observerError); } this.client.report(error); }
 }
 

@@ -24,11 +24,13 @@ const impact: ThreadForceResetImpact = {
     { kind: "conversation_operation", count: 2 },
     { kind: "conversation_runtime", count: 1 },
     { kind: "fork_origin", count: 1 },
+    { kind: "archive_recovery", count: 1 },
   ],
   affectedThreads: [
     {
       threadId: "11111111-1111-4111-8111-111111111111",
       title: "Stuck fork",
+      archiveRecovery: "retained_output",
     },
     {
       threadId: "22222222-2222-4222-8222-222222222222",
@@ -40,6 +42,10 @@ const impact: ThreadForceResetImpact = {
     },
   ],
   warnings: [
+    {
+      code: "unapplied_archive_output_may_be_lost",
+      message: "Unsaved agent output may be permanently lost.",
+    },
     {
       code: "running_work_will_stop",
       message: "Force reset replaces the loaded runtimes listed below, which stops their running turns and background work.",
@@ -78,12 +84,14 @@ describe("ForceResetDialog", () => {
     expect(within(dialog).getByText("2 conversation operations")).toBeVisible();
     expect(within(dialog).getByText("1 conversation runtime")).toBeVisible();
     expect(within(dialog).getByText("1 fork operation")).toBeVisible();
+    expect(within(dialog).getByText("1 archive recovery record")).toBeVisible();
+    expect(within(dialog).getByText("Unsaved agent output may be permanently lost.")).toBeVisible();
     expect(within(dialog).getByText("Affected threads (2)")).toBeVisible();
     const threads = within(dialog).getAllByRole("listitem").filter(
       (item) => item.closest("ul")?.classList.contains("force-reset-threads"),
     );
     expect(threads.map((item) => item.textContent)).toEqual([
-      "Stuck fork",
+      "Stuck forkDiscards recovery of retained agent output or operation results.",
       "Its unfinished childRuntime running, 2 background tasks; resetting stops this work.",
     ]);
     expect(dialog).toHaveTextContent("stops their running turns and background work");

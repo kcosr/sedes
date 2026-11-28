@@ -161,9 +161,9 @@ package bundles Claude Code 2.1.319; Sedes never runs it, removes it at
 install, and always uses the operator-installed executable.
 
 Upgrade local worker artifacts and persistent sidecars with this server:
-Claude requires `claude_runtime@4` and `claude_persistent_runtime@7` for its
+Claude requires `claude_runtime@4` and `claude_persistent_runtime@8` for its
 worker and remote operations, including the account-quota read. Client
-protocol 187 requires a matching browser or packaged-client build.
+protocol 188 requires a matching browser or packaged-client build.
 
 For the most predictable deployment, pin the reviewed baseline. Before adopting
 a newer admitted runtime, deliberately run the opt-in live gate described
@@ -219,9 +219,9 @@ A remote query that main no longer attends does not stay resident
 indefinitely. A query that failed is retired once its output is delivered,
 and reopening the thread starts a fresh one instead of requiring a backend
 restart. A query detached for 30 minutes with nothing outstanding is retired,
-and it resumes when the thread is next used. Archiving a thread retires its
-remote query, and the archive is refused while that query still has running
-work. The sidecar holds at most 32 Claude sessions, fork launches included.
+and it resumes when the thread is next used. Archive can recover retained output
+from the existing remote query and retire it directly from the thread list.
+While the query has running work, its archive waits for a later attempt. The sidecar holds at most 32 Claude sessions, fork launches included.
 Beyond that, opening a thread or forking fails with a message naming the limit
 and asking you to archive or close idle Claude threads in that environment.
 These rules require sidecar runtime protocol 18.
@@ -593,7 +593,7 @@ an estimate against Claude's effective auto-compaction window. Read failures or
 query/model/compaction changes clear old estimates without interrupting work.
 Rebuild local workers and upgrade remote Claude sidecars with this server:
 the worker requires `query.context_usage`, and the persistent runtime requires
-`claude_persistent_runtime@7`. Context telemetry itself needs no browser
+`claude_persistent_runtime@8`. Context telemetry itself needs no browser
 protocol or database migration; follow the current upgrade requirements above.
 
 ## Account quota

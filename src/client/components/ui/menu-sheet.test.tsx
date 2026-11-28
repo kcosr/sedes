@@ -297,6 +297,22 @@ describe("context menu presented as a sheet", () => {
     expect(screen.getByRole("dialog", { name: "MCP events" })).toBeVisible();
   });
 
+  it("suppresses a release retargeted to a sheet action, then accepts a new tap on it", () => {
+    vi.useFakeTimers();
+    const onOpenChange = vi.fn();
+    render(<RowMenu onOpenChange={onOpenChange} />);
+    fireEvent.pointerDown(screen.getByText("MCP events row"), { pointerType: "touch", clientX: 80, clientY: 100 });
+    act(() => vi.advanceTimersByTime(800));
+    const pin = screen.getByRole("menuitem", { name: "Pin" });
+    fireEvent.pointerUp(pin, { pointerType: "touch" });
+    expect(fireEvent.click(pin, { detail: 1 })).toBe(false);
+    expect(onOpenChange.mock.calls).toEqual([[true]]);
+    fireEvent.pointerDown(pin, { pointerType: "touch" });
+    fireEvent.pointerUp(pin, { pointerType: "touch" });
+    fireEvent.click(pin, { detail: 1 });
+    expect(onOpenChange.mock.calls).toEqual([[true], [false]]);
+  });
+
   it("swallows the release click after Android's contextmenu during a hold", () => {
     const onRowClick = vi.fn();
     render(<LinkRowMenu onRowClick={onRowClick} />);

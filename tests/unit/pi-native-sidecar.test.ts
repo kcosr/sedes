@@ -216,12 +216,12 @@ setInterval(() => {}, 1000);
     expect(observed).toHaveBeenLastCalledWith(undefined);
   });
 
-  it("requires native capability 3 before sending provider operations", async () => {
+  it("requires native capability 4 before sending provider operations", async () => {
     const f = await fixture(), connected = await attachment(f);
-    const supported = vi.spyOn(connected.channel, "supportsOperation").mockImplementation(operation => operation.majorVersion <= 2);
+    const supported = vi.spyOn(connected.channel, "supportsOperation").mockImplementation(operation => operation.majorVersion <= 3);
     const { port } = proxy(connected.lease);
     await expect(port.attach(identity)).rejects.toThrow("pi_native_remote_runtime_unsupported");
-    expect(supported).toHaveBeenCalledWith(expect.objectContaining({ capabilityId: "pi_native_runtime", majorVersion: 3 }));
+    expect(supported).toHaveBeenCalledWith(expect.objectContaining({ capabilityId: "pi_native_runtime", majorVersion: 4 }));
     expect(f.createHost).not.toHaveBeenCalled();
   });
 
@@ -575,6 +575,25 @@ setInterval(() => {}, 1000);
     expect(runtime.acquireExisting).toHaveBeenCalledTimes(1);
     expect(f.createHost).not.toHaveBeenCalled();
     expect(f.launches).not.toHaveBeenCalled();
+  });
+
+  it("requires exact native ownership before drain or retirement across a clean generation replacement", async () => {
+    const f = await fixture(), first = await attachment(f), { port } = proxy(first.lease);
+    const original = await port.attach(identity);
+    const target = { ...identity, expectedOwner: { handleId: original.handleId, generation: original.generation } };
+    await port.release({ handleId: original.handleId });
+    expect(["absent", "retired"]).toContain(await port.retireSession(target));
+    expect(await port.retireSession(target)).toBe("absent");
+    await expect(port.retireSession({ ...target, expectedOwner: { ...target.expectedOwner, generation: "unknown" } }))
+      .rejects.toThrow("pi_native_session_retirement_unconfirmed");
+    await expect(port.retireSession({ ...target, sessionFile: "/wrong/file" })).rejects.toThrow("pi_native_session_retirement_unconfirmed");
+
+    const replacement = await port.attach(identity);
+    expect(replacement.handleId).not.toBe(original.handleId);
+    await expect(port.retireSession(target)).rejects.toThrow("pi_native_session_identity_mismatch");
+    await expect(port.attachForDrain(target)).rejects.toThrow("pi_native_session_identity_mismatch");
+    expect((await port.inspect()).retainedSessions).toMatchObject([{ handleId: replacement.handleId, generation: replacement.generation }]);
+    expect(f.close).toHaveBeenCalledTimes(1);
   });
 
   it("awaits proved native residency cleanup over the control lane", async () => {

@@ -1,11 +1,12 @@
 import { z } from "zod";
+import { withAbort } from "../../../runtime/with-abort.js";
 import { isSidecarRevisionChanged, type SidecarRuntimeLease, type SidecarRuntimeProvider } from "../../../sidecar/runtime-channel.js";
 import { AntigravityError, type AntigravityPort, type AntigravityRuntimeConfiguration } from "../port.js";
 import { antigravityRuntimeOperations, antigravityHostCommandSchema, antigravityHostCommandLane,
   antigravityHostResponseSchema, antigravityExecuteOperation, antigravityControlOperation,
   antigravitySetupSchema, antigravityIdentitySchema, antigravityListSchema, antigravityHistorySchema,
   antigravityAttachmentSchema, antigravityOutcomeSchema, antigravityObservationSchema,
-  antigravityInspectionSchema, antigravityRetirementSchema, antigravitySuccessSchema, type AntigravityHostCommandInput,
+  antigravityArchiveProbeSchema, antigravityArchiveStateSchema, antigravityRetiredArchiveSchema, antigravityInspectionSchema, antigravityRetirementSchema, antigravitySuccessSchema, type AntigravityHostCommandInput,
 } from "./wire.js";
 type Attachment = { readonly lease: SidecarRuntimeLease; readonly runtimeId: string; retained: boolean; released: boolean };
 const runtimeSchema = z.strictObject({ runtimeId: z.string().uuid() });
@@ -31,7 +32,7 @@ export class AntigravityRemotePort implements AntigravityPort {
       if (attachment) this.#release(attachment);
       return result;
     }).finally(() => { this.#opening = undefined; }) };
-    const result = await opening.promise; signal?.throwIfAborted();
+    const result = await (signal ? withAbort(opening.promise, signal) : opening.promise); signal?.throwIfAborted();
     // Join an in-flight recovery lookup, then acquire normal authority once.
     // This also covers the interval after #open publishes its attachment but
     // before its promise settles. A normal open may deliberately return a
@@ -94,8 +95,24 @@ export class AntigravityRemotePort implements AntigravityPort {
   async attach(input: Parameters<AntigravityPort["attach"]>[0], signal?: AbortSignal) {
     const result = antigravityAttachmentSchema.parse(await this.#invoke("attach", input, signal)); this.#handles.add(result.handleId); return result;
   }
+  async probeArchiveOwner(input: Parameters<AntigravityPort["probeArchiveOwner"]>[0], signal?: AbortSignal) {
+    try { return antigravityArchiveProbeSchema.nullable().parse(await this.#invoke("probe_archive_owner", input, signal, true)); }
+    catch (error) { if (error instanceof AntigravityError && error.code === "antigravity_retained_runtime_missing") return null; throw error; }
+  }
+  async releaseArchiveClaim(input: Parameters<AntigravityPort["releaseArchiveClaim"]>[0], signal?: AbortSignal) {
+    antigravitySuccessSchema.parse(await this.#invoke("release_archive_claim", input, signal, true));
+  }
+  async readRetiredArchive(input: Parameters<AntigravityPort["readRetiredArchive"]>[0], signal?: AbortSignal) {
+    return antigravityRetiredArchiveSchema.nullable().parse(await this.#invoke("read_retired_archive", input, signal, true));
+  }
+  async confirmArchiveCut(input: Parameters<AntigravityPort["confirmArchiveCut"]>[0], signal?: AbortSignal) {
+    return z.boolean().parse(await this.#invoke("confirm_archive_cut", input, signal, true));
+  }
+  async readArchiveState(input: Parameters<AntigravityPort["readArchiveState"]>[0], signal?: AbortSignal) {
+    return antigravityArchiveStateSchema.parse(await this.#invoke("read_archive_state", input, signal, true));
+  }
   async attachExisting(input: Parameters<AntigravityPort["attachExisting"]>[0], signal?: AbortSignal) {
-    try { const result = antigravityAttachmentSchema.nullable().parse(await this.#invoke("attach_existing", input, signal, true)); if (result) this.#handles.add(result.handleId); return result; }
+    try { const result = antigravityAttachmentSchema.nullable().parse(await this.#invoke("attach_existing", input, signal, true)); if (result && !input.expected) this.#handles.add(result.handleId); return result; }
     catch (error) { if (error instanceof AntigravityError && error.code === "antigravity_retained_runtime_missing") return null; throw error; }
   }
   async request(input: Parameters<AntigravityPort["request"]>[0], signal?: AbortSignal) {
@@ -157,7 +174,7 @@ async function call(lease: SidecarRuntimeLease, input: AntigravityHostCommandInp
     };
     // Observation cancellation ends the caller wait after the admitted bounded
     // exchange drains; aborting an in-flight write would destroy a shared carrier.
-    const observation = ["lookup_retained", "observe", "outcome", "acknowledge", "acknowledge_operation", "inspect"].includes(command.action);
+    const observation = ["lookup_retained", "probe_archive_owner", "read_archive_state", "read_retired_archive", "observe", "outcome", "acknowledge", "acknowledge_operation", "inspect"].includes(command.action);
     const response = observation && signal ? await drainObservation(signal, invoke) : await invoke(signal);
     if (response.status === "failed") throw new AntigravityError(response.failure.code, response.failure.delivery);
     return response.value;
