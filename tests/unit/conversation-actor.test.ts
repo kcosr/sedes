@@ -1344,7 +1344,7 @@ describe("ConversationActorManager", () => {
     current.handle.close.mockImplementation(async () => { await hostStopped; await originalClose(); });
     const stopOwnedResources = vi.fn(async () => {
       expect(current.handle.close).not.toHaveBeenCalled();
-      await expect(runtime.actor.usage()).rejects.toThrow("conversation_actor_operation_unavailable");
+      await expect(runtime.actor.usage()).rejects.toMatchObject({ backendCode: "conversation_actor_operation_unavailable", crossedSubmissionBoundary: false });
       releaseHost();
     });
     let finish!: () => void;
@@ -1615,12 +1615,13 @@ describe("ConversationActorManager", () => {
     current.handle.usage.mockImplementationOnce(async () => { await pendingRead; return {}; });
     const active = runtime.actor.usage();
     await vi.waitFor(() => expect(current.handle.usage).toHaveBeenCalledOnce());
-    const queued = runtime.actor.usage();
-    const rejected = expect(queued).rejects.toThrow("conversation_actor_operation_unavailable");
+    const queued = runtime.actor.perform({ applicationOperationId: "initial-title", action: "rename", title: "Initial title" });
+    const rejected = expect(queued).rejects.toMatchObject({ backendCode: "conversation_actor_operation_unavailable", crossedSubmissionBoundary: false });
     await current.coordinator.runWithRuntimesStopped(scope, [binding.applicationThreadId], async () => { releaseRead(); }, async () => undefined);
     await active;
     await rejected;
     expect(current.handle.usage).toHaveBeenCalledOnce();
+    expect(current.handle.perform).not.toHaveBeenCalled();
     runtime.release();
     await current.coordinator.close();
     await current.manager.close();

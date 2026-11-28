@@ -10,7 +10,7 @@ import { CodexRpcRemoteError } from "./rpc/errors.js";
 export async function releaseCodexThreadResidency(
   client: Pick<CodexSharedClientFacade, "requestWithReceipt">, lifecycle: CodexSharedClientFacade["lifecycleSnapshot"],
   threadId: string, workspace: string, archive?: {
-    signal: AbortSignal; markObserved(): void; beforeUnsubscribe?(): void; onUnsubscribe?(generation: number): void;
+    signal: AbortSignal; inspectionOnly?: boolean; markObserved(): void; beforeUnsubscribe?(): void; onUnsubscribe?(generation: number): void;
   },
 ): Promise<"released" | "busy"> {
   const options = { timeoutMilliseconds: CODEX_HISTORY_TIMEOUT_MILLISECONDS, signal: archive?.signal };
@@ -83,7 +83,7 @@ export async function releaseCodexThreadResidency(
     assertGeneration(goal.generation);
     if (goal.result.goal && goal.result.goal.threadId !== threadId) throw bindingMismatch();
     if (goal.result.goal?.status === "active") return "busy";
-    if (!materialized) return "released";
+    if (!materialized || archive?.inspectionOnly) return "released";
     archive?.signal.throwIfAborted();
     archive?.beforeUnsubscribe?.();
     const unsubscribed = await client.requestWithReceipt(

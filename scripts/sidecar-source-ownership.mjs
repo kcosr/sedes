@@ -155,6 +155,7 @@ const ALLOWED_REPOSITORY_SOURCES = new Set([
   "src/server/backends/codex/codex-thread-binding.ts",
   "src/server/backends/codex/codex-read-errors.ts",
   "src/server/backends/codex/codex-thread-residency.ts",
+  "src/server/backends/codex/runtime/codex-external-archive-inspection.ts",
   "src/server/backends/codex/codex-history-timeouts.ts",
   "src/server/backends/codex/codex-native-archive.ts",
   "src/server/backends/codex/codex-c1-protocol.ts",

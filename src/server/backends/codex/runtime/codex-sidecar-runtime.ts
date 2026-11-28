@@ -15,6 +15,7 @@ import type { CodexRpcRequestReceipt } from "../rpc/codex-rpc-client.js";
 import { CodexRpcDeliveryError, CodexRpcProtocolError, CodexRpcRemoteError } from "../rpc/errors.js";
 import { codexRuntimeAuthoritySchema, codexRuntimeCommandSchema, codexRuntimeEventSchema, codexRuntimeOutcomeSchema, codexRuntimeOutcomeReferencesSchema, codexRuntimeSnapshotSchema, type CodexRuntimeCommand } from "./codex-runtime-wire.js";
 import type { CodexRuntimeAuthority, CodexRuntimeConnection, CodexRuntimeEvent, CodexRuntimeOutcome } from "./codex-runtime-protocol.js";
+import { inspectExternalCodexThread } from "./codex-external-archive-inspection.js";
 import type { CodexRuntimeConfiguration, CodexRuntimeHostRegistry } from "./codex-runtime-host-registry.js";
 import { CodexRuntimeEventOrder } from "./codex-runtime-event-order.js";
 import { attachmentDiagnostic, type AttachmentDiagnosticFields } from "../../../diagnostics/attachment-diagnostics.js";
@@ -53,6 +54,12 @@ export const codexRuntimePrepareArchiveOperation = {
   ...capability, operation: "runtime.prepare_thread_archive", requestSchema: archiveInputSchema,
   responseSchema: archiveResultSchema, lane: "operation", maximumDeadlineMilliseconds: 120_000,
 } satisfies SidecarOperationDefinition<z.infer<typeof archiveInputSchema>, z.infer<typeof archiveResultSchema>>;
+const externalArchiveInput = z.strictObject({ configuration: configurationSchema, connectionProfileId: id, threadId: id,
+  workspace: z.string().min(1).max(16384) });
+export const codexRuntimeInspectExternalArchiveOperation = {
+  ...capability, operation: "runtime.inspect_external_archive", requestSchema: externalArchiveInput,
+  responseSchema: z.enum(["busy", "inconclusive", "released", "offline"]), lane: "operation", maximumDeadlineMilliseconds: 120_000,
+} satisfies SidecarOperationDefinition<z.infer<typeof externalArchiveInput>, "busy" | "inconclusive" | "released" | "offline">;
 export const codexRuntimeExecuteOperation = {
   ...capability, operation: "runtime.execute", requestSchema: sidecarRuntimeBodySchema,
   responseSchema: sidecarRuntimeBodySchema, lane: "operation", maximumDeadlineMilliseconds: 600_000,
@@ -176,10 +183,41 @@ export function registerCodexRuntimeHost(input: ProviderPolicyAttachment & {
     };
     if (blocked()) return "busy";
     if (runtime.supervisor.snapshot().cleanupUncertainty) return "inconclusive";
+    const parked = runtime.supervisor.snapshot();
+    if (parked.state === "idle" && runtime.configuration.connection.ownership === "external") {
+      const assertParked = () => {
+        assertCanRelease();
+        const current = runtime.supervisor.snapshot();
+        if (current.state !== "idle" || current.generation !== parked.generation || !host.canReleaseParkedProcess())
+          throw new Error("codex_runtime_archive_evidence_changed");
+      };
+      assertParked();
+      const outcome = await inspectExternalCodexThread(authority.scope, runtime.environmentChannel, runtime.configuration.connection,
+        { threadId, workspace }, signal, assertParked);
+      assertParked();
+      return outcome === "offline" ? "inconclusive" : outcome;
+    }
     const outcome = input.hosts.canReplaceParkedLaunch(runtime) ? "released" :
       await host.prepareThreadArchive(threadId, workspace, signal, assertCanRelease);
     assertCanRelease();
     return outcome;
+  });
+  input.registry.register(codexRuntimeInspectExternalArchiveOperation, async ({ configuration, connectionProfileId, threadId, workspace }, { signal }) => {
+    const target = configuration.connections.find(connection => connection.enabled && connection.id === connectionProfileId);
+    if (!target || configuration.connection.ownership !== "external") throw new SidecarOperationError("backend_policy_denied");
+    const admission = launchAdmission(input, "codex_app_server", configuration.instance.id,
+      runtimeLaunchDigest.codex_app_server(configuration, configuration.startupEnvironmentVariables), configuration.connections);
+    let generation: number | undefined;
+    const assertPolicy = () => {
+      if (detached) throw new Error("codex_runtime_attachment_detached");
+      admission.assertCurrent();
+      const grant = input.getExecutionPolicy().backends.find(backend => backend.id === configuration.instance.id && backend.kind === "codex_app_server");
+      const current = grant?.targets.find(item => item.id === target.templateId);
+      if (!current || (generation !== undefined && current.generation !== generation)) throw new SidecarOperationError("backend_policy_denied");
+      generation = current.generation;
+    };
+    assertPolicy();
+    return input.hosts.inspectUnregisteredExternalArchive(configuration, { threadId, workspace }, input.controllerEpoch, signal, assertPolicy);
   });
   input.registry.register(codexRuntimeExecuteOperation, async body => {
     if (detached) throw new Error("codex_runtime_attachment_detached");
@@ -395,6 +433,9 @@ export class CodexSidecarRuntimeConnection implements CodexRuntimeConnection {
   }
   async prepareThreadArchive(authority: CodexRuntimeAuthority, input: { applicationThreadId: string; threadId: string; workspace: string; targetId: string }, signal: AbortSignal) {
     return this.channel.call(codexRuntimePrepareArchiveOperation, { authority, ...input }, { signal });
+  }
+  async inspectUnregisteredExternalArchive(configuration: CodexRuntimeConfiguration, connectionProfileId: string, threadId: string, workspace: string, signal: AbortSignal) {
+    return this.channel.call(codexRuntimeInspectExternalArchiveOperation, { configuration, connectionProfileId, threadId, workspace }, { signal });
   }
   async inspect(authority: CodexRuntimeAuthority) {
     return z.strictObject({ state: z.enum(["idle", "active", "unknown"]), startupEnvironmentFingerprint: z.string().regex(/^[a-f0-9]{64}$/), incarnation: id, revision: z.string().min(1).max(160), blockers: z.array(sidecarUpgradeBlockerSchema).max(7) }).parse(await this.#execute({ action: "inspect", authority }));

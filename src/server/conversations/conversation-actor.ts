@@ -1544,14 +1544,17 @@ export class ConversationActor {
 
   #enqueue<T>(operation: () => T | Promise<T>): Promise<T> {
     if (!this.#started || this.#closing || this.#closed) {
-      return Promise.reject(
-        new Error("conversation_actor_operation_unavailable"),
-      );
+      return Promise.reject(this.#operationUnavailable());
     }
     return this.#mailbox.enqueue(() => {
-      if (this.#explicitStopPending) throw new Error("conversation_actor_operation_unavailable");
+      if (this.#explicitStopPending) throw this.#operationUnavailable();
       return operation();
     });
+  }
+
+  #operationUnavailable(): BackendError {
+    return new BackendError({ category: "unavailable", retryable: true, crossedSubmissionBoundary: false,
+      backendCode: "conversation_actor_operation_unavailable", safeMessage: "The conversation stopped before the operation was sent." });
   }
 
   async #establishProjection(externalSignal?: AbortSignal): Promise<void> {

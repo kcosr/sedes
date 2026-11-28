@@ -112,13 +112,26 @@ export class CodexRemoteRuntimeSupervisor {
         try { lease = await this.input.provider.acquireExisting(signal); }
         catch (error) {
           signal.throwIfAborted();
-          if (existingSidecarIsOffline(error)) return { outcome: "offline" };
+          if (existingSidecarIsOffline(error)) return { outcome: this.#lookupConfiguration.connection.ownership === "external" ? "inconclusive" : "offline" };
           throw error;
         }
         const connection = new CodexSidecarRuntimeConnection(lease.channel);
         try {
           const runtimeId = await connection.lookup(this.#lookupConfiguration, signal);
-          if (!runtimeId) return { outcome: "offline" };
+          if (!runtimeId) {
+            const previous = this.#retainedIdentity;
+            if (previous && this.input.receipts.pending({ scope: this.#scope, runtimeId: previous.runtimeId })
+              .some(receipt => receipt.correlation.applicationThreadId === applicationThreadId)) {
+              markObserved();
+              return { outcome: "inconclusive" };
+            }
+            if (this.#lookupConfiguration.connection.ownership === "owned") return { outcome: "offline" };
+            const outcome = await connection.inspectUnregisteredExternalArchive(this.#lookupConfiguration, connectionProfileId, threadId, workspace, signal)
+              .catch(error => { markObserved(); throw error; });
+            signal.throwIfAborted();
+            if (outcome === "busy" || outcome === "inconclusive") markObserved();
+            return { outcome };
+          }
           markObserved();
           const previous = this.#retainedIdentity;
           if (previous && (runtimeId !== previous.runtimeId || lease.serviceIncarnation !== previous.serviceIncarnation)) {

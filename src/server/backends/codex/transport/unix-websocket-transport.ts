@@ -1,3 +1,4 @@
+import { EnvironmentEndpointUnreachableError } from "../../../execution/environment-channel.js";
 import type { IncomingMessage } from "node:http";
 import {
   sameEnvironmentChannelScope,
@@ -216,6 +217,9 @@ function isEnvironmentIdentityFailure(error: unknown): boolean {
 }
 
 function classifyEnvironmentOpenFailure(error: unknown): Error {
+  if (error instanceof EnvironmentEndpointUnreachableError) {
+    return new FramedTransportOpenError("codex_unix_websocket_unavailable", false, { cause: error });
+  }
   if (isEnvironmentReplacementRace(error)) {
     return new FramedTransportOpenError(
       "codex_unix_websocket_unavailable",

@@ -1,3 +1,4 @@
+import { EnvironmentEndpointUnreachableError } from "../../../execution/environment-channel.js";
 import type { IncomingMessage } from "node:http";
 import {
   isValidEnvironmentAssuredTcpStreamIdentity,
@@ -339,6 +340,9 @@ function hasRetryableConnectCause(
 }
 
 function classifyEnvironmentOpenFailure(error: unknown): Error {
+  if (error instanceof EnvironmentEndpointUnreachableError) {
+    return new FramedTransportOpenError("codex_tcp_websocket_unavailable", false, { cause: error });
+  }
   const code = error instanceof Error ? error.message : "";
   if (
     code === "environment_assured_tcp_stream_unavailable" ||

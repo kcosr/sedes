@@ -25,6 +25,7 @@ import type {
 } from "../managed-workers/artifact.js";
 import { launchLocalManagedWorker } from "../managed-workers/local-launcher.js";
 import {
+  EnvironmentEndpointUnreachableError,
   EnvironmentProcessWriteError,
   EnvironmentStreamWriteError,
   createEnvironmentAssuredTcpStreamIdentity,
@@ -168,13 +169,9 @@ async function inspectPrivateUnixSocket(
   let configuredMetadata: BigIntStats;
   let configuredParentMetadata: BigIntStats;
   try {
-    [canonicalParent, canonicalSocket, configuredParentMetadata, configuredMetadata] =
-      await Promise.all([
-        realpath(parentPath),
-        realpath(configuredPath),
-        lstat(parentPath, { bigint: true }),
-        lstat(configuredPath, { bigint: true }),
-      ]);
+    [canonicalParent, configuredParentMetadata] = await Promise.all([
+      realpath(parentPath), lstat(parentPath, { bigint: true }),
+    ]);
   } catch {
     throw new Error("environment_private_unix_stream_identity_unavailable");
   }
@@ -184,6 +181,18 @@ async function inspectPrivateUnixSocket(
   ) {
     throw new Error("environment_private_unix_stream_path_unsafe");
   }
+  try {
+    configuredMetadata = await lstat(configuredPath, { bigint: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT" &&
+        configuredParentMetadata.uid === BigInt(process.geteuid?.() ?? process.getuid?.() ?? -1) &&
+        (configuredParentMetadata.mode & 0o777n) === 0o700n) {
+      throw new EnvironmentEndpointUnreachableError("environment_private_unix_stream_identity_unavailable");
+    }
+    throw new Error("environment_private_unix_stream_identity_unavailable");
+  }
+  try { canonicalSocket = await realpath(configuredPath); }
+  catch { throw new Error("environment_private_unix_stream_identity_unavailable"); }
   // An operator-configured final alias may name a daemon's private socket.
   // Do not expand this into arbitrary symlinked directories or alias chains.
   if (configuredMetadata.isSymbolicLink()) {
@@ -1270,8 +1279,10 @@ async function waitForPrivateUnixConnect(
           : new Error("environment_private_unix_stream_connect_aborted"),
       );
     const connected = () => finish();
-    const failed = () =>
-      finish(new Error("environment_private_unix_stream_connect_failed"));
+    const failed = (error: NodeJS.ErrnoException) =>
+      finish(error.syscall === "connect" && (error.code === "ECONNREFUSED" || error.code === "ENOENT")
+        ? new EnvironmentEndpointUnreachableError("environment_private_unix_stream_connect_failed")
+        : new Error("environment_private_unix_stream_connect_failed"));
     signal.addEventListener("abort", abort, { once: true });
     socket.once("connect", connected);
     socket.once("error", failed);
@@ -1510,6 +1521,10 @@ async function waitForTcpConnect(
       finish();
     };
     const failed = (error: NodeJS.ErrnoException) => {
+      if (error.code === "ECONNREFUSED" && error.syscall === "connect") {
+        finish(new EnvironmentEndpointUnreachableError("environment_assured_tcp_stream_unavailable"));
+        return;
+      }
       const retryable = new Set([
         "ECONNREFUSED",
         "ECONNRESET",

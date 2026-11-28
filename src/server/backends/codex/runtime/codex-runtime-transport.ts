@@ -12,27 +12,8 @@ export function createCodexRuntimeTransport(input: {
   readonly environmentChannel: ExecutionEnvironmentChannelProvider;
   readonly assertLaunchAdmission?: () => void;
 }): FramedTransportFactory {
-    if (
-      input.configuration.connection.ownership === "external" &&
-      input.configuration.connection.channel.type === "tcp_websocket"
-    ) {
-      return new TcpWebSocketTransportFactory({
-        scope: input.scope,
-        channels: input.environmentChannel,
-        url: input.configuration.connection.channel.url,
-        secretReference:
-          input.configuration.connection.channel.authentication.secret,
-      });
-    }
-    if (
-      input.configuration.connection.ownership === "external" &&
-      input.configuration.connection.channel.type === "unix_websocket"
-    ) {
-      return new UnixWebSocketTransportFactory({
-        scope: input.scope,
-        channels: input.environmentChannel,
-        socketPath: input.configuration.connection.channel.socketPath,
-      });
+    if (input.configuration.connection.ownership === "external") {
+      return createExternalCodexTransport(input.scope, input.environmentChannel, input.configuration.connection);
     }
     const configuration = input.configuration;
     if (
@@ -60,4 +41,12 @@ export function createCodexRuntimeTransport(input: {
         }),
       ],
     });
+}
+
+
+export function createExternalCodexTransport(scope: ProviderTransportScope, channels: ExecutionEnvironmentChannelProvider,
+  connection: Extract<ResolvedCodexRuntimeConfiguration["connection"], { ownership: "external" }>): FramedTransportFactory {
+  const channel = connection.channel;
+  return channel.type === "unix_websocket" ? new UnixWebSocketTransportFactory({ scope, channels, socketPath: channel.socketPath }) :
+    new TcpWebSocketTransportFactory({ scope, channels, url: channel.url, secretReference: channel.authentication.secret });
 }

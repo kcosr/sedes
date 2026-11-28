@@ -69,6 +69,40 @@ it.each(["offline", "missing", "ready", "policy denied", "carrier lost after loo
   },
 );
 
+it.each(["carrier offline", "busy", "released", "offline", "inconclusive"] as const)(
+  "checks the operator-owned native endpoint when no external host is registered: %s", async condition => {
+    const acquire = vi.fn(), ensure = vi.spyOn(CodexSidecarRuntimeConnection.prototype, "ensure");
+    const acquireExisting = vi.fn(async () => {
+      if (condition === "carrier offline") throw new Error("outbound_connector_offline");
+      return { channel: {} as SidecarRuntimeChannel, controllerEpoch: 1, serviceIncarnation: "service",
+        closed: new Promise<void>(() => {}), release: vi.fn() };
+    });
+    vi.spyOn(CodexSidecarRuntimeConnection.prototype, "lookup").mockResolvedValue(undefined);
+    const inspect = vi.spyOn(CodexSidecarRuntimeConnection.prototype, "inspectUnregisteredExternalArchive")
+      .mockResolvedValue(condition === "carrier offline" ? "inconclusive" : condition);
+    const external = { ...configuration, connection: { ownership: "external", channel: { type: "unix_websocket", socketPath: "/configured/codex.sock" } },
+      connections: [{ id: "cp", enabled: true, templateId: "target" }] } as CodexRuntimeConfiguration;
+    const supervisor = new CodexRemoteRuntimeSupervisor({
+      scope: { tenantId: "tenant", principalId: "principal", executionEnvironmentId: "remote", backendInstanceId: "backend" },
+      provider: { acquire, acquireExisting }, configuration: external, serverRequests: new CodexServerRequestRouter(), receipts: {
+        reserve: () => { throw new Error("unused"); }, recordOutcome: () => "untracked", pending: () => [],
+        reconcileRecordedApplicationState: () => 0, compactRetiredRuntime: () => 0, releaseRejected: () => false,
+      },
+    });
+    const signal = AbortSignal.timeout(1000), markObserved = vi.fn();
+    try {
+      await expect(supervisor.client.inspectExistingArchive!({ applicationThreadId: "app", connectionProfileId: "cp",
+        threadId: "native", workspace: "/workspace", signal, markObserved }))
+        .resolves.toEqual({ outcome: condition === "carrier offline" ? "inconclusive" : condition });
+      if (condition !== "carrier offline") expect(inspect).toHaveBeenCalledWith(external, "cp", "native", "/workspace", signal);
+      else expect(inspect).not.toHaveBeenCalled();
+      expect(markObserved).toHaveBeenCalledTimes(condition === "busy" || condition === "inconclusive" ? 1 : 0);
+      expect(acquire).not.toHaveBeenCalled();
+      expect(ensure).not.toHaveBeenCalled();
+    } finally { await supervisor.close(); }
+  },
+);
+
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
 it("exposes only the in-flight initialization until the ready lifecycle is published", async () => {

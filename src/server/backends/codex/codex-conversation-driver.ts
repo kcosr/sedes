@@ -1,3 +1,4 @@
+import type { CodexExternalArchiveResult } from "./runtime/codex-external-archive-inspection.js";
 import { releaseCodexThreadResidency } from "./codex-thread-residency.js";
 import { withAbort } from "../../runtime/with-abort.js";
 import { CODEX_STEP_MODEL_SWITCHING_CONFIG } from "./codex-active-speed-protocol.js";
@@ -237,6 +238,7 @@ export class CodexConversationOwnershipRegistry {
 }
 
 export interface CodexConversationDriverInput {
+  readonly inspectExternalArchive?: (input: PrepareConversationArchiveInput) => Promise<CodexExternalArchiveResult>;
   readonly usageSink: UsageSink;
   readonly nativeNamespace: string;
   readonly resolveThreadEnvironment?: ThreadEnvironmentResolver;
@@ -280,6 +282,7 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
   readonly #fastModeSessions: CodexFastModeSessionRegistry;
   readonly #goalSessions:
     import("./codex-goal-session.js").CodexGoalSessionRegistry | undefined;
+  readonly #inspectExternalArchive: CodexConversationDriverInput["inspectExternalArchive"];
   readonly #managedTui: CodexManagedTuiController | undefined;
   readonly #now: () => string;
   readonly #onError: (error: unknown) => void;
@@ -338,6 +341,7 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
       input.fastModeSessions ?? new CodexFastModeSessionRegistry();
     this.#goalSessions = input.goalSessions;
     this.#managedTui = input.managedTui;
+    this.#inspectExternalArchive = input.inspectExternalArchive;
     this.#now = input.now ?? (() => new Date().toISOString());
     this.#onError = input.onError ?? (() => undefined);
     if (
@@ -1286,7 +1290,7 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
         markObserved: input.markObserved });
     }
     const client = this.#client.currentReadyGeneration();
-    if (!client) return { outcome: "offline" };
+    if (!client) return { outcome: this.#inspectExternalArchive ? await this.#inspectExternalArchive(input) : "offline" };
     const lease = this.#client.residency?.retain();
     let observed = false;
     let knownBusy = false;
@@ -1301,7 +1305,7 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
     } catch (error) {
       input.signal.throwIfAborted();
       if (!observed && error instanceof BackendError && error.cause instanceof CodexRpcDeliveryError) {
-        return { outcome: "offline" };
+        return { outcome: this.#inspectExternalArchive ? await this.#inspectExternalArchive(input) : "offline" };
       }
       throw error;
     } finally {

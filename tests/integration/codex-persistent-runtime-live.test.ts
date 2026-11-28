@@ -39,9 +39,16 @@ it.skipIf(!enabled)("retains a real Luna turn, receipt and native history across
   };
   const sessions: Awaited<ReturnType<typeof service.attach>>[] = [];
   const clients: CodexRuntimeClient[] = [];
+  let emptyService: typeof service | undefined;
   let runtimeId: string | undefined;
   let nativeThreadId: string | undefined;
   try {
+    emptyService = await createPersistentCodexLiveSidecar();
+    const independent = await emptyService.attach(configuration); sessions.push(independent);
+    const emptyRegistry = new CodexSidecarRuntimeConnection(independent.session.runtimeChannel);
+    const inspectExternal = (threadId: string) => emptyRegistry.inspectUnregisteredExternalArchive(configuration,
+      configuration.connections[0]!.id, threadId, workspace, AbortSignal.timeout(15_000));
+    await expect(emptyRegistry.lookup(configuration)).resolves.toBeUndefined();
     const first = await service.attach(configuration); sessions.push(first);
     const connection = new CodexSidecarRuntimeConnection(first.session.runtimeChannel);
     runtimeId = await connection.ensure(configuration);
@@ -102,6 +109,7 @@ it.skipIf(!enabled)("retains a real Luna turn, receipt and native history across
     await connection.submit(authority, { operationId, method: "turn/start", generation: originalGeneration, params, timeoutMilliseconds: 30_000 });
     await Promise.race([streamed, new Promise<never>((_, reject) => { const timer = setTimeout(() => reject(new Error("live_stream_timeout")), 120_000); timer.unref(); })]);
     expect(completedBeforeDetach).toBe(false);
+    await expect(inspectExternal(nativeThreadId)).resolves.toBe("busy");
     await first.session.close("canary_main_process_restart");
     connection.close();
     database.close();
@@ -133,6 +141,8 @@ it.skipIf(!enabled)("retains a real Luna turn, receipt and native history across
       expect(history.data).toHaveLength(1);
       expect(history.data[0]?.status).toBe("completed");
     }, { timeout: 120_000, interval: 500 });
+    await expect(inspectExternal(nativeThreadId)).resolves.toBe("released");
+    await expect(emptyRegistry.lookup(configuration)).resolves.toBeUndefined();
     const turn = history!.data[0]!;
     expect(turn.id).toBe(turnReceipt!.outcome!.status === "completed" ? turnReceipt!.outcome!.nativeTurnId : undefined);
     const items = await restored.client.request(codexThreadItemsListMethod, { threadId: nativeThreadId, turnId: turn.id, limit: 100, sortDirection: "asc" }, options);
@@ -142,6 +152,8 @@ it.skipIf(!enabled)("retains a real Luna turn, receipt and native history across
     await restored.drainAcknowledgements();
     await reconnected.evictThread(restoredAuthority, nativeThreadId, originalGeneration);
     expect(await reconnected.idle(restoredAuthority, originalGeneration)).toBe(true);
+    expect(restored.client.lifecycleSnapshot().state).toBe("idle");
+    await expect(reconnected.prepareThreadArchive(restoredAuthority, archiveTarget, AbortSignal.timeout(15_000))).resolves.toBe("released");
     expect(restored.client.lifecycleSnapshot().state).toBe("idle");
     await reconnected.wake(restoredAuthority);
     expect(restored.client.lifecycleSnapshot().state).toBe("ready");
@@ -156,6 +168,7 @@ it.skipIf(!enabled)("retains a real Luna turn, receipt and native history across
     for (const client of clients.reverse()) await client.close().catch(() => undefined);
     for (const attached of sessions.reverse()) await attached.session.close("canary_complete").catch(() => undefined);
     if (database.open) database.close();
+    await emptyService?.close();
     await service.close();
   }
   const socketPathAfter = await lstat(socketPath!, { bigint: true });

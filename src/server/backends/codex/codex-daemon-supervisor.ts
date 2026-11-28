@@ -270,7 +270,7 @@ export class CodexDaemonSupervisor {
       this.#restartJitterRatio > 1 ||
       (this.#maximumRestartAttempts !== "unbounded" &&
         (!Number.isSafeInteger(this.#maximumRestartAttempts) ||
-          this.#maximumRestartAttempts <= 0)) ||
+          this.#maximumRestartAttempts < 0)) ||
       !Number.isSafeInteger(this.#initializationTimeoutMilliseconds) ||
       this.#initializationTimeoutMilliseconds <= 0 ||
       !Number.isSafeInteger(this.#stabilityResetMilliseconds) ||

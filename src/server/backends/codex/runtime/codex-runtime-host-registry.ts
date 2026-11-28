@@ -18,6 +18,7 @@ import { CodexNativeStoreOwnershipGate } from "../codex-native-store-ownership.j
 import { createCodexNativeStoreLifecycle, type CodexSidecarStoreContext } from "../codex-native-store-lock.js";
 import { resolveCodexRuntimeConfiguration } from "../codex-runtime-config.js";
 import { CodexDaemonSupervisor } from "../codex-daemon-supervisor.js";
+import { inspectExternalCodexThread, type CodexArchiveTarget } from "./codex-external-archive-inspection.js";
 import { createCodexRuntimeTransport } from "./codex-runtime-transport.js";
 import { CodexRuntimeHost } from "./codex-runtime-host.js";
 import { CodexRuntimeManagedTuiHosts } from "./codex-runtime-managed-tui.js";
@@ -105,6 +106,29 @@ export class CodexRuntimeHostRegistry {
     if (!existing) return undefined;
     if (existing.storeFingerprint !== codexStoreFingerprint(configuration.connection)) throw new Error("codex_runtime_configuration_restart_required");
     return existing.host;
+  }
+
+  async inspectUnregisteredExternalArchive(configuration: CodexRuntimeConfiguration, target: CodexArchiveTarget,
+    controllerEpoch: number, signal: AbortSignal, assertPolicy: () => void) {
+    const assertCurrent = () => {
+      signal.throwIfAborted();
+      this.input.services.assertAdmission(controllerEpoch);
+      assertPolicy();
+      if (this.#starting.has(configuration.instance.id) || this.#runtimes.has(configuration.instance.id)) {
+        throw new Error("codex_runtime_archive_registration_changed");
+      }
+    };
+    this.#assertConfigurationScope(configuration);
+    if (!configuration.instance.enabled || configuration.connection.ownership !== "external") throw new Error("codex_external_archive_unavailable");
+    assertCurrent();
+    const resolved = await resolveCodexRuntimeConfiguration({ ...configuration, scope: this.input.scope,
+      environmentChannel: this.input.environmentChannel, environment: this.input.environment });
+    if (resolved.connection.ownership !== "external") throw new Error("codex_external_archive_unavailable");
+    assertCurrent();
+    const scope = { ...this.input.scope, backendInstanceId: configuration.instance.id, executionEnvironmentId: this.input.executionEnvironmentId };
+    const outcome = await inspectExternalCodexThread(scope, this.input.environmentChannel, resolved.connection, target, signal, assertCurrent);
+    assertCurrent();
+    return outcome;
   }
 
   #assertConfigurationScope(configuration: CodexRuntimeConfiguration): void {
