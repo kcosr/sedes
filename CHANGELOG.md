@@ -514,6 +514,7 @@ User-facing changes are collected here before release. See the
   open. Archive saves retained backend updates first, and Rename keeps an
   unconfirmed edit available to check after a lost reply.
   See [organizing threads](docs/user/organize-work.md#archive-finished-work).
+  ([#177](https://github.com/kcosr/sedes/pull/177))
 
 - OpenCode threads can stream replies and reopen saved history when OpenCode
   reports the first-token timestamp. See [OpenCode compatibility](docs/operator/backends/opencode.md).
