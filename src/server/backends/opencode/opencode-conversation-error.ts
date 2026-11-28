@@ -5,7 +5,7 @@ import { OpenCodeNativeProtocolError, OpenCodeNativeReadLimitError } from "./ope
 import { OpenCodeRuntimeError } from "./opencode-release.js";
 
 const retryable = new Set([
-  "opencode_request_failed", "opencode_request_aborted", "opencode_response_read_failed",
+  "opencode_request_failed", "opencode_daemon_offline", "opencode_request_aborted", "opencode_response_read_failed",
   "opencode_event_ready_timeout", "opencode_event_aborted", "opencode_event_disconnected",
   "opencode_event_stream_failed", "opencode_event_closed", "opencode_event_overflow",
   "opencode_runtime_unavailable", "opencode_runtime_start_failed", "opencode_runtime_stopping",

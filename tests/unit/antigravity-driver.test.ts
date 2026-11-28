@@ -7,7 +7,7 @@ import type { AgentBackendInstance, AgentConnectionProfile, AttachConversationIn
 import type { ValidatedWorkspace } from "../../src/server/execution/contracts.js";
 import { ANTIGRAVITY_PROTOCOL_RELEASE } from "../../src/server/backends/antigravity/release-profile.js";
 import { AntigravityDriver } from "../../src/server/backends/antigravity/driver.js";
-import { AntigravityError, type AntigravityAttachment, type AntigravityEvent, type AntigravityOutcome, type AntigravityPort } from "../../src/server/backends/antigravity/port.js";
+import { AntigravityError, type AntigravityArchiveOperation, type AntigravityAttachment, type AntigravityEvent, type AntigravityOutcome, type AntigravityPort } from "../../src/server/backends/antigravity/port.js";
 import type { AntigravityNativeHistory } from "../../src/server/backends/antigravity/native-schema.js";
 import { compileBackendModelPolicy, type BackendModelPolicy } from "../../src/server/backends/model-policy.js";
 import { buildAntigravityPrompt } from "../../src/server/backends/antigravity/submission.js";
@@ -47,6 +47,9 @@ function fixture(policy: BackendModelPolicy = { type: "catalog" }, usage?: Usage
       if (contents !== nativeContents) { native.revision = createHash("sha256").update(contents).digest("hex"); nativeContents = contents; }
       return input.knownRevision === native.revision ? null : { ...identity, native: structuredClone(native) };
     }), attach: vi.fn(async () => attachment),
+    readRetiredArchive: vi.fn(async () => null),
+    probeArchiveOwner: vi.fn(async () => null), releaseArchiveClaim: vi.fn(async () => {}),
+    readArchiveState: vi.fn(async () => ({ state: "unproven" as const })),
     attachExisting: vi.fn(async () => attachment),
     request: vi.fn(async ({ operationId, command }) => {
       if (command.type !== "prompt") throw new Error("Unexpected fixture operation");
@@ -74,6 +77,112 @@ function fixture(policy: BackendModelPolicy = { type: "catalog" }, usage?: Usage
     opaqueBindingDetail: JSON.stringify(driver.nativeBinding(identity.sessionId, identity.cwd)) };
   return { driver, attached, port, native, attachment, receipts, desired, emit };
 }
+
+describe("Antigravity archive on a retained owner", () => {
+  function archiveFixture() {
+    const f = fixture();
+    const owner = { ...identity, generation: f.attachment.generation, handleId: f.attachment.handleId };
+    const retained = { ...owner, retainedOutput: true, attached: false };
+    vi.mocked(f.port.probeArchiveOwner).mockResolvedValue(retained);
+    const state = { state: "idle" as const, acknowledged: 0, throughSequence: 0, operations: [] as AntigravityArchiveOperation[],
+      history: { ...identity, native: f.native }, setup: f.attachment.setup };
+    vi.mocked(f.port.readArchiveState).mockImplementation(async () => state);
+    const archiveReceipts = { apply: vi.fn(() => true), creationBound: vi.fn(() => true) };
+    const driver = new AntigravityDriver({ ...f.driver.input, archiveReceipts });
+    const request = { ...f.attached, signal: AbortSignal.timeout(5000), retainedOwner: undefined as string | undefined,
+      markObserved: vi.fn(), markRetained: vi.fn(), markSettled: vi.fn(), settle: vi.fn(async () => {}) };
+    return { ...f, owner, retained, state, archiveReceipts, driver, request };
+  }
+  function setter(operationId = "setter"): AntigravityArchiveOperation {
+    return { operationId, kind: "set_config", commandFingerprint: "a".repeat(64), setterConfirmed: true, sessionConfiguration: true };
+  }
+  it.each(["events", "receipt", "both"] as const)("applies %s under a single claim and awaits acknowledgement before retiring", async kind => {
+    const f = archiveFixture(), order: string[] = [];
+    if (kind !== "events") { f.state.operations.push(setter()); f.receipts.set("setter", { status: "completed", result: {} }); }
+    if (kind !== "receipt") {
+      f.emit({ kind: "session_loaded", session: f.attachment.setup.session });
+      f.emit({ kind: "permission_resolved", requestId: "resolved" }); f.state.throughSequence = 2;
+    }
+    let finish!: () => void;
+    const barrier = new Promise<void>(resolve => { finish = resolve; });
+    f.request.settle.mockImplementation(async () => { order.push("settling"); await barrier; order.push("settled"); });
+    f.archiveReceipts.apply.mockImplementation(() => { order.push("receipt"); return true; });
+    vi.mocked(f.port.acknowledgeOperation).mockImplementation(async () => { order.push("ackOperation"); });
+    vi.mocked(f.port.acknowledge).mockImplementation(async () => { order.push("ackEvents"); });
+    vi.mocked(f.port.retireSession).mockImplementation(async () => { order.push("retired"); return "retired"; });
+    const archive = f.driver.prepareArchive(f.request);
+    await vi.waitFor(() => expect(order).toEqual(["settling"]));
+    expect(f.port.acknowledge).not.toHaveBeenCalled(); expect(f.port.acknowledgeOperation).not.toHaveBeenCalled();
+    finish(); expect(await archive).toEqual({ outcome: "released" });
+    expect(order).toEqual(["settling", "settled", ...(kind === "events" ? [] : ["receipt", "ackOperation"]),
+      ...(kind === "receipt" ? [] : ["ackEvents"]), "retired"]);
+    expect(f.port.attachExisting).toHaveBeenCalledExactlyOnceWith({ ...identity, expected: f.owner }, f.request.signal);
+    expect(f.port.releaseArchiveClaim).toHaveBeenCalledExactlyOnceWith(f.owner, expect.any(AbortSignal));
+    expect(f.request.markSettled).toHaveBeenCalledWith(f.request.markRetained.mock.calls[0]![0]);
+    expect(f.port.attach).not.toHaveBeenCalled(); expect(f.port.request).not.toHaveBeenCalled(); expect(f.port.create).not.toHaveBeenCalled();
+  });
+  it.each(["application", "event ack", "receipt ack", "cleanup", "gap", "replacement", "owner unreadable", "unknown receipt", "pending", "busy"] as const)(
+    "retains the obligation on %s and releases the claim", async failure => {
+      const f = archiveFixture();
+      f.emit({ kind: "permission_resolved", requestId: "resolved" }); f.state.throughSequence = 1;
+      f.state.operations.push(setter()); f.receipts.set("setter", { status: "completed", result: {} });
+      if (failure === "application") f.request.settle.mockRejectedValue(new Error("failed"));
+      if (failure === "event ack") vi.mocked(f.port.acknowledge).mockRejectedValue(new Error("lost ack"));
+      if (failure === "receipt ack") vi.mocked(f.port.acknowledgeOperation).mockRejectedValue(new Error("lost ack"));
+      if (failure === "cleanup") vi.mocked(f.port.releaseArchiveClaim).mockRejectedValue(new Error("unproven"));
+      if (failure === "gap") vi.mocked(f.port.observe).mockResolvedValue({ events: [], retainedAfterSequence: 1, throughSequence: 1, activePromptIds: [], closed: false });
+      if (failure === "replacement") vi.mocked(f.port.probeArchiveOwner).mockResolvedValueOnce(f.retained).mockResolvedValue({ ...f.retained, generation: "replacement" });
+      if (failure === "owner unreadable") vi.mocked(f.port.readArchiveState).mockRejectedValue(new Error("history unavailable"));
+      if (failure === "unknown receipt") f.archiveReceipts.apply.mockReturnValue(false);
+      if (failure === "pending") f.receipts.set("setter", { status: "pending" });
+      if (failure === "busy") vi.mocked(f.port.readArchiveState).mockResolvedValue({ state: "busy" });
+      expect(await f.driver.prepareArchive(f.request)).toMatchObject({ outcome: failure === "busy" || failure === "pending" ? "busy" : "inconclusive" });
+      expect(f.request.markRetained).toHaveBeenCalled(); expect(f.request.markSettled).not.toHaveBeenCalled();
+      expect(f.port.releaseArchiveClaim).toHaveBeenCalledOnce(); expect(f.port.request).not.toHaveBeenCalled();
+      if (failure !== "cleanup") expect(f.port.retireSession).not.toHaveBeenCalled();
+      if (["application", "gap", "replacement", "unknown receipt", "pending"].includes(failure)) expect(f.port.acknowledgeOperation).not.toHaveBeenCalled();
+    });
+  it("finishes the same durable settlement after losing a successful retirement reply", async () => {
+    const f = archiveFixture();
+    f.state.operations.push(setter()); f.receipts.set("setter", { status: "completed", result: {} });
+    vi.mocked(f.port.retireSession).mockRejectedValueOnce(new Error("retire reply lost"));
+    expect(await f.driver.prepareArchive(f.request)).toMatchObject({ outcome: "inconclusive" });
+    const ownerKey = f.request.markRetained.mock.calls[0]![0];
+    f.request.retainedOwner = ownerKey;
+    vi.mocked(f.port.probeArchiveOwner).mockResolvedValue(null);
+    vi.mocked(f.port.readRetiredArchive).mockResolvedValue({ ownerKey, setup: f.attachment.setup, history: f.state.history,
+      operations: [{ operation: setter(), outcome: { status: "completed", result: {} } }] });
+    expect(await f.driver.prepareArchive(f.request)).toEqual({ outcome: "released" });
+    expect(f.request.markSettled).toHaveBeenCalledExactlyOnceWith(ownerKey);
+    expect(f.port.attachExisting).toHaveBeenCalledOnce();
+    expect(f.archiveReceipts.apply).toHaveBeenCalledTimes(2);
+  });
+  it("requires exact evidence for a pending creation", async () => {
+    const f = archiveFixture();
+    vi.mocked(f.port.readArchiveState).mockResolvedValue({ ...f.state, pendingCreation: "creation" });
+    f.archiveReceipts.creationBound.mockReturnValue(false);
+    expect(await f.driver.prepareArchive(f.request)).toMatchObject({ outcome: "inconclusive" });
+    expect(f.port.acknowledgeCreation).not.toHaveBeenCalled();
+    f.archiveReceipts.creationBound.mockReturnValue(true);
+    expect(await f.driver.prepareArchive(f.request)).toMatchObject({ outcome: "released" });
+    expect(f.port.acknowledgeCreation).toHaveBeenCalledExactlyOnceWith({ ...identity, operationId: "creation" }, f.request.signal);
+  });
+  it("distinguishes positive absence, an offline lookup, and failure with a known obligation", async () => {
+    const f = archiveFixture();
+    vi.mocked(f.port.probeArchiveOwner).mockResolvedValue(null);
+    expect(await f.driver.prepareArchive(f.request)).toEqual({ outcome: "released" });
+    vi.mocked(f.port.probeArchiveOwner).mockRejectedValue(new Error("sidecar_transport_unavailable"));
+    expect(await f.driver.prepareArchive(f.request)).toEqual({ outcome: "offline" });
+    vi.mocked(f.port.probeArchiveOwner).mockRejectedValue(new Error("incompatible sidecar"));
+    expect(await f.driver.prepareArchive(f.request)).toMatchObject({ outcome: "inconclusive" });
+    f.request.retainedOwner = "previous-generation";
+    for (const seen of [null, f.retained]) {
+      vi.mocked(f.port.probeArchiveOwner).mockResolvedValue(seen);
+      expect(await f.driver.prepareArchive(f.request)).toMatchObject({ outcome: "inconclusive" });
+    }
+    expect(f.port.attachExisting).not.toHaveBeenCalled(); expect(f.port.create).not.toHaveBeenCalled();
+  });
+});
 
 describe("Antigravity driver authority and projection", () => {
   it("finishes the native turn once while its prompt callback holds admission across child work", async () => {

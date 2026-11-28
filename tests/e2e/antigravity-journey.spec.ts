@@ -226,3 +226,116 @@ test("Settings records verified retirement for one disabled local Antigravity ca
     finally { await fixture.close(); }
   }
 });
+
+test("desktop and mobile sidebar actions preserve the running thread while updating an unopened thread", async ({ page, browserDiagnostics }, testInfo) => {
+  test.slow();
+  const { AntigravityProductionFixture } = await import("../support/antigravity-production-fixture.js");
+  const fixture = await AntigravityProductionFixture.create();
+  try {
+    const selected = await fixture.createThread({ title: "Still running" });
+    await fixture.send(selected, "wait");
+    const selectedUrl = `${fixture.url}/threads/${selected}`;
+    await page.goto(selectedUrl);
+    await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
+    const navigated: string[] = [];
+    page.on("framenavigated", frame => {
+      if (frame === page.mainFrame()) navigated.push(frame.url());
+    });
+
+    for (const mobile of [false, true]) {
+      const surface = mobile ? "mobile" : "desktop";
+      const initialTitle = `Unopened ${surface}`;
+      const desiredTitle = `Renamed from ${surface}`;
+      const target = await fixture.createThread({ title: initialTitle });
+      if (!mobile) {
+        await fixture.send(target, "hello");
+        await expect.poll(async () => (await fixture.thread(target)).orderedTurnIds.length).toBe(1);
+        await expect.poll(async () => (await fixture.thread(target)).runState).toBe("idle");
+      }
+      await page.setViewportSize(mobile ? { width: 390, height: 844 } : { width: 1440, height: 900 });
+      const drawer = page.getByRole("dialog", { name: "Thread navigation" });
+      if (mobile) await page.getByRole("button", { name: "Open thread navigation" }).click();
+      const sidebar = mobile ? drawer : page.getByTestId("desktop-sidebar");
+      const row = sidebar.locator(`[data-thread-id="${target}"]`).getByTestId(/^(flat-thread-row|thread-row)$/).first();
+      await expect(row).toContainText(initialTitle);
+      const touch = mobile ? await page.context().newCDPSession(page) : undefined;
+      if (touch) await touch.send("Emulation.setTouchEmulationEnabled", { enabled: true });
+      const openMenu = async () => {
+        if (!touch) {
+          await row.click({ button: "right" });
+          return page.getByTestId("thread-context-menu");
+        }
+        const bounds = await row.boundingBox();
+        if (!bounds) throw new Error("Sidebar target is outside the drawer.");
+        const point = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+        await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [point] });
+        const menu = page.getByTestId("thread-actions-sheet");
+        await expect(menu).toBeVisible();
+        await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        await expect(menu).toBeVisible();
+        return menu;
+      };
+
+      const requests: unknown[] = [];
+      const acknowledgements: string[] = [];
+      page.on("request", request => {
+        if (request.url() === `${fixture.url}/api/threads/${target}/attention/dismiss`) {
+          acknowledgements.push(request.postDataJSON().kind);
+        }
+      });
+      const renameUrl = `${fixture.url}/api/threads/${target}/operations`;
+      await page.route(renameUrl, async route => {
+        requests.push(route.request().postDataJSON());
+        if (mobile && requests.length === 1) {
+          // The server commits and sends its receipt before the browser loses it.
+          const response = await route.fetch();
+          expect(response.ok(), await response.text()).toBe(true);
+          browserDiagnostics.allowNetworkFailures = true;
+          await route.abort("failed");
+        } else await route.continue();
+      });
+      const menu = await openMenu();
+      if (!mobile) await capture(page, testInfo, "background-thread-actions-desktop.png");
+      await menu.getByRole("menuitem", { name: "Rename", exact: true }).click();
+      const editor = sidebar.getByRole("textbox", { name: "Thread title" });
+      await editor.fill(desiredTitle);
+      const lostReply = mobile ? page.waitForEvent("requestfailed", request => request.url() === renameUrl) : undefined;
+      await editor.press("Enter");
+      if (mobile) {
+        expect((await lostReply)!.failure()?.errorText).toContain("ERR_FAILED");
+        await expect(sidebar.getByRole("button", { name: "Check rename status" })).toBeVisible();
+        browserDiagnostics.allowNetworkFailures = false;
+        await capture(page, testInfo, "background-thread-actions-mobile.png");
+        await page.getByRole("button", { name: "Close thread navigation" }).click();
+        await page.getByRole("button", { name: "Open thread navigation" }).click();
+        await expect(editor).toHaveValue(desiredTitle);
+        await expect(editor).not.toBeEditable();
+        await sidebar.getByRole("button", { name: "Check rename status" }).click();
+      }
+      await expect(editor).toBeHidden();
+      await expect(row).toContainText(desiredTitle);
+      expect(requests).toHaveLength(mobile ? 2 : 1);
+      if (mobile) expect(requests[1]).toEqual(requests[0]);
+      expect(requests[0]).toMatchObject({ kind: "perform", operation: { action: "rename", title: desiredTitle } });
+      await page.unroute(renameUrl);
+
+      const archived = page.waitForResponse(response =>
+        response.request().method() === "PATCH" && response.url() === `${fixture.url}/api/threads/${target}/inventory`);
+      await (await openMenu()).getByRole("menuitem", { name: "Archive", exact: true }).click();
+      const response = await archived;
+      expect(response.ok(), await response.text()).toBe(true);
+      expect(response.request().postDataJSON()).toMatchObject({ action: "archive", expectedPendingQuestionCount: 0 });
+      expect(await response.json()).toEqual({ archivedThreadIds: [target] });
+      await expect(row).toBeHidden();
+      await expect(page).toHaveURL(selectedUrl);
+      if (mobile) await page.getByRole("button", { name: "Close thread navigation" }).click();
+      await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
+      expect(acknowledgements).not.toContain("unseen_completion");
+      await touch?.detach();
+    }
+    expect(navigated.filter(url => url !== selectedUrl)).toEqual([]);
+  } finally {
+    try { await page.goto("about:blank"); }
+    finally { await fixture.close(); }
+  }
+});

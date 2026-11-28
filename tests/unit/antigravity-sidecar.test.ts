@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { runtimeLaunchDigest } from "../../src/server/backends/provider-launch-digest.js";
 import { attachFixturePolicy, installFixturePolicy } from "../helpers/execution-policy-fixture.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -73,6 +74,41 @@ function proxy(f: Awaited<ReturnType<typeof fixture>>, getLease: () => SidecarRu
   const port = new AntigravityRemotePort({ configuration: f.configuration, sidecarRuntime: runtime }); cleanup.push(() => port.close()); return { port, runtime };
 }
 describe("Antigravity persistent sidecar", () => {
+  it("probes without a launch or claim and confines archive inspection to the retained generation", async () => {
+    const f = await fixture(), connected = await attachment(f);
+    const { port, runtime } = proxy(f, () => connected.lease);
+    const identity = { cwd: f.cwd, sessionId: "missing" };
+    expect(await port.probeArchiveOwner(identity)).toBeNull();
+    expect(runtime.acquire).not.toHaveBeenCalled(); expect(f.launched).not.toHaveBeenCalled();
+    const target = await port.create({ cwd: f.cwd, operationId: "created" });
+    const existing = await port.probeArchiveOwner(target);
+    expect(existing).toMatchObject({ retainedOutput: true });
+    const owner = { ...target, handleId: existing!.handleId, generation: existing!.generation };
+    await port.releaseArchiveClaim(owner);
+    expect((await port.probeArchiveOwner(target))?.attached).toBe(false);
+    await expect(port.attachExisting({ ...target, expected: { ...owner, generation: "replacement" } })).rejects.toMatchObject({ code: "antigravity_archive_owner_changed" });
+    expect((await port.probeArchiveOwner(target))?.attached).toBe(false);
+    await port.attachExisting({ ...target, expected: owner });
+    expect((await port.probeArchiveOwner(target))?.attached).toBe(true);
+    const state = await port.readArchiveState(owner);
+    expect(state).toMatchObject({ state: "idle", pendingCreation: "created", operations: [] });
+    await port.releaseArchiveClaim(owner);
+    expect((await port.probeArchiveOwner(target))?.attached).toBe(false);
+    await port.acknowledgeCreation({ ...target, operationId: "created" });
+    // A normal open can drain and retire this very owner after a refused archive.
+    await port.attachExisting(target);
+    const events = await port.observe({ handleId: owner.handleId, afterSequence: 0 });
+    await port.acknowledge({ handleId: owner.handleId, throughSequence: events.throughSequence });
+    await port.release({ handleId: owner.handleId });
+    expect(await port.probeArchiveOwner(target)).toBeNull();
+    const ownerKey = createHash("sha256").update(JSON.stringify([target.sessionId, target.cwd, owner.handleId, owner.generation])).digest("hex");
+    await expect(port.readRetiredArchive({ ...target, ownerKey })).resolves.toMatchObject({ ownerKey, history: { native: { revision: "a".repeat(64) } } });
+    expect(await port.readRetiredArchive({ ...target, ownerKey: "a".repeat(64) })).toBeNull();
+    f.readHistory.mockResolvedValue({ ...target, native: { steps: [], executions: [], revision: "b".repeat(64) } });
+    expect(await port.readRetiredArchive({ ...target, ownerKey })).toBeNull();
+    expect(f.launched).toHaveBeenCalledOnce();
+  });
+
   it("inspects a retained owner by its original ID without its saved definition or launch authority", async () => {
     const f = await fixture(), initial = await attachment(f);
     await proxy(f, () => initial.lease).port.create({ cwd: f.cwd, operationId: "original" });
@@ -222,7 +258,7 @@ describe("Antigravity persistent sidecar", () => {
       .rejects.toMatchObject({ code: "antigravity_history_revision_unproven" });
   });
   it("requires executor evidence inventory in its versioned private history contract", () => {
-    expect(antigravityRuntimeCapability.majorVersion).toBe(6);
+    expect(antigravityRuntimeCapability.majorVersion).toBe(7);
     const history = { sessionId: "session", cwd: "/workspace", native: { steps: [], revision: "a".repeat(64) } };
     expect(antigravityHistorySchema.safeParse(history).success).toBe(false);
     expect(antigravityHistorySchema.safeParse({ ...history, native: { ...history.native, executions: [] } }).success).toBe(true);
@@ -358,7 +394,7 @@ describe("Antigravity persistent sidecar", () => {
     expect(f.createHost).toHaveBeenCalledOnce();
   });
   it("denies wrong scope and incompatible capability 5 before execution", async () => {
-    const f = await fixture(), connected = await attachment(f, "normal", 5);
+    const f = await fixture(), connected = await attachment(f, "normal", 6);
     await expect(f.hosts.ensure({ ...f.configuration, principalId: "wrong" }, connected.epoch)).rejects.toMatchObject({ code: "antigravity_configuration_scope_denied" });
     const { port } = proxy(f, () => connected.lease);
     await expect(port.create({ cwd: f.cwd, operationId: "create" })).rejects.toMatchObject({ code: "antigravity_remote_unsupported" });

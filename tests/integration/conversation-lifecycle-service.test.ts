@@ -430,6 +430,7 @@ type Fixture = {
 };
 
 function fixture(input?: {
+  readonly maximumMigrationVersion?: number;
   readonly creationIdentity?:
     | typeof APPLICATION_ASSIGNED_CREATION_IDENTITY
     | typeof PROVIDER_ASSIGNED_CREATION_IDENTITY;
@@ -467,7 +468,8 @@ function fixture(input?: {
     quiescentCutoverConfirmed: true,
     appliedAt: 20,
   });
-  applyDatabaseMigrations(database, backendNormalizedMigrations);
+  applyDatabaseMigrations(database, backendNormalizedMigrations.filter(migration =>
+    migration.version <= (input?.maximumMigrationVersion ?? Infinity)));
   const profile = new BackendConfigurationRepository(database).listProfiles(
     scope,
   )[0]!;
@@ -3277,6 +3279,69 @@ describe("ConversationLifecycleService", () => {
     }
   });
 
+  it.each(["lost_reply", "not_sent"] as const)("recovers the original first-send rename after %s", async failure => {
+    const current = fixture();
+    let restarted: ReturnType<typeof restartLifecycle> | undefined;
+    try {
+      const thread = await createDraft(current, "55555555-5555-4555-8555-555555555557");
+      const request = { attemptId: "title-attempt", mutationId: "title-prompt", expectedThreadRevision: 0, expectedDraftRevision: 0 };
+      const original = { action: "rename" as const, applicationOperationId: "title-attempt:initial-title", title: "Original title" };
+      current.backendPersistence.initializationPlan = [original];
+      let dispatches = 0;
+      current.driver.perform.mockImplementationOnce(async () => {
+        if (failure === "lost_reply") dispatches++;
+        throw new BackendError({ category: "unavailable", retryable: true,
+          crossedSubmissionBoundary: failure === "lost_reply", safeMessage: "Native title write interrupted." });
+      }).mockImplementation(async () => { dispatches++; return { accepted: true }; });
+      current.driver.reconcileAction.mockResolvedValue({ outcome: "unknown" });
+      await expect(current.service.startFirstSend(current.scope, thread.applicationThreadId, request))
+        .resolves.toMatchObject({ status: "recovery_required" });
+      expect(current.driver.reconcileAction).not.toHaveBeenCalled();
+      expect(current.driver.submit).not.toHaveBeenCalled();
+      await current.actors.close();
+      current.backendPersistence.initializationPlan = [{ ...original, title: "Intervening edit" }];
+      restarted = restartLifecycle(current);
+      const recover = () => restarted!.service.recoverFirstSend(current.scope, thread.applicationThreadId, request.attemptId);
+      if (failure === "lost_reply") {
+        await expect(recover()).resolves.toMatchObject({ status: "recovery_required" });
+        expect(current.driver.reconcileAction).toHaveBeenLastCalledWith(original);
+        expect(current.driver.perform).toHaveBeenCalledOnce();
+        expect(current.driver.submit).not.toHaveBeenCalled();
+        current.driver.reconcileAction.mockResolvedValue({ outcome: "accepted" });
+      }
+      await expect(recover()).resolves.toMatchObject({ status: "bound" });
+      expect(current.driver.perform).toHaveBeenLastCalledWith(original);
+      expect(dispatches).toBe(1);
+      expect(current.driver.submit).toHaveBeenCalledOnce();
+    } finally {
+      await restarted?.actors.close();
+      await current.actors.close();
+      current.database.close();
+    }
+  });
+
+  it("checks an already identified pre-upgrade session before writing its first-send title", async () => {
+    const current = fixture({ maximumMigrationVersion: 177 });
+    try {
+      const thread = await createDraft(current, "55555555-5555-4555-8555-555555555558");
+      const attemptId = "old-attempt";
+      current.driver.captureAnchor.mockRejectedValueOnce(new Error("Stopped before the first prompt"));
+      await expect(current.service.startFirstSend(current.scope, thread.applicationThreadId, {
+        attemptId, mutationId: "old-first-input", expectedThreadRevision: 0, expectedDraftRevision: 0,
+      })).resolves.toMatchObject({ status: "recovery_required" });
+      applyDatabaseMigrations(current.database, backendNormalizedMigrations);
+      const action = { applicationOperationId: "old-attempt:initial-title", action: "rename" as const, title: "Old title" };
+      current.backendPersistence.initializationPlan = [action];
+      current.driver.reconcileAction.mockResolvedValueOnce({ outcome: "unknown" }).mockResolvedValueOnce({ outcome: "accepted" });
+      const recover = () => current.service.recoverFirstSend(current.scope, thread.applicationThreadId, attemptId);
+      await expect(recover()).resolves.toMatchObject({ status: "recovery_required" });
+      await expect(recover()).resolves.toMatchObject({ status: "bound" });
+      expect(current.driver.reconcileAction).toHaveBeenCalledWith(action);
+      expect(current.driver.perform).not.toHaveBeenCalled();
+      expect(current.driver.submit).toHaveBeenCalledOnce();
+    } finally { await current.actors.close(); current.database.close(); }
+  });
+
   it("binds provider-assigned identity before the first submission", async () => {
     const current = fixture({
       creationIdentity: PROVIDER_ASSIGNED_CREATION_IDENTITY,
@@ -3295,13 +3360,13 @@ describe("ConversationLifecycleService", () => {
       let boundBeforeInitialization = false;
       let boundBeforeSubmit = false;
       let creationStillGatedBeforeSubmit = false;
-      current.driver.reconcileAction.mockImplementation(async () => {
+      current.driver.perform.mockImplementation(async () => {
         boundBeforeInitialization =
           current.bindings.getBinding(
             current.scope,
             created.applicationThreadId,
           )?.backendConversationId === "provider-native-1";
-        return { outcome: "not_applied" };
+        return { accepted: true };
       });
       current.driver.submit.mockImplementation(async (input) => {
         const binding = current.bindings.getBinding(
@@ -3351,7 +3416,7 @@ describe("ConversationLifecycleService", () => {
       expect(boundBeforeInitialization).toBe(true);
       expect(creationStillGatedBeforeSubmit).toBe(true);
       expect(current.driver.create).toHaveBeenCalledTimes(1);
-      expect(current.driver.reconcileAction).toHaveBeenCalledWith(initialTitle);
+      expect(current.driver.reconcileAction).not.toHaveBeenCalled();
       expect(current.driver.perform).toHaveBeenCalledWith(initialTitle);
       expect(current.driver.submit).toHaveBeenCalledWith(
         expect.objectContaining({ text: "hello from durable draft" }),

@@ -223,6 +223,11 @@ export class CodexSharedClientFacade {
     return current?.dispatchContinuity ?? `local:${this.#lifecycle.generation}`;
   }
 
+  /** Read the existing generation without waking an idle app-server. */
+  currentReadyGeneration(): CodexReadyClientGeneration | undefined {
+    return this.#lifecycle.state === "ready" ? this.#current() : undefined;
+  }
+
   lifecycleSnapshot(): CodexClientLifecycleSnapshot {
     return this.#lifecycle;
   }

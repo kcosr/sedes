@@ -458,6 +458,7 @@ export class AutomationTurnSettlementObserver {
       | "completionObservedAt"
     >,
     turn: { readonly startedAt?: string; readonly completedAt?: string } = {},
+    purpose?: "archive",
   ): void {
     if (
       observation.applicationTurnId === null ||
@@ -476,8 +477,9 @@ export class AutomationTurnSettlementObserver {
         settledAt: observation.completionObservedAt,
         ...turnTimes(turn),
       },
+      purpose,
     );
-    if (run) this.#publisher.publishRunSettlement(scope, run);
+    if (run && purpose !== "archive") this.#publisher.publishRunSettlement(scope, run);
   }
 }
 

@@ -4,6 +4,7 @@ import type {
   OpenTaskDisposition,
   ThreadArchiveImpact,
 } from "../../../shared/index.js";
+import { getThreadArchiveOperations } from "../../operations/thread-archive.js";
 import type { ApplicationClientStore } from "../../stores/ApplicationClientStore.js";
 import { messageFrom } from "../../stores/ApplicationClientStore.js";
 import { Callout } from "@client/components/ui/callout";
@@ -37,12 +38,16 @@ export function useArchiveChoices(
   const impactRequest = useRef<Promise<ThreadArchiveImpact> | undefined>(
     undefined,
   );
+  const archives = getThreadArchiveOperations(store);
+  const confirmed = archives.confirmed(thread.id);
+  const pendingRequest = useRef(false);
+  const [confirmedRetry, setConfirmedRetry] = useState(Boolean(confirmed));
   const [pending, setPending] = useState<"only" | "all">();
-  const [error, setError] = useState("");
+  const [error, setError] = useState(confirmed ? "The previous archive is awaiting confirmation." : "");
   const [taskDisposition, setTaskDisposition] =
-    useState<OpenTaskDisposition>("move_to_project");
+    useState<OpenTaskDisposition>(confirmed?.openTaskDisposition ?? "move_to_project");
   const [executionWorkspaceDisposition, setExecutionWorkspaceDisposition] =
-    useState<"keep" | "delete">("keep");
+    useState<"keep" | "delete">(confirmed?.executionWorkspaceDisposition.kind ?? "keep");
 
   const openTaskTotal = (choice: "only" | "all"): number => {
     if (!impact) return 0;
@@ -89,7 +94,7 @@ export function useArchiveChoices(
   };
 
   const archive = async (choice: "only" | "all") => {
-    if (disabled || pending || loading) return;
+    if (disabled || pendingRequest.current || loading || !impact) return;
     if (
       choice === "all" &&
       impact?.executionWorkspace.kind === "isolated" &&
@@ -101,6 +106,7 @@ export function useArchiveChoices(
       setError(cause.message);
       throw cause;
     }
+    pendingRequest.current = true;
     setPending(choice);
     onPendingChange?.(true);
     setError("");
@@ -108,50 +114,36 @@ export function useArchiveChoices(
       const openTaskDisposition =
         openTaskTotal(choice) > 0 ? taskDisposition : undefined;
       const expectedStashedPromptCount = stashedPromptTotal(choice);
-      const taskConfirmation =
-        openTaskDisposition === "complete" && impact
-          ? {
-              expectedOpenTaskSnapshot:
-                choice === "all"
-                  ? impact.openTasks.familySnapshot
-                  : impact.openTasks.root.snapshot,
-            }
-          : {};
-      const archivedThreadIds =
-        choice === "all"
-          ? await store.archiveThreadFamily(thread, {
-              expectedStashedPromptCount,
-              ...taskConfirmation,
-              executionWorkspaceDisposition: { kind: "keep" },
-              ...(openTaskDisposition ? { openTaskDisposition } : {}),
-            })
-          : await store
-              .mutateInventory(thread, "archive", {
-                expectedStashedPromptCount,
-                ...taskConfirmation,
-                ...(openTaskDisposition ? { openTaskDisposition } : {}),
-                executionWorkspaceDisposition:
-                  impact?.executionWorkspace.kind === "isolated" &&
-                  executionWorkspaceDisposition === "delete"
-                    ? {
-                        kind: "delete" as const,
-                        expectedRevision:
-                          impact.executionWorkspace.allocationRevision,
-                        operationId: crypto.randomUUID(),
-                      }
-                    : { kind: "keep" as const },
-              })
-              .then(() => [thread.id]);
-      onArchived?.(choice, archivedThreadIds);
+      const all = choice === "all";
+      const request = archives.confirmed(thread.id) ?? {
+        action: all ? "archive_family" as const : "archive" as const,
+        mutationId: crypto.randomUUID(),
+        expectedRevision: thread.inventoryRevision,
+        expectedStashedPromptCount,
+        expectedPendingQuestionCount: impact.pendingQuestions.root + (all ? impact.pendingQuestions.descendants : 0),
+        expectedOpenTaskSnapshot: all ? impact.openTasks.familySnapshot : impact.openTasks.root.snapshot,
+        ...(openTaskDisposition ? { openTaskDisposition } : {}),
+        executionWorkspaceDisposition:
+          !all && impact.executionWorkspace.kind === "isolated" && executionWorkspaceDisposition === "delete"
+            ? { kind: "delete" as const, expectedRevision: impact.executionWorkspace.allocationRevision, operationId: crypto.randomUUID() }
+            : { kind: "keep" as const },
+      };
+      const archived = await archives.submit(thread.id, request);
+      onArchived?.(archived.choice, archived.ids);
     } catch (cause) {
       setError(messageFrom(cause));
-      try {
-        setImpact(await store.getThreadArchiveImpact(thread.id));
-      } catch {
-        // Preserve the mutation error; a later menu open performs a fresh read.
+      const retained = Boolean(archives.confirmed(thread.id));
+      setConfirmedRetry(retained);
+      if (!retained) {
+        // The old impact must not authorize another submission when its
+        // refresh fails. Retry is an impact read until fresh choices arrive.
+        setImpact(undefined);
+        try { setImpact(await store.getThreadArchiveImpact(thread.id)); }
+        catch { /* Preserve the mutation error alongside Retry. */ }
       }
       throw cause;
     } finally {
+      pendingRequest.current = false;
       setPending(undefined);
       onPendingChange?.(false);
     }
@@ -161,6 +153,8 @@ export function useArchiveChoices(
     impact,
     loading,
     pending,
+    confirmedRetry,
+    confirmedFamily: confirmed?.action === "archive_family",
     error,
     load,
     archive,

@@ -50,7 +50,13 @@ function ArchiveResult({ store, operation }: {
           <DialogDescription>{thread.title.text}</DialogDescription>
         </DialogHeader>
         <DialogBody><DialogAlert id={errorId} tone="danger">{error}</DialogAlert></DialogBody>
-        <DialogFooter><Button onClick={close}>Close</Button></DialogFooter>
+        <DialogFooter>
+          <Button variant="outline" onClick={close}>Close</Button>
+          {operations.confirmed(thread.id) && <Button onClick={() => {
+            close();
+            void operations.start(operation);
+          }}>Retry confirmed archive</Button>}
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );
@@ -61,7 +67,7 @@ function ArchiveResult({ store, operation }: {
       store={store}
       descendantCount={result.impact.descendantCount}
       initialImpact={result.impact}
-      disabled={!state.authoritative || state.connection !== "connected" || !thread.available}
+      disabled={!state.authoritative || state.connection !== "connected"}
       returnFocusRef={operation.returnFocusRef}
       onOpenChange={(open) => { if (!open) close(); }}
       onPendingChange={operation.onPendingChange}

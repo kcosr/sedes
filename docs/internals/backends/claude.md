@@ -41,7 +41,7 @@ enabled. One
 principal/backend runtime owns the SDK queries admitted by the shared Sedes
 conversation-runtime budget for that execution environment. A live Sedes thread
 has at most one warm query. The strict worker and persistent sidecar capabilities
-are `claude_runtime@4` and `claude_persistent_runtime@7`. Worker operations are
+are `claude_runtime@4` and `claude_persistent_runtime@8`. Worker operations are
 defined in `src/server/backends/claude/worker/claude-runtime-v4.ts`; older majors
 are not accepted.
 Closing a handle does not delete its Claude session, and attaching the same
@@ -80,14 +80,17 @@ minutes with nothing outstanding (no admitted or running input, no Claude
 activity or background work, no unacknowledged event, and no unanswered
 permission) is retired and resumes on demand. A query that still holds such
 retained work is never retired by eviction, this limit, or `retire`; it waits
-for an attachment to apply and acknowledge that work. Archiving a thread whose runtime
-is not loaded retires its query by session through the `retire` command, and
-the archive is refused while that query still has outstanding work. When only
-unacknowledged output holds the query, `retire` reports it as `undelivered`;
-main then attaches once to apply and acknowledge that output, closes with
-eviction, and retires the query. If the output still cannot be applied, the
-archive says so instead of calling the thread active. The host
-holds at most 32 sessions and fork launches together; an open beyond that is a
+for an attachment to apply and acknowledge that work. Archive looks up the existing sidecar service and query under the thread maintenance fence.
+The owner verifies application thread, workspace, controller, and startup generation. An idle
+query with retained output supplies a bounded, ordered cut without taking a live subscription.
+Sedes hydrates the matching history, records task bookends, usage, and application settlement,
+then acknowledges those exact sequences and rechecks for new work. A lost final response can
+be confirmed from the scoped retired-query journal. A changed owner or failed application
+keeps the archive pending. If the user opens the original query after a failed archive,
+the live observer applies the same durable effects before each ACK. Sedes clears the
+generation pin after the host confirms that exact sequence is fully applied and idle.
+Late terminal results retain their complete correlated turn even outside the display window.
+The host holds at most 32 sessions and fork launches together. An open beyond that is a
 retryable overload whose message names the limit.
 
 Connected replay is reclaimed incrementally instead of waiting for the entire
@@ -292,7 +295,7 @@ late responses cannot restore them. Missing telemetry leaves context unknown
 without failing the conversation. Persistent reads bind the current service,
 controller and startup identity and never launch or reconnect a runtime for the
 meter. The worker requires `query.context_usage` in its exact operation inventory;
-the persistent closed command union requires `claude_persistent_runtime@7`.
+the persistent closed command union requires `claude_persistent_runtime@8`.
 
 Counters continue to come from the transcript projection. Every `usage_changed`
 event replaces the complete context-and-counters snapshot. Neither the context
@@ -1154,7 +1157,7 @@ The alias list is bounded to 128 names of at most 160 characters per skill.
 The catalog exposes at most 512 skills. Client protocol 132 carries the
 optional normalized field; Pi, Codex, Grok, and OpenCode omit it and retain
 their existing behavior. Native `builtin` classification stays private and
-is preserved by `claude_runtime@4` / `claude_persistent_runtime@7` catalogs.
+is preserved by `claude_runtime@4` / `claude_persistent_runtime@8` catalogs.
 Stale selections, terminal-only commands, unclassified builtins, malformed
 commands, and reset-producing forms fail before provider submission.
 
@@ -1356,7 +1359,7 @@ action only on exact native evidence. A lost reply or runtime authority keeps
 the operation uncertain; recovery consults its retained receipt and never
 resends a command whose outcome cannot be proven. Persistent sidecars carry
 the same command, result, and scoped receipt behavior. This operation requires
-the current `claude_runtime@4` / `claude_persistent_runtime@7` capability majors;
+the current `claude_runtime@4` / `claude_persistent_runtime@8` capability majors;
 the shared sidecar wire protocol is 18.
 
 Full accounting receipts are limited to 256 per native query and persistent

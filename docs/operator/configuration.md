@@ -796,7 +796,7 @@ major-1 release and sign in under the selected execution account. One enabled
 Antigravity backend per environment may serve multiple targets. Set an optional
 absolute executable and native profile path in the backend editor. Configure
 target defaults from that runtime's advertised model and reasoning options.
-The reference CLI is 1.5.18. Remote execution requires `antigravity_runtime` capability 6.
+The reference CLI is 1.5.18. Remote execution requires `antigravity_runtime` capability 7.
 When a migration disables competing Antigravity backends on a local host, open
 each candidate in **Settings → Backends**. **Confirm retirement** is available
 when Sedes knows of no current owner, active work, or pending cleanup for that

@@ -2118,7 +2118,7 @@ class GrokConversationHandle implements ConversationHandle {
       }
       return session.title === nativeTitle
         ? { outcome: "accepted" }
-        : { outcome: "not_applied" };
+        : { outcome: "unknown" };
     } catch (error) {
       if (error instanceof BackendError) throw error;
       if (this.#lifecycle.closed) {

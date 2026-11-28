@@ -539,7 +539,7 @@ export class AntigravityHandle implements ConversationHandle {
       // acknowledged result from before that external change.
       const operationId = `config:${randomUUID()}`;
       try {
-        await this.#request(operationId, { type: "set_config", configId, value: requested });
+        await this.#request(operationId, { type: "set_config", origin: "session_configuration", configId, value: requested });
         const result = await this.#wait(operationId);
         await this.#applyConfigResult(operationId, result);
         if (antigravityConfigValue(this.#setup, category) !== requested) throw unknown();
@@ -659,7 +659,7 @@ export class AntigravityHandle implements ConversationHandle {
     if (!configId || !antigravitySelectOptions(option).some(option => option.value === value)) throw unsupported("The selected native setting is unavailable.");
     this.#assertSelection(input.action === "set_model" ? value : antigravityConfigValue(this.#setup, "model"),
       input.action === "set_thinking_level" ? value : antigravityConfigValue(this.#setup, "thought_level"));
-    await this.#request(input.applicationOperationId, { type: "set_config", configId, value });
+    await this.#request(input.applicationOperationId, { type: "set_config", origin: "thread_action", configId, value });
     const outcome = await this.#wait(input.applicationOperationId);
     try { await this.#applyConfigResult(input.applicationOperationId, outcome); }
     catch { return { accepted: true as const }; }

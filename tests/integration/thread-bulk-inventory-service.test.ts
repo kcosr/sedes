@@ -1,3 +1,4 @@
+import { DomainError } from "../../src/server/domain/errors.js";
 import { describe, expect, it, vi } from "vitest";
 import { parseResolvedBackendConfiguration } from "../support/resolved-backend-configuration.js";
 import { openOverlayDatabase } from "../../src/server/db/database.js";
@@ -111,7 +112,7 @@ function fixture(nativeArchive?: {
   const questions = new QuestionRequestRepository(database, inventory);
   const tasks = new TaskRepository(database);
   const runtimeStates = new Map<string, ThreadRunState>();
-  const archiveSafe = new Set<string>();
+  const archiveLiveWork = new Set<string>();
   const publishCommitted = vi.fn(async () => undefined);
   const publishTaskChange = vi.fn(async () => undefined);
   const runWithRuntimeRetired = vi.fn(
@@ -176,7 +177,7 @@ function fixture(nativeArchive?: {
     runtimes: {
       captureLoadedState: async (_requestedScope, threadId) => {
         const runState = runtimeStates.get(threadId);
-        return runState ? { runState, archiveRetirementSafe: archiveSafe.has(threadId) } : undefined;
+        return runState ? { runState, archiveHasLiveWork: archiveLiveWork.has(threadId) } : undefined;
       },
       runWithRuntimeRetired:
         runWithRuntimeRetired as unknown as ArchivedThreadRuntimeRetirement["runWithRuntimeRetired"],
@@ -195,7 +196,7 @@ function fixture(nativeArchive?: {
     inventory,
     tasks,
     runtimeStates,
-    archiveSafe,
+    archiveLiveWork,
     publishCommitted,
     publishTaskChange,
     runWithRuntimeRetired,
@@ -229,7 +230,7 @@ describe("thread bulk inventory service", () => {
       const impact = await current.service.impact(current.scope, { action: "archive", threadIds: ids });
       await current.service.transition(current.scope, {
         action: "archive", targets: impact.targets, mutationId: "bulk-native-archive-order",
-        expectedStashedPromptCount: 0, expectedOpenTaskCount: 0,
+        expectedStashedPromptCount: 0, expectedOpenTaskSnapshot: impact.openTasks.snapshot, expectedPendingQuestionCount: impact.pendingQuestionCount, expectedOpenTaskCount: 0,
       });
       expect(archive).toHaveBeenCalledExactlyOnceWith(current.scope, ids);
       expect(current.publishCommitted).toHaveBeenCalledOnce();
@@ -253,7 +254,7 @@ describe("thread bulk inventory service", () => {
         mutationId: `bulk-${action}-${availability}`,
         expectedStashedPromptCount: 0,
         ...(action === "archive"
-          ? { action: "archive", expectedOpenTaskCount: 0 }
+          ? { action: "archive", expectedOpenTaskSnapshot: impact.openTasks.snapshot, expectedPendingQuestionCount: impact.pendingQuestionCount, expectedOpenTaskCount: 0 }
           : { action: "park" }),
       });
       for (const id of ids) {
@@ -267,14 +268,14 @@ describe("thread bulk inventory service", () => {
     const current = fixture();
     try {
       const ids = current.ids.slice(0, 2);
-      for (const id of ids) { current.runtimeStates.set(id, "disconnected"); current.archiveSafe.add(id); }
+      for (const id of ids) { current.runtimeStates.set(id, "disconnected"); }
       const parkImpact = await current.service.impact(current.scope, { action: "park", threadIds: ids });
       expect(parkImpact).toMatchObject({ available: false, blockers: { total: 2 } });
       const impact = await current.service.impact(current.scope, { action: "archive", threadIds: ids });
       expect(impact).toMatchObject({ available: true, blockers: { total: 0 } });
       await current.service.transition(current.scope, {
         action: "archive", targets: impact.targets, mutationId: "bulk-archive-incomplete",
-        expectedStashedPromptCount: 0, expectedOpenTaskCount: 0,
+        expectedStashedPromptCount: 0, expectedOpenTaskSnapshot: impact.openTasks.snapshot, expectedPendingQuestionCount: impact.pendingQuestionCount, expectedOpenTaskCount: 0,
       });
       for (const id of ids) expect(current.inventory.getInventory(current.scope, id).inventoryState).toBe("archived");
     } finally { current.database.close(); }
@@ -295,15 +296,30 @@ describe("thread bulk inventory service", () => {
         });
       } else current.runtimeStates.set(unavailableId, state);
       const impact = await current.service.impact(current.scope, { action: "archive", threadIds: ids });
-      expect(impact).toMatchObject({
-        available: false, blockers: { total: 1, items: [{ threadId: unavailableId, reason: "active" }] },
-      });
+      if (state === "provider_work") {
+        expect(impact).toMatchObject({ available: false, blockers: { total: 1 } });
+      } else {
+        expect(impact).toMatchObject({ available: true, blockers: { total: 0 } });
+        current.runWithRuntimeRetired.mockRejectedValueOnce(
+          new DomainError("invalid_transition", "The provider could not confirm quiescence.", true));
+      }
       await expect(current.service.transition(current.scope, {
         action: "archive", targets: impact.targets,
         mutationId: `bulk-archive-unavailable-${state}`,
-        expectedStashedPromptCount: 0, expectedOpenTaskCount: 0,
+        expectedStashedPromptCount: 0, expectedOpenTaskSnapshot: impact.openTasks.snapshot, expectedPendingQuestionCount: impact.pendingQuestionCount, expectedOpenTaskCount: 0,
       })).rejects.toMatchObject({ code: "invalid_transition" });
       for (const id of ids) expect(current.inventory.getInventory(current.scope, id).inventoryState).toBe("active");
+    } finally { current.database.close(); }
+  });
+
+  it.each(["idle", "disconnected", "reconciling"] as const)("blocks observed live work on a %s stack member", async state => {
+    const current = fixture();
+    try {
+      const [rootId, childId] = current.ids as [string, string, ...string[]];
+      current.runtimeStates.set(childId, state);
+      current.archiveLiveWork.add(childId);
+      await expect(current.service.impact(current.scope, { action: "archive", threadIds: [rootId, childId] }))
+        .resolves.toMatchObject({ available: false, blockers: { total: 1, items: [{ threadId: childId, reason: "active" }] } });
     } finally { current.database.close(); }
   });
 
@@ -320,6 +336,18 @@ describe("thread bulk inventory service", () => {
         action: "archive", threadIds: [first, second],
       });
       expect(impact.pendingQuestionCount).toBe(1);
+      current.runWithRuntimeRetired.mockImplementation(async (_scope, id, operation) => {
+        if (id === first) current.questions.admit(current.scope, second, "retained-new-question", {
+          questions: [{ title: "Build now?", options: null }],
+        }, 451);
+        return operation();
+      });
+      await expect(current.service.transition(current.scope, {
+        action: "archive", targets: impact.targets, mutationId: "bulk-questions-changed",
+        expectedStashedPromptCount: 0, expectedPendingQuestionCount: impact.pendingQuestionCount,
+        expectedOpenTaskSnapshot: impact.openTasks.snapshot, expectedOpenTaskCount: 0,
+      })).rejects.toMatchObject({ code: "conflict" });
+      for (const id of [first, second]) expect(current.inventory.getInventory(current.scope, id).inventoryState).toBe("active");
     } finally {
       current.database.close();
     }
@@ -509,7 +537,7 @@ describe("thread bulk inventory service", () => {
           targets: impact.targets,
           mutationId: "bulk-archive-two",
           expectedStashedPromptCount: 0,
-          expectedOpenTaskCount: 0,
+          expectedOpenTaskSnapshot: impact.openTasks.snapshot, expectedPendingQuestionCount: impact.pendingQuestionCount, expectedOpenTaskCount: 0,
         }),
       ).resolves.toEqual({ changedThreadIds: [second, first] });
       expect(
@@ -551,7 +579,7 @@ describe("thread bulk inventory service", () => {
         targets: impact.targets,
         mutationId: "bulk-archive-runtime-replay",
         expectedStashedPromptCount: 0,
-        expectedOpenTaskCount: 0,
+        expectedOpenTaskSnapshot: impact.openTasks.snapshot, expectedPendingQuestionCount: impact.pendingQuestionCount, expectedOpenTaskCount: 0,
       };
       current.runWithRuntimeRetired.mockImplementation(
         async (_scope, threadId) => {
@@ -603,6 +631,36 @@ describe("thread bulk inventory service", () => {
     } finally {
       current.database.close();
     }
+  });
+
+  it("respects a restore when another stack archive commits before fence admission", async () => {
+    const nativeArchive = vi.fn(async () => undefined);
+    const current = fixture({ archive: nativeArchive });
+    try {
+      const ids = current.ids.slice(0, 2);
+      const restored = ids[0]!;
+      const impact = await current.service.impact(current.scope, { action: "archive", threadIds: ids });
+      const request = {
+        action: "archive" as const, targets: impact.targets, mutationId: "overlapping-stack-archive",
+        expectedStashedPromptCount: 0, expectedPendingQuestionCount: 0, expectedOpenTaskCount: 0,
+        expectedOpenTaskSnapshot: impact.openTasks.snapshot,
+      };
+      let admit!: () => void;
+      const admission = new Promise<void>(resolve => { admit = resolve; });
+      current.runWithRuntimeRetired.mockImplementationOnce(async (_scope, _id, operation) => {
+        await admission;
+        return operation();
+      });
+      const waiting = current.service.transition(current.scope, request);
+      await expect(current.service.transition(current.scope, request)).resolves.toEqual({ changedThreadIds: ids });
+      current.inventory.transitionInventory(current.scope, restored, {
+        expectedRevision: 1, mutationId: "restore-before-stack-admission", change: { action: "restore" }, now: 510,
+      });
+      admit();
+      await expect(waiting).resolves.toEqual({ changedThreadIds: [ids[1]] });
+      expect(nativeArchive).toHaveBeenCalledTimes(2);
+      expect(nativeArchive).toHaveBeenLastCalledWith(current.scope, [ids[1]]);
+    } finally { current.database.close(); }
   });
 
   it("unparks only parked members and reports an all-satisfied stack as unavailable", async () => {
@@ -706,7 +764,7 @@ describe("thread bulk inventory service", () => {
           targets: impact.targets,
           mutationId: "bulk-stale-stash",
           expectedStashedPromptCount: impact.stashedPromptCount,
-          expectedOpenTaskCount: impact.openTasks.total,
+          expectedOpenTaskSnapshot: impact.openTasks.snapshot, expectedPendingQuestionCount: impact.pendingQuestionCount, expectedOpenTaskCount: impact.openTasks.total,
         }),
       ).rejects.toThrow("Stashed prompts changed");
       expect(
@@ -733,10 +791,10 @@ describe("thread bulk inventory service", () => {
           targets: refreshed.targets,
           mutationId: "bulk-stale-task",
           expectedStashedPromptCount: refreshed.stashedPromptCount,
-          expectedOpenTaskCount: refreshed.openTasks.total,
+          expectedOpenTaskSnapshot: refreshed.openTasks.snapshot, expectedPendingQuestionCount: refreshed.pendingQuestionCount, expectedOpenTaskCount: refreshed.openTasks.total,
           openTaskDisposition: "move_to_project",
         }),
-      ).rejects.toThrow("Open tasks changed");
+      ).rejects.toMatchObject({ code: "conflict" });
       expect(current.tasks.get(current.scope, task.id)).toMatchObject({
         scopeKind: "thread",
         threadId: second,
@@ -836,7 +894,7 @@ describe("thread bulk inventory service", () => {
         targets: impact.targets,
         mutationId: "bulk-cross-project-archive",
         expectedStashedPromptCount: 0,
-        expectedOpenTaskCount: 2,
+        expectedOpenTaskSnapshot: impact.openTasks.snapshot, expectedPendingQuestionCount: impact.pendingQuestionCount, expectedOpenTaskCount: 2,
         openTaskDisposition: "move_to_project",
       });
       expect(current.tasks.get(current.scope, tasks[0]!.id).projectId).toBe(
@@ -863,11 +921,11 @@ describe("reviewed bulk task completion", () => {
       const impact = await current.service.impact(current.scope, { action: "archive", threadIds: [first, second] });
       const input = {
         action: "archive" as const, targets: impact.targets, mutationId: "bulk-complete", expectedStashedPromptCount: 0,
-        expectedOpenTaskCount: impact.openTasks.total, expectedOpenTaskSnapshot: impact.openTasks.snapshot,
+        expectedPendingQuestionCount: impact.pendingQuestionCount, expectedOpenTaskCount: impact.openTasks.total, expectedOpenTaskSnapshot: impact.openTasks.snapshot,
         openTaskDisposition: "complete" as const,
       };
       current.publishTaskChange.mockRejectedValueOnce(new Error("interrupted publication"));
-      await expect(current.service.transition(current.scope, input)).rejects.toThrow("interrupted publication");
+      await expect(current.service.transition(current.scope, input)).rejects.toMatchObject({ code: "operation_outcome_uncertain", retryable: true });
       await current.service.transition(current.scope, input);
       expect(current.tasks.get(current.scope, tasks[0]!.id)).toMatchObject({ scopeKind: "thread", threadId: first, completedAt: 500, revision: 1 });
       expect(current.tasks.get(current.scope, tasks[1]!.id).completedAt).toBe(500);
@@ -886,7 +944,7 @@ describe("reviewed bulk task completion", () => {
       const replacement = current.tasks.create(current.scope, { title: "Unreviewed", scope: { kind: "thread", threadId: second }, mutationId: "replacement-task", now: 460 });
       await expect(current.service.transition(current.scope, {
         action: "archive", targets: impact.targets, mutationId: "stale-bulk-complete", expectedStashedPromptCount: 0,
-        expectedOpenTaskCount: 1, expectedOpenTaskSnapshot: impact.openTasks.snapshot, openTaskDisposition: "complete",
+        expectedPendingQuestionCount: impact.pendingQuestionCount, expectedOpenTaskCount: 1, expectedOpenTaskSnapshot: impact.openTasks.snapshot, openTaskDisposition: "complete",
       })).rejects.toMatchObject({ code: "conflict" });
       for (const id of [first, second]) expect(current.inventory.getInventory(current.scope, id).inventoryState).toBe("active");
       expect(current.tasks.get(current.scope, replacement.id).completedAt).toBeNull();

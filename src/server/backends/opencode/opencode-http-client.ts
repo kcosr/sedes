@@ -145,7 +145,12 @@ export class OpenCodeHttpClient {
     const lifetime = AbortSignal.any([this.#lifetime.signal, headersDeadline.signal, ...(init?.signal ? [init.signal] : [])]);
     let response: Response;
     try { response = await this.#fetch(url, { ...init, headers, redirect: "error", signal: lifetime }); }
-    finally { clearTimeout(timer); }
+    catch (error) {
+      // Loopback connection refusal proves the selected daemon was unreachable; an HTTP error has no such meaning.
+      if (!lifetime.aborted && error instanceof Error && error.cause instanceof Error &&
+          "code" in error.cause && error.cause.code === "ECONNREFUSED") throw new OpenCodeRuntimeError("opencode_daemon_offline");
+      throw error;
+    } finally { clearTimeout(timer); }
     if (response.status >= 300 && response.status < 400) {
       await response.body?.cancel();
       throw new OpenCodeRuntimeError("opencode_redirect_rejected");

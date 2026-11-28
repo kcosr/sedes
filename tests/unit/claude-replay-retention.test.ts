@@ -43,7 +43,7 @@ async function fixture(highWaterEntries = 8, highWaterBytes?: number) {
   const listener = (event: ClaudePersistentEvent) => { delivered.push(event); };
   await host.execute({ ...authority, action: "open", replay: "full", request: { queryId: sessionId, sessionId, cwd: "/workspace", launch: "new", environment: {}, enableCanUseTool: true } }, listener);
   const session = native.sessions[0]!;
-  const ack = (sequence: number) => host.execute({ ...authority, action: "acknowledge", request: { sessionId, sequence } }, listener);
+  const ack = (sequence: number) => host.execute({ ...authority, action: "acknowledge", request: { sessionId, startupProbeUuid: session.startupProbeUuid, sequence } }, listener);
   const emit = async (value: SDKMessage, acknowledge = true) => { await session.emit(value); const event = delivered.at(-1)!; if (acknowledge) await ack(event.sequence); return event; };
   const snapshot = async () => claudePersistentAttachmentSchema.parse(await host.execute({ ...authority, action: "attach", replay: "full", request: { sessionId } }, listener));
   cleanups.push(async () => { host.detach(); await native.runtime.close(); });
@@ -331,7 +331,7 @@ describe("Claude acknowledged replay retention", () => {
     await f.emit(complete()); await f.emit(complete());
     for (let index = 0; index < 2; index++) {
       await f.sessions[1]!.emit(message({ ...complete(), session_id: secondId }));
-      await f.host.execute({ ...f.authority, action: "acknowledge", request: { sessionId: secondId, sequence: delivered.at(-1)!.sequence } }, listener);
+      await f.host.execute({ ...f.authority, action: "acknowledge", request: { sessionId: secondId, startupProbeUuid: f.sessions[1]!.startupProbeUuid, sequence: delivered.at(-1)!.sequence } }, listener);
     }
     await vi.advanceTimersByTimeAsync(1);
     expect(f.runtime.getSessionMessagesPage).toHaveBeenCalledOnce();

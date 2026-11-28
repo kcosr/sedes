@@ -15,6 +15,7 @@ import type { InventoryService } from "./inventory-service.js";
 import type { TaskChangePublisher } from "./task-service.js";
 import { DomainError } from "./errors.js";
 import {
+  finishCommittedArchive,
   runWithArchivedThreadRuntimesRetired,
   type ArchivedThreadRuntimeRetirement,
 } from "./thread-runtime-archive-retirement.js";
@@ -198,6 +199,7 @@ export class ThreadArchiveService {
        * rejects any changed ancestry instead of silently expanding authority.
        */
       readonly expectedThreadIds?: readonly string[];
+      readonly expectedPendingQuestionCount?: number;
       readonly expectedStashedPromptCount?: number;
       readonly openTaskDisposition?: OpenTaskDisposition;
       readonly expectedOpenTaskSnapshot?: string;
@@ -210,6 +212,7 @@ export class ThreadArchiveService {
           };
     },
   ): Promise<readonly string[]> {
+    const startedAt = performance.now();
     const now = this.input.now?.() ?? Date.now();
     const disposition = input.openTaskDisposition ?? "keep";
     const replay = this.input.inventory.findArchiveThreadsReplay(
@@ -217,22 +220,20 @@ export class ThreadArchiveService {
       threadId,
       input,
     );
-    if (replay) {
-      const archivedThreadIds = replay.states
-        .filter(({ inventoryState }) => inventoryState === "archived")
-        .map(({ threadId: replayThreadId }) => replayThreadId);
+    const stillArchived = (id: string) => this.input.inventory.getInventory(scope, id).inventoryState === "archived";
+    if (replay) return finishCommittedArchive(async () => {
+      const archivedThreadIds = replay.threadIds.filter(stillArchived);
       await runWithArchivedThreadRuntimesRetired({
-        purpose: "archive",
-        scope,
-        threadIds: archivedThreadIds,
-        runtimes: this.input.runtimes,
-        operation: async () => {
-          if (archivedThreadIds.length > 0) {
-            await this.input.nativeArchive?.archive(scope, archivedThreadIds);
-          }
+        purpose: "archive", scope, threadIds: archivedThreadIds, runtimes: this.input.runtimes,
+        startedAt, replay: { readThreadIds: () => replay.threadIds, isArchived: stillArchived },
+        operation: async (beginCommit) => {
+          beginCommit();
+          const currentIds = archivedThreadIds.filter(stillArchived);
+          if (currentIds.length > 0) await this.input.nativeArchive?.archive(scope, currentIds);
         },
       });
-      await this.input.publications.publishCommitted(scope, replay.states, now);
+      const currentStates = replay.threadIds.map(id => this.input.inventory.getInventory(scope, id));
+      await this.input.publications.publishCommitted(scope, currentStates, now);
       // Re-publishing the receipted moved tasks lets a retry recover task
       // events the original request failed to emit after its commit.
       for (const movedTaskId of replay.movedTaskIds) {
@@ -243,8 +244,8 @@ export class ThreadArchiveService {
         threadId,
         input.executionWorkspaceDisposition,
       );
-      return replay.threadIds;
-    }
+      return replay.threadIds.filter(stillArchived);
+    });
     let threadIds: readonly string[];
     if (input.includeDescendants) {
       threadIds = this.#familyThreadIds(scope, threadId);
@@ -264,13 +265,19 @@ export class ThreadArchiveService {
         "The thread family changed after the archive operation was admitted.",
       );
     }
-    const blocked = await this.#blockedThreads(scope, threadIds);
     const result = await runWithArchivedThreadRuntimesRetired({
       purpose: "archive",
+      startedAt,
+      replay: {
+        readThreadIds: () => this.input.inventory.findArchiveThreadsReplay(scope, threadId, input)?.threadIds,
+        isArchived: stillArchived,
+      },
       scope,
       threadIds,
       runtimes: this.input.runtimes,
-      operation: async () => {
+      operation: async (beginCommit) => {
+        const blocked = await this.#blockedThreads(scope, threadIds);
+        beginCommit();
         const committed = this.input.inventory.archiveThreads(scope, threadId, {
           ...input,
           expectedThreadIds: threadIds,
@@ -296,22 +303,26 @@ export class ThreadArchiveService {
         });
         // Keep the maintenance fences through native synchronization. Include
         // already-archived members so a manual retry can synchronize old rows.
-        await this.input.nativeArchive?.archive(scope, threadIds);
+        await finishCommittedArchive(async () => {
+          const archived = committed.states.filter(state => state.inventoryState === "archived").map(state => state.threadId);
+          if (archived.length) await this.input.nativeArchive?.archive(scope, archived);
+        });
         return committed;
       },
     });
-    await this.input.publications.publishCommitted(scope, result.states, now);
-    for (const movedTaskId of result.movedTaskIds) {
-      await this.input.taskPublications.publishTaskChange(scope, movedTaskId);
-    }
-    await this.#applyExecutionWorkspaceDisposition(
-      scope,
-      threadId,
-      input.executionWorkspaceDisposition,
-    );
-    return result.states.map(
-      ({ threadId: changedThreadId }) => changedThreadId,
-    );
+    return finishCommittedArchive(async () => {
+      await this.input.publications.publishCommitted(scope, result.states, now);
+      for (const movedTaskId of result.movedTaskIds) {
+        await this.input.taskPublications.publishTaskChange(scope, movedTaskId);
+      }
+      await this.#applyExecutionWorkspaceDisposition(
+        scope,
+        threadId,
+        input.executionWorkspaceDisposition,
+      );
+      return result.states.map(state => state.threadId).filter(id =>
+        this.input.inventory.getInventory(scope, id).inventoryState === "archived");
+    });
   }
 
   async park(
@@ -395,7 +406,7 @@ export class ThreadArchiveService {
           readonly operationId: string;
         },
   ): Promise<void> {
-    if (disposition.kind !== "delete") return;
+    if (disposition.kind !== "delete" || this.input.inventory.getInventory(scope, threadId).inventoryState !== "archived") return;
     await this.input.executionWorkspaces.delete(scope, threadId, disposition);
   }
 
@@ -432,8 +443,10 @@ export class ThreadArchiveService {
               : summary.backingState,
             loaded?.runState,
           );
-          if (!BLOCKED_RUN_STATES.has(state) || state === "disconnected" && loaded?.archiveRetirementSafe === true) return;
-          blocked.set(threadId, state === "running" ? "running" : "active");
+          const uncertain = state === "disconnected" || state === "reconciling";
+          if (loaded?.archiveHasLiveWork || (!uncertain && BLOCKED_RUN_STATES.has(state))) {
+            blocked.set(threadId, state === "running" ? "running" : "active");
+          }
         }),
       );
     }

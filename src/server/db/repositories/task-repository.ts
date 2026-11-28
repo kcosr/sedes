@@ -1086,7 +1086,8 @@ export class TaskRepository {
     }))();
   }
 
-  /** Hash every open task revision, including rows beyond the visible summary limit. */
+  /** Inventory confirmation binds target membership, each member's inventory
+   * revision, and every open task revision, including undisplayed tasks. */
   openThreadTaskSnapshot(
     scope: RequestScope,
     threadIds: readonly string[],
@@ -1097,6 +1098,13 @@ export class TaskRepository {
     );
     if (canonicalThreadIds.length > 0) {
       const placeholders = canonicalThreadIds.map(() => "?").join(", ");
+      for (const row of this.database.prepare(`
+        SELECT thread_id, inventory_revision FROM thread_principal_state
+        WHERE tenant_id = ? AND principal_id = ? AND thread_id IN (${placeholders})
+        ORDER BY thread_id ASC
+      `).iterate(scope.tenantId, scope.principalId, ...canonicalThreadIds)) {
+        hash.update(JSON.stringify(row));
+      }
       const rows = this.database
         .prepare(`
           SELECT id, revision FROM tasks
@@ -1129,7 +1137,7 @@ export class TaskRepository {
     ) {
       throw new DomainError(
         "conflict",
-        "Open tasks changed while this action was being confirmed. Review the updated impact and try again.",
+        "Open tasks or the selected threads changed while this action was being confirmed. Review the updated impact and try again.",
       );
     }
   }

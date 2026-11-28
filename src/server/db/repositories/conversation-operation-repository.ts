@@ -22,6 +22,7 @@ import { interactionResponseInputSchema } from "../../../shared/protocol/backend
 import type { ComposerAttachmentDescriptor } from "../../../shared/protocol/composer-attachments.js";
 import type { ComposerTaskReference } from "../../../shared/protocol/tasks.js";
 import type { MaterializedTaskContext } from "../../domain/materialized-task-contexts.js";
+import { draftRenameFingerprint } from "./inventory-repository.js";
 import { ComposerAttachmentRepository } from "./composer-attachment-repository.js";
 import { activateParkedThread } from "./parked-thread-activation.js";
 import {
@@ -447,6 +448,17 @@ function parseInterrupt(row: ReceiptRow): InterruptOperationRecord {
     state: row.resultCode,
     createdAt: row.createdAt,
   };
+}
+
+function backendActionFingerprint(threadId: string, input: {
+  readonly expectedThreadRevision: number;
+  readonly expectedSettingsRevision?: number;
+  readonly operation: PerformOperation["operation"];
+}): string {
+  return fingerprint([
+    "conversation_backend_action", threadId, input.expectedThreadRevision,
+    input.expectedSettingsRevision ?? null, input.operation,
+  ]);
 }
 
 function backendActionOperationKind(
@@ -1163,6 +1175,27 @@ export class ConversationOperationRepository {
     })();
   }
 
+  /** A completed draft rename stays authoritative after first-send creates a native binding. */
+  isAcceptedRename(scope: RequestScope, threadId: string, input: {
+    readonly mutationId: string;
+    readonly expectedThreadRevision: number;
+    readonly operation: Extract<PerformOperation["operation"], { action: "rename" }>;
+  }): boolean {
+    const receipt = this.#findReceipt(scope, input.mutationId);
+    if (!receipt) return false;
+    const draft = receipt.operationKind === "rename_thread";
+    const expected = draft
+      ? draftRenameFingerprint(threadId, input.operation.title, input.expectedThreadRevision)
+      : backendActionFingerprint(threadId, input);
+    if (
+      receipt.threadId !== threadId || receipt.requestFingerprint !== expected ||
+      (!draft && receipt.operationKind !== "conversation_rename")
+    ) {
+      throw new DomainError("conflict", "The mutation ID is already used by another operation.");
+    }
+    return draft ? receipt.resultCode === "completed" : parseBackendAction(receipt).state === "accepted";
+  }
+
   prepareBackendAction(
     scope: RequestScope,
     threadId: string,
@@ -1178,13 +1211,7 @@ export class ConversationOperationRepository {
       throw new Error("provider_feature_requires_dedicated_receipt");
     }
     const operation = input.operation;
-    const requestFingerprint = fingerprint([
-      "conversation_backend_action",
-      threadId,
-      input.expectedThreadRevision,
-      input.expectedSettingsRevision ?? null,
-      operation,
-    ]);
+    const requestFingerprint = backendActionFingerprint(threadId, input);
     const operationKind = backendActionOperationKind(operation.action);
     return this.database.transaction(() => {
       const existing = this.#findReceipt(scope, input.mutationId);

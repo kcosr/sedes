@@ -30,6 +30,8 @@ import {
   type ReadConversationInput,
   type ReconcileSubmissionInput,
   type ReleaseConversationResidencyInput,
+  type PrepareConversationArchiveInput,
+  type ConversationArchivePreparation,
   type ResolveBranchCheckpointInput,
   type SubmissionReconciliation,
 } from "../contracts.js";
@@ -57,6 +59,7 @@ import {
   type ClaudeHistoryProjection,
 } from "./claude-history-projector.js";
 import type {
+  ClaudeArchiveRecoveryCut,
   ClaudeRuntimeClient,
   ClaudeRuntimeSession,
 } from "./claude-runtime-client.js";
@@ -514,7 +517,11 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
     };
   }
 
-  async attach(input: AttachConversationInput): Promise<ConversationHandle> {
+  attach(input: AttachConversationInput): Promise<ConversationHandle> {
+    return this.#attach(input);
+  }
+
+  async #attach(input: AttachConversationInput, recovery?: ClaudeArchiveRecoveryCut): Promise<ClaudeConversationHandle> {
     this.#assertAttach(input);
     this.#assertEnabled();
     const sessionId = input.binding.backendConversationId;
@@ -526,19 +533,21 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
       releaseAdmission();
     };
     try {
-      const exists = await this.#sessionExists(sessionId, input.workspace);
-      const priorSettings = this.#settings.get(
-        input.scope,
-        input.binding.applicationThreadId,
-      );
-      this.#settings.markEffectiveUnknown(
-        input.scope,
-        input.binding.applicationThreadId,
-        {
-          expectedRevision: priorSettings.revision,
-          now: Date.parse(this.#now()),
-        },
-      );
+      const exists = recovery ? true : await this.#sessionExists(sessionId, input.workspace);
+      if (!recovery) {
+        const priorSettings = this.#settings.get(
+          input.scope,
+          input.binding.applicationThreadId,
+        );
+        this.#settings.markEffectiveUnknown(
+          input.scope,
+          input.binding.applicationThreadId,
+          {
+            expectedRevision: priorSettings.revision,
+            now: Date.parse(this.#now()),
+          },
+        );
+      }
       const queryGeneration = this.#allocateQueryGeneration();
       const agentToolSource = {
         scope: input.scope,
@@ -548,7 +557,7 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
         backendKind: "claude_agent_sdk" as const,
       };
       const agentToolPolicy =
-        this.#agentToolCli.availability !== "unavailable"
+        !recovery && this.#agentToolCli.availability !== "unavailable"
           ? this.#agentTools.readPolicy(agentToolSource)
           : undefined;
       const cliPresentation =
@@ -573,13 +582,14 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
       );
       handle = await ClaudeConversationHandle.create({
         usage: this.#usage,
-        accountUsage: this.#accountUsage,
+        accountUsage: recovery ? undefined : this.#accountUsage,
         nativeNamespace: this.#nativeNamespace,
         binding: input.binding,
         canonicalWorkspacePath: input.workspace.canonicalPath,
         workspaceId: input.workspace.summary.id,
         opaqueBindingDetail: input.opaqueBindingDetail,
         runtimeClient: this.#runtimeClient,
+        archiveRecovery: recovery,
         executablePath: this.#executablePath,
         initializationTimeoutMs: this.#initializationTimeoutMs,
         settings: this.#settings,
@@ -591,27 +601,27 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
         )
           ? true
           : undefined,
-        onPermissionModeEvidence: (evidence) =>
+        onPermissionModeEvidence: recovery ? undefined : (evidence) =>
           this.#recordPermissionModeEvidence(
             input.binding.applicationThreadId,
             evidence,
           ),
-        onModelEvidence: (evidence) =>
+        onModelEvidence: recovery ? undefined : (evidence) =>
           this.#recordModelEvidence(
             input.binding.applicationThreadId,
             evidence,
           ),
-        onEffortEvidence: (evidence) =>
+        onEffortEvidence: recovery ? undefined : (evidence) =>
           this.#recordEffortEvidence(
             input.binding.applicationThreadId,
             evidence,
           ),
-        onQueryGenerationLost: (generation) =>
+        onQueryGenerationLost: recovery ? undefined : (generation) =>
           this.#recordQueryGenerationLost(
             input.binding.applicationThreadId,
             generation,
           ),
-        onEffectiveAxisUnknown: (generation, axis) =>
+        onEffectiveAxisUnknown: recovery ? undefined : (generation, axis) =>
           this.#recordEffectiveAxisUnknown(
             input.binding.applicationThreadId,
             generation,
@@ -630,7 +640,7 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
           : {}),
         ...(sourceCapability ? { sourceCapability } : {}),
         childEnvironment: this.#childEnvironment,
-        executionEnvironment: await this.#resolveThreadEnvironment(input.binding.applicationThreadId),
+        executionEnvironment: recovery ? undefined : await this.#resolveThreadEnvironment(input.binding.applicationThreadId),
         onVersionAssessment: versionObservation.observeVersionAssessment,
         onVersionAssessmentFailed: versionObservation.failed,
         forkBoundaryAuthentication: this.#forkBoundaryAuthentication,
@@ -639,6 +649,11 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
         // startup message this launch just persisted.
         onControlReady: input.onControlReady,
         loadInitialMessages: async () => {
+          if (recovery) {
+            const messages = await recovery.readHistory();
+            assertClaudeHistorySession(messages, sessionId);
+            return messages;
+          }
           if (!exists) return [];
           const messages = await this.#runtimeClient.getSessionMessages(
             sessionId,
@@ -1207,6 +1222,32 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
     }
   }
 
+  async prepareArchive(input: PrepareConversationArchiveInput): Promise<ConversationArchivePreparation> {
+    this.#assertAttach(input);
+    const sessionId = input.binding.backendConversationId;
+    if ([...this.#handles].some(handle => handle.binding.backendConversationId === sessionId)) {
+      input.markObserved();
+      return { outcome: "busy", reason: "Claude still has an attachment to this thread." };
+    }
+    if (!this.#runtimeClient.prepareArchive) return { outcome: "released" }; // Local Claude exits with its handle.
+    const outcome = await this.#runtimeClient.prepareArchive({
+      sessionId, cwd: input.workspace.canonicalPath, applicationThreadId: input.binding.applicationThreadId,
+      signal: input.signal, retainedOwner: input.retainedOwner, markObserved: () => input.markObserved(),
+      markRetained: owner => input.markRetained(owner), markSettled: owner => input.markSettled(owner),
+      apply: async recovery => {
+        const handle = await this.#attach(input, recovery);
+        try {
+          await handle.establishProjection({ signal: input.signal });
+          for (const { snapshot, completed } of handle.archiveSettlement()) {
+            input.signal.throwIfAborted();
+            await input.settle(snapshot, completed);
+          }
+        } finally { await handle.close(); }
+      },
+    });
+    return { outcome };
+  }
+
   async releaseConversationResidency(
     input: ReleaseConversationResidencyInput,
   ): Promise<"released" | "busy" | "undelivered"> {
@@ -1225,7 +1266,8 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
       // drains the same way before its hydration fails and evicts it.
       try {
         const handle = await this.attach(input);
-        await handle.close({ reason: "evicted" });
+        try { await handle.establishProjection({ signal: AbortSignal.timeout(15_000) }); }
+        finally { await handle.close({ reason: "evicted" }); }
       } catch (error) {
         console.warn("claude_residency_drain_failed", {
           sessionId, reason: error instanceof Error ? error.message.slice(0, 240) : "unknown",

@@ -186,7 +186,7 @@ describe("ApplicationClientStore lineage", () => {
     });
   });
 
-  it("requires a confirmed stash count before park or archive mutations", async () => {
+  it("requires a confirmed stash count before parking", async () => {
     const mutateInventory = vi.fn(async () => undefined);
     const api = {
       session: vi.fn(async () => session()),
@@ -197,9 +197,6 @@ describe("ApplicationClientStore lineage", () => {
     const root = snapshot().threads[0]!;
 
     await expect(store.mutateInventory(root, "park")).rejects.toThrow(
-      "confirmed stashed-prompt count",
-    );
-    await expect(store.mutateInventory(root, "archive")).rejects.toThrow(
       "confirmed stashed-prompt count",
     );
     expect(mutateInventory).not.toHaveBeenCalled();
@@ -268,7 +265,7 @@ describe("ApplicationClientStore lineage", () => {
   });
 
   it("forwards archive workspace disposition and lifecycle revisions", async () => {
-    const mutateInventory = vi.fn(async () => undefined);
+    const archiveThreads = vi.fn(async () => ({ archivedThreadIds: ["root-thread"] }));
     const getThreadExecutionWorkspace = vi.fn(async () => ({
       kind: "direct" as const,
     }));
@@ -290,7 +287,7 @@ describe("ApplicationClientStore lineage", () => {
     }));
     const api = {
       session: vi.fn(async () => session()),
-      mutateInventory,
+      archiveThreads,
       getThreadExecutionWorkspace,
       deleteThreadExecutionWorkspace,
       importThreadExecutionWorkspace,
@@ -300,7 +297,9 @@ describe("ApplicationClientStore lineage", () => {
     await store.initialize();
     const root = snapshot().threads[0]!;
 
-    await store.mutateInventory(root, "archive", {
+    await store.archiveThreads(root.id, {
+      action: "archive", expectedRevision: root.inventoryRevision, mutationId: crypto.randomUUID(), expectedPendingQuestionCount: 0,
+      expectedOpenTaskSnapshot: "a".repeat(64),
       expectedStashedPromptCount: 0,
       executionWorkspaceDisposition: {
         kind: "delete",
@@ -313,7 +312,7 @@ describe("ApplicationClientStore lineage", () => {
     await store.importThreadExecutionWorkspace(root.id, 3);
     await store.handoffThreadExecutionWorkspace(root.id, 3);
 
-    expect(mutateInventory).toHaveBeenCalledWith(
+    expect(archiveThreads).toHaveBeenCalledWith(
       root.id,
       expect.objectContaining({
         action: "archive",
@@ -366,7 +365,9 @@ describe("ApplicationClientStore lineage", () => {
       impact,
     );
     await expect(
-      store.archiveThreadFamily(root, {
+      store.archiveThreads(root.id, {
+        action: "archive_family", expectedRevision: root.inventoryRevision, mutationId: crypto.randomUUID(),
+        expectedOpenTaskSnapshot: "a".repeat(64), expectedPendingQuestionCount: 0,
         expectedStashedPromptCount: 3,
         executionWorkspaceDisposition: { kind: "keep" },
       }),
@@ -374,7 +375,7 @@ describe("ApplicationClientStore lineage", () => {
 
     expect(getThreadArchiveImpact).toHaveBeenCalledWith(root.id);
     expect(archiveThreads).toHaveBeenCalledWith(root.id, {
-      action: "archive_family",
+      action: "archive_family", expectedOpenTaskSnapshot: "a".repeat(64), expectedPendingQuestionCount: 0,
       expectedRevision: root.inventoryRevision,
       expectedStashedPromptCount: 3,
       executionWorkspaceDisposition: { kind: "keep" },

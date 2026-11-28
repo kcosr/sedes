@@ -8,7 +8,7 @@ import { BackendError, type AgentBackendInstance, type AgentConnectionProfile, t
   type ConversationHistoryReader, type CreateConversationInput, type CreateConversationResult, type DiscoverConversationsInput,
   type DiscoveredConversationPage, type EstablishedBackendProjection, type EstablishProjectionInput, type HistoryPageInput,
   type InteractionResponseInput, type InterruptConversationInput, type LocateTurnInput, type LocateTurnResult,
-  type ReadConversationInput, type ReconcileSubmissionInput, type RegisteredBackendActionInput, type ReleaseConversationResidencyInput, type ResolveBranchCheckpointInput,
+  type ReadConversationInput, type ReconcileSubmissionInput, type RegisteredBackendActionInput, type PrepareConversationArchiveInput, type ConversationArchivePreparation, type ReleaseConversationResidencyInput, type ResolveBranchCheckpointInput,
   type SteerTurnInput, type SteerTurnResult, type SubmissionReconciliation, type SubmitTurnInput, type SubmitTurnResult,
   type Unsubscribe } from "../../../contracts.js";
 import { BackendAgentToolRequestError, type BackendAgentToolAccessDecisionAuthority } from "../../../../agent-tools/adapters/backend-facade.js";
@@ -65,6 +65,11 @@ export interface PiNativeDriverOptions {
   readonly modelPolicy: CompiledBackendModelPolicy;
   readonly operations: PiNativeOperations;
   readonly claimNativeSession?: (scope: ExecutionScope, input: PiSessionReservation) => void;
+  readonly archiveRecovery?: {
+    retainedOwner(threadId: string): string | null | undefined;
+    settle(threadId: string, owner: string, snapshot: NativeHistoryProjection["snapshot"], terminalTurns: readonly string[]): void;
+    acknowledge(threadId: string, owner: string): void;
+  };
   readonly usage: UsageSink;
   readonly outputArtifacts?: OutputArtifactPublisher;
   readonly agentTools?: PiNativeAgentToolService;
@@ -90,6 +95,9 @@ export interface PiNativeOperations {
   resetUnsentOperation(scope: ExecutionScope, threadId: string, operationId: string, requestHash: string, prepareAttempt: number): PiNativeOperationRecord;
   /** A sent or unknown submission, action or Stop receipt awaits native evidence. */
   hasUnresolvedOperations(scope: ExecutionScope, threadId: string): boolean;
+}
+function archiveOwner(session: PiNativeAttachment): string {
+  return fingerprint([session.sessionId, session.sessionFile, session.cwd, session.handleId, session.generation]);
 }
 function reject(code: string, text = "The Pi operation is not available.", crossed = false): BackendError {
   return new BackendError({ category: crossed ? "submission_unknown" : "rejected", retryable: false,
@@ -403,6 +411,49 @@ export class PiNativeConversationDriver implements ConversationBackendDriver {
     const child = await nativeCall(() => this.options.port.fork(request));
     return creationResult(child, input.applicationOperationId);
   }
+  async prepareArchive(input: PrepareConversationArchiveInput): Promise<ConversationArchivePreparation> {
+    input.signal.throwIfAborted();
+    const native = this.assertBinding(input);
+    const threadId = input.binding.applicationThreadId;
+    if (this.#handles.has(native.sessionId) || this.#attaching.has(native.sessionId) || this.#releasePending.has(native.sessionId)) {
+      input.markObserved();
+      return { outcome: "busy" };
+    }
+    const unresolved = () => this.options.operations.hasUnresolvedOperations(input.scope, threadId);
+    if (unresolved()) input.markObserved();
+    const inspection = await this.options.port.inspectExisting(input.signal).catch(error => {
+      if (error instanceof PiNativeError && error.code === "pi_native_archive_probe_offline") return undefined;
+      throw error;
+    });
+    input.signal.throwIfAborted();
+    if (inspection === undefined) return { outcome: "offline" };
+    if (!inspection) return { outcome: unresolved() || input.retainedOwner ? "inconclusive" : "released" };
+    const retained = inspection.retainedSessions.find(session => session.sessionId === native.sessionId || session.sessionFile === native.sessionFile);
+    if (!retained) return { outcome: unresolved() || input.retainedOwner ? "inconclusive" : "released" };
+    if (retained.sessionId !== native.sessionId || retained.sessionFile !== native.sessionFile || retained.cwd !== native.cwd) {
+      throw reject("pi_native_session_identity_mismatch");
+    }
+    input.markObserved();
+    const owner = archiveOwner(retained);
+    if (input.retainedOwner && input.retainedOwner !== owner) return { outcome: "inconclusive" };
+    const pending = retained.throughSequence > retained.retainedAfterSequence || retained.retainedOperationIds.length > 0;
+    if (pending) input.markRetained(owner);
+    const retire = () => nativeCall(() => this.options.port.retireSession(native, input.signal));
+    // A normal observer may already have acknowledged this exact generation.
+    // Re-apply its durable history while a matching owner can still prove the cut.
+    if (input.retainedOwner === owner && !pending) await this.#drain(input, undefined, { input, owner, retained });
+    let result = await retire();
+    if (result === "undelivered") {
+      if (!pending) input.markRetained(owner);
+      await this.#drain(input, undefined, { input, owner, retained });
+      result = await retire();
+    }
+    input.signal.throwIfAborted();
+    if (result === "busy") return { outcome: "busy" };
+    if (result === "undelivered") input.markRetained(owner);
+    if (result === "undelivered" || unresolved()) return { outcome: "inconclusive" };
+    return { outcome: "released" };
+  }
   async releaseConversationResidency(input: ReleaseConversationResidencyInput): Promise<"released" | "busy" | "undelivered"> {
     const native = this.assertBinding(input);
     if (this.#handles.has(native.sessionId) || this.#attaching.has(native.sessionId) || this.#releasePending.has(native.sessionId)) {
@@ -428,15 +479,22 @@ export class PiNativeConversationDriver implements ConversationBackendDriver {
       throw cause;
     }
   }
-  async #drain(input: ReleaseConversationResidencyInput, preparation?: { applicationOperationId: string; prepareAttempt: number }): Promise<void> {
+  async #drain(input: ReleaseConversationResidencyInput, preparation?: { applicationOperationId: string; prepareAttempt: number },
+    archive?: { input: PrepareConversationArchiveInput; owner: string; retained: PiNativeAttachment }): Promise<void> {
     const native = this.assertBinding(input);
     if (this.#handles.has(native.sessionId) || this.#attaching.has(native.sessionId) || this.#releasePending.has(native.sessionId)) throw reject("pi_native_already_attached");
     this.#attaching.add(native.sessionId);
     try {
-      const attachment = await nativeCall(() => this.options.port.attachForDrain(native));
-      if (!attachment) return;
+      const attachment = await nativeCall(() => this.options.port.attachForDrain(native, archive?.input.signal));
+      if (!attachment) {
+        if (archive) throw reject("pi_native_archive_owner_missing");
+        return;
+      }
       let handle: PiNativeConversationHandle;
       try {
+        if (archive && (archive.retained.handleId !== attachment.handleId || archive.retained.generation !== attachment.generation)) {
+          throw reject("pi_native_archive_owner_changed");
+        }
         handle = new PiNativeConversationHandle(this, input, attachment, released => { if (released) this.#handles.delete(native.sessionId); });
       } catch (cause) {
         try { await nativeCall(() => this.options.port.release({ handleId: attachment.handleId })); }
@@ -444,12 +502,13 @@ export class PiNativeConversationDriver implements ConversationBackendDriver {
         throw cause;
       }
       this.#handles.set(native.sessionId, handle);
+      let acknowledged = false;
       try {
         if (preparation) {
           const { applicationOperationId, prepareAttempt } = preparation;
           if (attachment.retainedOperationIds.includes(`${applicationOperationId}:prepare:${prepareAttempt}`))
             await handle.recoverRetainedPreparation(applicationOperationId);
-        } else await handle.initialize(true, attachment.closed);
+        } else await handle.initialize(true, attachment.closed, archive?.input);
         if (!preparation && attachment.observationGap) {
           // Keep the warning until a public subscriber receives it, including
           // when the gap acknowledgement succeeds but its reply is lost.
@@ -459,13 +518,32 @@ export class PiNativeConversationDriver implements ConversationBackendDriver {
           await nativeCall(() => this.options.port.acknowledgeObservationGap({ handleId: attachment.handleId,
             generation: attachment.generation, throughSequence: attachment.throughSequence }));
         }
+        if (archive) {
+          archive.input.signal.throwIfAborted();
+          // Unmatched native operations keep the same owner fenced for a later retry.
+          acknowledged = handle.archiveOutputApplied;
+        }
       }
       catch (cause) {
-        try { await nativeCall(() => handle.close()); }
-        catch (cleanup) { throw new AggregateError([cause, cleanup], "Pi drain failed and native release is unconfirmed."); }
+        try {
+          // A lost ACK reply can still be proved by the same host before we detach.
+          if (archive && !archive.input.signal.aborted && handle.archiveSnapshotApplied) {
+            const current = await this.options.port.inspectExisting(archive.input.signal).catch(() => null);
+            const listed = current?.retainedSessions.find(candidate => archiveOwner(candidate) === archive.owner);
+            if (listed && listed.throughSequence === listed.retainedAfterSequence &&
+                listed.throughSequence === attachment.throughSequence && !listed.retainedOperationIds.length) {
+              acknowledged = true;
+            }
+          }
+        } finally {
+          try { await nativeCall(() => handle.close()); }
+          catch (cleanup) { throw new AggregateError([cause, cleanup], "Pi drain failed and native release is unconfirmed."); }
+        }
+        if (archive && acknowledged) archive.input.markSettled(archive.owner);
         throw cause;
       }
       await nativeCall(() => handle.close());
+      if (archive && acknowledged) archive.input.markSettled(archive.owner);
     } finally { this.#attaching.delete(native.sessionId); }
   }
   async reconcileSubmission(input: ReconcileSubmissionInput): Promise<SubmissionReconciliation> {
@@ -671,6 +749,13 @@ class PiNativeConversationHandle implements ConversationHandle {
   #settingsInFlight?: Promise<ConfirmedPiSettings | undefined>;
   #draining = false;
   #providerClosed = false;
+  #archive?: PrepareConversationArchiveInput;
+  readonly #retainedArchiveOwner?: string;
+  #archiveSnapshotApplied = false;
+  get archiveSnapshotApplied(): boolean { return this.#archiveSnapshotApplied; }
+  get archiveOutputApplied(): boolean {
+    return this.#archiveSnapshotApplied && this.#eventCheckpoint.acknowledged >= Math.max(this.#afterSequence, this.attachment.throughSequence) && this.#retainedOperationIds.size === 0;
+  }
   #recoveryNotice?: { readonly notice: RuntimeNotice; readonly observed: () => void };
   #controlOnly: boolean;
   #controlAttached: boolean;
@@ -687,6 +772,8 @@ class PiNativeConversationHandle implements ConversationHandle {
   readonly control;
   constructor(readonly driver: PiNativeConversationDriver, readonly input: AttachConversationInput,
     readonly attachment: PiNativeAttachment, readonly release: (released: boolean) => void, controlOnly = false) {
+    const retained = driver.options.archiveRecovery?.retainedOwner(input.binding.applicationThreadId);
+    if (retained && retained === archiveOwner(attachment)) this.#retainedArchiveOwner = retained;
     this.binding = input.binding; this.#afterSequence = attachment.retainedAfterSequence;
     this.#readDiagnostics = new PiNativeReadDiagnostics(diagnosticContext(input.binding, attachment));
     this.#controlOnly = controlOnly;
@@ -731,20 +818,26 @@ class PiNativeConversationHandle implements ConversationHandle {
     this.#assert();
     if (this.#controlOnly) throw reject("pi_native_observation_control_only", "Pi must recover its saved conversation before accepting new work.");
   }
-  async initialize(drainRetained = false, providerClosed = false): Promise<void> {
+  async initialize(drainRetained = false, providerClosed = false, archive?: PrepareConversationArchiveInput): Promise<void> {
+    this.#archive = archive;
     this.#draining = drainRetained; this.#providerClosed = providerClosed;
     try {
-      for (const id of this.#retainedOperationIds) {
-        const base = nativeOperationBase(id);
-        const operation = this.driver.options.operations.getOperation(this.input.scope, this.binding.applicationThreadId, id)
-          ?? this.driver.options.operations.getOperation(this.input.scope, this.binding.applicationThreadId, base);
-        if (operation?.state === "completed") await this.#acknowledge([id]);
+      const abort = () => this.#lifetime.abort(archive?.signal.reason);
+      if (archive) {
+        archive.signal.throwIfAborted();
+        archive.signal.addEventListener("abort", abort, { once: true, signal: this.#lifetime.signal });
       }
       this.#historyMetadata = await nativeCall(() => this.port.readHistory(this.attachment));
       if (this.driver.options.usage.enabled) this.#usageAccounting = new PiNativeUsageAccounting(this.driver.options.usage,
         this.binding, `pi-native:${this.binding.backendInstanceId}:${this.binding.executionEnvironmentId}`, this.#historyMetadata);
       if (!drainRetained && !this.#controlOnly) this.#agentTools = this.driver.options.agentTools?.createBridge({ attachment: this.attachment, conversation: this.input, port: this.port, getToolMode: () => this.#configuringMode ?? this.#settings.toolMode, clientControlAuthority: userEntryId => this.#clientControlAuthority(userEntryId) });
       await this.#refresh(false);
+      for (const id of this.#retainedOperationIds) {
+        const base = nativeOperationBase(id);
+        const operation = this.driver.options.operations.getOperation(this.input.scope, this.binding.applicationThreadId, id)
+          ?? this.driver.options.operations.getOperation(this.input.scope, this.binding.applicationThreadId, base);
+        if (operation?.state === "completed") await this.#acknowledge([id]);
+      }
       if (!drainRetained && !this.#controlOnly) {
         this.driver.options.settings.syncObserved?.(this.input.scope, this.binding.applicationThreadId, capabilities(this.#settings, this.#state, Boolean(this.driver.options.outputArtifacts)).effectiveSettings);
         if (this.#state.isIdle === true) await this.#applyIdleSettings();
@@ -906,6 +999,7 @@ class PiNativeConversationHandle implements ConversationHandle {
         entries: closedHistory.entries, leafId: closedHistory.leafId, operations: closedHistory.operations, toolCalls: closedHistory.toolCalls,
         toolResults: closedHistory.toolResults, tools: [], activeTools: [], isIdle: true } : await companion(this.port, this.attachment, { type: "snapshot" }, undefined, signal));
       signal.throwIfAborted();
+      if (this.#archive && state.isIdle !== true) throw reject("pi_native_archive_active");
       if (state.sessionId !== this.attachment.sessionId || !Array.isArray(state.entries) || !(state.leafId === null || typeof state.leafId === "string")) throw reject("pi_native_snapshot_identity_mismatch");
       const history: PiNativeHistory = { ...this.attachment, entries: state.entries.map(object), leafId: state.leafId as string | null, operations: state.operations, toolCalls: state.toolCalls, toolResults: state.toolResults,
         inheritedEntryIds: this.#historyMetadata?.inheritedEntryIds ?? [], inheritance: this.#historyMetadata?.inheritance ?? "unknown",
@@ -936,11 +1030,7 @@ class PiNativeConversationHandle implements ConversationHandle {
           ...(typeof operation.userEntryId === "string" ? { userEntryId: operation.userEntryId } : {}),
           ...(typeof operation.targetTurnId === "string" ? { targetTurnId: operation.targetTurnId } : {}), presentation: operation.input.presentation }];
       });
-      if (recovered.length) {
-        if (this.#draining) await this.#acknowledge(recovered);
-        else this.#deferAcknowledgement(recovered);
-      }
-      const images = await publishNativeHistoryArtifacts(history, this.binding, this.driver.options.outputArtifacts);
+      const images = this.#archive ? new Map() : await publishNativeHistoryArtifacts(history, this.binding, this.driver.options.outputArtifacts);
       const projected = projectNativeHistory(history, { running: state.isIdle === false, operations: evidence, images });
       const context = piNativeContextUsage(state.contextUsage);
       const next = { ...projected, usage: { ...projected.usage, ...(context ? { context } : {}) } };
@@ -954,6 +1044,21 @@ class PiNativeConversationHandle implements ConversationHandle {
         if (!turn) continue;
         next.snapshot.itemsById[item.backendItemId] = item;
         if (!turn.orderedBackendItemIds.includes(item.backendItemId)) turn.orderedBackendItemIds.push(item.backendItemId);
+      }
+      if (this.#archive || this.#retainedArchiveOwner) {
+        this.#archiveSnapshotApplied = false;
+        const completed = next.snapshot.orderedBackendTurnIds.filter(id => next.snapshot.turnsById[id]!.endedBy !== undefined);
+        if (this.#archive) {
+          await this.#archive.settle(next.snapshot, completed);
+          this.#archive.signal.throwIfAborted();
+        } else if (this.#retainedArchiveOwner) {
+          this.driver.options.archiveRecovery!.settle(this.binding.applicationThreadId, this.#retainedArchiveOwner, next.snapshot, completed);
+        }
+        this.#archiveSnapshotApplied = true;
+      }
+      if (recovered.length) {
+        if (this.#draining) await this.#acknowledge(recovered);
+        else this.#deferAcknowledgement(recovered);
       }
       this.#state = state; this.#projection = next; this.#checkpointState = state;
       for (const [controller, source] of this.#clientAuthorities) if (this.#activeOriginatingTurn(source.userEntryId) !== source.turnId) {
@@ -1652,7 +1757,10 @@ class PiNativeConversationHandle implements ConversationHandle {
       try { await this.port.acknowledgeOperation({ handleId: this.attachment.handleId, operationId }, signal); this.#retainedOperationIds.delete(operationId); }
       catch (cause) {
         if (cause instanceof PiNativeError && ["pi_native_operation_unknown", "pi_native_operation_acknowledged"].includes(cause.code)) this.#retainedOperationIds.delete(operationId);
-        else this.#retainedOperationIds.add(operationId);
+        else {
+          this.#retainedOperationIds.add(operationId);
+          if (this.#archive) throw cause;
+        }
       }
     }
   }
@@ -1931,6 +2039,10 @@ class PiNativeConversationHandle implements ConversationHandle {
           catch (cause) {
             // The host's bounded receipt of a retired handle may have aged out.
             if (!(this.#sessionRetired && cause instanceof PiNativeError && cause.code === "pi_native_session_unknown")) throw cause;
+          }
+          if (!this.#archive && this.#retainedArchiveOwner && cleanupSucceeded && this.archiveOutputApplied &&
+              !this.driver.options.operations.hasUnresolvedOperations(this.input.scope, this.binding.applicationThreadId)) {
+            this.driver.options.archiveRecovery!.acknowledge(this.binding.applicationThreadId, this.#retainedArchiveOwner);
           }
           forgetNativeObservations(this.port, this.attachment.handleId); released = true;
         }

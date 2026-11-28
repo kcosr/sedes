@@ -206,7 +206,7 @@ receipt exists. The final execution governs a multi-execution turn; trailing
 native inputs proven unstarted do not advance the executed head. The same proof
 settles background continuations and retires retained ACP tools only when no
 newer activity invalidates it. A failed or cancelled tool step alone is
-insufficient. Capability 6 of `antigravity_runtime` carries the diagnostic
+insufficient. Capability 7 of `antigravity_runtime` carries the diagnostic
 classification, the `failed` child state and the child ID from a qualified
 system failure notice (`failedSubagentSessionId`). Remote peers negotiate this
 capability before opening a runtime.
@@ -321,6 +321,30 @@ response fences preventing a stale attachment from reopening a resolved request.
 After an SSH recovery attachment, selected permission options reacquire normal
 configuration-checked authority on the same retained runtime. Cancel decisions
 remain available through the retained control path.
+
+## Sidebar archive preparation
+
+Archive probes the bound session on the existing execution host. A retained
+owner is identified by session, workspace, handle and generation. Sedes pins
+that identity durably before claiming the session for maintenance. A clean
+session retires directly. Retained output requires a fresh native history
+projection, usage capture, application settlement, and exact acknowledgements
+for the event cursor and the independent operation receipts. Pending prompts
+and permissions block archive. Unreadable history, missing event ranges and
+unproved operation results leave the inventory active.
+
+The host preserves each command's kind, fingerprint and configuration origin.
+Completed prompt and Steer receipts require signed terminal history and the
+durable completion row. Controls require their native and scoped application
+dispositions. Submission configuration requires proof of the selected native
+value. Archive claims release even after a failed read or acknowledgement. All
+archive calls use existing-only transport and perform no provider commands.
+
+A clean retirement leaves bounded generation-specific metadata for lost
+replies or an intervening normal thread open. Recovery rereads the final
+native history revision and commits any owed application facts. Forced
+retirement, replacement, or a missing proof cannot establish settlement.
+The private `antigravity_runtime` sidecar capability is version 7.
 
 ## Cross-backend audit
 

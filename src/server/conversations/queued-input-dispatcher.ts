@@ -1114,58 +1114,64 @@ export class QueuedInputDispatcher {
     return this.#track(async () => {
       await this.#requireRecovery(scope);
       return this.#serialize(scope, applicationThreadId, async () => {
-        const head = this.#repository.listActiveHeads(scope).find(item => item.applicationThreadId === applicationThreadId);
-        if (head?.state === "uncertain" && head.deliveryMode === "submit" && head.mutationId === backendCorrelation) {
-          this.#repository.markAccepted(scope, applicationThreadId, head.id, {
-            expectedState: "uncertain", acceptedAt: this.#clock.now(), backendCorrelation,
-          });
-          this.#scheduleSubmissionPublication(scope, applicationThreadId);
-          return true;
-        }
-        const receipt = this.#operations.findAwaitingSteerSubmission(
-          scope,
-          applicationThreadId,
-          backendCorrelation,
-        );
-        if (!receipt) return false;
-        if (
-          receipt.source !== "queued_input" ||
-          receipt.applicationOperationId !== backendCorrelation
-        ) {
-          return false;
-        }
-        const acceptedAt = this.#clock.now();
-        this.#repository.database
-          .transaction(() => {
-            this.#operations.acceptSteer(scope, receipt.mutationId, acceptedAt);
-            this.#completion.recordAccepted(scope, applicationThreadId, {
-              operationId: receipt.applicationOperationId,
-              acceptedAt,
-              backendCorrelation,
-              attachmentIds: receipt.attachments.map(({ id }) => id),
-            });
-            this.#repository.acceptSteered(
-              scope,
-              applicationThreadId,
-              receipt.queuedInputId,
-              {
-                steerOperationId: receipt.mutationId,
-                expectedState:
-                  receipt.state === "failed_unknown"
-                    ? "failed"
-                    : receipt.state === "pending_materialization"
-                      ? "dispatching"
-                      : "uncertain",
-                acceptedAt,
-                backendCorrelation,
-              },
-            );
-          })
-          .immediate();
-        this.#scheduleSubmissionPublication(scope, applicationThreadId);
-        return true;
+        const changed = this.recordObservedSubmission(scope, applicationThreadId, backendCorrelation);
+        if (changed) this.#scheduleSubmissionPublication(scope, applicationThreadId);
+        return changed;
       });
     });
+  }
+
+  /** Called under ordinary queue serialization or the exclusive archive fence. */
+  recordObservedSubmission(scope: RequestScope, applicationThreadId: string, backendCorrelation: string): boolean {
+    const queued = this.#repository.findByMutationId(scope, applicationThreadId, backendCorrelation);
+    if (queued?.state === "uncertain" && queued.deliveryMode === "submit" &&
+        this.#repository.listActiveHeads(scope).some(head => head.applicationThreadId === applicationThreadId && head.id === queued.id)) {
+      this.#repository.markAccepted(scope, applicationThreadId, queued.id, {
+        expectedState: "uncertain", acceptedAt: this.#clock.now(), backendCorrelation,
+      });
+      return true;
+    }
+    const receipt = this.#operations.findAwaitingSteerSubmission(
+      scope,
+      applicationThreadId,
+      backendCorrelation,
+    );
+    if (!receipt) return false;
+    if (
+      receipt.source !== "queued_input" ||
+      receipt.applicationOperationId !== backendCorrelation
+    ) {
+      return false;
+    }
+    const acceptedAt = this.#clock.now();
+    this.#repository.database
+      .transaction(() => {
+        this.#operations.acceptSteer(scope, receipt.mutationId, acceptedAt);
+        this.#completion.recordAccepted(scope, applicationThreadId, {
+          operationId: receipt.applicationOperationId,
+          acceptedAt,
+          backendCorrelation,
+          attachmentIds: receipt.attachments.map(({ id }) => id),
+        });
+        this.#repository.acceptSteered(
+          scope,
+          applicationThreadId,
+          receipt.queuedInputId,
+          {
+            steerOperationId: receipt.mutationId,
+            expectedState:
+              receipt.state === "failed_unknown"
+                ? "failed"
+                : receipt.state === "pending_materialization"
+                  ? "dispatching"
+                  : "uncertain",
+            acceptedAt,
+            backendCorrelation,
+          },
+        );
+      })
+      .immediate();
+    return true;
   }
 
   close(): Promise<void> {

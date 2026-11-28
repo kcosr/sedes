@@ -174,7 +174,7 @@ export class UsageService implements UsageSink {
     const available=new Set(rows.map(row=>row.turn_id));
     return {threadId,revision:String(this.#state(scope,threadId)?.revision??0n),turns:[...new Set(turnIds)].map(turnId=>({turnId,available:available.has(turnId)}))};
   }
-  registerVisibleTurns(scope: RequestScope, threadId: string, turns: readonly ConversationTurn[]): void {
+  registerVisibleTurns(scope: RequestScope, threadId: string, turns: readonly ConversationTurn[], purpose?: "archive"): void {
     if (!this.enabled) return;
     const failedKey=hash([scope.tenantId,scope.principalId,threadId]);
     try {
@@ -185,8 +185,12 @@ export class UsageService implements UsageSink {
         for(const turn of turns)insert.run(scope.tenantId,scope.principalId,threadId,turn.id,turn.status);
         changes=this.#materialize(scope,threadId);
       })();
+      if (purpose === "archive") return;
       for(const changed of changes)for(const listener of this.#listeners){try{listener(scope,changed.threadId,changed.revision);}catch{/* Durable reads remain authoritative. */}}
-    } catch(error) { this.#recordFailure(scope,threadId,error); }
+    } catch(error) {
+      if (purpose === "archive") throw error;
+      this.#recordFailure(scope,threadId,error);
+    }
   }
   #admitBinding(binding: Parameters<UsageSink["open"]>[0]["binding"]) {
     const scope={tenantId:binding.tenantId,principalId:binding.ownerPrincipalId};

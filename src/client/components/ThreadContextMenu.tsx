@@ -1,3 +1,4 @@
+import { leaveArchivedThread } from "../operations/thread-archive.js";
 import { canUseDefaultThread, useDefaultThread } from "../app/default-thread.js";
 import { runThreadCreation, runThreadFork } from "../operations/thread-creation.js";
 import { useEffect, useRef, useState } from "react";
@@ -207,7 +208,6 @@ export function ThreadContextMenu({
   disabled = false,
   onAction,
   onRestore,
-  onArchiveFamily,
   onNavigate,
   children,
   returnFocusRef,
@@ -234,8 +234,7 @@ export function ThreadContextMenu({
    */
   onRestore?: () => void;
   /** Notified when archive-all accepts the complete server-resolved family. */
-  onArchiveFamily?: (archivedThreadIds: readonly string[]) => void;
-  onNavigate?: () => void;
+  onNavigate?: (options?: { readonly keepDrawerOpen?: boolean }) => void;
   children: React.ReactNode;
   returnFocusRef?: React.RefObject<HTMLElement | null>;
   origin?: NormalizedThreadForkOrigin;
@@ -286,9 +285,9 @@ export function ThreadContextMenu({
     disabled: pendingAction !== undefined,
     onPendingChange: (pending) =>
       setPendingAction(pending ? "archive" : undefined),
-    onArchived: (choice, archivedThreadIds) => {
+    onArchived: (_choice, archivedThreadIds) => {
+      if (leaveArchivedThread(archivedThreadIds)) onNavigate?.({ keepDrawerOpen: true });
       onAction?.("archive");
-      if (choice === "all") onArchiveFamily?.(archivedThreadIds);
     },
     returnFocusRef,
   });
@@ -339,7 +338,7 @@ export function ThreadContextMenu({
   // the menu teardown (focus restore blurs the input, and blur commits).
   const renameRequested = useRef(false);
   const performMutation = async (
-    action: InventoryContextAction,
+    action: Exclude<InventoryContextAction, "archive">,
     options?: {
       readonly openTaskDisposition?: OpenTaskDisposition;
       readonly expectedOpenTaskSnapshot?: string;
@@ -365,7 +364,7 @@ export function ThreadContextMenu({
       setPendingAction(undefined);
     }
   };
-  const mutate = (action: InventoryContextAction) => {
+  const mutate = (action: Exclude<InventoryContextAction, "archive">) => {
     void performMutation(action).catch(() => undefined);
   };
   const togglePin = () => {

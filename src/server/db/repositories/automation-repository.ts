@@ -972,6 +972,7 @@ export class AutomationRepository {
     resultThreadId: string,
     operationId: string,
     input: AutomationTurnSettlementInput,
+    purpose?: "archive",
   ): AutomationRunRecord | undefined {
     return this.database.transaction(() => {
       const run = this.findRunByDispatchMutation(
@@ -1026,7 +1027,7 @@ export class AutomationRepository {
           run.automationId,
           run.id,
         );
-      if (newProblem && run.state !== "failed") {
+      if (newProblem && run.state !== "failed" && purpose !== "archive") {
         activateParkedThread(this.database, scope, run.anchorThreadId, input.settledAt);
       }
       this.retireFinishedOneShot(scope, run.automationId, input.settledAt);

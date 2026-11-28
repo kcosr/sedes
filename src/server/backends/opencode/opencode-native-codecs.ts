@@ -463,7 +463,7 @@ const nativeFailureCodes = [
   "opencode_owned_cleanup_unproved",
   "opencode_platform_unsupported", "opencode_release_incompatible",
   "opencode_native_mutation_input_invalid", "opencode_native_read_input_invalid", "opencode_native_protocol_invalid",
-  "opencode_native_not_found", "opencode_native_cursor_invalid", "opencode_request_aborted", "opencode_request_failed",
+  "opencode_native_not_found", "opencode_native_cursor_invalid", "opencode_request_aborted", "opencode_request_failed", "opencode_daemon_offline",
   "opencode_runtime_configuration_restart_required", "opencode_response_too_large", "opencode_runtime_unavailable", "opencode_runtime_identity_changed", "opencode_request_authority_mismatch", "opencode_session_location_changed",
   "opencode_event_ready_timeout", "opencode_event_stream_failed", "opencode_event_overflow", "opencode_event_aborted", "opencode_event_closed",
   "opencode_event_disconnected", "opencode_event_malformed", "opencode_event_waiter_limit",

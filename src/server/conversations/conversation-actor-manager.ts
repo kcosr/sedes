@@ -15,6 +15,7 @@ import type {
   ValidatedWorkspace,
 } from "../execution/contracts.js";
 import { callRuntime } from "../runtime/runtime-errors.js";
+import { withAbort } from "../runtime/with-abort.js";
 import type { ComposerAttachmentDeliveryService } from "../composer-attachments/composer-attachment-delivery-service.js";
 import { ConversationActor } from "./conversation-actor.js";
 import { ConversationProjector, confirmedTurnOutcome } from "./conversation-projector.js";
@@ -60,7 +61,7 @@ export interface AcquireConversationActorOptions {
 
 export type ConversationActorRetirementDisposition =
   | { readonly kind: "idle" }
-  | { readonly kind: "archive" }
+  | { readonly kind: "archive"; readonly signal?: AbortSignal; readonly observeOwner?: () => void; readonly shouldRetire?: () => boolean }
   /** Management confirmed a successor to the provider service behind this runtime. */
   | { readonly kind: "provider_replaced" }
   | { readonly kind: "unprojected_detach"; readonly expectedGeneration: string }
@@ -805,11 +806,14 @@ export class ConversationActorManager {
     readonly operation: () => Promise<Result>;
   }): Promise<Result> {
     const key = scopedActorKey(input.scope, input.applicationThreadId);
+    const archiveSignal = input.disposition.kind === "archive" ? input.disposition.signal : undefined;
     while (true) {
+      archiveSignal?.throwIfAborted();
       if (this.#closing) throw new Error("conversation_actor_manager_closing");
       const existing = this.#maintenance.get(key);
       if (existing) {
-        await existing.completion;
+        if (archiveSignal) await withAbort(existing.completion, archiveSignal);
+        else await existing.completion;
         continue;
       }
 
@@ -828,6 +832,8 @@ export class ConversationActorManager {
       let retirementUnproven:
         ConversationActorRetirementUnprovenError | undefined;
       try {
+        // A changed receipt can skip this owner before any irreversible teardown.
+        if (input.disposition.kind === "archive" && input.disposition.shouldRetire?.() === false) return await input.operation();
         try {
           await input.detachCoordinatorRuntime();
           await this.#retireEntryForMaintenance(key, input.disposition);
@@ -1205,6 +1211,17 @@ export class ConversationActorManager {
           throw new ConversationActorRetirementStaleError();
         }
         return;
+      }
+      if (disposition.kind === "archive") {
+        if (disposition.signal?.aborted) throw new ConversationActorRetirementStaleError();
+        if (entry.actor?.hasArchiveOwnerProbe && !entry.actor.readOnly) disposition.observeOwner?.();
+        if (entry.actor?.archiveStateUncertain && disposition.signal) {
+          try { await entry.actor.waitForArchiveReadiness(disposition.signal); }
+          catch (error) {
+            if (disposition.signal.aborted) throw new ConversationActorRetirementStaleError();
+            throw error;
+          }
+        }
       }
       if (entry.poisoned) {
         throw new ConversationActorRetirementUnprovenError(entry.poisoned);
@@ -1594,6 +1611,7 @@ export class ConversationActorManager {
       });
       actor = new ConversationActor({
         handle,
+        hasArchiveOwnerProbe: !!input.driver.prepareArchive,
         nativeEffects: entry.nativeEffects,
         environmentLease: lease,
         ...(this.#readProgressParkRevision ? {readProgressParkRevision: () =>

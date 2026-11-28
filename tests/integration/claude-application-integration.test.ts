@@ -158,7 +158,7 @@ class FakeClaudeSdk implements ClaudeSdkFacade {
     return [];
   }
 
-  async getSessionInfo(sessionId: string) {
+  async getSessionInfo(sessionId: string): Promise<SDKSessionInfo | undefined> {
     const messages = this.#sessions.get(sessionId);
     return messages
       ? {
@@ -583,8 +583,9 @@ describe("Claude production application integration", () => {
     }
   }
 
-  it.each(["draft", "bound"] as const)("keeps a manual %s rename when Claude rediscovers a generated customTitle", async (whenRenamed) => {
+  it.each(["draft", "bound", "lost_reply"] as const)("preserves the original %s rename through receipt checks and rediscovery", async (whenRenamed) => {
     const sdk = new FakeClaudeSdk();
+    sdk.deferResult = whenRenamed === "lost_reply";
     const app = await createApplication(sdk);
     const { scope, database, workspace, connection, inventory, bindings, lifecycle } = app;
     const actorTargets = new DatabaseActorTargetResolver(app.targets);
@@ -608,9 +609,11 @@ describe("Claude production application integration", () => {
       });
       const readThread = () => inventory.getThread(scope, draft.applicationThreadId).thread;
       const manualTitle = "My Sedes title";
-      const rename = (expectedThreadRevision: number) => gateway.mutate(scope, draft.applicationThreadId, {
-        kind: "perform", mutationId: crypto.randomUUID(), expectedThreadRevision,
-        operation: { action: "rename", title: manualTitle },
+      const draftRenameId = crypto.randomUUID();
+      const draftRevision = readThread().revision;
+      const rename = (expectedThreadRevision: number, mutationId = crypto.randomUUID(), title = manualTitle) => gateway.mutate(scope, draft.applicationThreadId, {
+        kind: "perform", mutationId, expectedThreadRevision,
+        operation: { action: "rename", title },
       });
       // The pinned SDK can return the generated name in customTitle when the
       // explicit rename is outside its transcript metadata read windows.
@@ -632,7 +635,7 @@ describe("Claude production application integration", () => {
         discovery.discoverWorkspace(scope, workspace.id, policy, new AbortController().signal);
 
       if (whenRenamed === "draft") {
-        await expect(rename(readThread().revision)).resolves.toMatchObject({ status: "accepted" });
+        await expect(rename(draftRevision, draftRenameId)).resolves.toMatchObject({ status: "accepted" });
         expect(readThread()).toMatchObject({ title: manualTitle, backingState: "unbound" });
         expect(sdk.renameSession).not.toHaveBeenCalled();
       }
@@ -641,6 +644,40 @@ describe("Claude production application integration", () => {
         expectedThreadRevision: readThread().revision, expectedDraftRevision: draft.draft.revision,
       })).resolves.toMatchObject({ status: "bound", binding: { backendConversationId: SESSION_ID } });
 
+      if (whenRenamed === "draft") {
+        const before = readThread();
+        await expect(rename(draftRevision, draftRenameId)).resolves.toEqual({ status: "accepted", operationId: draftRenameId });
+        await expect(rename(draftRevision, draftRenameId, "Collision")).rejects.toMatchObject({ code: "conflict" });
+        await expect(rename(before.revision, draftRenameId)).rejects.toMatchObject({ code: "conflict" });
+        expect(readThread()).toEqual(before);
+        expect(sdk.renameSession).not.toHaveBeenCalled();
+      }
+      if (whenRenamed === "lost_reply") {
+        const revision = readThread().revision;
+        const mutationId = crypto.randomUUID();
+        await vi.waitFor(() => expect(sdk.finishTurn).toBeDefined());
+        let nativeTitle = "Original Claude title";
+        vi.spyOn(sdk, "getSessionInfo").mockImplementation(async sessionId => sessionId === SESSION_ID ? {
+          sessionId, summary: "Current", customTitle: nativeTitle, lastModified: Date.now(), cwd: workspace.canonicalPath,
+        } : undefined);
+        sdk.renameSession.mockImplementationOnce(async () => {
+          nativeTitle = manualTitle;
+          throw new Error("Claude rename response lost");
+        });
+        const check = () => rename(revision, mutationId);
+        const uncertain = { status: "recovery_required", retryable: true };
+        await expect(check()).resolves.toEqual(uncertain);
+        expect(nativeTitle).toBe(manualTitle);
+        nativeTitle = "Edited in Claude";
+        await expect(check()).resolves.toEqual(uncertain);
+        await expect(check()).resolves.toEqual(uncertain);
+        expect(readThread().title).not.toBe(manualTitle);
+        nativeTitle = manualTitle;
+        await expect(check()).resolves.toEqual({ status: "accepted", operationId: mutationId });
+        await expect(check()).resolves.toEqual({ status: "accepted", operationId: mutationId });
+        expect(sdk.renameSession).toHaveBeenCalledOnce();
+        sdk.finishTurn!();
+      }
       if (whenRenamed === "bound") {
         await expect(rename(readThread().revision - 1)).rejects.toMatchObject({ code: "conflict" });
         await expect(scan(startupScan)).resolves.toMatchObject({ completion: "complete", conversationsSeen: 1 });

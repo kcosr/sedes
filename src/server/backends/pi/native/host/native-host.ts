@@ -561,6 +561,7 @@ export class PiNativeHost implements PiNativePort {
   detach(): void {
     for (const session of this.#sessions.values()) { session.attached = false; session.draining = false; session.controlOnly = false; this.#abandonTransientOperations(session); this.#wake(session); this.#retireReleased(session); }
   }
+  inspectExisting(signal: AbortSignal): Promise<PiNativeInspection> { return this.inspect(signal); }
   async inspect(signal?: AbortSignal, authority = LOCAL_AUTHORITY): Promise<PiNativeInspection> {
     this.#current(authority, signal);
     return this.snapshot();

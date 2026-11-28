@@ -321,7 +321,7 @@ describe("normalized Grok conversation driver", () => {
     });
     try {
       await expect(handle.reconcileAction(action)).resolves.toEqual({
-        outcome: "not_applied",
+        outcome: "unknown",
       });
       await expect(handle.perform(action)).resolves.toEqual({ accepted: true });
       await expect(handle.perform(action)).resolves.toEqual({ accepted: true });
@@ -422,7 +422,7 @@ describe("normalized Grok conversation driver", () => {
     }
   });
 
-  it("reconciles a lost native rename response without retrying the mutation", async () => {
+  it.each([false, true])("checks a lost native rename without a second mutation after a competing edit: %s", async edited => {
     const sessionId = "13131313-1313-4313-8313-131313131313";
     const fixtureState = await openDriver([
       {
@@ -454,6 +454,7 @@ describe("normalized Grok conversation driver", () => {
     });
     const state = await readState(fixtureState.workspace.canonicalPath);
     state.sessions[0].renameBehavior = undefined;
+    if (edited) state.sessions[0].title = "Edited externally";
     await writeState(fixtureState.workspace.canonicalPath, state);
     const recovered = await fixtureState.driver.attach({
       scope,
@@ -463,7 +464,7 @@ describe("normalized Grok conversation driver", () => {
     });
     try {
       await expect(recovered.reconcileAction(action)).resolves.toEqual({
-        outcome: "accepted",
+        outcome: edited ? "unknown" : "accepted",
       });
       expect(
         (await readState(fixtureState.workspace.canonicalPath)).sessions[0]

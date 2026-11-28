@@ -2456,7 +2456,7 @@ export class CodexConversationHandle implements ConversationHandle {
         };
         return response.result.thread.name === input.title
           ? { outcome: "accepted" }
-          : { outcome: "not_applied" };
+          : { outcome: "unknown" };
       } catch (error) {
         throw mapCodexReadError(error);
       }

@@ -165,6 +165,22 @@ export function MenuSheetTrigger({
 const LONG_PRESS_MS = 700
 const LONG_PRESS_SLOP_PX = 10
 
+/** The sheet can cover the original pointer target before the finger lifts. */
+function suppressLongPressRelease(owner: Document) {
+  const listeners = new AbortController()
+  const options = { capture: true, signal: listeners.signal }
+  const clear = () => listeners.abort()
+  // A fresh press (including a tap inside the sheet) is a new selection.
+  owner.addEventListener("pointerdown", clear, options)
+  owner.addEventListener("keydown", clear, options)
+  owner.addEventListener("click", (event) => {
+    clear()
+    if (event.detail === 0) return
+    event.preventDefault()
+    event.stopPropagation()
+  }, options)
+}
+
 /**
  * The sheet-mode context-menu trigger: a secondary click or a touch long
  * press opens the sheet, as Radix's ContextMenu trigger opens its menu. The
@@ -175,7 +191,6 @@ const LONG_PRESS_SLOP_PX = 10
 export function MenuSheetContextTrigger({
   asChild = false,
   disabled = false,
-  onClickCapture,
   onContextMenu,
   onPointerDown,
   onPointerMove,
@@ -187,16 +202,15 @@ export function MenuSheetContextTrigger({
   const state = useMenuSheet()
   const timer = React.useRef<ReturnType<typeof setTimeout>>(undefined)
   const origin = React.useRef<{ x: number; y: number }>(undefined)
-  const suppressClick = React.useRef(false)
   const clear = () => {
     if (timer.current !== undefined) clearTimeout(timer.current)
     timer.current = undefined
     origin.current = undefined
   }
   React.useEffect(() => clear, [])
-  const openFromLongPress = () => {
+  const openFromLongPress = (owner: Document) => {
     clear()
-    suppressClick.current = true
+    suppressLongPressRelease(owner)
     state?.openFrom(focusedElement())
   }
   const Comp = asChild ? Slot.Root : "span"
@@ -206,15 +220,6 @@ export function MenuSheetContextTrigger({
       data-slot="context-menu-trigger"
       data-disabled={disabled ? "" : undefined}
       style={{ WebkitTouchCallout: "none", ...style }}
-      onClickCapture={(event: React.MouseEvent<HTMLSpanElement>) => {
-        onClickCapture?.(event)
-        if (!suppressClick.current) return
-        suppressClick.current = false
-        // A keyboard click (detail 0) is an interaction of its own.
-        if (event.detail === 0) return
-        event.preventDefault()
-        event.stopPropagation()
-      }}
       onContextMenu={(event: React.MouseEvent<HTMLSpanElement>) => {
         onContextMenu?.(event)
         if (event.defaultPrevented || disabled) return
@@ -222,7 +227,7 @@ export function MenuSheetContextTrigger({
         // Android fires contextmenu during a touch hold: that is the long
         // press, and its release clicks too.
         if (origin.current !== undefined) {
-          openFromLongPress()
+          openFromLongPress(event.currentTarget.ownerDocument)
           return
         }
         clear()
@@ -230,13 +235,11 @@ export function MenuSheetContextTrigger({
       }}
       onPointerDown={(event: React.PointerEvent<HTMLSpanElement>) => {
         onPointerDown?.(event)
-        // A new press: a long press that produced no click leaves nothing
-        // to swallow.
-        suppressClick.current = false
         if (event.defaultPrevented || disabled || event.pointerType === "mouse") return
         clear()
         origin.current = { x: event.clientX, y: event.clientY }
-        timer.current = setTimeout(openFromLongPress, LONG_PRESS_MS)
+        const owner = event.currentTarget.ownerDocument
+        timer.current = setTimeout(() => openFromLongPress(owner), LONG_PRESS_MS)
       }}
       onPointerMove={(event: React.PointerEvent<HTMLSpanElement>) => {
         onPointerMove?.(event)

@@ -50,3 +50,15 @@ export function isSidecarRevisionChanged(error: unknown): boolean {
   }
   return false;
 }
+
+/** Only use at existing-carrier acquisition, before any provider/owner observation.
+ * Ownership, protocol, authentication and cleanup failures remain inconclusive. */
+export function existingSidecarIsOffline(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const cause = error.message === "sidecar_unavailable" && error.cause instanceof Error ? error.cause : error;
+  return [
+    "sidecar_service_absent", "sidecar_intentionally_disconnected", "sidecar_automatic_connection_disabled",
+    "sidecar_transport_unavailable", "sidecar_connection_failed", "ssh_sidecar_connection_failed",
+    "outbound_connector_offline", "outbound_disconnected",
+  ].includes(cause.message);
+}

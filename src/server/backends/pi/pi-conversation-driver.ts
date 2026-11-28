@@ -591,12 +591,6 @@ function piActionApplicationEvidence(
         entry.modelId === input.modelId,
     );
   }
-  if (input.action === "rename") {
-    const title = input.title.replace(/[\r\n]+/g, " ").trim();
-    return suffix.some(
-      (entry) => entry.type === "session_info" && entry.name === title,
-    );
-  }
   return false;
 }
 
@@ -3502,7 +3496,9 @@ class PiConversationHandle implements ConversationHandle {
       let priorAction;
       try {
         priorAction = findPiActionState(
-          this.#session.sessionManager.getBranch(),
+          input.action === "rename"
+            ? this.#session.sessionManager.getEntries()
+            : this.#session.sessionManager.getBranch(),
           input,
         );
       } catch (cause) {
@@ -3524,6 +3520,15 @@ class PiConversationHandle implements ConversationHandle {
             this.#agentToolNames,
           ).revision,
         };
+      }
+      if (input.action === "rename" && priorAction.state === "started") {
+        if (this.#session.sessionName === input.title.replace(/[\r\n]+/g, " ").trim()) {
+          return { accepted: true };
+        }
+        throw error(
+          "submission_unknown", "Pi could not confirm the earlier rename.",
+          "pi_rename_outcome_unknown", true, true,
+        );
       }
       if (
         priorAction.state === "started" &&
@@ -3701,10 +3706,14 @@ class PiConversationHandle implements ConversationHandle {
   ): Promise<BackendMutationReconciliation> {
     this.#assertOpen();
     await backendCall(() => this.#session.ready());
-    const branch = this.#session.sessionManager.getBranch();
+    // Names and their operation markers are session-wide. The active branch
+    // can omit even a completed rename after the user moves the leaf.
+    const entries = input.action === "rename"
+      ? this.#session.sessionManager.getEntries()
+      : this.#session.sessionManager.getBranch();
     let state;
     try {
-      state = findPiActionState(branch, input);
+      state = findPiActionState(entries, input);
     } catch (cause) {
       throw error(
         "rejected",
@@ -3715,6 +3724,13 @@ class PiConversationHandle implements ConversationHandle {
         cause,
       );
     }
+    if (input.action === "rename") {
+      // A competing edit, a replaced journal or an interrupted marker write
+      // leaves no evidence that the original rename never reached Pi.
+      return state.state === "completed" || this.#session.sessionName === input.title.replace(/[\r\n]+/g, " ").trim()
+        ? { outcome: "accepted" }
+        : { outcome: "unknown" };
+    }
     if (state.state === "none") return { outcome: "not_applied" };
     if (
       state.state === "completed" ||
@@ -3723,9 +3739,6 @@ class PiConversationHandle implements ConversationHandle {
       return { outcome: "accepted" };
     }
     if (
-      (input.action === "rename" &&
-        this.#session.sessionName ===
-          input.title.replace(/[\r\n]+/g, " ").trim()) ||
       (input.action === "set_model" &&
         this.#session.model?.provider === input.provider &&
         this.#session.model.id === input.modelId) ||
@@ -3746,10 +3759,9 @@ class PiConversationHandle implements ConversationHandle {
     }
     if (
       state.state === "started" &&
-      (input.action === "rename" ||
-        input.action === "set_model" ||
+      (input.action === "set_model" ||
         input.action === "set_thinking_level") &&
-      !piActionApplicationEvidence(branch.slice(state.startedIndex + 1), input)
+      !piActionApplicationEvidence(entries.slice(state.startedIndex + 1), input)
     ) {
       // The action left a started marker but no durable native evidence of
       // the requested value, so it provably never applied and can be

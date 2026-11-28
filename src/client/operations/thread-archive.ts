@@ -1,7 +1,13 @@
 import type {
+  BulkInventoryImpact,
+  BulkInventoryMutationRequest,
+  BulkInventoryMutationResult,
+  InventoryTransitionRequest,
   NormalizedApplicationThreadSummary,
   ThreadArchiveImpact,
 } from "../../shared/index.js";
+import { ApiError } from "../api/ApiClient.js";
+import { navigate, parseRoute } from "../app/router.js";
 import type { ApplicationClientStore } from "../stores/ApplicationClientStore.js";
 import { getBlockingOperation, runBlockingOperation } from "./blocking-operation.js";
 
@@ -19,6 +25,31 @@ export function archiveNeedsChoices(impact: ThreadArchiveImpact): boolean {
     impact.executionWorkspace.kind === "isolated" ||
     !impact.archiveOnly.available
   );
+}
+
+type ArchiveRequest = Extract<InventoryTransitionRequest, { action: "archive" | "archive_family" }>;
+type Archived = { choice: "only" | "all"; ids: readonly string[] };
+
+export function leaveArchivedThread(ids: readonly string[]): boolean {
+  const route = parseRoute(window.location.pathname);
+  if (route.name !== "thread" || !ids.includes(route.threadId)) return false;
+  navigate("/");
+  return true;
+}
+
+export function archiveImpactChanged(error: unknown): boolean {
+  return error instanceof ApiError && (error.code === "conflict" || error.code === "inventory_revision_conflict");
+}
+
+function archiveRefused(error: unknown): boolean {
+  return error instanceof ApiError && error.status >= 400 && error.status < 500 &&
+    error.status !== 408 && error.code !== "operation_outcome_uncertain";
+}
+
+interface ConfirmedStackArchive {
+  readonly impact: BulkInventoryImpact;
+  readonly request: Extract<BulkInventoryMutationRequest, { action: "archive" }>;
+  pending?: Promise<BulkInventoryMutationResult>;
 }
 
 export interface ThreadArchiveStart {
@@ -40,6 +71,8 @@ class ThreadArchiveOperations {
   #operations: readonly ThreadArchiveOperation[] = [];
   #nextId = 0;
   readonly #listeners = new Set<() => void>();
+  readonly #stacks = new Map<string, ConfirmedStackArchive>();
+  readonly #confirmed = new Map<string, { request: ArchiveRequest; pending?: Promise<Archived> }>();
   readonly #pending = new Map<number, Promise<void>>();
 
   constructor(readonly store: ApplicationClientStore) {}
@@ -63,6 +96,41 @@ class ThreadArchiveOperations {
     this.#publish(this.#operations.map((operation) =>
       operation.id === id ? { ...operation, result } : operation,
     ));
+  }
+
+  confirmed(threadId: string): ArchiveRequest | undefined {
+    return this.#confirmed.get(threadId)?.request;
+  }
+
+  stack(key: string) { return this.#stacks.get(key); }
+
+  submitStack(key: string, impact: BulkInventoryImpact, request: ConfirmedStackArchive["request"]) {
+    const attempt = this.#stacks.get(key) ?? { request, impact };
+    this.#stacks.set(key, attempt);
+    attempt.pending ??= this.store.mutateBulkInventory(attempt.request)
+      .then(result => { this.#stacks.delete(key); return result; })
+      .catch((error: unknown) => {
+        if (archiveRefused(error)) this.#stacks.delete(key);
+        throw error;
+      }).finally(() => { attempt.pending = undefined; });
+    return attempt.pending;
+  }
+
+  submit(threadId: string, request: ArchiveRequest): Promise<Archived> {
+    const attempt = this.#confirmed.get(threadId) ?? { request };
+    this.#confirmed.set(threadId, attempt);
+    attempt.pending ??= this.store.archiveThreads(threadId, attempt.request)
+      .then((ids): Archived => {
+        this.#confirmed.delete(threadId);
+        return { choice: attempt.request.action === "archive" ? "only" : "all", ids };
+      })
+      .catch((error: unknown) => {
+        // A lost response can follow commit. Retain the exact request until a
+        // receipt or a definitive pre-commit refusal settles its outcome.
+        if (archiveRefused(error)) this.#confirmed.delete(threadId);
+        throw error;
+      }).finally(() => { attempt.pending = undefined; });
+    return attempt.pending;
   }
 
   async start(options: ThreadArchiveStart): Promise<void> {
@@ -92,7 +160,8 @@ class ThreadArchiveOperations {
       options.onPendingChange?.(pending);
     };
     let archiveStarted = false;
-    let work: Promise<boolean> | undefined;
+    let confirmFreshImpact = false;
+    let work: Promise<Archived | undefined> | undefined;
     const operation: ThreadArchiveOperation = {
       ...options,
       id: ++this.#nextId,
@@ -121,22 +190,41 @@ class ThreadArchiveOperations {
         }),
         run: () => {
           work = (async () => {
-            const impact = await this.store.getThreadArchiveImpact(options.thread.id);
-            if (archiveNeedsChoices(impact)) {
-              this.#setResult(operation.id, { kind: "choices", impact });
-              return false;
+            const id = options.thread.id;
+            let request = this.confirmed(id);
+            if (!request) {
+              const impact = await this.store.getThreadArchiveImpact(id);
+              if (confirmFreshImpact || archiveNeedsChoices(impact)) {
+                this.#setResult(operation.id, { kind: "choices", impact });
+                return;
+              }
+              request = {
+                action: "archive", mutationId: crypto.randomUUID(),
+                expectedRevision: options.thread.inventoryRevision,
+                expectedStashedPromptCount: impact.stashedPrompts.root,
+                expectedPendingQuestionCount: impact.pendingQuestions.root,
+                expectedOpenTaskSnapshot: impact.openTasks.root.snapshot,
+                executionWorkspaceDisposition: { kind: "keep" },
+              };
             }
             archiveStarted = true;
-            await this.store.mutateInventory(options.thread, "archive", {
-              expectedStashedPromptCount: impact.stashedPrompts.root,
-            });
-            return true;
+            try {
+              return await this.submit(id, request);
+            } catch (error) {
+              if (!archiveImpactChanged(error)) throw error;
+              // A change to reviewed work requires fresh, explicit confirmation,
+              // even if refreshing the impact fails and the user retries.
+              archiveStarted = false;
+              confirmFreshImpact = true;
+              const impact = await this.store.getThreadArchiveImpact(id);
+              this.#setResult(operation.id, { kind: "choices", impact });
+            }
           })();
           return work;
         },
-        retry: () => !archiveStarted,
+        retry: (error) => !archiveStarted || Boolean(this.confirmed(options.thread.id)) || (error instanceof ApiError && error.retryable),
         onSuccess: (archived) => {
-          if (archived) operation.onArchived?.("only", [options.thread.id]);
+          if (archived) operation.onArchived?.(archived.choice, archived.ids);
         },
       });
       // The runner reports errors; keep the shared guard until work settles.

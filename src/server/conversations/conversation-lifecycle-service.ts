@@ -2298,6 +2298,10 @@ export class ConversationLifecycleService {
         );
       }
       operationIds.add(action.applicationOperationId);
+      if (action.action === "rename") {
+        await this.#applyInitialRename(scope, applicationThreadId, attemptId, actor, action);
+        continue;
+      }
       const reconciliation = await actor.reconcileAction(action);
       if (reconciliation.outcome === "accepted") continue;
       if (reconciliation.outcome === "unknown") {
@@ -2311,6 +2315,40 @@ export class ConversationLifecycleService {
       }
       await actor.perform(action);
     }
+  }
+
+  async #applyInitialRename(
+    scope: RequestScope, threadId: string, attemptId: string,
+    actor: Awaited<ReturnType<ConversationActorManager["acquire"]>>["actor"],
+    planned: Extract<RegisteredBackendActionInput, { action: "rename" }>,
+  ): Promise<void> {
+    const receipt = this.#creation.captureInitialRename(scope, threadId, attemptId, planned);
+    if (receipt.state === "accepted") return;
+    const action = { ...planned, title: receipt.title };
+    const transition = (expected: "not_sent" | "uncertain", next: "not_sent" | "uncertain" | "accepted") =>
+      this.#creation.transitionInitialRename(scope, threadId, attemptId, action.applicationOperationId, expected, next);
+    if (receipt.state === "uncertain") {
+      const reconciliation = await actor.reconcileAction(action);
+      if (reconciliation.outcome === "accepted") {
+        transition("uncertain", "accepted");
+        return;
+      }
+      if (reconciliation.outcome !== "not_applied") {
+        throw new BackendError({
+          category: "submission_unknown", retryable: true, crossedSubmissionBoundary: true,
+          safeMessage: "The backend has not confirmed the original first-send rename.",
+        });
+      }
+      transition("uncertain", "not_sent");
+    }
+    transition("not_sent", "uncertain");
+    try {
+      await actor.perform(action);
+    } catch (error) {
+      if (error instanceof BackendError && !error.crossedSubmissionBoundary) transition("uncertain", "not_sent");
+      throw error;
+    }
+    transition("uncertain", "accepted");
   }
 
   #finalizeAccepted(

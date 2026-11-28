@@ -1,3 +1,7 @@
+import Database from "better-sqlite3";
+import { claudeTaskLifecycleMigration } from "../../src/server/db/migrations/100-claude-task-lifecycle.js";
+import { ClaudeThreadRepository } from "../../src/server/backends/claude/claude-thread-repository.js";
+import type { PrepareConversationArchiveInput } from "../../src/server/backends/contracts.js";
 import type { ClaudePersistentConfiguration } from "../../src/server/backends/claude/runtime/claude-persistent-runtime-wire.js";
 import { attachFixturePolicy, installFixturePolicy } from "../helpers/execution-policy-fixture.js";
 import { runtimeLaunchDigest } from "../../src/server/backends/provider-launch-digest.js";
@@ -34,6 +38,8 @@ const serviceConfiguration = { environmentRevision: 1, operationsRevision: 1 };
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => { vi.restoreAllMocks(); vi.unstubAllEnvs(); for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
 
+type ArchiveObserver = NonNullable<ConstructorParameters<typeof ClaudePersistentRuntimeClient>[0]["archiveObserver"]>;
+
 async function fixture(options: {
   readonly emptyWorker?: () => boolean;
   readonly readLaunchConfiguration?: () => ClaudePersistentConfiguration | undefined;
@@ -63,7 +69,11 @@ async function fixture(options: {
   });
   let current: SidecarRuntimeLease | undefined;
   const sidecarRuntime: SidecarRuntimeProvider = {
-    acquireExisting: async () => { throw new Error("unused_existing_carrier_admission"); },
+    acquireExisting: vi.fn(async signal => {
+      signal?.throwIfAborted();
+      if (!current) throw new Error("sidecar_service_absent");
+      return current;
+    }),
     acquire: vi.fn(async signal => {
       signal?.throwIfAborted();
       if (!current) throw new Error("test_carrier_unavailable");
@@ -105,8 +115,8 @@ async function fixture(options: {
     carriers.push(attached);
     return attached;
   }
-  function client(startupEnvironmentVariables?: EnvironmentVariableOverrides) {
-    const value = new ClaudePersistentRuntimeClient({ ...configuration, scope, sidecarRuntime, startupEnvironmentVariables, readLaunchConfiguration: options.readLaunchConfiguration });
+  function client(startupEnvironmentVariables?: EnvironmentVariableOverrides, archiveObserver?: ArchiveObserver) {
+    const value = new ClaudePersistentRuntimeClient({ ...configuration, scope, sidecarRuntime, startupEnvironmentVariables, archiveObserver, readLaunchConfiguration: options.readLaunchConfiguration });
     clients.push(value);
     return value;
   }
@@ -123,16 +133,20 @@ async function fixture(options: {
     for (const carrier of carriers) await carrier.close();
     await native.runtime.close();
   });
-  return { ...native, services, hosts, attach, client, stop, archive, createRuntime, disposeEmpty };
+  return { ...native, services, hosts, attach, client, stop, archive, createRuntime, disposeEmpty, sidecarRuntime };
+}
+
+function queryGeneration(f: Pick<Awaited<ReturnType<typeof fixture>>, "sessions">, sessionId: string) {
+  const native = f.sessions.findLast(session => session.options.sessionId === sessionId);
+  if (!native) throw new Error("test_query_missing");
+  return { sessionId, startupProbeUuid: native.startupProbeUuid };
 }
 
 function sessionOptions(sessionId: string, overrides: Partial<ClaudeRuntimeSessionOptions> = {}): ClaudeRuntimeSessionOptions {
   return { executablePath: configuration.executablePath, initializationTimeoutMs: 5_000,
     sessionId, cwd: "/workspace", launch: "new", environment: {}, onMessage: vi.fn(), ...overrides };
 }
-/** No Sedes actor is loaded: policy maintenance must reach the retained host query. */
-function policyRefreshGateway(client: ClaudePersistentRuntimeClient, sessionId: string,
-  initial: { enabled: boolean; enabledToolIds: readonly string[]; presentation: { surface: "native" | "cli"; mode: "individual" | "progressive" } }) {
+function conversationTarget(client: ClaudePersistentRuntimeClient, sessionId: string, settings: Partial<ClaudeThreadRepository>) {
   const threadId = "policy-thread";
   const binding = { tenantId: scope.tenantId, ownerPrincipalId: scope.principalId,
     applicationThreadId: threadId, backendInstanceId: scope.backendInstanceId,
@@ -142,15 +156,22 @@ function policyRefreshGateway(client: ClaudePersistentRuntimeClient, sessionId: 
     summary: { id: "workspace", environmentId: scope.executionEnvironmentId } };
   const driver = new ClaudeConversationBackendDriver({
     usage: NO_USAGE_SINK, nativeNamespace: "test", runtimeClient: client,
-    instance: { id: scope.backendInstanceId, tenantId: scope.tenantId, kind: "claude_agent_sdk" },
+    instance: { id: scope.backendInstanceId, tenantId: scope.tenantId, enabled: true, kind: "claude_agent_sdk" },
     connection: { id: "profile", tenantId: scope.tenantId, ownerPrincipalId: scope.principalId,
-      kind: "claude_agent_sdk", backendInstanceId: scope.backendInstanceId, executionEnvironmentId: scope.executionEnvironmentId },
+      enabled: true, kind: "claude_agent_sdk", backendInstanceId: scope.backendInstanceId, executionEnvironmentId: scope.executionEnvironmentId },
     executablePath: configuration.executablePath, initializationTimeoutMs: 5_000, probeDirectory: "/workspace",
-    settings: {}, permissionPolicy: { allowedModes: ["default"] },
+    settings, permissionPolicy: { allowedModes: ["default"] },
     modelPolicy: compileBackendModelPolicy({ type: "catalog" }, "model_effort"),
     attachmentProvenanceKey: new Uint8Array(32).fill(1), toolProvenanceKey: new Uint8Array(32).fill(2),
     outputArtifacts: {}, agentToolSourceCapabilities: {}, agentTools: {}, childEnvironment: {},
   } as unknown as ConstructorParameters<typeof ClaudeConversationBackendDriver>[0]);
+  return { threadId, binding, workspace, driver };
+}
+
+/** No Sedes actor is loaded: policy maintenance must reach the retained host query. */
+function policyRefreshGateway(client: ClaudePersistentRuntimeClient, sessionId: string,
+  initial: { enabled: boolean; enabledToolIds: readonly string[]; presentation: { surface: "native" | "cli"; mode: "individual" | "progressive" } }) {
+  const { threadId, binding, workspace, driver } = conversationTarget(client, sessionId, {});
   const coordinator = new ThreadRuntimeCoordinator({
     actors: { captureUnprojectedGeneration: () => undefined, runWithRuntimeRetired: async (input: Parameters<import("../../src/server/conversations/conversation-actor-manager.js").ConversationActorManager["runWithRuntimeRetired"]>[0]) => { await input.detachCoordinatorRuntime(); return input.operation(); } },
     targets: { resolve: async () => ({ scope, binding, workspace, driver,
@@ -1336,10 +1357,10 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     await restored.start();
     const native = f.sessions[0]!;
     await expect(f.hosts.get(runtimeId).execute({ action: "evict", runtimeId,
-      controllerEpoch: first.lease.controllerEpoch, request: { sessionId } }, vi.fn()))
+      controllerEpoch: first.lease.controllerEpoch, request: queryGeneration(f, sessionId) }, vi.fn()))
       .rejects.toThrow("controller_stale");
     await expect(second.connection.execute({ action: "evict", runtimeId,
-      controllerEpoch: first.lease.controllerEpoch, request: { sessionId } })).rejects.toThrow();
+      controllerEpoch: first.lease.controllerEpoch, request: queryGeneration(f, sessionId) })).rejects.toThrow();
     expect(native.close).not.toHaveBeenCalled();
     const message = delta(sessionId, "Replacement attachment is still live.");
     await native.emit(message);
@@ -1497,7 +1518,7 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
         {
           ...authority,
           action: "acknowledge",
-          request: { sessionId, sequence: delivered[0]!.sequence },
+          request: { ...queryGeneration(f, sessionId), sequence: delivered[0]!.sequence },
         },
         listener,
       );
@@ -1516,7 +1537,7 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
           {
             ...authority,
             action: "acknowledge",
-            request: { sessionId, sequence: event.sequence },
+            request: { ...queryGeneration(f, sessionId), sequence: event.sequence },
           },
           listener,
         );
@@ -1542,7 +1563,7 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
           {
             ...authority,
             action: "acknowledge",
-            request: { sessionId, sequence: event.sequence },
+            request: { ...queryGeneration(f, sessionId), sequence: event.sequence },
           },
           listener,
         );
@@ -1587,7 +1608,7 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
           {
             ...authority,
             action: "acknowledge",
-            request: { sessionId, sequence: event.sequence },
+            request: { ...queryGeneration(f, sessionId), sequence: event.sequence },
           },
           listener,
         );
@@ -1651,9 +1672,9 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     await native.emit({ type: "result", subtype: "success", user_message_uuid: operationId,
       num_turns: 1, result: "Started", stop_reason: "end_turn", uuid: randomUUID(), session_id: sessionId } as unknown as SDKMessage);
     for (const event of delivered.splice(0)) await host.execute({ ...authority, action: "acknowledge",
-      request: { sessionId, sequence: event.sequence } }, listener);
+      request: { ...queryGeneration(f, sessionId), sequence: event.sequence } }, listener);
     expect(host.snapshot().blockers).toContain("active_work");
-    await host.execute({ ...authority, action: "evict", request: { sessionId } }, listener);
+    await host.execute({ ...authority, action: "evict", request: queryGeneration(f, sessionId) }, listener);
     expect(native.closed).toBe(false);
     await carrier.close();
     const replacement = await f.attach();
@@ -1663,26 +1684,26 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     const empty = inventory([{ task_id: "ambient", task_type: "local_agent", description: "Watcher", ambient: true }]);
     await native.emit(empty);
     for (const event of delivered.splice(0)) await host.execute({ ...authority, action: "acknowledge",
-      request: { sessionId, sequence: event.sequence } }, listener);
+      request: { ...queryGeneration(f, sessionId), sequence: event.sequence } }, listener);
     const settled = claudePersistentAttachmentSchema.parse(await host.execute({ ...authority, action: "attach", replay: "full", request: { sessionId } }, listener));
     expect(settled.events.map(event => event.payload)).toEqual([{ kind: "message", message: empty }]);
     expect(settled.backgroundActivity).toMatchObject({ state: "known", agents: 0, commands: 0, other: 0 });
     expect(settled.pendingBackgroundTaskIds).toEqual(["child"]);
     expect(host.snapshot().blockers).toContain("active_work");
-    await host.execute({ ...authority, action: "evict", request: { sessionId } }, listener);
+    await host.execute({ ...authority, action: "evict", request: queryGeneration(f, sessionId) }, listener);
     expect(native.closed).toBe(false);
     const waiting = claudePersistentAttachmentSchema.parse(await host.execute({ ...authority, action: "attach", replay: "full", request: { sessionId } }, listener));
     expect(waiting.pendingBackgroundTaskIds).toEqual(["child"]);
     await native.emit({ type: "system", subtype: "task_updated", task_id: "child", patch: { status: "completed" }, uuid: randomUUID(), session_id: sessionId });
     // A terminal update releases the edge hold, but its receipt must still be acknowledged.
     expect(host.snapshot().blockers).toContain("unsettled_outcome");
-    await host.execute({ ...authority, action: "evict", request: { sessionId } }, listener);
+    await host.execute({ ...authority, action: "evict", request: queryGeneration(f, sessionId) }, listener);
     expect(native.closed).toBe(false);
     for (const event of delivered.splice(0)) await host.execute({ ...authority, action: "acknowledge",
-      request: { sessionId, sequence: event.sequence } }, listener);
+      request: { ...queryGeneration(f, sessionId), sequence: event.sequence } }, listener);
     // The acknowledgement returns at once; retiring the evicted query follows.
     await vi.waitFor(() => expect(host.snapshot().blockers).not.toContain("active_work"));
-    await host.execute({ ...authority, action: "evict", request: { sessionId } }, listener);
+    await host.execute({ ...authority, action: "evict", request: queryGeneration(f, sessionId) }, listener);
     expect(native.closed).toBe(true);
   });
 
@@ -1705,7 +1726,7 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     for (let index = 0; index < 8_200; index++) {
       await native.emit(index === 0 ? firstDelta(sessionId, "x", operation.operationId) : delta(sessionId, "x"));
       for (const event of delivered.splice(0)) {
-        await host.execute({ ...authority, action: "acknowledge", request: { sessionId, sequence: event.sequence } }, listener);
+        await host.execute({ ...authority, action: "acknowledge", request: { ...queryGeneration(f, sessionId), sequence: event.sequence } }, listener);
       }
     }
     const replay = claudePersistentAttachmentSchema.parse(await attached.connection.execute({
@@ -1779,7 +1800,7 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     const delivered = claudePersistentAttachmentSchema.parse(await replacement.connection.execute({ ...current, action: "attach", replay: "full", request: { sessionId } }));
     expect(delivered.events.map(event => event.payload.kind)).toEqual(["permission_delivered"]);
     expect(f.hosts.get(runtimeId).snapshot().blockers).toEqual(["unsettled_outcome"]);
-    await replacement.connection.execute({ ...current, action: "acknowledge", request: { sessionId, sequence: delivered.events[0]!.sequence } });
+    await replacement.connection.execute({ ...current, action: "acknowledge", request: { ...queryGeneration(f, sessionId), sequence: delivered.events[0]!.sequence } });
     expect(f.hosts.get(runtimeId).snapshot().blockers).toEqual([]);
   });
 
@@ -1829,7 +1850,7 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     await native.options.onPermissionResponseDelivered!({ requestId: "ask", toolUseID: "tool" });
     const snapshot = claudePersistentAttachmentSchema.parse(await attached.connection.execute({ ...authority, action: "attach", replay: "full", request: { sessionId } }));
     expect(snapshot.events.map(event => event.payload.kind)).toEqual(["permission_delivered"]);
-    await attached.connection.execute({ ...authority, action: "acknowledge", request: { sessionId, sequence: snapshot.events[0]!.sequence } });
+    await attached.connection.execute({ ...authority, action: "acknowledge", request: { ...queryGeneration(f, sessionId), sequence: snapshot.events[0]!.sequence } });
     expect(f.hosts.get(runtimeId).snapshot().blockers).toEqual([]);
   });
 
@@ -1848,8 +1869,8 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     const seen: ClaudePersistentEvent[] = [];
     await host.execute({ ...authority, action: "attach", replay: "full", request: { sessionId } }, event => seen.push(event));
     await f.sessions[0]!.emit({ type: "result", session_id: sessionId, uuid: randomUUID(), user_message_uuid: operation.operationId } as SDKMessage);
-    for (const event of seen) await host.execute({ ...authority, action: "acknowledge", request: { sessionId, sequence: event.sequence } }, () => {});
-    await attached.connection.execute({ ...authority, action: "evict", request: { sessionId } });
+    for (const event of seen) await host.execute({ ...authority, action: "acknowledge", request: { ...queryGeneration(f, sessionId), sequence: event.sequence } }, () => {});
+    await attached.connection.execute({ ...authority, action: "evict", request: queryGeneration(f, sessionId) });
     expect(f.sessions[0]!.closed).toBe(true);
     const disposition = (operationId: string) => attached.connection.execute({ ...authority, action: "submission_disposition",
       request: { sessionId, operationId, cwd: "/workspace" } });
@@ -1891,7 +1912,7 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     const snapshot = claudePersistentAttachmentSchema.parse(await attached.connection.execute({ ...authority, action: "attach", replay: "full", request: { sessionId } }));
     expect(snapshot.events.map(event => event.payload.kind)).toEqual(["permission_failed"]);
     expect(f.hosts.inspect(runtimeId).blockers).toEqual(["unsettled_outcome"]);
-    await attached.connection.execute({ ...authority, action: "acknowledge", request: { sessionId, sequence: snapshot.events[0]!.sequence } });
+    await attached.connection.execute({ ...authority, action: "acknowledge", request: { ...queryGeneration(f, sessionId), sequence: snapshot.events[0]!.sequence } });
     expect(f.hosts.inspect(runtimeId).blockers).toEqual([]);
   });
 
@@ -1954,11 +1975,11 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
       await expect(attached.connection.execute({ ...authority, action: "send", request: operation })).resolves.toEqual({ accepted: true });
       await f.sessions[0]!.emit({ type: "result", session_id: sessionId, uuid: randomUUID(), user_message_uuid: operation.operationId } as SDKMessage);
     }
-    for (const event of seen) await host.execute({ ...authority, action: "acknowledge", request: { sessionId, sequence: event.sequence } }, () => {});
+    for (const event of seen) await host.execute({ ...authority, action: "acknowledge", request: { ...queryGeneration(f, sessionId), sequence: event.sequence } }, () => {});
     await expect(disposition(operations[3]!.operationId)).resolves.toEqual({ disposition: "submitted" });
     await expect(disposition(operations[2]!.operationId)).resolves.toEqual({ disposition: "submitted" });
     await expect(disposition(operations[0]!.operationId)).resolves.toEqual({ disposition: "unknown" });
-    await attached.connection.execute({ ...authority, action: "evict", request: { sessionId } });
+    await attached.connection.execute({ ...authority, action: "evict", request: queryGeneration(f, sessionId) });
     expect(f.sessions[0]!.closed).toBe(true);
     // A forgotten send means an absent ID no longer proves it was never sent.
     await expect(disposition(randomUUID())).resolves.toEqual({ disposition: "session_ended" });
@@ -2100,6 +2121,241 @@ describe("Claude rejected sends and retained query failure", () => {
     expect(replacementFailure).toHaveBeenCalled();
     expect(f.sessions).toHaveLength(1);
     expect(native.send).not.toHaveBeenCalled();
+  });
+});
+
+describe("archive of an unattended Claude query", () => {
+  async function archiveFixture(archiveObserver?: ArchiveObserver) {
+    const f = await fixture();
+    const carrier = await f.attach();
+    const client = f.client(undefined, archiveObserver);
+    const sessionId = randomUUID();
+    const db = new Database(":memory:");
+    cleanups.push(async () => { db.close(); });
+    db.exec("CREATE TABLE claude_thread_settings(tenant_id TEXT, owner_principal_id TEXT, application_thread_id TEXT, PRIMARY KEY(tenant_id,owner_principal_id,application_thread_id));");
+    db.exec(claudeTaskLifecycleMigration.sql);
+    db.exec(`CREATE TABLE claude_turn_terminal_receipts (
+      tenant_id TEXT, owner_principal_id TEXT, application_thread_id TEXT, backend_turn_id TEXT, status TEXT,
+      provider_terminal_reason TEXT, provider_result_uuid TEXT, terminal_at INTEGER, created_at INTEGER, updated_at INTEGER,
+      failure_message TEXT, PRIMARY KEY(tenant_id, owner_principal_id, application_thread_id, backend_turn_id));`);
+    const settings = new ClaudeThreadRepository(db);
+    const { threadId, workspace, binding, driver } = conversationTarget(client, sessionId, {
+      get: vi.fn(() => ({ model: null, effort: null, permissionMode: "default", revision: 0 })) as unknown as ClaudeThreadRepository["get"],
+      markEffectiveUnknown: vi.fn(), confirmEffectiveModel: vi.fn(), confirmEffectiveEffort: vi.fn(), confirmEffectivePermissionMode: vi.fn(),
+      findForkChild: vi.fn(), listSteerOperations: () => new Map(), hasOperationSnapshot: () => true, associateSteerOperation: () => false, findSkillInvocation: vi.fn(),
+      listTerminalReceipts: settings.listTerminalReceipts.bind(settings), findTerminalReceipt: settings.findTerminalReceipt.bind(settings),
+      writeTerminalReceipt: settings.writeTerminalReceipt.bind(settings),
+      listTaskLifecycleReceipts: settings.listTaskLifecycleReceipts.bind(settings),
+      writeTaskStarted: settings.writeTaskStarted.bind(settings), writeTaskTerminal: settings.writeTaskTerminal.bind(settings),
+    });
+    db.prepare("INSERT INTO claude_thread_settings VALUES(?,?,?)").run(scope.tenantId, scope.principalId, threadId);
+    const input: PrepareConversationArchiveInput = { scope, workspace: workspace as PrepareConversationArchiveInput["workspace"],
+      binding: binding as PrepareConversationArchiveInput["binding"], opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }),
+      signal: AbortSignal.timeout(10_000), retainedOwner: undefined, markRetained: vi.fn(), markSettled: vi.fn(), markObserved: vi.fn(), settle: vi.fn(async () => {}) };
+    cleanups.push(() => driver.close());
+    const host = f.hosts.get(await carrier.connection.ensure(configuration));
+    const addNotices = async () => {
+      const handle = await driver.attach(input);
+      await handle.close();
+      const native = f.sessions.at(-1)!;
+      for (const id of ["one", "two"]) {
+        settings.writeTaskStarted(scope, threadId, sessionId, { nativeTaskId: id, nativeToolUseId: id, description: id, now: 1 });
+        await native.emit({ type: "system", subtype: "task_notification", task_id: id, tool_use_id: id, status: "completed",
+          output_file: "", summary: "Finished", uuid: randomUUID(), session_id: sessionId });
+      }
+    };
+    return { ...f, client, sessionId, input, host, driver, carrier, addNotices,
+      rows: () => db.prepare("SELECT native_task_id, terminal_status, terminal_at FROM claude_task_lifecycle_receipts ORDER BY native_task_id").all() };
+  }
+
+  it("checks a missing service or runtime without creating either", async () => {
+    const f = await fixture();
+    const client = f.client();
+    const request = { sessionId: randomUUID(), applicationThreadId: "thread", cwd: "/workspace",
+      signal: new AbortController().signal, retainedOwner: undefined, markObserved: vi.fn(), markRetained: vi.fn(), markSettled: vi.fn(), apply: vi.fn() };
+    await expect(client.prepareArchive(request)).resolves.toBe("released");
+    await f.attach();
+    await expect(client.prepareArchive(request)).resolves.toBe("released");
+    expect(f.createRuntime).not.toHaveBeenCalled();
+    expect(f.sidecarRuntime.acquire).not.toHaveBeenCalled();
+    expect(request.apply).not.toHaveBeenCalled();
+  });
+
+  it("leaves a cut retained when new work starts during application", async () => {
+    const f = await archiveFixture();
+    await f.addNotices();
+    const settle = async () => {
+      await f.sessions[0]!.emit({ type: "system", subtype: "session_state_changed", state: "running",
+        uuid: randomUUID(), session_id: f.sessionId } as SDKMessage);
+    };
+    await expect(f.driver.prepareArchive({ ...f.input, settle })).resolves.toEqual({ outcome: "busy" });
+    expect(f.host.abandonmentEvidence().sessions[0]?.retainedEventCount).toBeGreaterThanOrEqual(2);
+    expect(f.input.markSettled).not.toHaveBeenCalled();
+  });
+
+  it("settles a pinned failed archive during ordinary open before releasing its generation", async () => {
+    let retained: string | undefined;
+    const settle = vi.fn();
+    const release = vi.fn((_thread: string, owner: string) => {
+      expect(owner).toBe(retained);
+      retained = undefined;
+    });
+    const f = await archiveFixture({ retained: () => retained, settle, release });
+    await f.addNotices();
+    await expect(f.driver.prepareArchive({ ...f.input, markRetained: owner => { retained = owner; },
+      settle: async () => { throw new Error("temporarily_unavailable"); } })).rejects.toThrow();
+    const original = retained;
+    expect(original).toBeTruthy();
+    const live = await f.driver.attach(f.input);
+    await live.establishProjection({ signal: f.input.signal });
+    expect(settle).toHaveBeenCalledWith(f.input.binding.applicationThreadId, original, expect.any(Object), []);
+    expect(f.host.abandonmentEvidence().sessions[0]?.retainedEventCount).toBe(0);
+    expect(release).toHaveBeenCalledOnce();
+    // Losing the original carrier and its eventual ended journal can no longer strand the pin.
+    await f.carrier.close();
+    expect(retained).toBeUndefined();
+    await live.close({ reason: "evicted" });
+  });
+
+  it("preserves the original events and pin when ordinary recovery cannot persist application effects", async () => {
+    let retained: string | undefined;
+    const release = vi.fn();
+    const settle = vi.fn(() => { throw new Error("database_unavailable"); });
+    const f = await archiveFixture({ retained: () => retained, settle, release });
+    await f.addNotices();
+    await expect(f.driver.prepareArchive({ ...f.input, markRetained: owner => { retained = owner; },
+      settle: async () => { throw new Error("database_unavailable"); } })).rejects.toThrow();
+    const live = await f.driver.attach(f.input);
+    await expect(live.establishProjection({ signal: f.input.signal })).rejects.toThrow();
+    expect(f.host.abandonmentEvidence().sessions[0]?.retainedEventCount).toBe(2);
+    expect(release).not.toHaveBeenCalled();
+    expect(retained).toBeTruthy();
+    await live.close();
+  });
+
+  it("settles the full correlated assistant result for a retained terminal outside the display window", async () => {
+    const f = await archiveFixture();
+    const handle = await f.driver.attach(f.input);
+    await handle.close();
+    const ids = Array.from({ length: 16 }, () => randomUUID());
+    f.runtime.getSessionMessages.mockResolvedValue(ids.flatMap((uuid, i) => [
+      { uuid, type: "user" as const, session_id: f.sessionId, parent_tool_use_id: null, parent_agent_id: null,
+        message: { role: "user", content: `Input ${i}` } },
+      { uuid: randomUUID(), type: "assistant" as const, session_id: f.sessionId, parent_tool_use_id: null, parent_agent_id: null,
+        message: { id: randomUUID(), role: "assistant", content: [{ type: "text", text: `Complete reply ${i}` }], stop_reason: "end_turn" } },
+    ]));
+    const operationId = ids[0]!;
+    await f.sessions[0]!.emit({ type: "result", subtype: "success", duration_ms: 0, duration_api_ms: 0,
+      is_error: false, num_turns: 1, result: "Complete reply 0", terminal_reason: "completed", total_cost_usd: 0,
+      usage: {}, modelUsage: {}, permission_denials: [], uuid: randomUUID(), session_id: f.sessionId,
+      user_message_uuid: operationId, user_message_uuids: [operationId] } as unknown as SDKMessage);
+    let applied = false;
+    await expect(f.driver.prepareArchive({ ...f.input, settle: async (snapshot, completed) => {
+      for (const turnId of completed) {
+        const turn = snapshot.turnsById[turnId]!;
+        if (!turn.completionCorrelations?.includes(operationId)) continue;
+        expect(JSON.stringify(snapshot.itemsById)).toContain("Complete reply 0");
+        expect(f.host.abandonmentEvidence().sessions[0]?.retainedEventCount).toBe(1);
+        applied = true;
+      }
+    } })).resolves.toEqual({ outcome: "released" });
+    expect(applied).toBe(true);
+  });
+
+  it("settles two detached task completions and the application snapshot before acknowledging either", async () => {
+    const f = await archiveFixture();
+    await f.addNotices();
+    const snapshot = async () => {
+      expect(f.rows()).toEqual(["one", "two"].map(id => ({ native_task_id: id, terminal_status: "completed", terminal_at: expect.any(Number) })));
+      expect(f.host.abandonmentEvidence().sessions[0]?.retainedEventCount).toBe(2);
+    };
+    const ensure = vi.spyOn(ClaudeSidecarRuntimeConnection.prototype, "ensure");
+    const calls = vi.spyOn(ClaudeSidecarRuntimeConnection.prototype, "execute");
+    await expect(f.driver.prepareArchive({ ...f.input, settle: snapshot })).resolves.toEqual({ outcome: "released" });
+    expect(f.input.markRetained).toHaveBeenCalled();
+    expect(f.input.markSettled).toHaveBeenCalledWith(vi.mocked(f.input.markRetained).mock.calls[0]![0]);
+    expect(f.host.abandonmentEvidence().sessionCount).toBe(0);
+    expect(f.sessions).toHaveLength(1);
+    expect(ensure).not.toHaveBeenCalled();
+    expect(calls.mock.calls.map(([cmd]) => cmd.action)).toEqual(["archive_prepare", "archive_history", "archive_prepare"]);
+  });
+
+  it.each(["settlement", "acknowledgement"] as const)("retains an unacknowledged cut after a failed %s and applies its receipts idempotently", async stage => {
+    const f = await archiveFixture();
+    await f.addNotices();
+    const execute = ClaudeSidecarRuntimeConnection.prototype.execute;
+    const call = vi.spyOn(ClaudeSidecarRuntimeConnection.prototype, "execute").mockImplementation(function(this: ClaudeSidecarRuntimeConnection, command, options) {
+      if (stage === "acknowledgement" && command.action === "archive_prepare" && command.request.applied) throw new Error("lost_ack");
+      return execute.call(this, command, options);
+    });
+    const settle = vi.fn(async () => { if (stage === "settlement") throw new Error("settlement_failed"); });
+    await expect(f.driver.prepareArchive({ ...f.input, settle })).rejects.toThrow();
+    expect(f.host.abandonmentEvidence().sessions[0]?.retainedEventCount).toBe(2);
+    const committed = f.rows();
+    call.mockRestore();
+    await expect(f.driver.prepareArchive(f.input)).resolves.toEqual({ outcome: "released" });
+    expect(f.rows()).toEqual(committed);
+    expect(f.host.abandonmentEvidence().sessionCount).toBe(0);
+  });
+
+  it("can prove a lost final receipt only for the retired query it originally settled", async () => {
+    const f = await archiveFixture();
+    await f.addNotices();
+    const execute = ClaudeSidecarRuntimeConnection.prototype.execute;
+    const call = vi.spyOn(ClaudeSidecarRuntimeConnection.prototype, "execute").mockImplementation(async function(this: ClaudeSidecarRuntimeConnection, command, options) {
+      const reply = await execute.call(this, command, options);
+      if (command.action === "archive_prepare" && command.request.applied) throw new Error("lost_retirement_reply");
+      return reply;
+    });
+    await expect(f.driver.prepareArchive(f.input)).rejects.toThrow("lost_retirement_reply");
+    expect(f.host.abandonmentEvidence().sessionCount).toBe(0);
+    const owner = vi.mocked(f.input.markRetained).mock.calls[0]![0];
+    expect(f.input.markSettled).not.toHaveBeenCalled();
+    call.mockRestore();
+    await expect(f.driver.prepareArchive({ ...f.input, retainedOwner: owner })).resolves.toEqual({ outcome: "released" });
+    expect(f.input.markSettled).toHaveBeenCalledWith(owner);
+    // A fresh query can reuse the native session ID but cannot release or ACK
+    // outstanding evidence that main remembers from the old generation.
+    await f.addNotices();
+    await expect(f.driver.prepareArchive({ ...f.input, retainedOwner: owner })).rejects.toThrow();
+    expect(f.host.abandonmentEvidence().sessions[0]?.retainedEventCount).toBe(2);
+  });
+
+  it("drains terminal output produced by a stopped upgrade worker without creating a successor", async () => {
+    const f = await archiveFixture();
+    const first = await f.driver.attach(f.input);
+    await first.close();
+    const native = f.sessions[0]!;
+    f.runtime.close.mockImplementationOnce(async () => {
+      await native.emit(delta(f.sessionId, "final progress"));
+      await native.close();
+    });
+    await expect(f.host.stop()).rejects.toThrow("sidecar_resource_handoff_pending");
+    expect(native.closed).toBe(true);
+    await expect(f.driver.prepareArchive(f.input)).resolves.toEqual({ outcome: "released" });
+    expect(f.sessions).toHaveLength(1);
+    expect(f.host.abandonmentEvidence().sessionCount).toBe(0);
+  });
+
+  it("refuses a changed binding or query generation and never starts an absent query", async () => {
+    const f = await archiveFixture();
+    const authority = { runtimeId: f.host.runtimeId, controllerEpoch: f.carrier.lease.controllerEpoch };
+    const binding = { sessionId: f.sessionId, cwd: "/workspace", applicationThreadId: f.input.binding.applicationThreadId };
+    const ensure = vi.spyOn(ClaudeSidecarRuntimeConnection.prototype, "ensure");
+    await expect(f.driver.prepareArchive(f.input)).resolves.toEqual({outcome:"released"});
+    expect(f.sessions).toHaveLength(0);
+    expect(ensure).not.toHaveBeenCalled();
+    await f.addNotices();
+    for (const changed of [{ cwd: "/other" }, { applicationThreadId: "other-thread" }]) {
+      await expect(f.host.execute({ ...authority, action: "archive_prepare", request: { ...binding, ...changed } }, () => {})).rejects.toThrow("claude_archive_owner_changed");
+    }
+    await expect(f.host.execute({ ...authority, action: "archive_prepare", request: { ...binding,
+      applied: { startupProbeUuid: randomUUID(), throughSequence: 2, sequences: [1,2] } } }, () => {})).rejects.toThrow("claude_archive_owner_changed");
+    for (const action of ["evict", "detach"] as const) {
+      await expect(f.host.execute({ ...authority, action, request: { sessionId: f.sessionId, startupProbeUuid: randomUUID() } }, () => {}))
+        .rejects.toThrow("claude_persistent_query_generation_changed");
+    }
+    expect(f.host.abandonmentEvidence().sessions[0]?.retainedEventCount).toBe(2);
   });
 });
 
@@ -2440,7 +2696,7 @@ describe("persistent owner run-state evidence", () => {
     await vi.waitFor(() => expect(f.services.status().resources[0]!.blockers).toEqual(["active_work"]));
     const runtimeId = f.services.status().resources[0]!.resourceId;
     await carrier.connection.execute({ runtimeId, controllerEpoch: carrier.lease.controllerEpoch,
-      action: "evict", request: { sessionId } });
+      action: "evict", request: queryGeneration(f, sessionId) });
     // A turn Claude started itself must not be killed by idle retirement.
     expect(native.closed).toBe(false);
     await session.close();
@@ -2501,7 +2757,7 @@ describe("persistent retained-event accounting", () => {
       queryId: sessionId, sessionId, cwd: "/workspace", launch: "new", enableCanUseTool: false, environment: {},
     } }, listener);
     const replay = async () => claudePersistentAttachmentSchema.parse(await host.execute({ ...authority, action: "attach", replay: "full", request: { sessionId } }, listener));
-    const detach = async () => { await host.execute({ ...authority, action: "detach", request: { sessionId } }, listener); };
+    const detach = async () => { await host.execute({ ...authority, action: "detach", request: queryGeneration(f, sessionId) }, listener); };
     return { f, host, authority, sessionId, delivered, listener, replay, detach, native: f.sessions[0]! };
   }
   const texts = (events: readonly ClaudePersistentEvent[]) => events.map(event => {
@@ -2584,7 +2840,7 @@ describe("persistent host shutdown evidence", () => {
       queryId: sessionId, sessionId, cwd: "/workspace", launch: "new", enableCanUseTool: false, environment: {} } }, listener);
     const native = f.sessions.find(session => session.options.sessionId === sessionId)!;
     await native.emit(delta(sessionId, "unapplied output"));
-    await host.execute({ ...authority, action: "detach", request: { sessionId } }, listener);
+    await host.execute({ ...authority, action: "detach", request: queryGeneration(f, sessionId) }, listener);
     const retire = () => host.execute({ ...authority, action: "retire", request: { sessionId, cwd: "/workspace" } }, listener);
     await expect(retire()).resolves.toEqual({ outcome: "undelivered" });
     expect(native.closed).toBe(false);
@@ -2604,12 +2860,12 @@ describe("persistent host shutdown evidence", () => {
       queryId: sessionId, sessionId, cwd: "/workspace", launch: "new", enableCanUseTool: false, environment: {} } }, listener);
     const native = f.sessions.find(session => session.options.sessionId === sessionId)!;
     await native.emit(delta(sessionId, "last output"));
-    await host.execute({ ...authority, action: "evict", request: { sessionId } }, listener);
+    await host.execute({ ...authority, action: "evict", request: queryGeneration(f, sessionId) }, listener);
     // Closing the Claude process can take seconds; retirement runs on its own.
     let finishClose!: () => void;
     native.close.mockImplementationOnce(() => new Promise<void>(resolve => { finishClose = () => { native.closed = true; resolve(); }; }));
     const acknowledged = host.execute({ ...authority, action: "acknowledge",
-      request: { sessionId, sequence: delivered.at(-1)!.sequence } }, listener);
+      request: { ...queryGeneration(f, sessionId), sequence: delivered.at(-1)!.sequence } }, listener);
     await expect(Promise.race([acknowledged, new Promise(resolve => setTimeout(() => resolve("pending"), 200))]))
       .resolves.toEqual({ acknowledged: true });
     await vi.waitFor(() => expect(native.close).toHaveBeenCalled());
@@ -2634,7 +2890,7 @@ describe("persistent host shutdown evidence", () => {
     await native.emit(result(sessionId, operationId));
     // Claude goes straight on to a turn of its own: no idle edge follows.
     for (const event of [...delivered]) {
-      await host.execute({ ...authority, action: "acknowledge", request: { sessionId, sequence: event.sequence } }, listener);
+      await host.execute({ ...authority, action: "acknowledge", request: { ...queryGeneration(f, sessionId), sequence: event.sequence } }, listener);
     }
     const replayed = await host.execute({ ...authority, action: "attach", replay: "full", request: { sessionId } }, listener) as
       { events: ClaudePersistentEvent[] };
@@ -2665,7 +2921,7 @@ describe("persistent host shutdown evidence", () => {
     const native = f.sessions.find(session => session.options.sessionId === working)!;
     await native.emit(lifecycle(working, operationId, "started"));
     for (const event of delivered.splice(0)) {
-      await host.execute({ ...authority, action: "acknowledge", request: { sessionId: event.sessionId, sequence: event.sequence } }, listener);
+      await host.execute({ ...authority, action: "acknowledge", request: { sessionId: event.sessionId, startupProbeUuid: f.sessions.find(session => session.options.sessionId === event.sessionId)!.startupProbeUuid, sequence: event.sequence } }, listener);
     }
     // Earlier compaction segments make each full history large.
     f.runtime.hasSessionTranscript.mockResolvedValue(true);
@@ -2726,7 +2982,7 @@ describe("persistent host shutdown evidence", () => {
     const sessionId = randomUUID();
     await host.execute({ ...authority, action: "open", replay: "full", request: {
       queryId: sessionId, sessionId, cwd: "/workspace", launch: "new", enableCanUseTool: false, environment: {} } }, () => {});
-    await host.execute({ ...authority, action: "detach", request: { sessionId } }, () => {});
+    await host.execute({ ...authority, action: "detach", request: queryGeneration(f, sessionId) }, () => {});
     expect(host.snapshot().blockers).toEqual([]);
     const native = f.sessions[0]!;
     // A task notification wakes Claude while the idle stop reads its history.
@@ -2737,7 +2993,7 @@ describe("persistent host shutdown evidence", () => {
       sessions: [expect.objectContaining({ sessionId, liveWork: true })] })]);
     // Its retained frame is recovery evidence; once applied, the stop completes.
     const retained = claudePersistentAttachmentSchema.parse(await host.execute({ ...authority, action: "attach", replay: "unacknowledged", request: { sessionId } }, () => {}));
-    for (const event of retained.events) await host.execute({ ...authority, action: "acknowledge", request: { sessionId, sequence: event.sequence } }, () => {});
+    for (const event of retained.events) await host.execute({ ...authority, action: "acknowledge", request: { ...queryGeneration(f, sessionId), sequence: event.sequence } }, () => {});
     await host.stop(false, "sidecar_service_replacement");
     expect(evidence(f.archive).at(-1)).toMatchObject({ phase: "after_shutdown", startedAfterConfirmation: true });
   });
@@ -2812,7 +3068,7 @@ it("a full Claude Stop journal cannot disable other sessions and is retired only
   const secondNative = f.sessions[1]!;
   await expect(host.execute({ ...authority, action: "interrupt", request: { ...request, queryId: second, startupProbeUuid: secondNative.startupProbeUuid } }, listener)).resolves.toEqual({ receipt: null });
   expect(secondNative.interrupt).toHaveBeenCalledOnce();
-  await host.execute({ ...authority, action: "detach", request: { sessionId: first } }, listener);
+  await host.execute({ ...authority, action: "detach", request: queryGeneration(f, first) }, listener);
   await expect(host.execute({ ...authority, action: "retire", request: { sessionId: first, cwd: "/workspace" } }, listener)).resolves.toEqual({ outcome: "retired" });
   expect(native.closed).toBe(true);
   await open(first, "resume");

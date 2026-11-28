@@ -416,6 +416,12 @@ See [Sedes tools](provider-features.md#let-an-agent-use-sedes-tools).
 Archive removes a thread from the normal sidebar and blocks new delivery until
 the thread is restored. Choose **Archive** from the thread's menu or row. Sedes
 first checks the thread; when nothing needs a decision, it archives at once.
+You can keep another chat open while you long-press the target thread to archive
+or rename it. Sedes connects in the background when needed. Archive first saves
+any finished updates waiting on the backend. If the target still has running
+work, the dialog explains what is blocking it. For Rename, enter the new title
+in place. If confirmation is interrupted, you can check the original edit.
+
 When the thread has forks, open Tasks, stashed prompts, pending questions, or an
 isolated workspace, **Archive this thread** opens so you can choose first.
 

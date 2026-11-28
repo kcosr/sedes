@@ -604,6 +604,10 @@ function fingerprint(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
+export function draftRenameFingerprint(threadId: string, title: string, expectedRevision: number): string {
+  return fingerprint(["rename_thread", threadId, title, expectedRevision]);
+}
+
 // Stable hash inputs preserve receipts committed before the inventory rename.
 const parkThreadReceiptSeed = "settle_thread";
 
@@ -628,6 +632,7 @@ function archiveThreadsFingerprint(
   input: {
     readonly expectedRevision: number;
     readonly includeDescendants: boolean;
+    readonly expectedPendingQuestionCount?: number;
     readonly expectedStashedPromptCount?: number;
     readonly expectedOpenTaskSnapshot?: string;
     readonly openTaskDisposition?:
@@ -647,6 +652,7 @@ function archiveThreadsFingerprint(
     threadId,
     input.expectedRevision,
     input.includeDescendants,
+    ...(input.expectedPendingQuestionCount === undefined ? [] : [{ pendingQuestions: input.expectedPendingQuestionCount }]),
     ...(input.expectedStashedPromptCount === undefined
       ? []
       : [input.expectedStashedPromptCount]),
@@ -663,6 +669,7 @@ function archiveThreadsFingerprint(
 function bulkInventoryFingerprint(input: {
   readonly action: BulkInventoryAction;
   readonly targets: readonly BulkInventoryTarget[];
+  readonly expectedPendingQuestionCount?: number;
   readonly expectedStashedPromptCount?: number;
   readonly expectedOpenTaskCount?: number;
   readonly expectedOpenTaskSnapshot?: string;
@@ -681,6 +688,7 @@ function bulkInventoryFingerprint(input: {
       ? input.action
       : inventoryActionReceiptToken(input.action),
     canonicalTargets,
+    ...(input.expectedPendingQuestionCount === undefined ? [] : [{ pendingQuestions: input.expectedPendingQuestionCount }]),
     ...(input.expectedStashedPromptCount === undefined
       ? []
       : [input.expectedStashedPromptCount]),
@@ -2174,6 +2182,7 @@ export class InventoryRepository {
       readonly expectedThreadIds: readonly string[];
       readonly blockedThreadIds: ReadonlySet<string>;
       readonly now: number;
+      readonly expectedPendingQuestionCount?: number;
       readonly expectedStashedPromptCount?: number;
       readonly expectedOpenTaskSnapshot?: string;
       readonly openTaskDisposition?:
@@ -2271,6 +2280,7 @@ export class InventoryRepository {
         (candidate) =>
           currentInventory.get(candidate)!.inventoryState !== "archived",
       );
+      this.#assertPendingQuestionCount(scope, archivableThreadIds, input.expectedPendingQuestionCount);
       this.#assertStashedPromptCount(
         scope,
         archivableThreadIds,
@@ -2340,6 +2350,7 @@ export class InventoryRepository {
       readonly expectedRevision: number;
       readonly mutationId: string;
       readonly includeDescendants: boolean;
+      readonly expectedPendingQuestionCount?: number;
       readonly expectedStashedPromptCount?: number;
       readonly expectedOpenTaskSnapshot?: string;
       readonly openTaskDisposition?:
@@ -2389,6 +2400,7 @@ export class InventoryRepository {
       readonly mutationId: string;
       readonly blockedThreadIds: ReadonlySet<string>;
       readonly now: number;
+      readonly expectedPendingQuestionCount?: number;
       readonly expectedStashedPromptCount?: number;
       readonly expectedOpenTaskCount?: number;
       readonly expectedOpenTaskSnapshot?: string;
@@ -2489,6 +2501,7 @@ export class InventoryRepository {
       if (input.action === "park" || input.action === "archive") {
         this.#assertBulkThreadsDurablyInactive(scope, affectedThreadIds);
       }
+      this.#assertPendingQuestionCount(scope, affectedThreadIds, input.expectedPendingQuestionCount);
       this.#assertStashedPromptCount(
         scope,
         affectedThreadIds,
@@ -2563,6 +2576,7 @@ export class InventoryRepository {
       readonly action: BulkInventoryAction;
       readonly targets: readonly BulkInventoryTarget[];
       readonly mutationId: string;
+      readonly expectedPendingQuestionCount?: number;
       readonly expectedStashedPromptCount?: number;
       readonly expectedOpenTaskCount?: number;
       readonly expectedOpenTaskSnapshot?: string;
@@ -2942,12 +2956,7 @@ export class InventoryRepository {
       readonly now: number;
     },
   ): InventoryThreadAggregate {
-    const requestFingerprint = fingerprint([
-      "rename_thread",
-      threadId,
-      input.title,
-      input.expectedRevision,
-    ]);
+    const requestFingerprint = draftRenameFingerprint(threadId, input.title, input.expectedRevision);
     return this.database.transaction(() => {
       const receipt = this.#receipt(scope, input.mutationId);
       if (receipt) {
@@ -3408,6 +3417,23 @@ export class InventoryRepository {
       );
     }
     return rows.map(({ threadId: candidate }) => candidate);
+  }
+
+  #assertPendingQuestionCount(scope: RequestScope, threadIds: readonly string[], expected: number | undefined): void {
+    if (expected === undefined) return;
+    let count = 0;
+    for (let offset = 0; offset < threadIds.length; offset += 500) {
+      const ids = threadIds.slice(offset, offset + 500);
+      const row = this.database.prepare(`
+        SELECT coalesce(sum(json_array_length(payload_json, '$.questions')), 0) AS count
+        FROM question_requests
+        WHERE tenant_id = ? AND principal_id = ? AND payload_json IS NOT NULL
+          AND thread_id IN (${ids.map(() => "?").join(",")})
+      `).get(scope.tenantId, scope.principalId, ...ids) as { count: number };
+      count += row.count;
+    }
+    if (count !== expected) throw new DomainError(
+      "conflict", "Pending questions changed while archive was being prepared. Review the updated impact and try again.");
   }
 
   #assertStashedPromptCount(

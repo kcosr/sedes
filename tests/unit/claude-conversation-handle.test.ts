@@ -4135,6 +4135,13 @@ describe("ClaudeConversationHandle", () => {
         title: "Renamed",
       }),
     ).resolves.toEqual({ outcome: "accepted" });
+    vi.mocked((provider.sdk as ClaudeSdkFacade).getSessionInfo).mockResolvedValueOnce({
+      sessionId: SESSION_ID, cwd: "/another-workspace", summary: "", customTitle: "Renamed", lastModified: 2,
+    });
+    await expect(handle.reconcileAction({
+      applicationOperationId: "unknown-rename", action: "rename", title: "Renamed",
+    })).rejects.toMatchObject({ backendCode: "claude_session_identity_mismatch" });
+    expect(provider.sdk.renameSession).toHaveBeenCalledOnce();
     await handle.close();
   });
 });

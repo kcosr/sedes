@@ -10,6 +10,9 @@ export const claudePersistentConfigurationSchema = worker.claudeRuntimeInitializ
 });
 export type ClaudePersistentConfiguration = z.infer<typeof claudePersistentConfigurationSchema>;
 const session = z.strictObject({ sessionId: z.string().uuid() });
+const queryGeneration = session.extend({ startupProbeUuid: z.string().uuid() });
+const archiveBinding = session.extend({ cwd: worker.claudeRuntimeProbeRequestSchema.shape.cwd, applicationThreadId: id });
+const archiveGeneration = archiveBinding.extend({ startupProbeUuid: z.string().uuid() });
 const authority = { runtimeId: id, controllerEpoch: z.number().int().positive() };
 function command<const Action extends string, Schema extends z.ZodType>(action: Action, request: Schema) {
   return z.strictObject({ ...authority, action: z.literal(action), request });
@@ -36,11 +39,18 @@ export const claudePersistentCommandSchema = z.discriminatedUnion("action", [
   command("context_usage", worker.claudeRuntimeQueryContextUsageRequestSchema.extend({ startupProbeUuid: z.string().uuid() })),
   command("set_effort", worker.claudeRuntimeQuerySetEffortRequestSchema),
   command("set_permission_mode", worker.claudeRuntimeQuerySetPermissionModeRequestSchema),
-  command("attach", session).extend({ replay: z.enum(["full", "unacknowledged"]) }), command("detach", session), command("evict", session),
+  command("attach", session).extend({ replay: z.enum(["full", "unacknowledged"]) }), command("detach", queryGeneration), command("evict", queryGeneration),
   // Retire an unattended query for a thread main has no runtime for (archive).
   command("retire", session.extend({ cwd: worker.claudeRuntimeProbeRequestSchema.shape.cwd })),
+  // Maintenance observes an existing query without installing a live listener.
+  command("archive_prepare", archiveBinding.extend({ expectedStartupProbeUuid: z.string().uuid().optional(), applied: z.strictObject({
+    startupProbeUuid: z.string().uuid(), throughSequence: z.number().int().nonnegative(),
+    sequences: z.array(z.number().int().positive()).max(8192),
+  }).optional() })),
+  command("archive_delivery_proof", archiveGeneration.extend({ throughSequence: z.number().int().nonnegative() })),
+  command("archive_history", archiveGeneration.extend({ page: worker.claudeRuntimeSessionMessagesRequestSchema.omit({ sessionId: true, dir: true }) })),
   command("submission_disposition", session.extend({ operationId: z.string().uuid(), cwd: worker.claudeRuntimeProbeRequestSchema.shape.cwd })),
-  command("acknowledge", session.extend({ sequence: z.number().int().nonnegative() })),
+  command("acknowledge", queryGeneration.extend({ sequence: z.number().int().nonnegative() })),
   command("respond_permission", session.extend({ requestId: id, toolUseID: id, response: worker.claudeRuntimeCanUseToolResponseSchema })),
 ]);
 export type ClaudePersistentCommand = z.infer<typeof claudePersistentCommandSchema>;
@@ -91,3 +101,11 @@ export const claudePersistentSubmissionDispositionResponseSchema = z.strictObjec
 /** A retired or absent query holds nothing; a busy one still has work outstanding. */
 /** `undelivered`: only output no main has applied and acknowledged holds the query. */
 export const claudePersistentRetireResponseSchema = z.strictObject({ outcome: z.enum(["retired", "absent", "busy", "undelivered"]) });
+
+export const claudeArchivePreparationSchema = z.discriminatedUnion("outcome", [
+  z.strictObject({ outcome: z.literal("idle"), startupProbeUuid: z.string().uuid() }),
+  z.strictObject({ outcome: z.literal("absent") }),
+  z.strictObject({ outcome: z.literal("released") }),
+  z.strictObject({ outcome: z.literal("busy") }),
+  z.strictObject({ outcome: z.literal("retained"), cut: claudePersistentAttachmentSchema }),
+]);

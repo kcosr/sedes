@@ -1,3 +1,4 @@
+import { setTimeout as wait } from "node:timers/promises";
 import { LiveSpeechTracker, type CaptureEarlyReply, type EarlyReplySource } from "./early-reply-observation.js";
 import { ConversationNativeEffectFence } from "./conversation-native-effect-fence.js";
 import type { ClassifiedAssistantResult } from "../../shared/protocol/completion-result.js";
@@ -56,10 +57,7 @@ import {
   type ApplicationSubmitTurnInput,
 } from "./delivery-input-projection.js";
 import type { PrepareDeliveryInputSnapshot } from "../db/repositories/delivery-input-snapshot-repository.js";
-import {
-  projectAuthoritativeCompletionResult,
-  projectClassifiedAssistantResult,
-} from "./completion-result-projection.js";
+import { projectedCompletion } from "./completion-result-projection.js";
 import type { BoundedText } from "../../shared/protocol/payload.js";
 import { boundText, MAX_LIVE_PROGRESS_BYTES } from "./payload-policy.js";
 import type { ApplicationPublicationAnchor } from "../../shared/protocol/application-publications.js";
@@ -267,6 +265,7 @@ export class ConversationActor {
   #earlyReplyGapRevision = 0;
   #earlyReplyBaselineRevision = 0;
   readonly #handle: ConversationHandle;
+  readonly hasArchiveOwnerProbe: boolean;
   readonly #environmentLease: ExecutionEnvironmentLease | undefined;
   readonly #attachmentDelivery: ComposerAttachmentDeliveryService;
   readonly #drainAuthoritativeObservers?: () => Promise<void>;
@@ -324,6 +323,7 @@ export class ConversationActor {
   constructor(input: {
     readonly nativeEffects?: ConversationNativeEffectFence;
     readonly handle: ConversationHandle;
+    readonly hasArchiveOwnerProbe?: boolean;
     /** Installed before establishment so durable observers cannot miss startup events. */
     readonly initialObserver?: ConversationActorListener;
     readonly captureEarlyReply?: CaptureEarlyReply;
@@ -350,6 +350,7 @@ export class ConversationActor {
     readonly maximumPendingProjectionBytes?: number;
   }) {
     this.#handle = input.handle;
+    this.hasArchiveOwnerProbe = input.hasArchiveOwnerProbe === true;
     this.#readProgressParkRevision = input.readProgressParkRevision;
     this.#nativeEffects = input.nativeEffects ?? new ConversationNativeEffectFence();
     if (input.initialObserver) this.#listeners.add(input.initialObserver);
@@ -488,6 +489,28 @@ export class ConversationActor {
     return this.#canRetire(false, true);
   }
 
+  /** Positive local evidence also blocks a disconnected projection. */
+  get archiveHasLiveWork(): boolean {
+    const background = this.#snapshotState && this.#projector.timeline().backgroundActivity;
+    return this.#pendingInteractions.size > 0 || background?.state === "known" && hasOutstandingBackgroundActivity(background);
+  }
+
+  /** A lost projection alone cannot establish provider work or quiescence. */
+  get archiveStateUncertain(): boolean {
+    if (this.readOnly || this.archiveHasLiveWork) return false;
+    if (!this.#snapshotState) return this.initialProjectionUnavailable;
+    const timeline = this.#projector.timeline();
+    return timeline.runState === "disconnected" || timeline.runState === "reconciling";
+  }
+
+  /** An established owner's live rail can recover without opening a replacement.
+   * Hold admission while a disconnected owner reports its final disposition. */
+  async waitForArchiveReadiness(signal: AbortSignal): Promise<void> {
+    while (!this.#closed && !this.#closing && this.archiveStateUncertain && !this.canRetireForArchive) {
+      await wait(100, undefined, { signal });
+    }
+  }
+
   /**
    * Retirement after a management-confirmed provider service replacement.
    * The replaced service's processes are retired, so a runtime left
@@ -534,6 +557,10 @@ export class ConversationActor {
     // provider. This reader owns no such work and is always safe to close.
     if (this.readOnly) return true;
     if (this.#handleReplacementRequired) return true;
+    // These handles detach only their client. The existing provider owner
+    // retains its work and will be checked under this same archive fence.
+    if (archive && this.hasArchiveOwnerProbe && this.#handle.automaticEviction === "client_detach" &&
+        this.archiveStateUncertain && !this.#handle.retirementBlocked) return true;
     if (!this.#snapshotState || this.#projectionRecoveryRequired) return false;
     const timeline = this.#projector.timeline();
     return (
@@ -1782,9 +1809,7 @@ export class ConversationActor {
                 this.#completionBaselineGapRevision === completionGapRevision ? "live" : "recovered",
               );
             }
-            const completion = this.#completionResult(
-              event.event.turn.backendTurnId,
-            );
+            const completion = projectedCompletion(this.#projector, event.event.turn.backendTurnId);
             const submittedCorrelations = event.event.turn.completionCorrelations;
             const provenance = this.#completionProvenance(completionIdentity);
             if (!submittedCorrelations?.length && provenance === "live" &&
@@ -1870,7 +1895,7 @@ export class ConversationActor {
           (provenance !== "live" || !this.#claimUnsubmittedCompletion(completionIdentity))) continue;
       const correlations = Object.freeze(backendTurn.completionCorrelations?.length
         ? [...backendTurn.completionCorrelations] : [backendTurn.backendTurnId]);
-      const completion = this.#completionResult(backendTurn.backendTurnId);
+      const completion = projectedCompletion(this.#projector, backendTurn.backendTurnId);
       for (const backendCorrelation of correlations) {
         const event: ConversationActorEvent = {
           type: "authoritative_completion",
@@ -1892,27 +1917,6 @@ export class ConversationActor {
         }
       }
     }
-  }
-
-  #completionResult(backendTurnId: string): {
-    readonly applicationTurnId: string;
-    readonly result: BoundedText;
-    readonly classifiedResult: ClassifiedAssistantResult;
-  } {
-    return {
-      ...projectAuthoritativeCompletionResult({
-        backendTurnId,
-        timeline: this.#projector.timeline(),
-        matchesApplicationTurnId: (candidateBackendTurnId, applicationTurnId) =>
-          this.#projector.matchesApplicationTurnId(
-            candidateBackendTurnId,
-            applicationTurnId,
-          ),
-      }),
-      classifiedResult: projectClassifiedAssistantResult(
-        this.#projector.assistantItemsForTurn(backendTurnId),
-      ),
-    };
   }
 
   #publishSnapshotSubmissions(listener?: ConversationActorListener): void {

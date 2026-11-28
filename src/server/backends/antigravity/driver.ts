@@ -1,3 +1,5 @@
+import { prepareAntigravityArchive } from "./archive-preparation.js";
+import type { AntigravityArchiveReceipts } from "./archive-receipts.js";
 import { randomUUID } from "node:crypto";
 import { backendConversationSnapshotSchema, type BackendCapabilityDocument } from "../../../shared/protocol/backend.js";
 import type { EnvironmentVariableOverrides } from "../../../shared/protocol/environment-variables.js";
@@ -7,7 +9,7 @@ import type { UsageSink } from "../../usage/contracts.js";
 import { BackendError, type AgentBackendInstance, type AgentConnectionProfile, type AttachConversationInput,
   type BackendCatalogContext, type ConversationBackendDriver, type ConversationHistoryReader,
   type CreateConversationInput, type DiscoverConversationsInput, type ReadConversationInput,
-  type ReconcileSubmissionInput, type ReleaseConversationResidencyInput, type SubmissionReconciliation } from "../contracts.js";
+  type PrepareConversationArchiveInput, type ReconcileSubmissionInput, type ReleaseConversationResidencyInput, type SubmissionReconciliation } from "../contracts.js";
 import type { CompiledBackendModelPolicy } from "../model-policy.js";
 import { parseAntigravityBinding, serializeAntigravityBinding, type AntigravityBinding } from "./binding.js";
 import { antigravityCapabilities, antigravityCatalog } from "./catalog.js";
@@ -29,6 +31,7 @@ export interface AntigravityDriverInput {
   readonly nativeNamespaceKey: string;
   readonly correlationKey: Uint8Array;
   readonly usage?: UsageSink;
+  readonly archiveReceipts?: Pick<AntigravityArchiveReceipts, "apply" | "creationBound">;
   readonly agentTools?: AntigravityAgentToolService;
   readonly modeCatalog?: { observe(setup: AntigravitySetup): void };
   readonly executionEnvironmentVariables?: (applicationThreadId: string) => EnvironmentVariableOverrides;
@@ -230,6 +233,7 @@ export class AntigravityDriver implements ConversationBackendDriver {
     } catch { /* Lost authority is uncertainty, never permission to resend. */ }
     return { status: "unresolved", diagnostic: boundDisplayText("Antigravity has not yet provided exact durable acceptance evidence. The message has not been resent.") };
   }
+  prepareArchive(input: PrepareConversationArchiveInput) { return prepareAntigravityArchive(this, input); }
   async releaseConversationResidency(input: ReleaseConversationResidencyInput) {
     const detail = this.validate(input);
     const retained = await this.input.port.attachExisting({ sessionId: detail.sessionId, cwd: detail.canonicalWorkspacePath });

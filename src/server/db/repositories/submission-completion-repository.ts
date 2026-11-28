@@ -307,6 +307,7 @@ export class SubmissionCompletionRepository {
       readonly result: BoundedText;
       readonly classifiedResult: ClassifiedAssistantResult | null;
     },
+    purpose?: "archive",
   ): SubmissionCompletionObservationResult | undefined {
     return this.database.transaction(() => {
       const matches = this.database
@@ -354,7 +355,7 @@ export class SubmissionCompletionRepository {
         {
           completionIdentity: input.completionIdentity,
           observedAt: input.observedAt,
-          createAttention: true,
+          createAttention: purpose !== "archive",
           finalized: {
             applicationTurnId: input.applicationTurnId,
             outcome: input.outcome,
@@ -366,7 +367,7 @@ export class SubmissionCompletionRepository {
       // Reconciliation may have recorded the same terminal identity before
       // normalized history was available. Enrich that durable observation,
       // but do not replay thread activity/attention side effects.
-      if (current.lastCompletionIdentity !== null) {
+      if (current.lastCompletionIdentity !== null || purpose === "archive") {
         return observed;
       }
       const thread = this.database

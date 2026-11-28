@@ -8351,6 +8351,40 @@ describe("Pi conversation backend driver", () => {
     await reopened.close();
   });
 
+  it.each([false, true])("checks a rename after a branch change without repeating it (lost completion: %s)", async lost => {
+    const fixture = await workspace();
+    const base = fakeSessionFactory();
+    let session!: PiSdkSession;
+    const driver = new PiConversationBackendDriver({
+      instance, connection, usage: NO_USAGE_SINK, nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
+      toolProvenanceKey, agentTools: noAgentTools, toolAccessPolicy: fullToolAccessPolicy,
+      sessionDirectory: fixture.sessions,
+      sessionFactory: { async create(input) { session = await base.create(input); return session; } },
+    });
+    const created = await driver.create({ scope, workspace: fixture.workspace, applicationThreadId: "pi-rename-thread",
+      applicationOperationId: "pi-rename-create", source: { kind: "user" } });
+    const handle = await driver.attach({ scope, workspace: fixture.workspace, binding: binding(created.backendConversationId),
+      opaqueBindingDetail: created.opaqueBindingDetail });
+    try {
+      const action = { applicationOperationId: "pi-rename", action: "rename" as const, title: "My title" };
+      const manager = session.sessionManager;
+      const branchPoint = manager.appendSessionInfo("Original");
+      const setTitle = vi.spyOn(session, "setSessionName").mockImplementation(title => {
+        manager.appendSessionInfo(title);
+        if (lost) throw new Error("Rename response lost");
+      });
+      if (lost) await expect(handle.perform(action)).rejects.toMatchObject({ crossedSubmissionBoundary: true });
+      else await expect(handle.perform(action)).resolves.toMatchObject({ accepted: true });
+      manager.branch(branchPoint);
+      manager.appendSessionInfo("External edit");
+      await expect(handle.reconcileAction(action)).resolves.toEqual({ outcome: lost ? "unknown" : "accepted" });
+      if (lost) await expect(handle.perform(action)).rejects.toMatchObject({ crossedSubmissionBoundary: true });
+      else await expect(handle.perform(action)).resolves.toMatchObject({ accepted: true });
+      expect(setTitle).toHaveBeenCalledOnce();
+      expect(session.sessionName).toBe("External edit");
+    } finally { await handle.close(); await driver.close(); }
+  });
+
   it("settles a started compact with no durable native evidence as not applied after restart", async () => {
     const fixture = await workspace();
     let compactions = 0;

@@ -1,3 +1,5 @@
+import { firstSendRenameMigration } from "./migrations/178-first-send-rename.js";
+import { threadArchiveObligationsMigration } from "./migrations/177-thread-archive-obligations.js";
 import { blockingRequestObservationsMigration } from "./migrations/176-blocking-request-observations.js";
 import { inlineThreadReferencesMigration } from "./migrations/175-inline-thread-references.js";
 import { parkUntilDoneMigration } from "./migrations/174-park-until-done.js";
@@ -366,6 +368,8 @@ export const backendNormalizedMigrations = [
   parkUntilDoneMigration,
   inlineThreadReferencesMigration,
   blockingRequestObservationsMigration,
+  threadArchiveObligationsMigration,
+  firstSendRenameMigration,
 ] as const;
 
 export type DatabaseMigration = {

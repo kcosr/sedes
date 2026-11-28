@@ -11,7 +11,7 @@ Runtime wire version 18 uses control major 3. Hello authenticates the serving
 build and discovers supported operations in each direction. The connection
 selects its compression mode once. A separately installed policy authorizes
 work on persistent SSH and paired hosts. Local worker contexts keep their
-fixed dispatch tables. OpenCode's private runtime capability **6** selects
+fixed dispatch tables. OpenCode's private runtime capability **7** selects
 the 2.3.0 SDK/schema profile. The `HSC2` frame header occupies 16 bytes.
 
 | Offset | Field |

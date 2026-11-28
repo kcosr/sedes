@@ -1,15 +1,14 @@
 import { z } from "zod";
 import { boundDisplayText } from "../../conversations/payload-policy.js";
 import { BackendError, type AgentBackendInstance, type AgentConnectionProfile, type BackendHealth, type ConversationBackendDriver,
-  type AttachConversationInput, type DiscoverConversationsInput, type ReadConversationInput, type ReleaseConversationResidencyInput } from "../contracts.js";
-import { assertOpenCodeWorkspace, openCodeConversationError, openCodeRuntimeTarget, requireOpenCodeBinding, type OpenCodeDriverContext } from "./opencode-conversation-context.js";
+  type AttachConversationInput, type DiscoverConversationsInput, type ReadConversationInput, type ReleaseConversationResidencyInput, type PrepareConversationArchiveInput, type ConversationArchivePreparation } from "../contracts.js";
+import { assertOpenCodeWorkspace, openCodeConversationError, openCodeRuntimeTarget, requireOpenCodeBinding, type OpenCodeDriverContext, type OpenCodeConversationRuntime } from "./opencode-conversation-context.js";
 import { OpenCodeNativeApi } from "./opencode-native-api.js";
 import { OpenCodeConversationHandle, openCodeUnsupported, waitOpenCode } from "./opencode-conversation-handle.js";
 import { serializeOpenCodeBindingDetail } from "./opencode-binding-detail.js";
 import { OPENCODE_HISTORY_LIMITS, OpenCodeHistoryError, openCodeHistoryFingerprint } from "./opencode-history-reader.js";
 import { mapOpenCodeConversationError } from "./opencode-conversation-error.js";
 import { OpenCodeRuntimeError } from "./opencode-release.js";
-import type { OpenCodeRuntimeLease } from "./opencode-runtime.js";
 import { acquireOpenCodeInputObserver } from "./opencode-input-observer.js";
 import { createOpenCodeConversation } from "./opencode-conversation-creation.js";
 import { openCodeRuntimeDiagnostic } from "./opencode-runtime-diagnostic.js";
@@ -144,54 +143,86 @@ export class OpenCodeConversationBackendDriver implements ConversationBackendDri
     } catch (error) { throw mapOpenCodeConversationError(error); }
   }
 
-  async releaseConversationResidency(input: ReleaseConversationResidencyInput): Promise<"released" | "busy" | "undelivered"> {
+  async prepareArchive(input: PrepareConversationArchiveInput): Promise<ConversationArchivePreparation> {
     requireOpenCodeBinding(this.input, input);
-    let lease: OpenCodeRuntimeLease | undefined;
-    const cancellation = new AbortController();
+    input.signal.throwIfAborted();
+    if (this.#hasUnresolvedInput(input)) {
+      input.markObserved();
+      return { outcome: "busy" };
+    }
+    const runtime = await this.input.existingRuntime(input.signal);
+    input.signal.throwIfAborted();
+    if (!runtime) return { outcome: "offline" };
+    this.#assertNamespace(runtime);
+    let observed = false;
+    try {
+      const idle = await this.#residencyIdle(input, runtime, input.signal, () => {
+        observed = true; input.markObserved();
+      });
+      return { outcome: idle ? "released" : "busy" };
+    } catch (error) {
+      input.signal.throwIfAborted();
+      if (!observed && error instanceof BackendError && error.category === "not_found") return { outcome: "released" };
+      if (!observed && error instanceof OpenCodeRuntimeError && error.code === "opencode_daemon_offline") return { outcome: "offline" };
+      throw mapOpenCodeConversationError(error);
+    }
+  }
+
+  async releaseConversationResidency(input: ReleaseConversationResidencyInput): Promise<"released" | "busy"> {
+    requireOpenCodeBinding(this.input, input);
     try {
       const runtime = await this.#runtime(); await runtime.start();
-      lease = runtime.acquire(openCodeRuntimeTarget(input));
+      const idle = await this.#residencyIdle(input, runtime, AbortSignal.timeout(OPENCODE_HISTORY_LIMITS.milliseconds));
+      return idle ? "released" : "busy";
+    } catch (error) {
+      if (error instanceof BackendError && (error.category === "not_found" || error.backendCode === "opencode_session_location_changed")) throw error;
+      return "busy";
+    }
+  }
+
+  #hasUnresolvedInput(input: ReleaseConversationResidencyInput): boolean {
+    return new OpenCodeInputEvidenceRepository(this.input.repository).hasUnresolved(input.scope, input.binding.applicationThreadId);
+  }
+
+  async #residencyIdle(input: ReleaseConversationResidencyInput, runtime: OpenCodeConversationRuntime, budget: AbortSignal,
+    observed?: () => void): Promise<boolean> {
+    const cancellation = new AbortController();
+    const signal = AbortSignal.any([cancellation.signal, budget]);
+    const lease = runtime.acquire(openCodeRuntimeTarget(input));
+    try {
       const api = new OpenCodeNativeApi(lease.client);
-      const signal = AbortSignal.any([cancellation.signal, AbortSignal.timeout(OPENCODE_HISTORY_LIMITS.milliseconds)]);
       const sessionID = input.binding.backendConversationId;
-      // Only the selected session lookup can prove absence. A failed inventory
-      // or history lookup remains uncertainty about work, and cannot release it.
       const session = await api.getSession(sessionID, signal).catch(async error => {
         if (error instanceof OpenCodeRuntimeError && ["opencode_native_not_found", "opencode_session_location_changed"].includes(error.code)) {
           await runtime.assertCurrent(signal); throw mapOpenCodeConversationError(error);
         }
         throw error;
       });
+      observed?.();
       await runtime.assertCurrent(signal);
       if (session.location.directory !== input.workspace.canonicalPath) throw openCodeConversationError(
         "opencode_session_location_changed", "The OpenCode conversation moved to another workspace.", "invalid_state");
-      // Archive releases Sedes residency without settling historical turns or
-      // changing native policy. Other consumers still require terminal history.
-      const unfinished = input.purpose === "archive" ? false : await hasUnfinishedNativePeriod(api, sessionID, signal);
+      const unfinished = !observed && await hasUnfinishedNativePeriod(api, sessionID, signal);
       const [pending, interactions] = await Promise.all([api.getPending(sessionID, signal), api.getInteractions(sessionID, signal)]);
-      // Read activity after inbox: promotion must not pair an old inactive
-      // observation with a newer empty inbox.
+      // Read activity after inbox so promotion cannot combine a stale idle read with an empty inbox.
       const activity = await api.getActivity(sessionID, input.workspace.canonicalPath, signal);
       await runtime.assertCurrent(signal); signal.throwIfAborted();
-      if (unfinished || !openCodeArchiveInventoriesAreIdle(activity, pending, interactions) ||
-          new OpenCodeInputEvidenceRepository(this.input.repository).hasUnresolved(input.scope, input.binding.applicationThreadId)) return "busy";
-      // This releases client residency only; neither ownership mode retires the daemon here.
+      if (unfinished || !openCodeArchiveInventoriesAreIdle(activity, pending, interactions) || this.#hasUnresolvedInput(input)) return false;
       this.input.executionEnvironment.release(input.binding.applicationThreadId);
       this.input.tools.release(input.binding.applicationThreadId);
-      return "released";
-    } catch (error) {
-      // Normal retirement reports terminal provider absence and proceeds; strict
-      // policy refresh propagates it. Neither consumer mistakes it for busy work.
-      if (error instanceof BackendError && (error.category === "not_found" || error.backendCode === "opencode_session_location_changed")) throw error;
-      return "busy";
-    } finally { cancellation.abort(); lease?.release(); }
+      return true;
+    } finally { cancellation.abort(); lease.release(); }
   }
 
   async #runtime() {
     const runtime = await this.input.runtime();
+    this.#assertNamespace(runtime);
+    return runtime;
+  }
+
+  #assertNamespace(runtime: OpenCodeConversationRuntime): void {
     if (runtime.nativeNamespaceKey !== this.input.nativeNamespaceKey) throw openCodeConversationError(
       "opencode_runtime_namespace_mismatch", "The OpenCode runtime does not match the bound native store.", "permission_denied");
-    return runtime;
   }
 }
 

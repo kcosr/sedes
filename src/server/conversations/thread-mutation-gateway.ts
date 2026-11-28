@@ -681,30 +681,37 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
         this.#scheduleSubmissionPublication(scope, applicationThreadId);
         return;
       }
-      const receipt = this.input.operations.findAwaitingSteerSubmission(
-        scope,
-        applicationThreadId,
-        backendCorrelation,
-      );
-      if (!receipt) return;
-      if (receipt.source === "queued_input") return;
-      if (receipt.applicationOperationId !== backendCorrelation) return;
-      const acceptedAt = this.#now();
-      this.input.operations.database.transaction(() => {
-        this.input.operations.acceptSteer(
-          scope,
-          receipt.mutationId,
-          acceptedAt,
-        );
-        this.input.completions.recordAccepted(scope, applicationThreadId, {
-          operationId: receipt.applicationOperationId,
-          acceptedAt,
-          backendCorrelation,
-          attachmentIds: receipt.attachments.map(({ id }) => id),
-        });
-      })();
-      this.#scheduleSubmissionPublication(scope, applicationThreadId);
+      if (this.recordObservedDraftSteer(scope, applicationThreadId, backendCorrelation)) {
+        this.#scheduleSubmissionPublication(scope, applicationThreadId);
+      }
     });
+  }
+
+  /** A bound conversation can prove an uncertain composer Steer without acquiring its actor. */
+  recordObservedDraftSteer(scope: RequestScope, applicationThreadId: string, backendCorrelation: string): boolean {
+    const receipt = this.input.operations.findAwaitingSteerSubmission(
+      scope,
+      applicationThreadId,
+      backendCorrelation,
+    );
+    if (!receipt) return false;
+    if (receipt.source === "queued_input") return false;
+    if (receipt.applicationOperationId !== backendCorrelation) return false;
+    const acceptedAt = this.#now();
+    this.input.operations.database.transaction(() => {
+      this.input.operations.acceptSteer(
+        scope,
+        receipt.mutationId,
+        acceptedAt,
+      );
+      this.input.completions.recordAccepted(scope, applicationThreadId, {
+        operationId: receipt.applicationOperationId,
+        acceptedAt,
+        backendCorrelation,
+        attachmentIds: receipt.attachments.map(({ id }) => id),
+      });
+    })();
+    return true;
   }
 
   #scheduleSubmissionPublication(scope: RequestScope, applicationThreadId: string): void {
@@ -902,6 +909,16 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
     }
     if (operation.kind !== "interrupt" && operation.kind !== "cancel_queued_input") {
       const thread = this.input.inventory.getThread(scope, applicationThreadId).thread;
+      if (
+        operation.kind === "perform" && operation.operation.action === "rename" &&
+        this.input.operations.isAcceptedRename(scope, applicationThreadId, {
+          mutationId: operation.mutationId,
+          expectedThreadRevision: operation.expectedThreadRevision,
+          operation: operation.operation,
+        })
+      ) {
+        return { status: "accepted", operationId: operation.mutationId };
+      }
       this.input.inventory.assertWorkspaceActive(scope, thread.workspaceId);
     }
     if (
@@ -2959,12 +2976,6 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
       operation.operation.action === "rename" &&
       aggregate.thread.backingState === "unbound"
     ) {
-      if (aggregate.thread.revision !== operation.expectedThreadRevision) {
-        throw new DomainError(
-          "conflict",
-          "The thread changed in another client.",
-        );
-      }
       this.input.inventory.renameThread(scope, applicationThreadId, {
         title: operation.operation.title,
         expectedRevision: operation.expectedThreadRevision,

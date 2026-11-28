@@ -44,6 +44,6 @@ describe("OpenCode runtime compatibility policy", () => {
     for (const runtimeVersion of ["1.18.30", "2.0.32", "2.1.0", "2.1.0+build.1", "2.1.1", "2.1.1+build.1", "2.2.5", "2.2.5+build.1", "2.2.6", "2.2.6+build.1", "2.2.99", "2.3.0-rc.1", "2.3.0 credential"]) {
       expect(openCodeRuntimeInfoSchema.safeParse({ ...info, snapshot: { ...info.snapshot, runtimeVersion } }).success).toBe(false);
     }
-    expect(openCodeRuntimeOperations.every(operation => operation.majorVersion === 6)).toBe(true);
+    expect(openCodeRuntimeOperations.every(operation => operation.majorVersion === 7)).toBe(true);
   });
 });

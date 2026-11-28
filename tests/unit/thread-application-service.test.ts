@@ -548,6 +548,13 @@ describe("ThreadApplicationService", () => {
     expect(exhausted.capabilities.revision).not.toBe(retrying.capabilities.revision);
   });
 
+  it.each(["disconnected", "reconciling"] as const)("allows an archive check from a %s header with no known work", async runState => {
+    const snapshot = await createService({ runState, queue: [], includeInteraction: false }).service.snapshot(scope, "thread-1");
+    expect(snapshot.capabilities.operations.find(operation => operation.id === "archive")?.available).toBe(true);
+    const blocked = await createService({ runState, queue: [], includeInteraction: true }).service.snapshot(scope, "thread-1");
+    expect(blocked.capabilities.operations.find(operation => operation.id === "archive")?.available).toBe(false);
+  });
+
   it("keeps settled settings and inventory controls available throughout the retry delay", async () => {
     const options = {
       runState: "failed" as const, queue: [], includeInteraction: false,

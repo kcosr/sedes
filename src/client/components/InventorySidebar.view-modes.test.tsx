@@ -363,10 +363,10 @@ function renderSidebar(
     setSearch: vi.fn(),
     mutateInventory: vi.fn().mockResolvedValue(undefined),
     setThreadPinned: vi.fn().mockResolvedValue(undefined),
-    renameThread: vi.fn().mockResolvedValue(undefined),
+    renameThread: vi.fn(async (_id, _title, _revision, operationId) => ({ status: "accepted", operationId })),
     renameThreadGroup: vi.fn().mockResolvedValue(undefined),
     deleteThreadGroup: vi.fn().mockResolvedValue(undefined),
-    archiveThreadFamily: vi.fn().mockResolvedValue([]),
+    archiveThreads: vi.fn(async (id) => [id]),
     loadMoreDescendants: vi.fn().mockResolvedValue(undefined),
     getThreadArchiveImpact: vi.fn().mockResolvedValue({
       descendantCount: 0,
@@ -415,7 +415,7 @@ function renderSidebar(
           : {
               expectedStashedPromptCount: impact.stashedPromptCount,
               ...(impact.action === "archive"
-                ? { expectedOpenTaskCount: impact.openTasks.total }
+                ? { expectedOpenTaskCount: impact.openTasks.total, expectedPendingQuestionCount: impact.pendingQuestionCount, expectedOpenTaskSnapshot: impact.openTasks.snapshot }
                 : {}),
             }),
         mutationId: "11111111-1111-4111-8111-111111111111",
@@ -430,6 +430,8 @@ function renderSidebar(
     ),
   } as unknown as ApplicationClientStore & {
     mutateInventory: ReturnType<typeof vi.fn>;
+    archiveThreads: ReturnType<typeof vi.fn>;
+    getThreadArchiveImpact: ReturnType<typeof vi.fn>;
     openWorkspace: ReturnType<typeof vi.fn>;
     refresh: ReturnType<typeof vi.fn>;
     getSnapshot: ReturnType<typeof vi.fn>;
@@ -4427,13 +4429,13 @@ describe("InventorySidebar view modes", () => {
     expect(screen.queryByRole("button", { name: /more…/ })).toBeNull();
   });
 
-  it("gives flat rows the same context menu as project rows, with working rename", async () => {
+  it.each(["flat-thread-row", "default-thread-row"] as const)("renames from the %s context menu", async (rowId) => {
     const user = userEvent.setup();
     seedViewPreferences({ groupBy: "none", lastAltGroupBy: "none" });
     const thread = makeThread("today-1", "Today thread");
-    const { store } = renderSidebar([thread]);
+    const { store } = renderSidebar([thread], rowId === "default-thread-row" ? { defaultThreadId: thread.id } : {});
 
-    fireEvent.contextMenu(screen.getByTestId("flat-thread-row"));
+    fireEvent.contextMenu(screen.getByTestId(rowId));
     const menu = await screen.findByTestId("thread-context-menu");
     // Spot-check the established items carry over from the project view.
     expect(within(menu).getByText("Rename")).toBeInTheDocument();
@@ -4450,16 +4452,47 @@ describe("InventorySidebar view modes", () => {
     expect(screen.queryByTestId("thread-context-menu")).toBeNull();
     await user.clear(input);
     await user.type(input, "Sharper title{Enter}");
-    expect(store.renameThread).toHaveBeenCalledWith(thread, "Sharper title");
+    expect(store.renameThread).toHaveBeenCalledWith(thread.id, "Sharper title", thread.threadRevision, expect.any(String));
     await waitFor(() =>
       expect(screen.queryByTestId("thread-row-rename")).toBeNull(),
     );
     // Scope to the row: when enabled, pointer travel can open the detail card,
     // which repeats the title in its own overlay.
-    expect(screen.getByTestId("flat-thread-row")).toHaveTextContent(
+    expect(screen.getByTestId(rowId)).toHaveTextContent(
       "Today thread",
     );
   });
+
+  it.each(["time", "project", "default"] as const)(
+    "leaves the selected descendant only when the %s row's family receipt includes it",
+    async (surface) => {
+      seedViewPreferences({ groupBy: surface === "default" ? "time" : surface });
+      const thread = makeThread("root-thread", "Parent");
+      const selected = "current-child";
+      const { store } = renderSidebar([thread], surface === "default" ? { defaultThreadId: thread.id } : {});
+      const baseImpact = await store.getThreadArchiveImpact(thread.id);
+      store.getThreadArchiveImpact.mockResolvedValue({ ...baseImpact, descendantCount: 2 });
+      const row = surface === "project"
+        ? document.querySelector<HTMLElement>('[data-thread-id="root-thread"] [data-testid="thread-row"]')!
+        : screen.getByTestId(surface === "time" ? "flat-thread-row" : "default-thread-row");
+      try {
+        for (const ids of [[thread.id], [thread.id, selected]]) {
+          window.history.replaceState(null, "", `/threads/${selected}`);
+          store.archiveThreads.mockResolvedValueOnce(ids);
+          fireEvent.contextMenu(row);
+          const menu = await screen.findByTestId("thread-context-menu");
+          await userEvent.click(within(menu).getByRole("menuitem", { name: "Archive" }));
+          const dialog = await screen.findByRole("dialog", { name: "Archive this thread" });
+          await userEvent.click(within(dialog).getByRole("checkbox", { name: "Archive child and descendant forks" }));
+          await userEvent.click(within(dialog).getByRole("button", { name: "Archive" }));
+          await waitFor(() => expect(dialog).not.toBeInTheDocument());
+          expect(window.location.pathname).toBe(ids.includes(selected) ? "/" : `/threads/${selected}`);
+        }
+      } finally {
+        window.history.replaceState(null, "", "/");
+      }
+    },
+  );
 
   it("archives through the flat-row context menu", async () => {
     const user = userEvent.setup();
@@ -4474,9 +4507,13 @@ describe("InventorySidebar view modes", () => {
     await user.click(archiveItem);
     // Nothing to choose: the authoritative impact archives directly.
     await waitFor(() =>
-      expect(store.mutateInventory).toHaveBeenCalledWith(thread, "archive", {
-        expectedStashedPromptCount: 0,
-      }),
+      expect(store.archiveThreads).toHaveBeenCalledWith(
+        thread.id,
+        expect.objectContaining({
+          action: "archive",
+          expectedStashedPromptCount: 0,
+        }),
+      ),
     );
     expect(store.getThreadArchiveImpact).toHaveBeenCalledWith(thread.id);
     expect(
@@ -4496,9 +4533,13 @@ describe("InventorySidebar view modes", () => {
     );
 
     await waitFor(() =>
-      expect(store.mutateInventory).toHaveBeenCalledWith(thread, "archive", {
-        expectedStashedPromptCount: 0,
-      }),
+      expect(store.archiveThreads).toHaveBeenCalledWith(
+        thread.id,
+        expect.objectContaining({
+          action: "archive",
+          expectedStashedPromptCount: 0,
+        }),
+      ),
     );
     expect(store.getThreadArchiveImpact).toHaveBeenCalledWith(thread.id);
     expect(screen.queryByRole("menu")).toBeNull();
@@ -4544,11 +4585,15 @@ describe("InventorySidebar view modes", () => {
     expect(store.mutateInventory).not.toHaveBeenCalled();
     await user.click(within(dialog).getByRole("button", { name: "Archive" }));
     await waitFor(() =>
-      expect(store.mutateInventory).toHaveBeenCalledWith(thread, "archive", {
-        expectedStashedPromptCount: 0,
-        openTaskDisposition: "move_to_project",
-        executionWorkspaceDisposition: { kind: "keep" },
-      }),
+      expect(store.archiveThreads).toHaveBeenCalledWith(
+        thread.id,
+        expect.objectContaining({
+          action: "archive",
+          expectedStashedPromptCount: 0,
+          openTaskDisposition: "move_to_project",
+          executionWorkspaceDisposition: { kind: "keep" },
+        }),
+      ),
     );
   });
 
@@ -4598,11 +4643,15 @@ describe("InventorySidebar view modes", () => {
     expect(store.mutateInventory).not.toHaveBeenCalled();
     await user.click(within(dialog).getByRole("button", { name: "Archive" }));
     await waitFor(() =>
-      expect(store.mutateInventory).toHaveBeenCalledWith(thread, "archive", {
-        expectedStashedPromptCount: 0,
-        openTaskDisposition: "move_to_project",
-        executionWorkspaceDisposition: { kind: "keep" },
-      }),
+      expect(store.archiveThreads).toHaveBeenCalledWith(
+        thread.id,
+        expect.objectContaining({
+          action: "archive",
+          expectedStashedPromptCount: 0,
+          openTaskDisposition: "move_to_project",
+          executionWorkspaceDisposition: { kind: "keep" },
+        }),
+      ),
     );
   });
 

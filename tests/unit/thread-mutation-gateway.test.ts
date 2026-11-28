@@ -234,6 +234,7 @@ function fixture(input?: {
       }
       return [];
     }),
+    isAcceptedRename: vi.fn(() => false),
     findUncertainThreadOperation: vi.fn(
       (_scope: RequestScope, threadId: string) =>
         record?.state === "uncertain"
@@ -3420,6 +3421,7 @@ function interactionResponseFixture(input?: {
   const operations = {
     database,
     expireInterrupts: vi.fn(() => []),
+    isAcceptedRename: vi.fn(() => false),
     findUncertainThreadOperation: vi.fn(() =>
       state === "uncertain"
         ? {
@@ -4066,6 +4068,7 @@ function backendActionFixture(input?: {
   const operations = {
     database,
     expireInterrupts: vi.fn(() => []),
+    isAcceptedRename: vi.fn(() => false),
     findUncertainThreadOperation: vi.fn(() =>
       record?.state === "uncertain"
         ? {

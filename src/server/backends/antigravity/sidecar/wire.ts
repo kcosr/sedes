@@ -32,6 +32,9 @@ export const antigravityConfigurationSchema = z.strictObject({
   initializationTimeoutMs: z.number().int().min(1000).max(120_000), startupEnvironmentVariables: environmentVariableOverridesSchema.optional(),
 });
 export const antigravityIdentitySchema = z.strictObject({ sessionId: id, cwd: hostPath });
+export const antigravityArchiveOwnerSchema = antigravityIdentitySchema.extend({ handleId: id, generation: id });
+export const antigravityArchiveProbeSchema = antigravityArchiveOwnerSchema.extend({ retainedOutput: z.boolean(), attached: z.boolean() });
+const retainedTarget = antigravityIdentitySchema.extend({ expected: antigravityArchiveOwnerSchema.optional() });
 export const antigravitySetupSchema = z.strictObject({ initialize: acp<InitializeResponse>(decodeInitializeResponse), session: acp<LoadSessionResponse>(decodeLoadSessionResponse),
   modelOptions: z.array(z.strictObject({ modelId: id, thinkingLevels: z.array(id).max(100), defaultThinkingLevel: id.optional() })).max(1000).optional() });
 export const antigravityHistorySchema = antigravityIdentitySchema.extend({ setup: antigravitySetupSchema.optional(), native: antigravityNativeHistorySchema });
@@ -40,8 +43,8 @@ export const antigravityCommandSchema = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("prompt"), prompt: acp<PromptRequest>(value => decodePromptRequest({ sessionId: "validation", prompt: value })).transform(value => value.prompt) }),
   z.strictObject({ type: z.literal("steer"), prompt: acp<PromptRequest>(value => decodePromptRequest({ sessionId: "validation", prompt: value })).transform(value => value.prompt) }),
   z.strictObject({ type: z.literal("cancel") }),
-  z.strictObject({ type: z.literal("set_config"), configId: id, value: z.string().max(8192) }),
-  z.strictObject({ type: z.literal("set_mode"), modeId: id }),
+  z.strictObject({ type: z.literal("set_config"), origin: z.enum(["session_configuration", "thread_action"]), configId: id, value: z.string().max(8192) }),
+  z.strictObject({ type: z.literal("set_mode"), origin: z.enum(["session_configuration", "thread_action"]), modeId: id }),
   z.strictObject({ type: z.literal("permission"), requestId: id, response: acp<RequestPermissionResponse>(decodeRequestPermissionResponse) }),
 ]);
 const handle = z.strictObject({ handleId: id });
@@ -61,18 +64,21 @@ export const antigravityHostCommandSchema = z.discriminatedUnion("action", [
   command("list", z.strictObject({ cwd: hostPath, cursor: id.optional() })),
   command("history", antigravityHistoryReadSchema),
   command("attach", antigravityIdentitySchema.extend({ executionEnvironment: environmentVariableOverridesSchema.optional(), agentTools: antigravityAgentToolsSchema.optional() })),
-  command("attach_existing", antigravityIdentitySchema),
+  command("probe_archive_owner", antigravityIdentitySchema), command("read_archive_state", antigravityArchiveOwnerSchema),
+  command("release_archive_claim", antigravityArchiveOwnerSchema),
+  command("read_retired_archive", antigravityIdentitySchema.extend({ ownerKey: z.string().regex(/^[a-f0-9]{64}$/u) })),
+  command("attach_existing", retainedTarget),
   command("request", operation.extend({ command: antigravityCommandSchema })),
   command("outcome", operation), command("acknowledge_operation", operation),
   command("observe", handle.extend({ afterSequence: position })),
   command("acknowledge", handle.extend({ throughSequence: position })),
-  command("release", handle), command("retire_session", antigravityIdentitySchema), command("inspect", z.strictObject({})),
+  command("release", handle), command("retire_session", retainedTarget.extend({ settledNativeRevision: z.string().regex(/^[a-f0-9]{64}$/u).optional() })), command("inspect", z.strictObject({})),
   command("stop", z.strictObject({ expectedRevision: id, force: z.boolean() })),
 ]);
 export type AntigravityHostCommand = z.infer<typeof antigravityHostCommandSchema>;
 export type AntigravityHostCommandInput = AntigravityHostCommand extends infer Command
   ? Command extends AntigravityHostCommand ? Omit<Command, "controllerEpoch" | "serviceIncarnation"> : never : never;
-const capability = { capabilityId: "antigravity_runtime", majorVersion: 6 } as const;
+const capability = { capabilityId: "antigravity_runtime", majorVersion: 7 } as const;
 export const antigravityExecuteOperation = { ...capability, operation: "runtime.execute", requestSchema: sidecarRuntimeBodySchema,
   responseSchema: sidecarRuntimeBodySchema, lane: "operation", maximumDeadlineMilliseconds: 120_000,
 } satisfies SidecarOperationDefinition<z.infer<typeof sidecarRuntimeBodySchema>, z.infer<typeof sidecarRuntimeBodySchema>>;
@@ -83,7 +89,7 @@ export const antigravityRuntimeOperations = [antigravityExecuteOperation, antigr
 export const antigravityRuntimeCapability = { ...capability, operations: antigravityRuntimeOperations.map(operation => operation.operation) };
 export function antigravityHostCommandLane(value: AntigravityHostCommand | AntigravityHostCommandInput): "operation" | "control" {
   if (value.action === "request") return ["cancel", "permission"].includes(value.input.command.type) ? "control" : "operation";
-  return ["ensure", "connect", "catalog", "create", "list", "history", "attach"].includes(value.action) ? "operation" : "control";
+  return ["ensure", "connect", "catalog", "create", "list", "history", "read_archive_state", "read_retired_archive", "attach"].includes(value.action) ? "operation" : "control";
 }
 export const antigravityFailureSchema = z.strictObject({ code: z.string().regex(/^antigravity_[a-z0-9_]{1,100}$/u), delivery: z.enum(["not_sent", "sent_outcome_unknown", "rejected"]) });
 export const antigravityOutcomeSchema = z.discriminatedUnion("status", [
@@ -109,6 +115,16 @@ export const antigravityEventSchema = z.discriminatedUnion("kind", [
   z.strictObject({ ...eventPosition, kind: z.literal("failure"), failure: antigravityFailureSchema }),
 ]);
 export const antigravityObservationSchema = z.strictObject({ activePromptIds: z.array(id).max(32), events: z.array(antigravityEventSchema).max(256), throughSequence: position, retainedAfterSequence: position, closed: z.boolean() });
+const archiveOperation = z.strictObject({ operationId: id, kind: z.enum(["prompt", "steer", "cancel", "permission", "set_config", "set_mode"]), setterConfirmed: z.boolean(), sessionConfiguration: z.boolean(), commandFingerprint: z.string().regex(/^[a-f0-9]{64}$/u) });
+export const antigravityRetiredArchiveSchema = z.strictObject({ ownerKey: z.string().regex(/^[a-f0-9]{64}$/u),
+  history: antigravityHistorySchema, setup: antigravitySetupSchema, creation: id.optional(),
+  operations: z.array(z.strictObject({ operation: archiveOperation, outcome: antigravityOutcomeSchema })).max(4224) });
+export const antigravityArchiveStateSchema = z.discriminatedUnion("state", [
+  z.strictObject({ state: z.enum(["busy", "unproven", "changed"]) }),
+  z.strictObject({ state: z.literal("idle"), acknowledged: position, throughSequence: position, pendingCreation: id.optional(),
+    operations: z.array(archiveOperation).max(640),
+    history: antigravityHistorySchema, setup: antigravitySetupSchema }),
+]);
 export const antigravityInspectionSchema = z.strictObject({ runtimeId: id, state: z.enum(["idle", "active", "unknown"]), revision: id,
   blockers: z.array(z.enum(["active_work", "pending_interaction", "unsettled_outcome", "cleanup_unproven", "unknown_state"])).max(5),
   retainedSessions: z.array(antigravityIdentitySchema.extend({ handleId: id, generation: id, closed: z.boolean() })).max(32) });

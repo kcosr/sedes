@@ -377,6 +377,23 @@ export function assertClaudeHistorySession(
   }
 }
 
+/** Maintenance needs the complete assistant output, even outside the display window. */
+export function* projectClaudeArchiveCompletions(
+  messages: readonly SessionMessage[],
+  completed: ReadonlySet<string>,
+  terminalReceipts: readonly ClaudeTerminalReceiptOverride[],
+  authentication: ClaudeHistoryAuthentication,
+): Generator<BackendConversationSnapshot> {
+  const timeline = buildTimeline(messages, terminalReceipts, authentication);
+  for (const id of completed) {
+    const turn = timeline.turnsById[id];
+    if (!turn || turn.status === "in_progress") throw new Error("claude_archive_terminal_unconfirmed");
+    // The normal display can compact an oversized turn. Leave it retained if a
+    // complete maintenance projection cannot fit the application contract.
+    yield backendConversationSnapshotSchema.parse({ ...pickTimeline(timeline, [id]), runState: "idle" });
+  }
+}
+
 export function projectClaudeLatestSnapshot(
   value: unknown,
   terminalReceipts: readonly ClaudeTerminalReceiptOverride[] = [],

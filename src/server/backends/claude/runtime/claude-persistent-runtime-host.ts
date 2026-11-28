@@ -30,7 +30,7 @@ type Session = {
   interruptOperations: ClaudeInterruptOperations<Awaited<ReturnType<ClaudeRuntimeSession["interrupt"]>>>;
   backgroundActivity: ClaudeBackgroundActivity; backgroundSequence?: number;
   terminalResultSequences: Set<number>; pendingTerminalSequence?: number; model?: string | null; commandsInvalidated: boolean; permissionMode?: import("@anthropic-ai/claude-agent-sdk").PermissionMode; confirmedEffort?: import("@anthropic-ai/claude-agent-sdk").EffortLevel | null;
-  id: string; cwd: string; authorityFingerprint: string; runtime: ClaudeOwnedRuntimeSession; starting: Promise<unknown>;
+  id: string; cwd: string; applicationThreadId?: string; authorityFingerprint: string; runtime: ClaudeOwnedRuntimeSession; starting: Promise<unknown>;
   admissionJournalComplete: boolean;
   compactions: Map<string, CompactRecord>;
   events: Map<number, ClaudePersistentEvent>; replay: Map<number, ClaudePersistentEvent>; bytes: number; replayBytes: number; sequence: number;
@@ -82,7 +82,7 @@ export class ClaudePersistentRuntimeHost {
   /** Running one-shot fork launches by child session; they share the session cap. */
   readonly #forkLaunches = new Map<string, Promise<ClaudeRuntimeForkResult>>();
   /** Admission journals of retired queries, by session, most recent last. */
-  readonly #endedJournals = new Map<string, { readonly cwd: string; readonly authorityFingerprint: string; readonly compactions: ReadonlyMap<string, CompactRecord>; readonly sends: ReadonlySet<string>; readonly withdrawn: ReadonlySet<string>; readonly admissionJournalComplete: boolean }>();
+  readonly #endedJournals = new Map<string, { readonly archiveSettled: boolean; readonly startupProbeUuid?: string; readonly applicationThreadId?: string; readonly cwd: string; readonly authorityFingerprint: string; readonly compactions: ReadonlyMap<string, CompactRecord>; readonly sends: ReadonlySet<string>; readonly withdrawn: ReadonlySet<string>; readonly admissionJournalComplete: boolean }>();
   #residencyTimer: ReturnType<typeof setInterval> | undefined;
   readonly #stoppedHistoryPager = new ClaudeHistoryPager();
   readonly #historySweepQueue = new Set<Session>();
@@ -301,6 +301,7 @@ export class ClaudePersistentRuntimeHost {
     if (command.action === "fork") return await this.#forkLaunch(command, assertPolicy);
     if (command.runtimeId !== this.runtimeId) throw new Error("claude_persistent_runtime_unknown");
     this.input.services.assertController(command.controllerEpoch);
+    const archive = command.action === "archive_prepare" || command.action === "archive_history" || command.action === "archive_delivery_proof";
     const existingOpen = command.action === "open" && this.#sessions.has(command.request.sessionId);
     const retainedProbe = this.#runtimeStopped && command.action === "probe";
     const history = command.action === "info" || command.action === "messages" || command.action === "transcript";
@@ -312,11 +313,11 @@ export class ClaudePersistentRuntimeHost {
         (command.request.response.behavior === "deny" &&
           this.#sessions.get(command.request.sessionId)?.permissions.has(permissionKey(command.request))));
     try {
-      if (!existingOpen && !retainedProbe && !retainedHistory && !permissionSettlement && !compactReplay &&
+      if (!archive && !existingOpen && !retainedProbe && !retainedHistory && !permissionSettlement && !compactReplay &&
           !["attach", "detach", "evict", "retire", "acknowledge", "submission_disposition", "compact_disposition", "interrupt_disposition", "interrupt"].includes(command.action)) assertPolicy?.();
       if (this.#closed || this.#cleanupUnproven) throw new Error("claude_persistent_runtime_unavailable");
-      if (this.#runtimeStopped && !existingOpen && !permissionSettlement && !compactReplay && !["attach", "detach", "evict", "retire", "acknowledge", "submission_disposition", "compact_disposition", "interrupt_disposition", "info", "messages", "transcript", "list", "probe"].includes(command.action)) throw new Error("claude_persistent_runtime_stopped");
-      if (!existingOpen && !retainedProbe && !permissionSettlement && !compactReplay && !["attach", "detach", "evict", "retire", "acknowledge", "list", "info", "messages", "transcript", "submission_disposition", "compact_disposition", "interrupt_disposition"].includes(command.action)) {
+      if (this.#runtimeStopped && !archive && !existingOpen && !permissionSettlement && !compactReplay && !["attach", "detach", "evict", "retire", "acknowledge", "submission_disposition", "compact_disposition", "interrupt_disposition", "info", "messages", "transcript", "list", "probe"].includes(command.action)) throw new Error("claude_persistent_runtime_stopped");
+      if (!archive && !existingOpen && !retainedProbe && !permissionSettlement && !compactReplay && !["attach", "detach", "evict", "retire", "acknowledge", "list", "info", "messages", "transcript", "submission_disposition", "compact_disposition", "interrupt_disposition"].includes(command.action)) {
         if (this.#frozen) throw new Error("claude_persistent_admission_frozen");
         this.input.services.assertAdmission(command.controllerEpoch);
       }
@@ -349,6 +350,32 @@ export class ClaudePersistentRuntimeHost {
   }
 
   async #execute(command: ClaudePersistentCommand, listener: (event: ClaudePersistentEvent) => void, assertPolicy?: () => void, signal?: AbortSignal): Promise<unknown> {
+    // Archive uses only the exact resident query or its captured shutdown
+    // baseline. An existing-only recovery carrier has no launch authority.
+    if (command.action === "archive_delivery_proof") {
+      const { sessionId, cwd, applicationThreadId, startupProbeUuid, throughSequence } = command.request;
+      const session = this.#sessions.get(sessionId);
+      return { settled: !!session && !this.#closing && !session.failureCode && session.cwd === cwd &&
+        session.applicationThreadId === applicationThreadId && session.runtime.startupProbeUuid === startupProbeUuid &&
+        session.sequence === throughSequence && !session.events.size && !this.#hasLiveWork(session) && !this.#hasUnsettledOutcomes(session) };
+    }
+    if (command.action === "archive_prepare" || command.action === "archive_history") {
+      if (this.#closed || this.#closing || this.#cleanupUnproven) throw new Error("claude_persistent_runtime_unavailable");
+      signal?.throwIfAborted();
+      if (command.action === "archive_prepare") return this.#prepareArchive(command, signal);
+      const { sessionId, cwd, startupProbeUuid, applicationThreadId, page } = command.request;
+      const validate = () => {
+        signal?.throwIfAborted();
+        this.input.services.assertController(command.controllerEpoch);
+        const session = this.#session(sessionId);
+        if (session.cwd !== cwd || session.applicationThreadId !== applicationThreadId ||
+            session.runtime.startupProbeUuid !== startupProbeUuid) throw new Error("claude_archive_owner_changed");
+      };
+      validate();
+      const result = await this.#execute({ ...command, action: "messages", request: { ...page, dir: cwd, sessionId } }, listener);
+      validate();
+      return result;
+    }
     const config = this.input.configuration;
     if (this.#runtimeStopped) {
       if (command.action === "info" || command.action === "messages" || command.action === "transcript") {
@@ -436,6 +463,7 @@ export class ClaudePersistentRuntimeHost {
         const session = this.#sessions.get(command.request.sessionId);
         if (!session && command.action === "evict") return { detached: true };
         if (!session) throw new Error("claude_persistent_session_not_found");
+        if (session.runtime.startupProbeUuid !== command.request.startupProbeUuid) throw new Error("claude_persistent_query_generation_changed");
         if (command.action === "evict" || session.epoch === command.controllerEpoch) {
           session.evicted = command.action === "evict";
           this.#unlisten(session);
@@ -459,47 +487,8 @@ export class ClaudePersistentRuntimeHost {
       }
       case "acknowledge": {
         const session = this.#session(command.request.sessionId);
-        const event = session.events.get(command.request.sequence);
-        if (event) {
-          session.events.delete(event.sequence);
-          session.bytes -= eventSize(event);
-          if (event.payload.kind === "message") { session.journalMessageBytes -= eventSize(event); session.journalMessageCount--; }
-          const currentReplay = session.replay.get(event.sequence);
-          if (currentReplay) {
-            const previous = [...session.replay.values()].filter(retained => retained.sequence < event.sequence).at(-1);
-            const merged = previous && !session.events.has(previous.sequence) ? coalesceDelta(previous, currentReplay) : undefined;
-            if (merged && previous) {
-              session.replay.delete(previous.sequence);
-              session.replayBytes -= eventSize(previous) + eventSize(currentReplay);
-              session.replay.set(event.sequence, merged); session.replayBytes += eventSize(merged);
-            }
-          }
-          if (session.terminalResultSequences.delete(event.sequence)) session.pendingTerminalSequence = event.sequence;
-          const terminalSequence = session.pendingTerminalSequence;
-          if (terminalSequence !== undefined && ![...session.events.values()].some(retained => retained.sequence <= terminalSequence && retained.payload.kind === "message")) {
-            // Claude's current run and permission state outlive the turn: it can
-            // chain a result straight into a turn of its own with no idle edge.
-            const currentState = new Set([...session.replayStateSequences]
-              .flatMap(([key, sequence]) => key.startsWith("state:") || key.startsWith("status:") ? [sequence] : []));
-            for (const [sequence, retained] of session.replay) {
-              if (sequence > terminalSequence || sequence === session.backgroundSequence || currentState.has(sequence)) continue;
-              this.#removeReplay(session, sequence);
-            }
-            session.pendingTerminalSequence = undefined;
-            session.historyCandidatesDirty = true;
-          }
-          if (isBackgroundInventory(event) && event.sequence !== session.backgroundSequence) {
-            const obsolete = session.replay.get(event.sequence);
-            if (obsolete) { session.replay.delete(event.sequence); session.replayBytes -= eventSize(obsolete); }
-          }
-          if (session.failureCode && ![...session.events.values()].some(retained => retained.payload.kind === "message" || retained.payload.kind === "failed")) {
-            session.replay.clear(); session.replayBytes = 0;
-            session.replayStateSequences.clear();
-          }
-          this.#compactAcknowledged(session, event);
-          this.#scheduleHistorySweep(session);
-          this.#revision++;
-        }
+        if (session.runtime.startupProbeUuid !== command.request.startupProbeUuid) throw new Error("claude_persistent_ack_owner_changed");
+        this.#acknowledgeEvent(session, command.request.sequence);
         // Retiring closes a Claude process, which can take seconds. Main bounds
         // its in-flight acknowledgements across every session, so an
         // acknowledgement never waits for it; failed cleanup records itself.
@@ -858,7 +847,7 @@ export class ClaudePersistentRuntimeHost {
         this.#fail(created, "claude_persistent_query_failed");
       },
     });
-    created = { interruptOperations: new ClaudeInterruptOperations(), compactions: new Map(), backgroundActivity: new ClaudeBackgroundActivity(), id: request.sessionId, cwd: request.cwd, authorityFingerprint: queryAuthorityFingerprint(command), runtime, starting: Promise.resolve(), events: new Map(), replay: new Map(), bytes: 0, replayBytes: 0, sequence: 0,
+    created = { interruptOperations: new ClaudeInterruptOperations(), compactions: new Map(), backgroundActivity: new ClaudeBackgroundActivity(), id: request.sessionId, cwd: request.cwd, applicationThreadId: command.applicationThreadId, authorityFingerprint: queryAuthorityFingerprint(command), runtime, starting: Promise.resolve(), events: new Map(), replay: new Map(), bytes: 0, replayBytes: 0, sequence: 0,
       journalMessageBytes: 0, journalMessageCount: 0, offeredThrough: 0,
       nextHistoryRead: 0, historyBackoff: 0, historyPressure: false, historyCandidatesDirty: true, hasHistoryCandidates: false, rewriteGeneration: 0, streamStopSequence: 0, replayStateSequences: new Map(),
       admissionJournalComplete: request.launch === "new",
@@ -895,10 +884,133 @@ export class ClaudePersistentRuntimeHost {
     // The response below offers every retained event to this main.
     session.offeredThrough = session.sequence;
     this.#scheduleHistorySweep(session);
+    return this.#attachmentSnapshot(session, reattached, replay);
+  }
+
+  #attachmentSnapshot(session: Session, reattached: boolean, replay: "full" | "unacknowledged") {
     const { actualModel: initialModel, ...initialization } = session.runtime.initialization!;
     const actualModel = session.model === undefined ? initialModel : session.model;
     return { queryId: session.id, throughSequence: session.sequence, initialization: { ...initialization, ...(actualModel ? { actualModel } : {}), ...(session.commandsInvalidated ? { skillNames: [] } : {}), ...(session.permissionMode ? { actualPermissionMode: session.permissionMode } : {}) }, ...(session.confirmedEffort !== undefined ? { confirmedEffort: session.confirmedEffort } : {}), startupProbeUuid: session.runtime.startupProbeUuid,
       reattached, failureCode: session.failureCode ?? null, backgroundActivity: session.backgroundActivity.snapshot(), pendingBackgroundTaskIds: session.backgroundActivity.pendingTaskIds(), events: [...new Map([...[...session.events].filter(([, event]) => replay !== "full" || event.payload.kind !== "message"), ...(replay === "full" ? session.replay : []), ...[...session.permissions.values()].filter(permission => !permission.response && !permission.cancelled).map(permission => [permission.event.sequence, permission.event] as const)]).values()].sort((a, b) => a.sequence - b.sequence) };
+  }
+
+  async #prepareArchive(command: Extract<ClaudePersistentCommand, { action: "archive_prepare" }>, signal?: AbortSignal) {
+    const { sessionId, cwd, applicationThreadId, expectedStartupProbeUuid, applied } = command.request;
+    const session = this.#sessions.get(sessionId);
+    if (!session) {
+      if (expectedStartupProbeUuid || applied) {
+        // A lost final response can outlive the retired query. Its bounded,
+        // cleanup-confirmed admission journal proves release of this exact cut.
+        const ended = this.#endedJournals.get(sessionId);
+        if (ended?.archiveSettled && ended.startupProbeUuid === (expectedStartupProbeUuid ?? applied?.startupProbeUuid) &&
+            ended.applicationThreadId === applicationThreadId && ended.cwd === cwd && !this.#forkLaunches.has(sessionId)) {
+          return { outcome: "released" };
+        }
+        throw new Error("claude_archive_owner_changed");
+      }
+      return { outcome: this.#forkLaunches.has(sessionId) ? "busy" : "absent" };
+    }
+    const recheck = () => {
+      signal?.throwIfAborted();
+      this.input.services.assertController(command.controllerEpoch);
+      if (this.#closed || this.#closing || this.#cleanupUnproven ||
+          this.#sessions.get(sessionId) !== session || session.cwd !== cwd ||
+          session.applicationThreadId !== applicationThreadId ||
+          (expectedStartupProbeUuid && session.runtime.startupProbeUuid !== expectedStartupProbeUuid) ||
+          (applied && session.runtime.startupProbeUuid !== applied.startupProbeUuid)) throw new Error("claude_archive_owner_changed");
+    };
+    recheck();
+    await session.starting;
+    recheck();
+    if (!session.runtime.startupProbeUuid) throw new Error("claude_archive_owner_unproven");
+    if (session.failureCode === "claude_persistent_event_capacity_exceeded" && !session.events.size) throw new Error("claude_archive_output_incomplete");
+    if (session.listener || this.#hasLiveWork(session)) return { outcome: "busy" };
+    if (applied) {
+      // The main applied this exact cut. A later event stays retained for
+      // another pass, and a changed query cannot consume its predecessor's ACK.
+      const exact = new Set(applied.sequences);
+      if (exact.size !== applied.sequences.length || applied.throughSequence > session.offeredThrough ||
+          applied.sequences.some(sequence => sequence > applied.throughSequence) ||
+          [...session.events.keys()].some(sequence => sequence <= applied.throughSequence && !exact.has(sequence))) {
+        throw new Error("claude_archive_cut_changed");
+      }
+      for (const sequence of applied.sequences) this.#acknowledgeEvent(session, sequence);
+    }
+    if (session.events.size) return this.#archiveCut(session);
+    if (this.#hasUnsettledOutcomes(session)) return { outcome: "busy" };
+    if (!expectedStartupProbeUuid && !applied) return { outcome: "idle", startupProbeUuid: session.runtime.startupProbeUuid };
+    if (this.#runtimeStopped) {
+      if (!session.runtime.closed) throw new Error("claude_archive_cleanup_unproven");
+      this.#rememberEndedJournal(session);
+      this.#sessions.delete(sessionId);
+      this.#stoppedHistory.delete(sessionId);
+      this.#revision++;
+      return { outcome: "released" };
+    }
+    session.evicted = true;
+    await this.#retireIdle(session);
+    signal?.throwIfAborted();
+    this.input.services.assertController(command.controllerEpoch);
+    if (!this.#sessions.has(sessionId)) return { outcome: "released" };
+    recheck();
+    if (session.listener || this.#hasLiveWork(session)) return { outcome: "busy" };
+    if (session.events.size) return this.#archiveCut(session);
+    throw new Error("claude_archive_cleanup_unproven");
+  }
+
+  #archiveCut(session: Session) {
+    // Freeze the offered sequence boundary against detached-delta coalescing.
+    // Rebuild previously applied context too, preserving exact outstanding
+    // originals when the live projection had only partially acknowledged it.
+    session.offeredThrough = session.sequence;
+    const cut = this.#attachmentSnapshot(session, true, "full");
+    cut.events = [...new Map([...cut.events.map(event => [event.sequence, event] as const), ...session.events]).values()]
+      .sort((a, b) => a.sequence - b.sequence);
+    return { outcome: "retained", cut };
+  }
+
+  #acknowledgeEvent(session: Session, sequence: number): void {
+    const event = session.events.get(sequence);
+    if (event) {
+      session.events.delete(event.sequence);
+      session.bytes -= eventSize(event);
+      if (event.payload.kind === "message") { session.journalMessageBytes -= eventSize(event); session.journalMessageCount--; }
+      const currentReplay = session.replay.get(event.sequence);
+      if (currentReplay) {
+        const previous = [...session.replay.values()].filter(retained => retained.sequence < event.sequence).at(-1);
+        const merged = previous && !session.events.has(previous.sequence) ? coalesceDelta(previous, currentReplay) : undefined;
+        if (merged && previous) {
+          session.replay.delete(previous.sequence);
+          session.replayBytes -= eventSize(previous) + eventSize(currentReplay);
+          session.replay.set(event.sequence, merged); session.replayBytes += eventSize(merged);
+        }
+      }
+      if (session.terminalResultSequences.delete(event.sequence)) session.pendingTerminalSequence = event.sequence;
+      const terminalSequence = session.pendingTerminalSequence;
+      if (terminalSequence !== undefined && ![...session.events.values()].some(retained => retained.sequence <= terminalSequence && retained.payload.kind === "message")) {
+        // Claude's current run and permission state outlive the turn: it can
+        // chain a result straight into a turn of its own with no idle edge.
+        const currentState = new Set([...session.replayStateSequences]
+          .flatMap(([key, sequence]) => key.startsWith("state:") || key.startsWith("status:") ? [sequence] : []));
+        for (const [sequence, retained] of session.replay) {
+          if (sequence > terminalSequence || sequence === session.backgroundSequence || currentState.has(sequence)) continue;
+          this.#removeReplay(session, sequence);
+        }
+        session.pendingTerminalSequence = undefined;
+        session.historyCandidatesDirty = true;
+      }
+      if (isBackgroundInventory(event) && event.sequence !== session.backgroundSequence) {
+        const obsolete = session.replay.get(event.sequence);
+        if (obsolete) { session.replay.delete(event.sequence); session.replayBytes -= eventSize(obsolete); }
+      }
+      if (session.failureCode && ![...session.events.values()].some(retained => retained.payload.kind === "message" || retained.payload.kind === "failed")) {
+        session.replay.clear(); session.replayBytes = 0;
+        session.replayStateSequences.clear();
+      }
+      this.#compactAcknowledged(session, event);
+      this.#scheduleHistorySweep(session);
+      this.#revision++;
+    }
   }
 
   #unlisten(session: Session): void {
@@ -965,6 +1077,8 @@ export class ClaudePersistentRuntimeHost {
   #rememberEndedJournal(session: Session): void {
     // This journal is captured only after owned-query close proved cleanup.
     // Its unknown effect remains unknown, while no command can execute again.
+    const archiveSettled = session.failureCode !== "claude_persistent_event_capacity_exceeded" &&
+      !this.#hasUnsettledOutcomes(session) && !this.#hasLiveWork(session);
     for (const record of session.compactions.values()) {
       record.pending = false;
       if (record.response) record.bytes = compactResponseBytes(record.response);
@@ -977,7 +1091,7 @@ export class ClaudePersistentRuntimeHost {
     const compactions = new Map([...(earlier?.authorityFingerprint === session.authorityFingerprint ? earlier.compactions : []), ...session.compactions]);
     // Admission counts the retained earlier incarnation too, so merging keeps
     // every exact receipt and lightweight refusal identity within its cap.
-    this.#endedJournals.set(session.id, { cwd: session.cwd, authorityFingerprint: session.authorityFingerprint, compactions,
+    this.#endedJournals.set(session.id, { archiveSettled, startupProbeUuid: session.runtime.startupProbeUuid, applicationThreadId: session.applicationThreadId, cwd: session.cwd, authorityFingerprint: session.authorityFingerprint, compactions,
       sends: new Set(sends.slice(-this.#journalLimit)),
       withdrawn: new Set(withdrawn.slice(-this.#journalLimit)),
       // A dropped send would make its absence read as never sent.

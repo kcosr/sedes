@@ -34,6 +34,8 @@ import {
   type DiscoveredConversationPage,
   type NativeConversationArchiveInput,
   type NativeConversationArchiveResult,
+  type PrepareConversationArchiveInput,
+  type ConversationArchivePreparation,
   type ReadConversationInput,
   type ReconcileSubmissionInput,
   type ReleaseConversationResidencyInput,
@@ -1218,6 +1220,9 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
       }
       if (inspected.result.thread.status.type === "active") return { state: "busy", changed: false };
       if (state === "archived") return { state, changed: false };
+      // There is nothing to move to archived_sessions until a rollout exists.
+      // Native archive can shut down an in-memory thread and its children.
+      if (input.action === "archive" && inspected.result.thread.path === null) return { state: "missing", changed: false };
       // Native archive shuts down a loaded root and its native subagents. Keep
       // Sedes's root work/terminal checks even when no local actor is retained.
       if (this.#managedTui) {
@@ -1265,10 +1270,54 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
     }
   }
 
-  async releaseConversationResidency(
-    input: ReleaseConversationResidencyInput,
-  ): Promise<"released" | "busy" | "undelivered"> {
+  async prepareArchive(input: PrepareConversationArchiveInput): Promise<ConversationArchivePreparation> {
     this.#assertAttach(input);
+    input.signal.throwIfAborted();
+    const binding = input.binding;
+    if (this.#ownership.current(binding.backendConversationId) || this.#managedTerminalActive(input) ||
+        this.#goalSessions?.recoveryReceipts?.hasUnresolved(binding) || this.#client.replacedServiceReceiptsPending(binding.applicationThreadId)) {
+      input.markObserved();
+      return { outcome: "busy" };
+    }
+    const client = this.#client.currentReadyGeneration();
+    if (!client) return { outcome: "offline" };
+    const lease = this.#client.residency?.retain();
+    let observed = false;
+    try {
+      const outcome = await this.#releaseResidency(input, client, {
+        signal: input.signal,
+        markObserved: () => { observed = true; input.markObserved(); },
+      });
+      if (outcome === "busy" && !observed) input.markObserved();
+      return { outcome };
+    } catch (error) {
+      input.signal.throwIfAborted();
+      if (!observed && error instanceof BackendError && error.cause instanceof CodexRpcDeliveryError) {
+        return { outcome: "offline" };
+      }
+      throw error;
+    } finally { await lease?.release(); }
+  }
+
+  async releaseConversationResidency(input: ReleaseConversationResidencyInput): Promise<"released" | "busy"> {
+    this.#assertAttach(input);
+    return this.#releaseResidency(input, this.#client);
+  }
+
+  #managedTerminalActive(input: ReleaseConversationResidencyInput): boolean {
+    if (!this.#managedTui) return false;
+    const { registry } = this.#managedTui;
+    const threadId = input.binding.applicationThreadId;
+    const lifecycle = registry.projection(input.scope, threadId).state.lifecycle;
+    return ["starting", "running", "stopping"].includes(lifecycle) || !!registry.runningAuthority(input.scope, threadId);
+  }
+
+  async #releaseResidency(
+    input: ReleaseConversationResidencyInput,
+    client: Pick<CodexSharedClientFacade, "requestWithReceipt">,
+    archive?: Pick<PrepareConversationArchiveInput, "markObserved" | "signal">,
+  ): Promise<"released" | "busy"> {
+    const options = { timeoutMilliseconds: CODEX_HISTORY_TIMEOUT_MILLISECONDS, signal: archive?.signal };
     const threadId = input.binding.backendConversationId;
     // The caller retires its actor under the thread maintenance fence first.
     // Do not detach a provider subscription still owned by another actor.
@@ -1280,22 +1329,29 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
         // The remote registry's synchronous cache is empty before attachment.
         // Await its authoritative snapshot rather than interpreting that gap
         // as proof that no managed native subscriber exists.
-        await this.#managedTui.consumeLifecycle();
+        const observation = this.#managedTui.consumeLifecycle();
+        if (archive) await waitForCodexArchiveInspection(observation, archive.signal);
+        else await observation;
       } catch (error) {
         throw codexError("unavailable", "Codex could not verify managed terminal state. Reconnect the backend and retry.",
           "codex_residency_tui_state_unavailable", true, error);
       }
-      const lifecycle = this.#managedTui.registry.projection(input.scope, input.binding.applicationThreadId).state.lifecycle;
-      if (["starting", "running", "stopping"].includes(lifecycle) ||
-        this.#managedTui.registry.runningAuthority(input.scope, input.binding.applicationThreadId)) return "busy";
+      if (this.#managedTerminalActive(input)) return "busy";
     }
     try {
-      const inspected = await this.#client.requestWithReceipt(
+      const inspected = await client.requestWithReceipt(
         codexThreadReadMethod,
         { threadId, includeTurns: false },
-        { timeoutMilliseconds: CODEX_HISTORY_TIMEOUT_MILLISECONDS },
-      );
+        options,
+      ).catch(error => {
+        if (archive && isCodexNativeArchiveThreadMissing(error, threadId) &&
+            this.#client.lifecycleSnapshot().state === "ready" &&
+            codexRpcErrorGeneration(error) === this.#client.lifecycleSnapshot().generation) return undefined;
+        throw error;
+      });
+      if (!inspected) return "released";
       assertThreadBinding(inspected.result.thread, threadId, input.workspace.canonicalPath);
+      archive?.markObserved();
       const generation = inspected.generation;
       const assertGeneration = (received: number) => {
         const current = this.#client.lifecycleSnapshot();
@@ -1310,19 +1366,20 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
       // A newly created native thread may still exist only in memory. Prove
       // that its history is materialized before dropping the subscription;
       // otherwise the next resume can fail with "no rollout found".
+      let materialized = true;
       try {
         if (inspected.result.thread.historyMode === "paginated") {
-          const history = await this.#client.requestWithReceipt(
+          const history = await client.requestWithReceipt(
             codexThreadTurnsListMethod,
             { threadId, limit: 1, sortDirection: "desc", itemsView: "notLoaded" },
-            { timeoutMilliseconds: CODEX_HISTORY_TIMEOUT_MILLISECONDS },
+            options,
           );
           assertGeneration(history.generation);
         } else {
-          const history = await this.#client.requestWithReceipt(
+          const history = await client.requestWithReceipt(
             codexThreadReadMethod,
             { threadId, includeTurns: true },
-            { timeoutMilliseconds: CODEX_HISTORY_TIMEOUT_MILLISECONDS },
+            options,
           );
           assertGeneration(history.generation);
           assertThreadBinding(history.result.thread, threadId, input.workspace.canonicalPath);
@@ -1330,23 +1387,32 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
         }
       } catch (error) {
         if (error instanceof CodexRpcRemoteError && /(?:not materialized yet|no rollout found)/iu.test(error.message)) {
-          throw codexError("invalid_state", "Send the first message before changing tools on this Codex conversation.",
+          if (!archive) throw codexError("invalid_state", "Send the first message before changing tools on this Codex conversation.",
             "codex_residency_history_unmaterialized", false, error);
-        }
-        throw error;
+          const historyMethod = inspected.result.thread.historyMode === "paginated" ? "thread/turns/list" : "thread/read";
+          if (error.method !== historyMethod || ![-32600, -32603].includes(error.code) || ![
+            "thread not materialized yet",
+            `no rollout found for thread id ${threadId}`,
+            `thread ${threadId} is not materialized yet; ${historyMethod} is unavailable before first user message`,
+          ].includes(error.message)) throw error;
+          assertGeneration(error.generation);
+          materialized = false;
+        } else throw error;
       }
-      const goal = await this.#client.requestWithReceipt(
+      const goal = await client.requestWithReceipt(
         codexThreadGoalGetMethod,
         { threadId },
-        { timeoutMilliseconds: CODEX_HISTORY_TIMEOUT_MILLISECONDS },
+        options,
       );
       assertGeneration(goal.generation);
       if (goal.result.goal && goal.result.goal.threadId !== threadId) throw bindingMismatch();
       if (goal.result.goal?.status === "active") return "busy";
-      const unsubscribed = await this.#client.requestWithReceipt(
+      if (!materialized) return "released";
+      archive?.signal.throwIfAborted();
+      const unsubscribed = await client.requestWithReceipt(
         codexThreadUnsubscribeMethod,
         { threadId },
-        { timeoutMilliseconds: CODEX_HISTORY_TIMEOUT_MILLISECONDS },
+        options,
       );
       assertGeneration(unsubscribed.generation);
       // This releases Sedes's subscription only. Codex can retain an idle

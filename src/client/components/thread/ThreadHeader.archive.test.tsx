@@ -152,7 +152,7 @@ function fixture(descendantCount: number): {
   readonly applicationStore: ApplicationClientStore & {
     createThreadFromSettings: ReturnType<typeof vi.fn>;
     mutateInventory: ReturnType<typeof vi.fn>;
-    archiveThreadFamily: ReturnType<typeof vi.fn>;
+    archiveThreads: ReturnType<typeof vi.fn>;
     getThreadArchiveImpact: ReturnType<typeof vi.fn>;
   };
   readonly threadStore: ThreadClientStore;
@@ -194,7 +194,7 @@ function fixture(descendantCount: number): {
       targetId: "target-1",
     })),
     mutateInventory: vi.fn(async () => undefined),
-    archiveThreadFamily: vi.fn(async () => ["thread-1", "thread-2"]),
+    archiveThreads: vi.fn(async (id, request) => request.action === "archive" ? [id] : [id, "thread-2"]),
     getThreadArchiveImpact: vi.fn(async () => ({
       descendantCount,
       pendingQuestions: { root: 0, descendants: 0 },
@@ -211,7 +211,7 @@ function fixture(descendantCount: number): {
   } as unknown as ApplicationClientStore & {
     createThreadFromSettings: ReturnType<typeof vi.fn>;
     mutateInventory: ReturnType<typeof vi.fn>;
-    archiveThreadFamily: ReturnType<typeof vi.fn>;
+    archiveThreads: ReturnType<typeof vi.fn>;
     getThreadArchiveImpact: ReturnType<typeof vi.fn>;
   };
   const threadStore = {
@@ -242,6 +242,7 @@ function renderHeader(
   descendantCount: number,
   openDrawer = vi.fn(),
   inventoryState: "active" | "archived" = "active",
+  runtimeState: "idle" | "disconnected" | "reconciling" = "idle",
 ) {
   const { applicationStore, threadStore, publishArchived } = fixture(descendantCount);
   const view = render(
@@ -259,7 +260,7 @@ function renderHeader(
       <ThreadHeader
         store={threadStore}
         applicationStore={applicationStore}
-        snapshot={makeSnapshot(inventoryState)}
+        snapshot={{ ...makeSnapshot(inventoryState), runState: runtimeState }}
         connection="connected"
         authoritative
         forkAttempts={{}}
@@ -319,6 +320,16 @@ describe("ThreadHeader archive action", () => {
     ).not.toHaveAttribute("data-disabled");
   });
 
+  it.each(["disconnected", "reconciling"] as const)(
+    "offers authoritative archive when the target runtime is %s",
+    async runtimeState => {
+      const { applicationStore } = renderHeader(0, vi.fn(), "active", runtimeState);
+      const menu = await openThreadActions();
+      await userEvent.click(within(menu).getByRole("menuitem", { name: "Archive" }));
+      await waitFor(() => expect(applicationStore.archiveThreads).toHaveBeenCalledOnce());
+    },
+  );
+
   it("archives immediately on desktop when the thread has no descendants", async () => {
     const { applicationStore } = renderHeader(0);
     const menu = await openThreadActions();
@@ -329,10 +340,12 @@ describe("ThreadHeader archive action", () => {
     await userEvent.click(archive);
 
     await waitFor(() =>
-      expect(applicationStore.mutateInventory).toHaveBeenCalledWith(
-        expect.objectContaining({ id: "thread-1" }),
-        "archive",
-        { expectedStashedPromptCount: 0 },
+      expect(applicationStore.archiveThreads).toHaveBeenCalledWith(
+        "thread-1",
+        expect.objectContaining({
+          action: "archive",
+          expectedStashedPromptCount: 0,
+        }),
       ),
     );
     expect(applicationStore.getThreadArchiveImpact).toHaveBeenCalledWith(
@@ -365,7 +378,7 @@ describe("ThreadHeader archive action", () => {
       }),
     ).toBeVisible();
     expect(screen.queryByRole("menuitem", { name: /Archive only/ })).toBeNull();
-    expect(applicationStore.mutateInventory).not.toHaveBeenCalled();
+    expect(applicationStore.archiveThreads).not.toHaveBeenCalled();
     expect(applicationStore.getThreadArchiveImpact).toHaveBeenCalledWith(
       "thread-1",
     );
@@ -385,25 +398,26 @@ describe("ThreadHeader archive action", () => {
       name: "Archive this thread",
     });
     expect(within(dialog).getByText("2 unanswered questions")).toBeVisible();
-    expect(applicationStore.mutateInventory).not.toHaveBeenCalled();
+    expect(applicationStore.archiveThreads).not.toHaveBeenCalled();
 
     await userEvent.click(
       within(dialog).getByRole("button", { name: "Archive" }),
     );
-    expect(applicationStore.mutateInventory).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "thread-1" }),
-      "archive",
-      {
+    expect(applicationStore.archiveThreads).toHaveBeenCalledWith(
+      "thread-1",
+      expect.objectContaining({
+        action: "archive",
         expectedStashedPromptCount: 0,
+        expectedPendingQuestionCount: 2,
         executionWorkspaceDisposition: { kind: "keep" },
-      },
+      }),
     );
   });
 
   it("keeps choice completion and navigation when inventory updates before the archive response", async () => {
     const { applicationStore, publishArchived, unmount } = renderHeader(2);
     let finish!: () => void;
-    applicationStore.mutateInventory.mockReturnValueOnce(new Promise<void>((resolve) => { finish = resolve; }));
+    applicationStore.archiveThreads.mockReturnValueOnce(new Promise<string[]>((resolve) => { finish = () => resolve(["thread-1"]); }));
     window.history.replaceState(null, "", "/threads/thread-1");
     const menu = await openThreadActions();
     await userEvent.click(within(menu).getByRole("menuitem", { name: "Archive" }));
@@ -418,7 +432,7 @@ describe("ThreadHeader archive action", () => {
     await act(async () => { finish(); });
     await waitFor(() => expect(dialog).not.toBeInTheDocument());
     expect(window.location.pathname).toBe("/");
-    expect(applicationStore.mutateInventory).toHaveBeenCalledOnce();
+    expect(applicationStore.archiveThreads).toHaveBeenCalledOnce();
   });
 
   it("requires confirmation before archiving a childless thread with stashed prompts", async () => {
@@ -435,23 +449,24 @@ describe("ThreadHeader archive action", () => {
       name: "Archive this thread",
     });
     expect(within(dialog).getByText("1 stashed prompt")).toBeVisible();
-    expect(applicationStore.mutateInventory).not.toHaveBeenCalled();
+    expect(applicationStore.archiveThreads).not.toHaveBeenCalled();
 
     await userEvent.click(
       within(dialog).getByRole("button", { name: "Archive" }),
     );
-    expect(applicationStore.mutateInventory).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "thread-1" }),
-      "archive",
-      {
+    expect(applicationStore.archiveThreads).toHaveBeenCalledWith(
+      "thread-1",
+      expect.objectContaining({
+        action: "archive",
         expectedStashedPromptCount: 1,
         executionWorkspaceDisposition: { kind: "keep" },
-      },
+      }),
     );
   });
 
   it("archives from the mobile sheet directly when nothing needs a choice", async () => {
     mobileMatches = true;
+    window.history.replaceState(null, "", "/threads/thread-1");
     const { applicationStore, openDrawer } = renderHeader(0);
     fireEvent.click(
       screen.getByRole("button", { name: "Show thread toolbar" }),
@@ -461,10 +476,12 @@ describe("ThreadHeader archive action", () => {
     fireEvent.click(within(sheet).getByRole("menuitem", { name: "Archive" }));
 
     await waitFor(() =>
-      expect(applicationStore.mutateInventory).toHaveBeenCalledWith(
-        expect.objectContaining({ id: "thread-1" }),
-        "archive",
-        { expectedStashedPromptCount: 0 },
+      expect(applicationStore.archiveThreads).toHaveBeenCalledWith(
+        "thread-1",
+        expect.objectContaining({
+          action: "archive",
+          expectedStashedPromptCount: 0,
+        }),
       ),
     );
     expect(
@@ -498,7 +515,7 @@ describe("ThreadHeader archive action", () => {
         within(dialog).getByRole("button", { name: "Archive" }),
       ).toBeEnabled(),
     );
-    expect(applicationStore.mutateInventory).not.toHaveBeenCalled();
+    expect(applicationStore.archiveThreads).not.toHaveBeenCalled();
   });
 });
 
@@ -517,8 +534,11 @@ describe("dismissed archive results after leaving a thread", () => {
     const dialog = await screen.findByRole("dialog", { name: "Archive this thread" });
     expect(within(dialog).getByText("Header thread")).toBeVisible();
     await userEvent.click(within(dialog).getByRole("button", { name: "Archive" }));
-    await waitFor(() => expect(applicationStore.mutateInventory).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "thread-1" }), "archive", expect.anything(),
+    await waitFor(() => expect(applicationStore.archiveThreads).toHaveBeenCalledWith(
+      "thread-1",
+      expect.objectContaining({
+        action: "archive",
+      }),
     ));
     await waitFor(() => expect(dialog).not.toBeInTheDocument());
     expect(window.location.pathname).toBe("/threads/another-thread");
@@ -529,10 +549,10 @@ describe("dismissed archive results after leaving a thread", () => {
     let fail!: (error: Error) => void;
     const failure = new Promise((_, reject) => { fail = reject; });
     if (phase === "check") applicationStore.getThreadArchiveImpact.mockReturnValueOnce(failure);
-    else applicationStore.mutateInventory.mockReturnValueOnce(failure);
+    else applicationStore.archiveThreads.mockReturnValueOnce(failure);
     const menu = await openThreadActions();
     await userEvent.click(within(menu).getByRole("menuitem", { name: "Archive" }));
-    if (phase === "mutation") await waitFor(() => expect(applicationStore.mutateInventory).toHaveBeenCalledOnce());
+    if (phase === "mutation") await waitFor(() => expect(applicationStore.archiveThreads).toHaveBeenCalledOnce());
     await userEvent.click(await screen.findByRole("button", { name: "Dismiss" }));
     unmount();
     window.history.pushState(null, "", "/threads/another-thread");

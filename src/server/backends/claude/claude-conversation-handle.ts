@@ -72,6 +72,7 @@ import {
   projectClaudeHistoryPageAtIndex,
   locateClaudeHistoryTurn,
   projectClaudeLatestSnapshot,
+  projectClaudeArchiveCompletions,
   type ClaudeHistoryAuthentication,
   type ClaudeHistoryProjection,
 } from "./claude-history-projector.js";
@@ -211,6 +212,7 @@ export interface ClaudeConversationHandleInput {
   readonly workspaceId: string;
   readonly opaqueBindingDetail: string;
   readonly runtimeClient: ClaudeRuntimeClient;
+  readonly archiveRecovery?: import("./claude-runtime-client.js").ClaudeArchiveRecoveryCut;
   readonly executablePath: string;
   readonly initializationTimeoutMs: number;
   readonly settings: ClaudeThreadRepository;
@@ -280,6 +282,8 @@ export class ClaudeConversationHandle implements ConversationHandle {
   readonly #forkBoundaryAuthentication: ClaudeForkBoundaryAuthentication;
   readonly #scope: RequestScope;
   readonly #session: ClaudeRuntimeSession;
+  readonly #archiveMaintenance: boolean;
+  readonly #archiveResultTurns = new Set<string>();
   readonly #interactions: ClaudeInteractionBridge;
   readonly #operationalNotices: ClaudeOperationalNoticeProjector;
   /** This attachment's published and failed read images, by publication key. */
@@ -397,6 +401,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
   #closePromise: Promise<void> | undefined;
 
   constructor(input: ClaudeConversationHandleInput) {
+    this.#archiveMaintenance = input.archiveRecovery !== undefined;
     this.binding = input.binding;
     this.#usageAccounting = input.usage.enabled ? new ClaudeUsageAccounting({sink: input.usage, binding: input.binding, nativeNamespace: input.nativeNamespace,
       launch: input.launch ?? (input.resumeSession === true ? "resume" : "new")}) : undefined;
@@ -537,7 +542,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
         reconcileInterrupt: value => this.reconcileInterrupt(value),
       });
     };
-    this.#session = input.runtimeClient.createSession({
+    this.#session = (input.archiveRecovery ?? input.runtimeClient).createSession({
       applicationThreadId: input.binding.applicationThreadId,
       executionEnvironment: input.executionEnvironment,
       executablePath: input.executablePath,
@@ -569,10 +574,16 @@ export class ClaudeConversationHandle implements ConversationHandle {
       ...(input.onVersionAssessmentFailed
         ? { onVersionAssessmentFailed: input.onVersionAssessmentFailed }
         : {}),
+      settleArchiveProjection: settle => {
+        for (const { snapshot, completed } of this.archiveSettlement()) settle(snapshot, completed);
+      },
       onMessage: async (message, evidence) => {
         // Retained remote output must follow native history hydration. Keep
         // delivery pending so the runtime only acknowledges applied output.
         if (this.#session.flushMessages) await this.#initialHistory;
+        // Close unblocks the history gate so receivers can unwind. It never
+        // proves a provider message was applied, before or during consumption.
+        if (this.#closed || this.#projectionInvalidated) return false;
         this.#recoveryBaseline = evidence?.completionProvenance === "recovered" ? this.#captureTurnStatuses() : undefined;
         try {
           if (evidence?.consumedTurnRootUuid && message.type === "user" && message.uuid) {
@@ -597,7 +608,8 @@ export class ClaudeConversationHandle implements ConversationHandle {
         }
         // A message can move the window over a read whose image is not yet
         // published, for example a retraction or a relinked compaction.
-        if (!this.#closed && !this.#projectionInvalidated) {
+        if (this.#closed || this.#projectionInvalidated) return false;
+        if (!this.#archiveMaintenance) {
           this.#viewedImages.schedule(this.#projection.pendingViewedImages);
         }
         return this.#usageAccounting?.deliveryCommitted === false ? false : undefined;
@@ -762,6 +774,24 @@ export class ClaudeConversationHandle implements ConversationHandle {
       subscribeFromNext: (listener) =>
         this.#subscribeFrom(epoch, after, listener),
     };
+  }
+
+  *archiveSettlement(): Generator<{ snapshot: BackendConversationSnapshot; completed: readonly string[] }> {
+    this.#assertOpen();
+    if (!this.#initialHistoryLoaded) throw new Error("claude_archive_history_unavailable");
+    const visible = this.#snapshot(this.#projection.snapshot);
+    const completed = new Set([...this.#archiveResultTurns, ...this.#recoveredCompletionTurnIds.keys()]);
+    for (const turn of Object.values(visible.turnsById)) {
+      if (turn.status !== "in_progress" && turn.completionCorrelations?.length) completed.add(turn.backendTurnId);
+    }
+    if (completed.size === 0) {
+      yield { snapshot: visible, completed: [] };
+      return;
+    }
+    for (const snapshot of projectClaudeArchiveCompletions(this.#messages, completed,
+      this.#terminalReceipts([...completed]), this.#historyAuthentication())) {
+      yield { snapshot, completed: snapshot.orderedBackendTurnIds };
+    }
   }
 
   async history(input: HistoryPageInput): Promise<BackendHistoryPage> {
@@ -1787,12 +1817,13 @@ export class ClaudeConversationHandle implements ConversationHandle {
       },
       this.#childEnvironment,
     );
-    if (info && info.sessionId !== this.binding.backendConversationId) {
+    if (info && (info.sessionId !== this.binding.backendConversationId ||
+      (info.cwd !== undefined && info.cwd !== this.#canonicalWorkspacePath))) {
       throw this.#invalidateProjection("claude_session_identity_mismatch");
     }
     return info?.customTitle === input.title
       ? { outcome: "accepted" }
-      : { outcome: "not_applied" };
+      : { outcome: "unknown" };
   }
 
   async respond(input: InteractionResponseInput): Promise<void> {
@@ -2088,7 +2119,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
   }
 
   #refreshContextUsage(): void {
-    if (this.#initialProjectionReady && !this.#closed && !this.#projectionInvalidated && !this.#session.closed) this.#contextUsage.refresh();
+    if (!this.#archiveMaintenance && this.#initialProjectionReady && !this.#closed && !this.#projectionInvalidated && !this.#session.closed) this.#contextUsage.refresh();
   }
 
   /** On resume Claude stops or fails background work the previous process
@@ -2336,16 +2367,26 @@ export class ClaudeConversationHandle implements ConversationHandle {
       .map(([id]) => id);
     // The turn holding a result's native input identity is the one it settles,
     // wherever that turn is: a mid-turn compaction adds rows after its prompt.
-    const consumingTurnId = this.#turnConsuming(correlatedIds);
+    const archiveRecovery = this.#archiveMaintenance || this.#session.archiveRecoveryPending;
+    const consumingTurnId = this.#turnConsuming(correlatedIds) ?? (archiveRecovery && correlatedIds.length
+      ? this.#projectLatest(this.#messages).usageTurns.find(turn => turn.completionCorrelations?.some(id => correlatedIds.includes(id)))?.backendTurnId
+      : undefined);
     const expectedIds = consumingTurnId !== undefined ? correlatedIds : [...pendingIds,
       ...(activeId ? this.#projection.snapshot.turnsById[activeId]?.completionCorrelations ?? [] : [])];
-    if (claudeResultIsUnrelated(message, expectedIds)) return;
+    if (claudeResultIsUnrelated(message, expectedIds)) {
+      if (archiveRecovery && !claudeResultIsNotificationDrain(message) &&
+          correlatedIds.some(id => id !== startupProbeUuid && this.#settings.hasOperationSnapshot(this.#scope, {
+            applicationThreadId: this.binding.applicationThreadId, applicationOperationId: id,
+          }))) throw new Error("claude_archive_terminal_turn_unproven");
+      return;
+    }
     const operationId = this.#resultSubmissionOperationId(message);
     if (operationId) this.#materializePendingUser(operationId);
     // Without a live turn, an uncorrelated result has no application turn to
     // settle; attributing it to the previous turn would forge its receipt.
     if (correlatedIds.length === 0 && this.#runState !== "running" && this.#runState !== "stopping") return;
-    const backendTurnId = this.#turnConsuming(correlatedIds) ?? this.#activeBackendTurnId();
+    const backendTurnId = consumingTurnId ?? this.#turnConsuming(correlatedIds) ?? this.#activeBackendTurnId();
+    if (archiveRecovery && backendTurnId && terminalReceiptStatus(message)) this.#archiveResultTurns.add(backendTurnId);
     // A result for an earlier input's turn does not end a later input's run.
     const settlesRun = backendTurnId === undefined || this.#endsForegroundRun(backendTurnId);
     this.#captureResultUsage(message);
@@ -2784,7 +2825,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
    * completes is published before the real projection sees the result.
    */
   async #publishArrivingViewedImages(message: SessionMessage): Promise<void> {
-    if (!carriesImageReadResult(message, this.#projection.imageReadToolUseIds)) return;
+    if (this.#archiveMaintenance || !carriesImageReadResult(message, this.#projection.imageReadToolUseIds)) return;
     let pending: readonly ClaudeViewedImageCandidate[];
     try {
       pending = this.#projectLatest([...this.#projectionMessages, message], {
@@ -2808,7 +2849,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
    * budget, then shows them as new items; the rest follow in the background.
    */
   async #publishWindowViewedImages(): Promise<void> {
-    if (this.#closed || this.#projectionInvalidated) return;
+    if (this.#archiveMaintenance || this.#closed || this.#projectionInvalidated) return;
     const pending = this.#projection.pendingViewedImages;
     if (pending.length === 0 || !(await this.#viewedImages.publish(pending, CLAUDE_VIEWED_IMAGE_INLINE_BUDGET))) return;
     this.#showViewedImages();

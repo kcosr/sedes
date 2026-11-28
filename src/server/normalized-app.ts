@@ -2980,17 +2980,14 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
             expectedRevision: body.expectedRevision,
             mutationId: body.mutationId,
             includeDescendants: body.action === "archive_family",
+            expectedPendingQuestionCount: body.expectedPendingQuestionCount,
             expectedStashedPromptCount: body.expectedStashedPromptCount,
             openTaskDisposition: body.openTaskDisposition,
             expectedOpenTaskSnapshot: body.expectedOpenTaskSnapshot,
             executionWorkspaceDisposition: body.executionWorkspaceDisposition,
           },
         );
-        if (body.action === "archive_family") {
-          response.json({ archivedThreadIds });
-        } else {
-          response.status(204).end();
-        }
+        response.json({ archivedThreadIds });
         return;
       } else if (body.action === "park") {
         await dependencies.threadArchives.park(requestScope, threadId, {

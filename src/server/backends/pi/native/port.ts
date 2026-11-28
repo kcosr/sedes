@@ -153,6 +153,8 @@ export interface PiNativePort {
   release(input: { readonly handleId: string }, signal?: AbortSignal): Promise<void>;
   /** Proves the exact session process and writer lease retired without discarding work or output. */
   retireSession(input: PiNativeSessionIdentity, signal?: AbortSignal): Promise<PiNativeRetirement>;
+  /** No host, daemon or conversation may be started by this inventory lookup. */
+  inspectExisting(signal: AbortSignal): Promise<PiNativeInspection | null>;
   inspect(signal?: AbortSignal): Promise<PiNativeInspection>;
   stop(input: { readonly expectedRevision: string; readonly force: boolean }, signal?: AbortSignal): Promise<void>;
   close(): Promise<void>;
