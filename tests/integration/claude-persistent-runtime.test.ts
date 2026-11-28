@@ -2211,7 +2211,8 @@ describe("archive of an unattended Claude query", () => {
 
   it("settles a pinned failed archive during ordinary open before releasing its generation", async () => {
     let retained: string | undefined;
-    const settle = vi.fn();
+    const onControlReady = vi.fn();
+    const settle = vi.fn(() => { expect(onControlReady).not.toHaveBeenCalled(); });
     const release = vi.fn((_thread: string, owner: string) => {
       expect(owner).toBe(retained);
       retained = undefined;
@@ -2222,8 +2223,10 @@ describe("archive of an unattended Claude query", () => {
       settle: async () => { throw new Error("temporarily_unavailable"); } })).rejects.toThrow();
     const original = retained;
     expect(original).toBeTruthy();
-    const live = await f.driver.attach(f.input);
+    const live = await f.driver.attach({ ...f.input, onControlReady });
     await live.establishProjection({ signal: f.input.signal });
+    expect(onControlReady).toHaveBeenCalledOnce();
+    expect(onControlReady).toHaveBeenCalledWith(expect.objectContaining({ lifetime: expect.objectContaining({ aborted: false }) }));
     expect(settle).toHaveBeenCalledWith(f.input.binding.applicationThreadId, original, expect.any(Object), []);
     expect(f.host.abandonmentEvidence().sessions[0]?.retainedEventCount).toBe(0);
     expect(release).toHaveBeenCalledOnce();
