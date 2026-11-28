@@ -81,7 +81,8 @@ it.each(["carrier offline", "busy", "released", "offline", "inconclusive"] as co
     const inspect = vi.spyOn(CodexSidecarRuntimeConnection.prototype, "inspectUnregisteredExternalArchive")
       .mockResolvedValue(condition === "carrier offline" ? "inconclusive" : condition);
     const external = { ...configuration, connection: { ownership: "external", channel: { type: "unix_websocket", socketPath: "/configured/codex.sock" } },
-      connections: [{ id: "cp", enabled: true, templateId: "target" }] } as CodexRuntimeConfiguration;
+      connections: [{ id: "cp", enabled: true, templateId: "target", kind: "codex_app_server", label: "Codex", configurationRevision: 1,
+        tenantId: "tenant", ownerPrincipalId: "principal", backendInstanceId: "backend", executionEnvironmentId: "remote" }] } satisfies CodexRuntimeConfiguration;
     const supervisor = new CodexRemoteRuntimeSupervisor({
       scope: { tenantId: "tenant", principalId: "principal", executionEnvironmentId: "remote", backendInstanceId: "backend" },
       provider: { acquire, acquireExisting }, configuration: external, serverRequests: new CodexServerRequestRouter(), receipts: {

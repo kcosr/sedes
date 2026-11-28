@@ -211,7 +211,9 @@ export class CodexBackendDriverFactory implements BackendDriverFactory {
       get(target, property) {
         const value = Reflect.get(target, property, target);
         if (typeof value !== "function") return value;
-        if (property === "health") return value.bind(target);
+        // Archive borrows or inspects an existing owner and manages its own
+        // lease. The generic activity wrapper wakes parked provider processes.
+        if (property === "health" || property === "prepareArchive") return value.bind(target);
         return (...args: unknown[]) => residency.run(async () => {
           const result: unknown = await Reflect.apply(value, target, args);
           if (property === "create") {

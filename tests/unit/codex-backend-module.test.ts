@@ -13,6 +13,8 @@ import {
   type CodexBackendModuleDependencies,
 } from "../../src/server/backends/codex/codex-backend-module.js";
 import { CodexSharedClientFacade } from "../../src/server/backends/codex/codex-client-facade.js";
+import { RetainedRuntimeLifecycle } from "../../src/server/backends/retained-runtime-lifecycle.js";
+import { serializeCodexBindingDetail } from "../../src/server/backends/codex/codex-binding-codec.js";
 import { CodexBackendDriverFactory } from "../../src/server/backends/codex/codex-driver-factory.js";
 import { CodexRemoteRuntimeSupervisor } from "../../src/server/backends/codex/runtime/codex-remote-runtime-supervisor.js";
 import { CODEX_APP_SERVER_RELEASE } from "../../src/server/backends/codex/codex-release-guard.js";
@@ -214,7 +216,7 @@ function context(
   return {
     database: {
       prepare: () => ({
-        run: () => ({ changes: 0 }),
+        run: () => ({ changes: 0 }), get: () => undefined,
       }),
     } as unknown as Database.Database,
     scope: runtimeScope,
@@ -319,7 +321,7 @@ function resolvedConfiguration(
   return Object.freeze(resolved);
 }
 
-function fakeDependencies() {
+function fakeDependencies(residency?: RetainedRuntimeLifecycle) {
   const resolveRuntimeConfiguration = vi.fn(
     async (
       input: Parameters<
@@ -350,6 +352,7 @@ function fakeDependencies() {
     vi.fn((input) => {
       supervisorInputs.push(input);
       const client = new CodexSharedClientFacade({
+        residency,
         current: () => undefined,
         latestGeneration: () => 0,
         retireGeneration: async () => undefined,
@@ -388,6 +391,31 @@ function fakeDependencies() {
 }
 
 describe("CodexBackendModule", () => {
+  it.each(["owned", "external"] as const)("checks a parked %s backend through its normal driver factory without waking it", async ownership => {
+    const root = await temporaryDirectory(), socketPath = path.join(root, "missing.sock");
+    const wake = vi.fn(() => { throw new Error("unexpected_wake"); });
+    const fakes = fakeDependencies(new RetainedRuntimeLifecycle({ wake, retire: vi.fn() }));
+    const ctx = context(), profile = ctx.connections[0]!;
+    const open = vi.spyOn(ctx.environmentChannel, "openPrivateUnixStream");
+    const runtime = new CodexBackendModule(fakes.dependencies).prepare(configuration({
+      ownership, socketPath, workingDirectory: root, codexHome: root,
+    })).createRuntime(ctx);
+    try {
+      fakes.clients[0]!.updateLifecycle({ state: "idle", generation: 0 });
+      const driver = runtime.driverFactory.create(profile);
+      await expect(driver.prepareArchive!({ scope, binding: { tenantId: scope.tenantId, ownerPrincipalId: scope.principalId,
+        applicationThreadId: "app", backendConversationId: "native", backendInstanceId, connectionProfileId: profile.id,
+        executionEnvironmentId: profile.executionEnvironmentId, createdAt: new Date(0).toISOString() },
+        workspace: { authorityRevision: 1, canonicalPath: root, summary: { id: "workspace", displayName: "Workspace", displayPath: root,
+          environmentId: profile.executionEnvironmentId, availability: "available", trustState: "trusted", revision: 1 } },
+        opaqueBindingDetail: serializeCodexBindingDetail({ threadId: "native", sessionId: null, nativeAncestry: null, correlationAncestorThreadIds: [] }),
+        signal: AbortSignal.timeout(3_000), retainedOwner: undefined, markRetained: vi.fn(), markSettled: vi.fn(),
+        markObserved: vi.fn(), settle: vi.fn(),
+      })).resolves.toEqual({ outcome: "offline" });
+      expect(wake).not.toHaveBeenCalled();
+      expect(open).toHaveBeenCalledTimes(ownership === "external" ? 1 : 0);
+    } finally { await runtime.close(); }
+  });
   it("preserves actionable store recovery guidance through startup wrappers", () => {
     const module = new CodexBackendModule();
     const error = new Error("remote startup failed at /private/path", {

@@ -3279,7 +3279,7 @@ describe("ConversationLifecycleService", () => {
     }
   });
 
-  it.each(["lost_reply", "not_sent"] as const)("recovers the original first-send rename after %s", async failure => {
+  it.each(["lost_reply", "not_sent", "actor_stopped"] as const)("recovers the original first-send rename after %s", async failure => {
     const current = fixture();
     let restarted: ReturnType<typeof restartLifecycle> | undefined;
     try {
@@ -3288,16 +3288,30 @@ describe("ConversationLifecycleService", () => {
       const original = { action: "rename" as const, applicationOperationId: "title-attempt:initial-title", title: "Original title" };
       current.backendPersistence.initializationPlan = [original];
       let dispatches = 0;
-      current.driver.perform.mockImplementationOnce(async () => {
-        if (failure === "lost_reply") dispatches++;
-        throw new BackendError({ category: "unavailable", retryable: true,
-          crossedSubmissionBoundary: failure === "lost_reply", safeMessage: "Native title write interrupted." });
-      }).mockImplementation(async () => { dispatches++; return { accepted: true }; });
+      if (failure === "actor_stopped") {
+        const acquire = current.actors.acquire.bind(current.actors);
+        vi.spyOn(current.actors, "acquire").mockImplementationOnce(async (input, options) => {
+          const acquired = await acquire(input, options);
+          vi.spyOn(current.backendPersistence, "initializationActions").mockImplementationOnce(() => {
+            void acquired.actor.close();
+            return [original];
+          });
+          return acquired;
+        });
+      } else {
+        current.driver.perform.mockImplementationOnce(async () => {
+          if (failure === "lost_reply") dispatches++;
+          throw new BackendError({ category: "unavailable", retryable: true,
+            crossedSubmissionBoundary: failure === "lost_reply", safeMessage: "Native title write interrupted." });
+        });
+      }
+      current.driver.perform.mockImplementation(async () => { dispatches++; return { accepted: true }; });
       current.driver.reconcileAction.mockResolvedValue({ outcome: "unknown" });
       await expect(current.service.startFirstSend(current.scope, thread.applicationThreadId, request))
         .resolves.toMatchObject({ status: "recovery_required" });
       expect(current.driver.reconcileAction).not.toHaveBeenCalled();
       expect(current.driver.submit).not.toHaveBeenCalled();
+      if (failure === "actor_stopped") expect(current.driver.perform).not.toHaveBeenCalled();
       await current.actors.close();
       current.backendPersistence.initializationPlan = [{ ...original, title: "Intervening edit" }];
       restarted = restartLifecycle(current);
