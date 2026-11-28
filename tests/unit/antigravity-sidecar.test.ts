@@ -96,6 +96,8 @@ describe("Antigravity persistent sidecar", () => {
     await port.releaseArchiveClaim(owner);
     expect(await port.probeArchiveOwner(target)).toMatchObject({ attached: false });
     await port.acknowledgeCreation({ ...target, operationId: "created" });
+    const prior = { index: 0, type: 15, status: 3, hasSubtrajectory: false, response: { text: "original", thinking: "", stopReason: 2, toolCalls: [] } };
+    f.readHistory.mockResolvedValue({ ...target, native: { steps: [prior], executions: [], revision: "a".repeat(64) } });
     // A normal open can drain and retire this very owner after a refused archive.
     await port.attachExisting(target);
     const events = await port.observe({ handleId: owner.handleId, afterSequence: 0 });
@@ -105,7 +107,10 @@ describe("Antigravity persistent sidecar", () => {
     const ownerKey = createHash("sha256").update(JSON.stringify([target.sessionId, target.cwd, owner.handleId, owner.generation])).digest("hex");
     await expect(port.readRetiredArchive({ ...target, ownerKey })).resolves.toMatchObject({ ownerKey, history: { native: { revision: "a".repeat(64) } } });
     expect(await port.readRetiredArchive({ ...target, ownerKey: "a".repeat(64) })).toBeNull();
-    f.readHistory.mockResolvedValue({ ...target, native: { steps: [], executions: [], revision: "b".repeat(64) } });
+    f.readHistory.mockResolvedValue({ ...target, native: { steps: [prior, { ...prior, index: 1 }], executions: [], revision: "b".repeat(64) } });
+    expect((await port.readRetiredArchive({ ...target, ownerKey }))?.history.native).toMatchObject({ steps: [prior], revision: "a".repeat(64) });
+    // Rewriting a fact inside the captured cut cannot be mistaken for an append.
+    f.readHistory.mockResolvedValue({ ...target, native: { steps: [], executions: [], revision: "c".repeat(64) } });
     expect(await port.readRetiredArchive({ ...target, ownerKey })).toBeNull();
     expect(f.launched).toHaveBeenCalledOnce();
   });

@@ -77,7 +77,7 @@ export interface AntigravityArchiveOwner extends AntigravityIdentity {
   readonly generation: string;
 }
 export type AntigravityArchiveProbe =
-  | (AntigravityArchiveOwner & { readonly retainedOutput: boolean; readonly attached: boolean })
+  | (AntigravityArchiveOwner & { readonly retainedOutput: boolean; readonly attached: boolean; readonly inheritedOwners?: readonly string[] })
   | (AntigravityIdentity & { readonly pendingCreation: string });
 export interface AntigravityArchiveOperation {
   readonly operationId: string;
@@ -85,6 +85,8 @@ export interface AntigravityArchiveOperation {
   /** Setters must prove the exact native target value independently of response delivery. */
   readonly setterConfirmed: boolean;
   readonly commandFingerprint: string;
+  /** Stable across an exact host handoff to a successor generation. */
+  readonly originOwner: string;
   readonly sessionConfiguration: boolean;
 }
 export type AntigravityArchiveState =
@@ -121,6 +123,7 @@ export interface AntigravityPort {
   probeArchiveOwner(input: AntigravityIdentity, signal?: AbortSignal): Promise<AntigravityArchiveProbe | null>;
   readRetiredArchive(input: AntigravityIdentity & { readonly ownerKey: string }, signal?: AbortSignal): Promise<AntigravityRetiredArchive | null>;
   releaseArchiveClaim(input: AntigravityArchiveOwner, signal?: AbortSignal): Promise<void>;
+  confirmArchiveCut(input: AntigravityArchiveOwner & { throughSequence: number; nativeRevision: string }, signal?: AbortSignal): Promise<boolean>;
   readArchiveState(input: AntigravityArchiveOwner, signal?: AbortSignal): Promise<AntigravityArchiveState>;
   attachExisting(input: AntigravityIdentity & { readonly expected?: AntigravityArchiveOwner }, signal?: AbortSignal): Promise<AntigravityAttachment | null>;
   request(input: { readonly handleId: string; readonly operationId: string; readonly command: AntigravityCommand }, signal?: AbortSignal): Promise<AntigravityOutcome>;

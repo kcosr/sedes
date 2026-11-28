@@ -342,10 +342,19 @@ creation before acknowledging it. Submission configuration requires proof of
 the selected native value. Archive claims release even after a failed read or acknowledgement. All
 archive calls use existing-only transport and perform no provider commands.
 
-A clean retirement leaves bounded generation-specific metadata for lost
-replies or an intervening normal thread open. Recovery rereads the final
-native history revision and commits any owed application facts. Forced
-retirement, replacement, or a missing proof cannot establish settlement.
+The ordinary observer can settle a pinned cut before attaching or releasing
+its native peer. Sedes clears the exact pin only after committing application
+facts and confirming the original generation's acknowledgements. An archive
+that loses its final retirement reply can therefore recover across a host
+restart. The host records receipt origins during a failed-load handoff after
+the old event cursor is acknowledged, so a successor can settle those
+same operations. Abrupt disappearance before settlement remains inconclusive.
+
+Clean retirement also keeps bounded metadata for a prior generation. A digest
+of its normalized history prefix permits replay after later appends. Rewriting
+the captured facts invalidates that proof. An exact signed terminal turn and
+its durable result settle a lost prompt callback. Definitively rejected controls
+use the saved scoped application rejection, including its translated command.
 The private `antigravity_runtime` sidecar capability is version 7.
 
 ## Cross-backend audit

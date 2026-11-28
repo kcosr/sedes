@@ -61,6 +61,7 @@ export function registerAntigravityHost(input: ProviderPolicyAttachment & { read
       case "read_retired_archive": return host.readRetiredArchive(command.input, signal, callAuthority);
       case "release_archive_claim": await host.releaseArchiveClaim(command.input, signal, callAuthority); return { ok: true };
       case "probe_archive_owner": return host.probeArchiveOwner(command.input, signal, callAuthority);
+      case "confirm_archive_cut": return host.confirmArchiveCut(command.input, signal, callAuthority);
       case "read_archive_state": return host.readArchiveState(command.input, signal, callAuthority);
       case "attach_existing": return host.attachExisting(command.input, signal, callAuthority);
       case "request": return host.request(command.input, signal, callAuthority);

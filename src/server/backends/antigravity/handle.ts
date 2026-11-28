@@ -17,6 +17,7 @@ import { antigravityHistoryPage, antigravityWindowSnapshot, locateAntigravityTur
 import { type AntigravityAttachment, type AntigravityCommand, type AntigravityEvent,
   type AntigravityHistory, type AntigravityOutcome, type AntigravitySetup } from "./port.js";
 import { buildAntigravityPrompt, inspectAntigravityInput } from "./submission.js";
+import { settleObservedAntigravityArchive } from "./archive-preparation.js";
 import { AntigravityUsage } from "./usage.js";
 import { antigravityFailureError, antigravityReadError, antigravityTransportError } from "./errors.js";
 
@@ -715,6 +716,7 @@ export class AntigravityHandle implements ConversationHandle {
     // Receipt cleanup must not prevent releasing the handle on carrier loss.
     // The retained owner keeps any outcomes whose acknowledgement was unproven.
     await this.#acknowledgeAbandoned(AbortSignal.timeout(5000), true).catch(() => undefined);
+    await settleObservedAntigravityArchive(this.driver, this.attached, this.attachment);
     await this.driver.input.port.release({ handleId: this.attachment.handleId }).catch(error => { throw antigravityReadError(error); });
     this.#accounting.close(); this.#listeners.clear(); this.#rawListeners.clear(); this.driver.handles.delete(this); this.#closeComplete = true;
   }

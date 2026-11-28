@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existingSidecarIsOffline } from "../../sidecar/runtime-channel.js";
-import type { ConversationArchivePreparation, PrepareConversationArchiveInput } from "../contracts.js";
+import type { AttachConversationInput, ConversationArchivePreparation, PrepareConversationArchiveInput } from "../contracts.js";
 import type { AntigravityDriver } from "./driver.js";
 import { projectAntigravityHistory } from "./history.js";
 import type { AntigravityArchiveOwner, AntigravityArchiveProbe, AntigravityHistory, AntigravityIdentity } from "./port.js";
@@ -12,6 +12,40 @@ const inconclusive = { outcome: "inconclusive", reason: "Sedes could not verify 
 function sameOwner(expected: AntigravityArchiveOwner, actual: AntigravityArchiveOwner | AntigravityArchiveProbe | null): boolean {
   return actual !== null && "handleId" in actual && actual.handleId === expected.handleId && actual.generation === expected.generation &&
     actual.sessionId === expected.sessionId && actual.cwd === expected.cwd;
+}
+
+function archiveOwnerKey(owner: AntigravityArchiveOwner): string {
+  return createHash("sha256").update(JSON.stringify([owner.sessionId, owner.cwd, owner.handleId, owner.generation])).digest("hex");
+}
+
+/** Ordinary open and close can finish the exact pending cut under the same
+ * application fence, before normal observers consume its last receipts. */
+export async function settleObservedAntigravityArchive(driver: AntigravityDriver, attached: AttachConversationInput, held?: AntigravityArchiveOwner): Promise<void> {
+  const observer = driver.input.archiveObserver;
+  const threadId = attached.binding.applicationThreadId;
+  const retained = observer?.retained(threadId);
+  if (!observer || !retained) return;
+  const signal = AbortSignal.timeout(5000);
+  try {
+    const detail = driver.validate(attached);
+    const identity = { sessionId: detail.sessionId, cwd: detail.canonicalWorkspacePath };
+    if (retained.startsWith("creation:")) {
+      const operationId = retained.slice("creation:".length);
+      if (!driver.input.archiveReceipts?.creationBound(attached, operationId)) return;
+      await driver.input.port.acknowledgeCreation({ ...identity, operationId }, signal);
+      signal.throwIfAborted(); observer.release(threadId, retained);
+      return;
+    }
+    const owner = await driver.input.port.probeArchiveOwner(identity, signal);
+    if (!owner || !("handleId" in owner) || (held && !sameOwner(held, owner)) ||
+        (archiveOwnerKey(owner) !== retained && !owner.inheritedOwners?.includes(retained)) || owner.sessionId !== identity.sessionId || owner.cwd !== identity.cwd) return;
+    await drainArchiveOwner(driver, { ...attached, signal, retainedOwner: retained, markObserved() {}, markRetained() {},
+      markSettled(key) { observer.release(threadId, key); },
+      async settle(snapshot, ids) {
+        if (observer.retained(threadId) !== retained) throw new Error("antigravity_archive_owner_changed");
+        observer.settle(threadId, retained, snapshot, ids);
+      } }, identity, owner, retained, false);
+  } catch { /* A normal open/close remains usable. The exact pin survives an inconclusive read. */ }
 }
 
 export async function prepareAntigravityArchive(driver: AntigravityDriver, input: PrepareConversationArchiveInput): Promise<ConversationArchivePreparation> {
@@ -49,16 +83,17 @@ export async function prepareAntigravityArchive(driver: AntigravityDriver, input
     } catch { return inconclusive; }
   }
   const probe = found && "handleId" in found ? found : null;
-  const ownerKey = probe ? createHash("sha256").update(JSON.stringify([probe.sessionId, probe.cwd, probe.handleId, probe.generation])).digest("hex") : undefined;
+  const ownerKey = probe ? archiveOwnerKey(probe) : undefined;
   if (probe && ownerKey && probe.retainedOutput && !previouslyRetained) input.markRetained(ownerKey);
   else if (probe) input.markObserved();
-  if (previouslyRetained && previouslyRetained !== ownerKey) {
+  const inheritedPin = previouslyRetained && probe?.inheritedOwners?.includes(previouslyRetained) ? previouslyRetained : undefined;
+  if (previouslyRetained && previouslyRetained !== ownerKey && !inheritedPin) {
     try {
       const retired = await port.readRetiredArchive({ ...identity, ownerKey: previouslyRetained }, input.signal);
       if (!retired || retired.ownerKey !== previouslyRetained || retired.history.sessionId !== identity.sessionId || retired.history.cwd !== identity.cwd) return inconclusive;
       const correlations = await settleArchiveHistory(driver, input, retired.history);
       for (const { operation, outcome } of retired.operations) {
-        if (outcome.status === "pending" || !driver.input.archiveReceipts?.apply(input, previouslyRetained, operation, outcome, correlations.has(operation.operationId), retired.setup)) return inconclusive;
+        if (outcome.status === "pending" || !driver.input.archiveReceipts?.apply(input, operation, outcome, correlations.has(operation.operationId), retired.setup)) return inconclusive;
       }
       if (retired.creation) {
         if (!driver.input.archiveReceipts?.creationBound(input, retired.creation)) return inconclusive;
@@ -80,18 +115,18 @@ export async function prepareAntigravityArchive(driver: AntigravityDriver, input
       if (result === "busy") return busy;
       if (result !== "undelivered") return inconclusive;
     }
-    if (!probe.retainedOutput || previouslyRetained) input.markRetained(ownerKey);
+    const pin = inheritedPin ?? ownerKey;
+    if (!probe.retainedOutput || previouslyRetained) input.markRetained(pin);
     let result: ConversationArchivePreparation;
     try {
       const claimed = await port.attachExisting({ ...identity, expected: owner }, input.signal);
       if (!sameOwner(owner, claimed)) return inconclusive;
-      result = await drainArchiveOwner(driver, input, identity, owner, ownerKey);
+      result = await drainArchiveOwner(driver, input, identity, owner, ownerKey, true);
     } finally {
       // A lost claim reply can still have marked the host attached. Releasing
       // the exact generation never stops a peer or consumes outstanding output.
       await port.releaseArchiveClaim(owner, AbortSignal.timeout(5000));
     }
-    if (result.outcome === "released") input.markSettled(ownerKey);
     return result;
   } catch {
     return { outcome: "inconclusive", reason: "Sedes could not confirm Antigravity output delivery or release of its retained session." };
@@ -99,7 +134,7 @@ export async function prepareAntigravityArchive(driver: AntigravityDriver, input
 }
 
 async function drainArchiveOwner(driver: AntigravityDriver, input: PrepareConversationArchiveInput,
-  identity: AntigravityIdentity, owner: AntigravityArchiveOwner, ownerKey: string): Promise<ConversationArchivePreparation> {
+  identity: AntigravityIdentity, owner: AntigravityArchiveOwner, ownerKey: string, retire: boolean): Promise<ConversationArchivePreparation> {
   const { port, archiveReceipts } = driver.input;
   const { signal } = input;
   while (true) {
@@ -138,7 +173,7 @@ async function drainArchiveOwner(driver: AntigravityDriver, input: PrepareConver
       const target = { handleId: owner.handleId, operationId: operation.operationId };
       const outcome = await port.outcome(target, signal);
       if (outcome.status === "pending") return busy;
-      if (!archiveReceipts?.apply(input, ownerKey, operation, outcome, correlations.has(operation.operationId), state.setup)) return inconclusive;
+      if (!archiveReceipts?.apply(input, operation, outcome, correlations.has(operation.operationId), state.setup)) return inconclusive;
       signal.throwIfAborted();
       await port.acknowledgeOperation(target, signal);
     }
@@ -148,8 +183,14 @@ async function drainArchiveOwner(driver: AntigravityDriver, input: PrepareConver
     }
     if (through > state.acknowledged) await port.acknowledge({ handleId: owner.handleId, throughSequence: through }, signal);
     signal.throwIfAborted();
+    if (!await port.confirmArchiveCut({ ...owner, throughSequence: through, nativeRevision: state.history.native.revision }, signal)) continue;
+    // This cut is now applied and acknowledged. Record it before fallible
+    // process cleanup so a lost final reply or host restart cannot revive it.
+    input.markSettled(ownerKey);
+    if (!retire) return { outcome: "released" };
     const released = await port.retireSession({ ...identity, expected: owner, settledNativeRevision: state.history.native.revision }, signal);
     if (released === "retired") return { outcome: "released" };
+    if (released === "undelivered" || released === "busy") input.markRetained(ownerKey);
     if (released === "busy") return busy;
     if (released !== "undelivered") return inconclusive;
     // A new page or receipt arrived while settlement was in progress. It

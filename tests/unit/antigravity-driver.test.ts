@@ -49,6 +49,7 @@ function fixture(policy: BackendModelPolicy = { type: "catalog" }, usage?: Usage
     }), attach: vi.fn(async () => attachment),
     readRetiredArchive: vi.fn(async () => null),
     probeArchiveOwner: vi.fn(async () => null), releaseArchiveClaim: vi.fn(async () => {}),
+    confirmArchiveCut: vi.fn(async () => true),
     readArchiveState: vi.fn(async () => ({ state: "unproven" as const })),
     attachExisting: vi.fn(async () => attachment),
     request: vi.fn(async ({ operationId, command }) => {
@@ -94,7 +95,7 @@ describe("Antigravity archive on a retained owner", () => {
     return { ...f, owner, retained, state, archiveReceipts, driver, request };
   }
   function setter(operationId = "setter"): AntigravityArchiveOperation {
-    return { operationId, kind: "set_config", commandFingerprint: "a".repeat(64), setterConfirmed: true, sessionConfiguration: true };
+    return { operationId, originOwner: "a".repeat(64), kind: "set_config", commandFingerprint: "a".repeat(64), setterConfirmed: true, sessionConfiguration: true };
   }
   it.each(["events", "receipt", "both"] as const)("applies %s under a single claim and awaits acknowledgement before retiring", async kind => {
     const f = archiveFixture(), order: string[] = [];
@@ -137,25 +138,43 @@ describe("Antigravity archive on a retained owner", () => {
       if (failure === "pending") f.receipts.set("setter", { status: "pending" });
       if (failure === "busy") vi.mocked(f.port.readArchiveState).mockResolvedValue({ state: "busy" });
       expect(await f.driver.prepareArchive(f.request)).toMatchObject({ outcome: failure === "busy" || failure === "pending" ? "busy" : "inconclusive" });
-      expect(f.request.markRetained).toHaveBeenCalled(); expect(f.request.markSettled).not.toHaveBeenCalled();
+      expect(f.request.markRetained).toHaveBeenCalled();
+      expect(f.request.markSettled).toHaveBeenCalledTimes(failure === "cleanup" ? 1 : 0);
       expect(f.port.releaseArchiveClaim).toHaveBeenCalledOnce(); expect(f.port.request).not.toHaveBeenCalled();
       if (failure !== "cleanup") expect(f.port.retireSession).not.toHaveBeenCalled();
       if (["application", "gap", "replacement", "unknown receipt", "pending"].includes(failure)) expect(f.port.acknowledgeOperation).not.toHaveBeenCalled();
     });
-  it("finishes the same durable settlement after losing a successful retirement reply", async () => {
+  it("keeps the committed cut settled across a lost retirement reply and a host restart", async () => {
     const f = archiveFixture();
     f.state.operations.push(setter()); f.receipts.set("setter", { status: "completed", result: {} });
     vi.mocked(f.port.retireSession).mockRejectedValueOnce(new Error("retire reply lost"));
     expect(await f.driver.prepareArchive(f.request)).toMatchObject({ outcome: "inconclusive" });
-    const ownerKey = f.request.markRetained.mock.calls[0]![0];
-    f.request.retainedOwner = ownerKey;
+    expect(f.request.markSettled).toHaveBeenCalledExactlyOnceWith(f.request.markRetained.mock.calls[0]![0]);
     vi.mocked(f.port.probeArchiveOwner).mockResolvedValue(null);
-    vi.mocked(f.port.readRetiredArchive).mockResolvedValue({ ownerKey, setup: f.attachment.setup, history: f.state.history,
-      operations: [{ operation: setter(), outcome: { status: "completed", result: {} } }] });
     expect(await f.driver.prepareArchive(f.request)).toEqual({ outcome: "released" });
-    expect(f.request.markSettled).toHaveBeenCalledExactlyOnceWith(ownerKey);
-    expect(f.port.attachExisting).toHaveBeenCalledOnce();
-    expect(f.archiveReceipts.apply).toHaveBeenCalledTimes(2);
+    expect(f.port.readRetiredArchive).not.toHaveBeenCalled();
+    expect(f.archiveReceipts.apply).toHaveBeenCalledOnce();
+  });
+  it.each(["same", "transferred", "unrelated"] as const)("a normal open settles only a %s retained owner before opening the thread", async kind => {
+    const f = archiveFixture();
+    const key = createHash("sha256").update(JSON.stringify([identity.sessionId, identity.cwd, f.owner.handleId, f.owner.generation])).digest("hex");
+    let pin: string | null = key;
+    const observer = { retained: () => pin, settle: vi.fn(), release: vi.fn(() => { pin = null; }) };
+    if (kind !== "same") vi.mocked(f.port.probeArchiveOwner).mockResolvedValue({ ...f.retained, generation: "next",
+      ...(kind === "transferred" ? { inheritedOwners: [key] } : {}) });
+    f.state.operations.push(setter()); f.receipts.set("setter", { status: "completed", result: {} });
+    const driver = new AntigravityDriver({ ...f.driver.input, archiveObserver: observer });
+    const handle = await driver.attach(f.attached);
+    try {
+      if (kind === "unrelated") {
+        expect(observer.settle).not.toHaveBeenCalled(); expect(pin).toBe(key);
+      } else {
+        expect(observer.settle).toHaveBeenCalledOnce(); expect(pin).toBeNull();
+        expect(f.port.acknowledgeOperation).toHaveBeenCalled();
+        expect(f.port.confirmArchiveCut).toHaveBeenCalled();
+        expect(observer.release.mock.invocationCallOrder[0]!).toBeLessThan(vi.mocked(f.port.attach).mock.invocationCallOrder[0]!);
+      }
+    } finally { await handle.close(); await driver.close(); }
   });
   it("resolves a creation retained without its ACP session, including a lost acknowledgement reply", async () => {
     const f = archiveFixture(), pending = { ...identity, pendingCreation: "bound-creation" };

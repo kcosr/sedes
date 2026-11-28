@@ -39,17 +39,18 @@ export class AntigravityArchiveReceipts {
       record.executionEnvironmentId === binding.executionEnvironmentId && record.provisionalBackendConversationId === binding.backendConversationId;
   }
 
-  apply(input: ReceiptInput, owner: string, operation: AntigravityArchiveOperation, outcome: TerminalOutcome, terminalTurn: boolean, setup: AntigravitySetup): boolean {
+  apply(input: ReceiptInput, operation: AntigravityArchiveOperation, outcome: TerminalOutcome, terminalTurn: boolean, setup: AntigravitySetup): boolean {
     const { scope, binding } = input;
     const threadId = binding.applicationThreadId;
     // Acknowledgement can lose its reply after a proven rejection deleted
     // the original uncertain application receipt. Commit that disposition in
     // the same transaction so replay never depends on the now absent row.
-    const key = `antigravity_archive:${digest([threadId, owner, operation.operationId])}`;
-    const fingerprint = digest([input.opaqueBindingDetail, operation.operationId, operation.kind, operation.commandFingerprint,
-      outcome.status, outcome.status === "failed" ? outcome.failure : [
-        outcome.cancelledAtNativeRevision, (outcome.result as { stopReason?: unknown } | null)?.stopReason === "cancelled",
-      ]]);
+    const key = `antigravity_archive:${digest([threadId, operation.originOwner, operation.operationId])}`;
+    const signedTerminal = terminalTurn && (operation.kind === "prompt" || operation.kind === "steer") &&
+      (outcome.status === "completed" || outcome.failure.delivery === "sent_outcome_unknown");
+    const disposition = signedTerminal ? "signed_terminal" : outcome.status === "failed" ? outcome.failure :
+      ["completed", outcome.cancelledAtNativeRevision, (outcome.result as { stopReason?: unknown } | null)?.stopReason === "cancelled"];
+    const fingerprint = digest([input.opaqueBindingDetail, operation.operationId, operation.kind, operation.commandFingerprint, disposition]);
     return this.database.transaction(() => {
       const prior = prepareCached(this.database, `SELECT thread_id, request_fingerprint, operation_kind FROM mutation_receipts
         WHERE tenant_id = ? AND principal_id = ? AND mutation_id = ?`).get(scope.tenantId, scope.principalId, key) as
@@ -67,12 +68,16 @@ export class AntigravityArchiveReceipts {
     const { scope, binding } = input;
     const threadId = binding.applicationThreadId, id = operation.operationId;
     if (this.#operations.isOperationAbandoned(scope, threadId, id)) return true;
+    const inputCommand = operation.kind === "prompt" || operation.kind === "steer";
+    if (inputCommand && terminalTurn) {
+      const completed = this.#completions.find(scope, threadId, id);
+      // The signed native turn and its durable result resolve a lost ACP
+      // callback. A definitive rejection contradicting that turn remains unsafe.
+      return (outcome.status === "completed" || outcome.failure.delivery === "sent_outcome_unknown") &&
+        completed?.backendCorrelation === id && completed.completionOutcome !== null;
+    }
     if (outcome.status === "failed" && outcome.failure.delivery === "sent_outcome_unknown") return false;
-    if (operation.kind === "prompt" || operation.kind === "steer") {
-      if (terminalTurn) {
-        const completed = this.#completions.find(scope, threadId, id);
-        return outcome.status === "completed" && completed?.backendCorrelation === id && completed.completionOutcome !== null;
-      }
+    if (inputCommand) {
       // A cancelled ACP callback can precede native materialization. Only the
       // host's exact cancellation-drain proof plus this fresh history admits rejection.
       if (outcome.status === "completed" && (!outcome.cancelledAtNativeRevision ||
@@ -102,7 +107,9 @@ export class AntigravityArchiveReceipts {
     if (operation.kind === "cancel") {
       if (operation.commandFingerprint !== digest({ type: "cancel" })) return false;
       const record = this.#operations.findInterrupt(scope, id);
-      if (record?.threadId !== threadId || record.applicationOperationId !== id) return false;
+      if (!record) return outcome.status === "failed" && Boolean(this.#operations.findRejectedInterrupt(scope, threadId, id));
+      if (record.threadId !== threadId || record.applicationOperationId !== id) return false;
+      if (record.state === "failed_unknown") return true; // Expiry is a committed terminal Stop disposition.
       if (record.state === "accepted") return outcome.status === "completed";
       if (record.state !== "uncertain") return false;
       if (outcome.status === "completed") this.#operations.acceptInterrupt(scope, id);
@@ -110,17 +117,19 @@ export class AntigravityArchiveReceipts {
       return true;
     }
     if (operation.kind === "permission") {
-      const record = this.#operations.findInteractionResponse(scope, id);
+      const current = this.#operations.findInteractionResponse(scope, id);
+      const record = current ?? (outcome.status === "failed" ? this.#operations.findRejectedInteractionResponse(scope, threadId, id) : undefined);
       if (record?.threadId !== threadId || record.applicationOperationId !== id) return false;
       if (record.state === "accepted") return outcome.status === "completed";
       const response = record.backendResponse;
-      if (record.state !== "uncertain" || !response) return false;
+      if ((current && record.state !== "uncertain") || !response) return false;
       const option = response.kind === "decision" ? response.selectedActionId : response.kind === "choice" &&
         response.selectedOptionIds.length === 1 ? response.selectedOptionIds[0] : undefined;
       if (response.kind !== "cancel" && !option) return false;
       const command = { type: "permission", requestId: response.interactionId, response: {
         outcome: response.kind === "cancel" ? { outcome: "cancelled" } : { outcome: "selected", optionId: option } } };
       if (digest(command) !== operation.commandFingerprint) return false;
+      if (!current) return true;
       if (outcome.status === "completed") this.#operations.acceptInteractionResponse(scope, id);
       else this.#operations.rejectInteractionResponseProvenNotApplied(scope, id);
       return true;
@@ -129,26 +138,28 @@ export class AntigravityArchiveReceipts {
     // Submission-time configuration has no application action receipt. The
     // host records its origin and checks the exact requested native value.
     if (operation.sessionConfiguration) return true;
-    const record = this.#operations.findBackendAction(scope, id);
+    const current = this.#operations.findBackendAction(scope, id);
+    const record = current ?? (outcome.status === "failed" ? this.#operations.findRejectedBackendAction(scope, threadId, id) : undefined);
     if (record?.threadId !== threadId || record.applicationOperationId !== id || record.action !== "set_setting") return false;
     if (record.state === "accepted") return outcome.status === "completed";
-    if (record.state === "uncertain" && outcome.status === "failed") {
-      this.#operations.rejectBackendActionProvenNotApplied(scope, id); return true;
-    }
-    if (record.state !== "uncertain" || outcome.status !== "completed" || operation.kind !== "set_config" ||
+    if ((current && record.state !== "uncertain") || operation.kind !== "set_config" ||
         record.operation.action !== "set_setting" || !record.operation.value || record.expectedSettingsRevision === undefined) return false;
     const setting = record.operation;
     let category: "model" | "thought_level", value: string;
     if (setting.settingId === "model") {
       const [connectionId, modelId, effort] = decodeAntigravityModelSetting(setting.value!);
-      if (connectionId !== binding.connectionProfileId || (effort !== null && antigravityConfigValue(setup, "thought_level") !== effort)) return false;
+      if (connectionId !== binding.connectionProfileId || (outcome.status === "completed" && effort !== null && antigravityConfigValue(setup, "thought_level") !== effort)) return false;
       category = "model"; value = modelId;
     } else if (setting.settingId === "thinking_level") {
       category = "thought_level"; value = setting.value!;
     } else return false;
     const option = antigravityConfigOption(setup, category);
-    if (!option || antigravityConfigValue(setup, category) !== value ||
+    if (!option || (outcome.status === "completed" && antigravityConfigValue(setup, category) !== value) ||
         operation.commandFingerprint !== digest({ type: "set_config", origin: "thread_action", configId: option.id, value })) return false;
+    if (outcome.status === "failed") {
+      if (current) this.#operations.rejectBackendActionProvenNotApplied(scope, id);
+      return true;
+    }
     this.settings.persistAccepted(scope, threadId, { mutationId: id, expectedThreadRevision: record.expectedThreadRevision,
       operation: setting, settingsGuard: { kind: "staged", expectedRevision: record.expectedSettingsRevision }, now: Date.now() });
     return this.#operations.acceptBackendAction(scope, id).state === "accepted";

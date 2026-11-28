@@ -34,7 +34,7 @@ export const antigravityConfigurationSchema = z.strictObject({
 export const antigravityIdentitySchema = z.strictObject({ sessionId: id, cwd: hostPath });
 export const antigravityArchiveOwnerSchema = antigravityIdentitySchema.extend({ handleId: id, generation: id });
 export const antigravityArchiveProbeSchema = z.union([
-  antigravityArchiveOwnerSchema.extend({ retainedOutput: z.boolean(), attached: z.boolean() }),
+  antigravityArchiveOwnerSchema.extend({ retainedOutput: z.boolean(), attached: z.boolean(), inheritedOwners: z.array(z.string().regex(/^[a-f0-9]{64}$/u)).max(64).optional() }),
   antigravityIdentitySchema.extend({ pendingCreation: id }),
 ]);
 const retainedTarget = antigravityIdentitySchema.extend({ expected: antigravityArchiveOwnerSchema.optional() });
@@ -68,6 +68,7 @@ export const antigravityHostCommandSchema = z.discriminatedUnion("action", [
   command("history", antigravityHistoryReadSchema),
   command("attach", antigravityIdentitySchema.extend({ executionEnvironment: environmentVariableOverridesSchema.optional(), agentTools: antigravityAgentToolsSchema.optional() })),
   command("probe_archive_owner", antigravityIdentitySchema), command("read_archive_state", antigravityArchiveOwnerSchema),
+  command("confirm_archive_cut", antigravityArchiveOwnerSchema.extend({ throughSequence: z.number().int().nonnegative(), nativeRevision: z.string().regex(/^[a-f0-9]{64}$/u) })),
   command("release_archive_claim", antigravityArchiveOwnerSchema),
   command("read_retired_archive", antigravityIdentitySchema.extend({ ownerKey: z.string().regex(/^[a-f0-9]{64}$/u) })),
   command("attach_existing", retainedTarget),
@@ -92,7 +93,7 @@ export const antigravityRuntimeOperations = [antigravityExecuteOperation, antigr
 export const antigravityRuntimeCapability = { ...capability, operations: antigravityRuntimeOperations.map(operation => operation.operation) };
 export function antigravityHostCommandLane(value: AntigravityHostCommand | AntigravityHostCommandInput): "operation" | "control" {
   if (value.action === "request") return ["cancel", "permission"].includes(value.input.command.type) ? "control" : "operation";
-  return ["ensure", "connect", "catalog", "create", "list", "history", "read_archive_state", "read_retired_archive", "attach"].includes(value.action) ? "operation" : "control";
+  return ["ensure", "connect", "catalog", "create", "list", "history", "confirm_archive_cut", "read_archive_state", "read_retired_archive", "attach"].includes(value.action) ? "operation" : "control";
 }
 export const antigravityFailureSchema = z.strictObject({ code: z.string().regex(/^antigravity_[a-z0-9_]{1,100}$/u), delivery: z.enum(["not_sent", "sent_outcome_unknown", "rejected"]) });
 export const antigravityOutcomeSchema = z.discriminatedUnion("status", [
@@ -118,7 +119,7 @@ export const antigravityEventSchema = z.discriminatedUnion("kind", [
   z.strictObject({ ...eventPosition, kind: z.literal("failure"), failure: antigravityFailureSchema }),
 ]);
 export const antigravityObservationSchema = z.strictObject({ activePromptIds: z.array(id).max(32), events: z.array(antigravityEventSchema).max(256), throughSequence: position, retainedAfterSequence: position, closed: z.boolean() });
-const archiveOperation = z.strictObject({ operationId: id, kind: z.enum(["prompt", "steer", "cancel", "permission", "set_config", "set_mode"]), setterConfirmed: z.boolean(), sessionConfiguration: z.boolean(), commandFingerprint: z.string().regex(/^[a-f0-9]{64}$/u) });
+const archiveOperation = z.strictObject({ operationId: id, kind: z.enum(["prompt", "steer", "cancel", "permission", "set_config", "set_mode"]), setterConfirmed: z.boolean(), sessionConfiguration: z.boolean(), commandFingerprint: z.string().regex(/^[a-f0-9]{64}$/u), originOwner: z.string().regex(/^[a-f0-9]{64}$/u) });
 export const antigravityRetiredArchiveSchema = z.strictObject({ ownerKey: z.string().regex(/^[a-f0-9]{64}$/u),
   history: antigravityHistorySchema, setup: antigravitySetupSchema, creation: id.optional(),
   operations: z.array(z.strictObject({ operation: archiveOperation, outcome: antigravityOutcomeSchema })).max(4224) });

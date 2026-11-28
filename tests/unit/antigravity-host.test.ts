@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { chmod, copyFile, mkdtemp, realpath, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -144,6 +145,8 @@ describe("Antigravity execution host", () => {
     await f.host.release({ handleId: first.handleId });
     const retry = await f.host.attach(input);
     expect(retry.generation).not.toBe(first.generation);
+    const originOwner = createHash("sha256").update(JSON.stringify([input.sessionId, input.cwd, first.handleId, first.generation])).digest("hex");
+    expect(await f.host.probeArchiveOwner(input)).toMatchObject({ handleId: retry.handleId, inheritedOwners: [originOwner] });
     expect(retry.retainedOperationIds).toContain(cancel.operationId);
     expect(await f.host.request({ handleId: retry.handleId, ...cancel })).toEqual(original);
     expect((await f.host.attachExisting(input))?.pendingPermissions).toHaveLength(1);

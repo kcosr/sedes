@@ -8,6 +8,7 @@ import {
   type BackendModuleRuntime, type BackendModuleRuntimeContext, type BackendRuntimeRecoveryContext,
   type PreparedBackendModule,
 } from "../module.js";
+import { ThreadArchiveObligationRepository } from "../../db/repositories/thread-archive-obligation-repository.js";
 import { AntigravityArchiveReceipts } from "./archive-receipts.js";
 import { AntigravityActionPersistence } from "./action-persistence.js";
 import { AntigravityAutomationPolicy } from "./automation-policy.js";
@@ -157,6 +158,7 @@ function createRuntime(
   const modeCatalog = new AntigravityModeCatalog();
   const actionPersistence = new AntigravityActionPersistence(settings, scope, instance.id, prepared.modelPolicy, modeCatalog);
   const archiveReceipts = new AntigravityArchiveReceipts(context.database, actionPersistence);
+  const obligations = new ThreadArchiveObligationRepository(context.database);
   const agentTools = new AntigravityAgentToolService({ facade: context.agentTools, cli: context.agentToolCli,
     sourceCapabilities: context.agentToolSourceCapabilities, remote: context.environmentOperations.environmentKind !== "local" });
   const threadPersistence = new AntigravityThreadPersistence({
@@ -193,6 +195,11 @@ function createRuntime(
         if (driver?.connection.configurationRevision !== connection.configurationRevision) {
           driver = new AntigravityDriver({ instance, connection, scope, port, settings,
             modelPolicy: prepared.modelPolicy, nativeNamespaceKey, correlationKey, usage: context.usage, agentTools, modeCatalog, archiveReceipts,
+            ...(context.settleRetainedArchiveSnapshot ? { archiveObserver: {
+              retained: threadId => obligations.read(scope, threadId)?.retainedOwner,
+              settle: context.settleRetainedArchiveSnapshot,
+              release: (threadId, owner) => { obligations.settleIfRetained(scope, threadId, owner); },
+            } } : {}),
             isOperationAbandoned: (threadId, operationId) => operations.isOperationAbandoned(scope, threadId, operationId),
             executionEnvironmentVariables: context.executionEnvironmentVariables });
           drivers.set(connection.id, driver);

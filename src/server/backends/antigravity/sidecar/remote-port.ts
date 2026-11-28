@@ -105,6 +105,9 @@ export class AntigravityRemotePort implements AntigravityPort {
   async readRetiredArchive(input: Parameters<AntigravityPort["readRetiredArchive"]>[0], signal?: AbortSignal) {
     return antigravityRetiredArchiveSchema.nullable().parse(await this.#invoke("read_retired_archive", input, signal, true));
   }
+  async confirmArchiveCut(input: Parameters<AntigravityPort["confirmArchiveCut"]>[0], signal?: AbortSignal) {
+    return z.boolean().parse(await this.#invoke("confirm_archive_cut", input, signal, true));
+  }
   async readArchiveState(input: Parameters<AntigravityPort["readArchiveState"]>[0], signal?: AbortSignal) {
     return antigravityArchiveStateSchema.parse(await this.#invoke("read_archive_state", input, signal, true));
   }
