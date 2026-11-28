@@ -1,4 +1,9 @@
-# OpenCode v2 2.2.6 protocol profile
+# Historical OpenCode v2 2.2.6 protocol profile
+
+This page records the retired profile and its November 2026 qualification.
+Current Sedes requires stock OpenCode 2.3.0 or newer. The 2.2.6 runtime emits
+global credential updates without the identifiers required by the current
+schema. See the [2.3.0 profile](../2.3.0/README.md) for admission and upgrade details.
 
 - Generated packages: exact `@opencode/client`, `@opencode/protocol` and
   `@opencode/schema` **2.2.6**, with **Effect 4.1.0**, in both the development

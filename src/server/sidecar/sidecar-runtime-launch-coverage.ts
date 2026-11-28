@@ -27,7 +27,7 @@ const coveredOperations: ReadonlyMap<string, readonly string[]> = new Map([
   ["pi_native_runtime:3", ["runtime.control", "runtime.execute"]],
   ["antigravity_runtime:6", ["runtime.control", "runtime.execute"]],
   ["claude_persistent_runtime:7", ["runtime.lookup", "runtime.inspect", "runtime.stop", "runtime.ensure", "runtime.execute"]],
-  ["opencode_runtime:5", ["runtime.execute", "runtime.control"]],
+  ["opencode_runtime:6", ["runtime.execute", "runtime.control"]],
 ]);
 
 export function recordUncoveredRuntimeOperation(

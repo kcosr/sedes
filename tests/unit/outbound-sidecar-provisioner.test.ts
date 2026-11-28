@@ -124,6 +124,72 @@ describe('outbound lifecycle provisioning', () => {
     expect(registry.openRuntime).not.toHaveBeenCalled();
   });
 
+  it('waits for the stopped process to exit after its socket closes', async () => {
+    const operations: string[] = [];
+    const { registry, provisioner } = setup(async (_scope, _environment, _operation, raw) => {
+      const request = raw as SidecarManagementRequest;
+      operations.push(request.operation);
+      const response = { managementVersion: 1, requestId: request.requestId };
+      if (request.operation === 'stop') return { ...response, outcome: 'ok', status: status({ state: 'stopped' }) };
+      if (operations.length === 2) return { ...response, outcome: 'error', code: 'sidecar_service_retirement_in_progress' };
+      return { ...response, outcome: 'absent' };
+    });
+    await expect(provisioner.control({ mutationId: 'stop', operation: 'stop', expectedServiceIncarnation: 'incarnation',
+      controllerEpoch: 1, expectedConfiguration: configuration, expectedResourcesFingerprint: 'b'.repeat(64), force: true }, signal())).resolves.toBeUndefined();
+    expect(operations).toEqual(['stop', 'status', 'status']);
+    expect(registry.openRuntime).not.toHaveBeenCalled();
+  });
+
+  it('propagates an ownership failure while waiting for a stopped process to exit', async () => {
+    const operations: string[] = [];
+    const { provisioner } = setup(async (_scope, _environment, _operation, raw) => {
+      const request = raw as SidecarManagementRequest;
+      operations.push(request.operation);
+      const response = { managementVersion: 1, requestId: request.requestId };
+      return request.operation === 'stop' ? { ...response, outcome: 'ok', status: status({ state: 'stopped' }) }
+        : { ...response, outcome: 'error', code: 'sidecar_service_recovery_required' };
+    });
+    await expect(provisioner.control({ mutationId: 'stop', operation: 'stop', expectedServiceIncarnation: 'incarnation',
+      controllerEpoch: 1, expectedConfiguration: configuration, expectedResourcesFingerprint: 'b'.repeat(64), force: true }, signal())).rejects.toThrow('sidecar_service_recovery_required');
+    expect(operations).toEqual(['stop', 'status']);
+  });
+
+  it('reports an unknown Stop outcome if the process never finishes retiring', async () => {
+    const { registry, provisioner } = setup(async (_scope, _environment, _operation, raw) => {
+      const request = raw as SidecarManagementRequest;
+      const response = { managementVersion: 1, requestId: request.requestId };
+      return request.operation === 'stop' ? { ...response, outcome: 'ok', status: status({ state: 'stopped' }) }
+        : { ...response, outcome: 'error', code: 'sidecar_service_retirement_in_progress' };
+    });
+    await expect(provisioner.control({ mutationId: 'stop', operation: 'stop', expectedServiceIncarnation: 'incarnation',
+      controllerEpoch: 1, expectedConfiguration: configuration, expectedResourcesFingerprint: 'b'.repeat(64), force: true }, signal()))
+      .rejects.toMatchObject({ code: 'sidecar_service_stop_unconfirmed', outcome: 'unknown', status: undefined });
+    const operations = registry.request.mock.calls.map(call => (call[3] as SidecarManagementRequest).operation);
+    expect(operations).toEqual(['stop', ...Array(100).fill('status')]);
+    expect(registry.openRuntime).not.toHaveBeenCalled();
+  }, 15_000);
+
+  it('starts the replacement only after retirement polling proves absence', async () => {
+    const operations: string[] = [];
+    const { registry, provisioner } = setup(async (_scope, _environment, operation, raw) => {
+      if (operation === 'install') {
+        return { accountHome: '/home/client', nodeExecutable: '/usr/bin/node', stateRoot: '/state', environment: {}, executableDirectory: artifactDirectory, executablePath: artifact.executablePath };
+      }
+      const request = raw as SidecarManagementRequest;
+      const response = { managementVersion: 1, requestId: request.requestId };
+      operations.push(request.operation);
+      if (request.operation === 'restart') return { ...response, outcome: 'ok', status: status({ state: 'stopped' }) };
+      if (operations.length === 2) return { ...response, outcome: 'error', code: 'sidecar_service_retirement_in_progress' };
+      return { ...response, outcome: 'absent' };
+    });
+    await expect(provisioner.control({ mutationId: 'restart', operation: 'restart', expectedServiceIncarnation: 'incarnation',
+      controllerEpoch: 1, expectedConfiguration: configuration, expectedResourcesFingerprint: 'b'.repeat(64), force: true }, signal()))
+      .rejects.toThrow('test_attachment_reached');
+    expect(operations).toEqual(['restart', 'status', 'status']);
+    expect(registry.openRuntime).toHaveBeenCalledExactlyOnceWith(scope, scope.executionEnvironmentId,
+      expect.objectContaining({ startIfAbsent: true }), expect.any(AbortSignal));
+  });
+
   it('never creates a missing daemon on the recovery attachment path', async () => {
     const { registry, provisioner } = setup(async (_scope, _environment, _operation, raw) => {
       const request = raw as SidecarManagementRequest;

@@ -129,7 +129,7 @@ function installOpenCodeFixture(observedStorePath: string, start: (signal?: Abor
       start: async (signal?: AbortSignal) => { await start(signal); ready = true; },
       health: async () => ({ available: ready, checkedAt: new Date().toISOString() }),
       snapshot: () => ({ state: ready ? "ready" : "stopped", ownership: "owned", references: 0,
-        ...(ready ? { generation: "fixture-opencode", runtimeVersion: "2.2.6" } : {}) }),
+        ...(ready ? { generation: "fixture-opencode", runtimeVersion: "2.3.0" } : {}) }),
       acquire: (): never => { throw new Error("unexpected_conversation_acquisition"); },
       assertCurrent: async () => { if (!ready) throw new Error("fixture_opencode_not_started"); },
       admitToolSession: async (): Promise<never> => { throw new Error("unexpected_tool_admission"); },
@@ -734,7 +734,7 @@ describe("production configuration reconciliation", () => {
         resources: [], resourcesFingerprint: "b".repeat(64) };
       const store = "/workspace/opencode.db";
       const info: OpenCodeRuntimeInfo = { runtimeId: randomUUID(), nativeNamespaceKey: openCodeRuntimeNamespaceKey(environmentId, store),
-        snapshot: { state: "ready", ownership: "owned", generation: randomUUID(), references: 0, runtimeVersion: "2.2.6",
+        snapshot: { state: "ready", ownership: "owned", generation: randomUUID(), references: 0, runtimeVersion: "2.3.0",
           identity: { pid: 123, startTime: incarnation, uid: 1000, executablePath: "/bin/opencode2", executable: { device: "1", inode: "2" },
             nativeStorePath: store, store: { device: "1", inode: "3" }, storeObservation: "open_file" } } };
       let present = false;

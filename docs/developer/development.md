@@ -262,7 +262,7 @@ owned-stdio process-group/native-lock ordering. It currently requires Linux
 x64, procfs, and a compatible operator-installed Codex command.
 
 The OpenCode v2 qualification suite uses an explicitly selected supported
-stable `opencode2` binary (minimum 2.2.6, tested through 2.2.6) with disposable configuration/storage and loopback model/MCP
+stable `opencode2` binary (minimum 2.3.0, tested through 2.3.0) with disposable configuration/storage and loopback model/MCP
 fixtures. Its page-preview image qualification uses the pinned Playwright
 Chromium installed for browser tests, with the production preview sandbox
 enabled; it does not require an operator-owned Sedes preview-browser
@@ -370,8 +370,11 @@ SEDES_RUN_LIVE_OPENCODE=1 \
   env -u NODE_ENV npm run test:live-opencode
 ```
 
-The [OpenCode 2.2.6 profile](../../protocol/opencode-http/2.2.6/README.md)
-records one authorized 2.2.6 AW Qwen read-only canary pass on 2026-11-08.
+The [OpenCode 2.3.0 profile](../../protocol/opencode-http/2.3.0/README.md)
+records the stock 2.3.0 loopback qualification, the incompatible 2.2.6
+global event and the authorized AW Qwen read-only canary runs on 2026-11-27. The
+[2.2.6 profile](../../protocol/opencode-http/2.2.6/README.md) records the
+previous canary pass on 2026-11-08.
 Historical 2.1.1 results remain intermittent: three attempts produced one
 two-model-step guard stop and two passes under unchanged limits. No finish
 diagnostic was retained for the first attempt; its cause was not established.

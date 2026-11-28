@@ -70,8 +70,11 @@ it.skipIf(!enabled)("cleans confirmed detached native children despite an unrela
     const nativeClient = (await (launched.mock.results.at(-1)!.value as ReturnType<typeof ownedProcesses.startOpenCodeOwnedProcess>)).client;
     const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
     const childCode = `const fs=require("node:fs");process.on("SIGTERM",()=>fs.writeFileSync(${JSON.stringify(termEvidence)},"received"));fs.writeFileSync(${JSON.stringify(childEvidence)},String(process.pid));setInterval(()=>{},1000)`;
+    // Stock 2.3 stops the foreground shell's process group when its daemon dies.
+    // Give the marked child its own session so Sedes must find and stop it.
+    const launcher = `require("node:child_process").spawn(process.execPath, ["-e", ${JSON.stringify(childCode)}], { detached: true, stdio: "ignore" }).unref()`;
     await nativeClient.call((client, signal) => client.shell.create({ location: { directory: root }, cwd: root,
-      command: `${quote(process.execPath)} -e ${quote(childCode)}` }, { signal }), value => value);
+      command: `${quote(process.execPath)} -e ${quote(launcher)}` }, { signal }), value => value);
     lease.release(); childPid = await pidFile(childEvidence);
     const nativePid = runtime.snapshot().identity!.pid;
     process.kill(nativePid, "SIGKILL");

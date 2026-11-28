@@ -37,7 +37,7 @@ function fixture(enabled = true) {
     connection: { ownership: "owned", channel: { type: "process_stdio" } },
   };
   const info: OpenCodeRuntimeInfo = { runtimeId: "native-owner", nativeNamespaceKey: openCodeRuntimeNamespaceKey("remote", "/native/opencode.db"),
-    snapshot: { state: "ready", ownership: "owned", generation: "native-generation", references: 0, runtimeVersion: "2.2.6",
+    snapshot: { state: "ready", ownership: "owned", generation: "native-generation", references: 0, runtimeVersion: "2.3.0",
       identity: { pid: 123, startTime: "start", uid: 1000, executablePath: "/bin/opencode2", executable: { device: "1", inode: "2" },
         nativeStorePath: "/native/opencode.db", store: { device: "1", inode: "3" }, storeObservation: "open_file" } } };
   const respond = vi.fn(async (command: OpenCodeRuntimeCommand, _signal?: AbortSignal): Promise<unknown> => {
@@ -75,7 +75,7 @@ function fixture(enabled = true) {
 
 describe("OpenCode remote startup cancellation", () => {
   it("clears stale remote assessment after failed health and requires a new attachment", async () => {
-    const f = fixture(); f.info.snapshot.runtimeVersion = "2.2.7";
+    const f = fixture(); f.info.snapshot.runtimeVersion = "2.3.1";
     await f.runtime.start();
     f.respond.mockRejectedValueOnce(new OpenCodeRuntimeError("opencode_runtime_identity_changed"));
     expect(await f.runtime.health()).toMatchObject({ available: false });
@@ -83,12 +83,12 @@ describe("OpenCode remote startup cancellation", () => {
     expect(f.observeVersion).toHaveBeenLastCalledWith(undefined);
     await f.runtime.start();
     expect(f.acquire).toHaveBeenCalledTimes(2);
-    expect(f.observeVersion).toHaveBeenLastCalledWith({ version: "2.2.7", newerThanTested: true });
+    expect(f.observeVersion).toHaveBeenLastCalledWith({ version: "2.3.1", newerThanTested: true });
   });
 
   it("retains valid remote version evidence when only the current observation is cancelled", async () => {
     const f = fixture(), controller = new AbortController();
-    f.info.snapshot.runtimeVersion = "2.2.7"; await f.runtime.start();
+    f.info.snapshot.runtimeVersion = "2.3.1"; await f.runtime.start();
     const reason = new Error("caller cancelled"), proof = deferred<unknown>();
     f.respond.mockImplementationOnce(async () => proof.promise);
     const cancelled = f.runtime.assertCurrent(controller.signal);
@@ -104,7 +104,7 @@ describe("OpenCode remote startup cancellation", () => {
 
   it("rejects a different runtime version when promoting retained ownership within one generation", async () => {
     const f = fixture(); await f.runtime.startRetained();
-    f.info.snapshot.runtimeVersion = "2.2.7";
+    f.info.snapshot.runtimeVersion = "2.3.1";
     await expect(f.runtime.start()).rejects.toThrow("opencode_runtime_unavailable");
     expect(f.runtime.snapshot().state).toBe("disconnected");
     expect(f.observeVersion).toHaveBeenLastCalledWith(undefined);
@@ -112,16 +112,16 @@ describe("OpenCode remote startup cancellation", () => {
     expect(f.leases[1]!.release).toHaveBeenCalledOnce();
   });
   it("reports the observed remote version and clears its assessment when disconnected", async () => {
-    const f = fixture(); f.info.snapshot.runtimeVersion = "2.2.7+vendor.1";
+    const f = fixture(); f.info.snapshot.runtimeVersion = "2.3.1+vendor.1";
     await f.runtime.start();
-    expect(f.observeVersion).toHaveBeenLastCalledWith({ version: "2.2.7+vendor.1", newerThanTested: true });
-    expect(f.runtime.snapshot().runtimeVersion).toBe("2.2.7+vendor.1");
+    expect(f.observeVersion).toHaveBeenLastCalledWith({ version: "2.3.1+vendor.1", newerThanTested: true });
+    expect(f.runtime.snapshot().runtimeVersion).toBe("2.3.1+vendor.1");
     f.disconnected.resolve();
     await vi.waitFor(() => expect(f.runtime.snapshot().state).toBe("disconnected"));
     expect(f.observeVersion).toHaveBeenLastCalledWith(undefined);
   });
 
-  it.each([undefined, "2.0.32", "2.1.0", "2.1.0+build.1", "2.1.1", "2.1.1+build.1", "2.2.5", "2.2.5+build.1", "2.2.7-rc.1", "not-a-version"])("rejects unproved or incompatible remote runtime evidence %s", async runtimeVersion => {
+  it.each([undefined, "2.0.32", "2.1.0", "2.1.0+build.1", "2.1.1", "2.1.1+build.1", "2.2.5", "2.2.5+build.1", "2.2.6", "2.2.6+build.1", "2.2.99", "2.3.1-rc.1", "not-a-version"])("rejects unproved or incompatible remote runtime evidence %s", async runtimeVersion => {
     const f = fixture(); f.info.snapshot.runtimeVersion = runtimeVersion;
     await expect(f.runtime.start()).rejects.toThrow();
     expect(f.observeVersion).not.toHaveBeenCalled();

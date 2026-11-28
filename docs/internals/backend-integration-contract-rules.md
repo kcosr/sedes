@@ -236,8 +236,8 @@ Every source exposes idempotent `close()` cancellation. Explicit Stop closes
 quota sources before actor shutdown or remote provider effects begin; transport
 retirement retains its existing ordering. Unsupported sources close harmlessly.
 
-The OpenCode 2.2.6 compatibility cutover is provider-private: use one current
-strict SDK/schema profile and its 2.2.6 runtime floor, retaining full native
+The OpenCode 2.3.0 compatibility cutover is provider-private: use one current
+strict SDK/schema profile and its 2.3.0 runtime floor, retaining full native
 history acquisition, counters, delivery evidence, images and usage accounting.
 Native archived-session metadata does not select Sedes thread state, and native
 idle queries do not imply a different acquisition or paging contract. Pi,
@@ -258,7 +258,7 @@ both the retired-worker path and the refusal while work is retained.
 
 All sidecar consumers use the current shared wire protocol 18,
 retaining negotiated compression from version 15; OpenCode's private runtime
-capability is major 5. No browser contract
+capability is major 6. No browser contract
 or client protocol change follows from this private schema update.
 
 Runtime notice retention and dismissal are shared application behavior for all

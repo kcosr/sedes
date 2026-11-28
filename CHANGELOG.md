@@ -90,10 +90,10 @@ User-facing changes are collected here before release. See the
   [persistent service upgrades](docs/operator/operations.md#persistent-remote-services).
   ([#116](https://github.com/kcosr/sedes/pull/116), [#123](https://github.com/kcosr/sedes/pull/123))
 
-- Upgrade OpenCode to stable stock **2.2.6 or newer** on every execution host.
-  OpenCode's private runtime protocol is now **5**. See
+- Upgrade OpenCode to stable stock **2.3.0 or newer** on every execution host.
+  Update the server and OpenCode sidecars together for private runtime protocol **6**. See
   [OpenCode setup](docs/operator/backends/opencode.md).
-  ([#93](https://github.com/kcosr/sedes/pull/93), [#123](https://github.com/kcosr/sedes/pull/123), [#134](https://github.com/kcosr/sedes/pull/134))
+  ([#93](https://github.com/kcosr/sedes/pull/93), [#123](https://github.com/kcosr/sedes/pull/123), [#134](https://github.com/kcosr/sedes/pull/134), [#176](https://github.com/kcosr/sedes/pull/176))
 
 - Automation management now uses explicit automation IDs and the
   `/api/automations` collection. Update automation agent-tool versions and
@@ -465,12 +465,12 @@ User-facing changes are collected here before release. See the
   [parking](docs/user/organize-work.md#park-quiet-work).
   ([#95](https://github.com/kcosr/sedes/pull/95))
 
-- OpenCode uses the **2.2.6** SDK/schema profile, admitting current server,
+- OpenCode uses the **2.3.0** SDK/schema profile, admitting current server,
   session, model and error metadata while retaining existing history, session
-  statistics and usage accounting. Qualification extends through **2.2.6**;
+  statistics and usage accounting. Qualification extends through **2.3.0**;
   newer-than-tested stable runtimes still show an active advisory. See
   [OpenCode compatibility](docs/operator/backends/opencode.md).
-  ([#93](https://github.com/kcosr/sedes/pull/93), [#123](https://github.com/kcosr/sedes/pull/123), [#134](https://github.com/kcosr/sedes/pull/134))
+  ([#93](https://github.com/kcosr/sedes/pull/93), [#123](https://github.com/kcosr/sedes/pull/123), [#134](https://github.com/kcosr/sedes/pull/134), [#176](https://github.com/kcosr/sedes/pull/176))
 
 - Archiving and restoring Codex threads also updates their native archive state
   by default, while preserving local archive controls when a backend is missing
@@ -508,6 +508,14 @@ User-facing changes are collected here before release. See the
   ([#81](https://github.com/kcosr/sedes/pull/81))
 
 ### Fixed
+
+- OpenCode threads can stream replies and reopen saved history when OpenCode
+  reports the first-token timestamp. See [OpenCode compatibility](docs/operator/backends/opencode.md).
+  ([#176](https://github.com/kcosr/sedes/pull/176))
+
+- Stopping a paired outbound host waits for the sidecar process to exit after
+  its management socket closes, so Settings can confirm the original Stop request.
+  ([#176](https://github.com/kcosr/sedes/pull/176))
 
 - Compatible sidecars can upgrade automatically after Antigravity verifies
   settled native work and acknowledges outcomes already recorded by Sedes, or when an external

@@ -79,7 +79,7 @@ the most queued data must resnapshot. Retention exhaustion for unacknowledged
 critical evidence prevents new ordinary work while preserving the independent
 control path.
 
-The persistent sidecar advertises major 5 of the private `opencode_runtime`
+The persistent sidecar advertises major 6 of the private `opencode_runtime`
 capability under sidecar wire protocol 18 on Linux. Its registry owns the same
 runtime/host used locally; SSH and outbound
 carriers share typed operations and the bounded runtime body channel. Carrier
@@ -121,9 +121,9 @@ Pi, Codex, Claude and Grok retain their existing backend contracts.
 ## Native ownership
 
 The immutable compiled HTTP/SSE profile pins `@opencode/client`,
-`@opencode/protocol` and `@opencode/schema` to **2.2.6**, upstream source revision
-`dc2ffcf8bf26f9e669b6aa22b95f50e12be15e06`. Runtime admission is independent:
-stable stock releases **2.2.6 or newer** are admitted, tested through **2.2.6**.
+`@opencode/protocol` and `@opencode/schema` to **2.3.0**, upstream source revision
+`a6b15d33daf6ab7d35569f6d711fdb630b9f04e7`. Runtime admission is independent:
+stable stock releases **2.3.0 or newer** are admitted, tested through **2.3.0**.
 Prereleases, malformed versions and releases below the floor fail closed; build
 metadata does not change version precedence. Every admitted runtime uses the
 one compiled schema profile and the existing authentication, process/store
@@ -132,12 +132,14 @@ backend resolves `opencode2` from its execution environment’s PATH unless an
 absolute executable override is supplied. Sedes never searches for the older
 `opencode` executable as an alternative.
 
-The 2.2.6 profile is one strict schema cutover, with no legacy message parser.
-The qualified runtime floor is 2.2.6: older releases before 2.2.4 omit the
-required persistent-terminal `userTitle` field in the global event stream.
-Validation precedes session routing, so unsupported terminal events cannot be
-made harmless by per-thread filtering. Admission rejects older runtimes.
-It admits bounded server hostname, session busy timestamps, model type and
+The 2.3.0 profile uses one strict schema for native history and events. It
+recognizes the optional assistant first-token timestamp and the associated
+native event. The remote carrier uses capability `opencode_runtime@6`.
+The runtime floor is 2.3.0. Stock 2.2.6 emits a global `credential.updated`
+event with empty data when a credential changes. The current schema requires
+`integrationID` and `credentialID`. Native event validation precedes thread
+routing, so that earlier payload breaks observation across the runtime.
+The profile admits bounded server hostname, session busy timestamps, model type and
 media-input metadata, and structured-error retry timing. The new
 `artifact.updated` event is validated but does not grant artifact or generated-
 image capabilities. Experimental media-reference negotiation is not enabled;
@@ -152,8 +154,8 @@ contracts; only their sidecar carriers require the current shared wire version.
 | Owned | `serve --stdio --hostname 127.0.0.1 --port 0`; stdout announces the HTTP endpoint, and stdin controls process lifetime. Application traffic uses authenticated HTTP and SSE. | Conversation references can reach zero while the daemon and its background work remain alive. Backend Stop/Restart retire the owned process. Main shutdown ends a local owner; a persistent sidecar owner outlives main. |
 | External | Authenticated HTTP to an explicit loopback IP literal and port on the execution host. DNS, direct remote native endpoints, URL credentials, redirects, query strings and endpoint paths are rejected. | Retiring the host attachment closes its subscriptions and lease without interrupting the external daemon. Remote Disconnect releases only main's attachment; the sidecar attachment remains resident. |
 
-Runtime snapshots carry the observed native version through private sidecar
-protocol 4. Main revalidates this evidence and derives a process-local active
+Runtime snapshots carry the observed native version through `opencode_runtime`.
+Main revalidates this evidence and derives a process-local active
 installation advisory when the version exceeds the tested-through release.
 Successful assessment replaces the current advisory; disconnect, retirement or
 failed admission clears it. Pi keeps its explicit empty advisory source;
@@ -305,7 +307,7 @@ it never resends a native effect. Lifetime invalidation remains visible on the
 separate raw subscription while snapshot hydration is pending.
 
 Only `/api/event` and the finite native input-log route use the provider-private
-SSE framing reader. The official 2.2.6 client hardcodes a 16 MiB decoded buffer,
+SSE framing reader. The official client hardcodes a 16 MiB decoded buffer,
 including several frames received in one chunk, and offers no override. The
 local reader enforces 32 MiB UTF-8 line/frame bounds, preserves finite EOF flush
 and multiline framing, and rejects malformed JSON/UTF-8. Payloads still pass
@@ -435,7 +437,7 @@ reconciliation, queue and automatic-detachment rules.
 Deterministic tests cover schema/authentication boundaries, release mismatch,
 HTTP response limits, runtime identity replacement, runtime ownership leases and
 scoped operation evidence. Opt-in isolated native tests qualify stock
-`opencode2` 2.2.6 with fixture-owned state. They exercise owned startup, malformed/expired
+`opencode2` 2.3.0 with fixture-owned state. They exercise owned startup, malformed/expired
 readiness, background-shell survival after reference release, external
 Disconnect, detached-descendant cleanup, retained database identity and restart.
 History qualification also exercises the actual driver/handle/actor with native
@@ -766,7 +768,7 @@ context, and native history does not attest those producers or final media
 lineage. This qualification assumes the admitted stock runtime and trusted
 configuration, not arbitrary adversarial context hooks.
 
-The pinned upstream 2.2.6 `Prompt.Base64` schema uses a stack-safe linear
+The pinned upstream `Prompt.Base64` schema uses a stack-safe linear
 validator. The adapter uses the official encoded schemas directly; the older
 local Base64 predicate replacement and AST drift guard are removed. Existing
 large-image and strict-shape tests retain the same lexical and byte bounds.
