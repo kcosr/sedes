@@ -556,7 +556,7 @@ See the [Grok operator guide](../operator/backends/grok.md).
 
 ## OpenCode v2
 
-OpenCode uses stable stock `opencode2` 2.2.6 or newer on Linux (tested through
+OpenCode uses stable stock `opencode2` 2.3.0 or newer on Linux (tested through
 2.3.0). Sedes can own a resident
 daemon or connect to an existing local server. Closing a thread view does not
 stop that daemon.

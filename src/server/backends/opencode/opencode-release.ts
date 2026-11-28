@@ -5,7 +5,7 @@ import path from "node:path";
 
 export const OPENCODE_RELEASE = "2.3.0" as const;
 export const OPENCODE_SOURCE_REVISION = "a6b15d33daf6ab7d35569f6d711fdb630b9f04e7" as const;
-export const OPENCODE_RUNTIME_MINIMUM_SUPPORTED_RELEASE = "2.2.6";
+export const OPENCODE_RUNTIME_MINIMUM_SUPPORTED_RELEASE = "2.3.0";
 export const OPENCODE_RUNTIME_TESTED_THROUGH_RELEASE = "2.3.0";
 // Regressions may exclude exact stable releases, regardless of build metadata.
 const OPENCODE_RUNTIME_EXCLUDED_RELEASES: readonly string[] = Object.freeze([]);

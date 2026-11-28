@@ -237,7 +237,7 @@ quota sources before actor shutdown or remote provider effects begin; transport
 retirement retains its existing ordering. Unsupported sources close harmlessly.
 
 The OpenCode 2.3.0 compatibility cutover is provider-private: use one current
-strict SDK/schema profile and its 2.2.6 runtime floor, retaining full native
+strict SDK/schema profile and its 2.3.0 runtime floor, retaining full native
 history acquisition, counters, delivery evidence, images and usage accounting.
 Native archived-session metadata does not select Sedes thread state, and native
 idle queries do not imply a different acquisition or paging contract. Pi,

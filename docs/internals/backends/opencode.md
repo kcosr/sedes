@@ -123,7 +123,7 @@ Pi, Codex, Claude and Grok retain their existing backend contracts.
 The immutable compiled HTTP/SSE profile pins `@opencode/client`,
 `@opencode/protocol` and `@opencode/schema` to **2.3.0**, upstream source revision
 `a6b15d33daf6ab7d35569f6d711fdb630b9f04e7`. Runtime admission is independent:
-stable stock releases **2.2.6 or newer** are admitted, tested through **2.3.0**.
+stable stock releases **2.3.0 or newer** are admitted, tested through **2.3.0**.
 Prereleases, malformed versions and releases below the floor fail closed; build
 metadata does not change version precedence. Every admitted runtime uses the
 one compiled schema profile and the existing authentication, process/store
@@ -135,11 +135,11 @@ absolute executable override is supplied. Sedes never searches for the older
 The 2.3.0 profile uses one strict schema for native history and events. It
 recognizes the optional assistant first-token timestamp and the associated
 native event. The remote carrier uses capability `opencode_runtime@6`.
-The qualified runtime floor is 2.2.6: older releases before 2.2.4 omit the
-required persistent-terminal `userTitle` field in the global event stream.
-Validation precedes session routing, so unsupported terminal events cannot be
-made harmless by per-thread filtering. Admission rejects older runtimes.
-It admits bounded server hostname, session busy timestamps, model type and
+The runtime floor is 2.3.0. Stock 2.2.6 emits a global `credential.updated`
+event with empty data when a credential changes. The current schema requires
+`integrationID` and `credentialID`. Native event validation precedes thread
+routing, so that earlier payload breaks observation across the runtime.
+The profile admits bounded server hostname, session busy timestamps, model type and
 media-input metadata, and structured-error retry timing. The new
 `artifact.updated` event is validated but does not grant artifact or generated-
 image capabilities. Experimental media-reference negotiation is not enabled;
@@ -437,7 +437,7 @@ reconciliation, queue and automatic-detachment rules.
 Deterministic tests cover schema/authentication boundaries, release mismatch,
 HTTP response limits, runtime identity replacement, runtime ownership leases and
 scoped operation evidence. Opt-in isolated native tests qualify stock
-`opencode2` 2.2.6 and 2.3.0 with fixture-owned state. They exercise owned startup, malformed/expired
+`opencode2` 2.3.0 with fixture-owned state. They exercise owned startup, malformed/expired
 readiness, background-shell survival after reference release, external
 Disconnect, detached-descendant cleanup, retained database identity and restart.
 History qualification also exercises the actual driver/handle/actor with native

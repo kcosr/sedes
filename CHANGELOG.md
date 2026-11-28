@@ -90,10 +90,10 @@ User-facing changes are collected here before release. See the
   [persistent service upgrades](docs/operator/operations.md#persistent-remote-services).
   ([#116](https://github.com/kcosr/sedes/pull/116), [#123](https://github.com/kcosr/sedes/pull/123))
 
-- Upgrade OpenCode to stable stock **2.2.6 or newer** on every execution host.
-  OpenCode's private runtime protocol is now **6**. See
+- Upgrade OpenCode to stable stock **2.3.0 or newer** on every execution host.
+  Update the server and OpenCode sidecars together for private runtime protocol **6**. See
   [OpenCode setup](docs/operator/backends/opencode.md).
-  ([#93](https://github.com/kcosr/sedes/pull/93), [#123](https://github.com/kcosr/sedes/pull/123), [#134](https://github.com/kcosr/sedes/pull/134))
+  ([#93](https://github.com/kcosr/sedes/pull/93), [#123](https://github.com/kcosr/sedes/pull/123), [#134](https://github.com/kcosr/sedes/pull/134), [#176](https://github.com/kcosr/sedes/pull/176))
 
 - Automation management now uses explicit automation IDs and the
   `/api/automations` collection. Update automation agent-tool versions and
@@ -470,7 +470,7 @@ User-facing changes are collected here before release. See the
   statistics and usage accounting. Qualification extends through **2.3.0**;
   newer-than-tested stable runtimes still show an active advisory. See
   [OpenCode compatibility](docs/operator/backends/opencode.md).
-  ([#93](https://github.com/kcosr/sedes/pull/93), [#123](https://github.com/kcosr/sedes/pull/123), [#134](https://github.com/kcosr/sedes/pull/134))
+  ([#93](https://github.com/kcosr/sedes/pull/93), [#123](https://github.com/kcosr/sedes/pull/123), [#134](https://github.com/kcosr/sedes/pull/134), [#176](https://github.com/kcosr/sedes/pull/176))
 
 - Archiving and restoring Codex threads also updates their native archive state
   by default, while preserving local archive controls when a backend is missing
@@ -509,9 +509,8 @@ User-facing changes are collected here before release. See the
 
 ### Fixed
 
-- OpenCode threads with first-token timestamps reopen on OpenCode 2.3.0.
-  Update the server and OpenCode sidecars together for the new provider
-  protocol profile. See [OpenCode compatibility](docs/operator/backends/opencode.md).
+- OpenCode threads can stream replies and reopen saved history when OpenCode
+  reports the first-token timestamp. See [OpenCode compatibility](docs/operator/backends/opencode.md).
   ([#176](https://github.com/kcosr/sedes/pull/176))
 
 - Stopping a paired outbound host waits for the sidecar process to exit after

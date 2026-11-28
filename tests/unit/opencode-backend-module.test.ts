@@ -60,7 +60,7 @@ function context() {
   };
   return { value, connection, resolveSecret, discard };
 }
-function nativeFactory(runtimeVersion = "2.2.6") {
+function nativeFactory(runtimeVersion = "2.3.0") {
   function native(input: OpenCodeRuntimeInput) {
     let state: OpenCodeRuntimeSnapshot["state"] = "stopped";
     const result = {
@@ -125,7 +125,7 @@ async function persistedInvocationFixture() {
   const owner: OpenCodeConversationRuntime & { close(): Promise<{ cleanup: "proved"; nativeInterrupts: "not_owned" }>; stop(): Promise<{ cleanup: "proved"; nativeInterrupts: "not_owned" }> } = {
     nativeNamespaceKey: namespace,
     start: vi.fn(async () => { state = "ready"; }), health: async () => ({ available: state === "ready", checkedAt: new Date().toISOString() }),
-    snapshot: () => ({ state, ownership: "owned", references: 0, generation: "persisted-generation", identity, runtimeVersion: "2.2.6" }),
+    snapshot: () => ({ state, ownership: "owned", references: 0, generation: "persisted-generation", identity, runtimeVersion: "2.3.0" }),
     assertCurrent: vi.fn(async () => { if (state !== "ready") throw new Error("not ready"); }),
     acquire: vi.fn(target => { const port = host.acquire(target); let released = false;
       return { client: port, generation: "persisted-generation", identity, release: () => { if (!released) { released = true; host.release(port); } } }; }),
@@ -195,7 +195,7 @@ describe("OpenCode compiled module", () => {
     expect(runtime.installationAdvisories.active()).toMatchObject([{ id: "runtime-newer-than-tested",
       message: { text: "Running 2.3.1+vendor.1; Sedes is tested through 2.3.0." } }]);
     const owner = factory.instances[0]!, driver = runtime.driverFactory.create(fixture.connection);
-    owner.runtimeVersion = "2.2.6";
+    owner.runtimeVersion = "2.3.0";
     await driver.health();
     expect(runtime.installationAdvisories.active()).toEqual([]);
     owner.runtimeVersion = "3.0.0";

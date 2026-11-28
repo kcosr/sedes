@@ -12,22 +12,28 @@ OpenCode integration. Normalized history and the browser protocol keep their
 existing shape.
 
 Runtime admission remains independent of the pinned SDK packages. Stable stock
-OpenCode 2.2.6 and newer use the same schema profile. Prereleases and runtimes
-below 2.2.6 are rejected. The provider-private `opencode_runtime` capability
+OpenCode 2.3.0 and newer use the same schema profile. Prereleases and runtimes
+below 2.3.0 are rejected. The provider-private `opencode_runtime` capability
 uses major 6 over sidecar wire 18. Update the server and OpenCode sidecars
 together. The tested-through release is 2.3.0. Higher stable releases display
 the newer-than-tested advisory.
 
 ## Qualification on Linux x64
 
-On 2026-11-27, stock 2.2.6 and 2.3.0 each passed all 52 isolated loopback tests. These include
+On 2026-11-27, stock 2.3.0 passed all 52 isolated loopback tests. These include
 history projection, MCP discovery and use, detached-child cleanup, and owned
 and external runtimes over local, SSH and paired outbound connections. The
 official 2.3.0 `opencode-linux-x64.tar.gz` release asset had SHA-256
 `fc0f81522aceeabac47693d88389efa2bc517ce74c2c38fd6967819fcc6e4d3b`.
 
-The separately authorized read-only canary passed on the initial candidate
-and the final build on stock 2.3.0 with the
+An earlier candidate also passed those 52 cases on 2.2.6. The suite did not
+exercise credential changes. Stock 2.2.6 emits `credential.updated` globally
+with empty data, while 2.3.0 requires `integrationID` and `credentialID`.
+The strict event parser rejects the earlier payload before routing events to
+threads. This incompatibility sets the 2.3.0 minimum. See the
+[2.2.6 credential publisher](https://github.com/anomalyco/opencode/blob/v2.2.6/packages/core/src/credential.ts#L194).
+
+The separately authorized read-only canary passed on stock 2.3.0 with the
 `aw-qwen-3-8-27b` model, low reasoning, a 256-token output limit and the
 two-model-step budget. This live result covers that model and host platform.
 
