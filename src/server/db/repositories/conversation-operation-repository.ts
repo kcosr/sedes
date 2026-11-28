@@ -156,6 +156,8 @@ type ReceiptRow = {
   readonly createdAt: number;
 };
 
+type ControlReceiptRow = Omit<ReceiptRow, "requestFingerprint" | "taskContextsJson" | "replayable">;
+
 type SteerResultBase = {
   readonly version: 5;
   readonly applicationOperationId: string;
@@ -226,7 +228,7 @@ export function queuedInputAbandonmentReceiptId(threadId: string, operationId: s
 }
 
 function assertOperationNotAbandoned(
-  row: ReceiptRow,
+  row: Pick<ReceiptRow, "resultCode" | "operationKind">,
   operationKinds: ReadonlySet<string>,
   safeMessage: string,
 ): void {
@@ -410,7 +412,7 @@ function parseSteer(
   };
 }
 
-function parseInterrupt(row: ReceiptRow): InterruptOperationRecord {
+function parseInterrupt(row: ControlReceiptRow): InterruptOperationRecord {
   assertOperationNotAbandoned(
     row,
     interruptOperationKinds,
@@ -469,7 +471,7 @@ function backendActionOperationKind(
   return "conversation_settings";
 }
 
-function parseBackendAction(row: ReceiptRow): BackendActionOperationRecord {
+function parseBackendAction(row: ControlReceiptRow): BackendActionOperationRecord {
   assertOperationNotAbandoned(
     row,
     backendActionOperationKinds,
@@ -540,7 +542,7 @@ function parseBackendAction(row: ReceiptRow): BackendActionOperationRecord {
 }
 
 function parseInteractionResponse(
-  row: ReceiptRow,
+  row: ControlReceiptRow,
 ): InteractionResponseOperationRecord {
   assertOperationNotAbandoned(
     row,
@@ -898,15 +900,7 @@ export class ConversationOperationRepository {
     scope: RequestScope,
     operationId: string,
   ): void {
-    prepareCached(this.database,
-        `
-          DELETE FROM mutation_receipts
-          WHERE tenant_id = ? AND principal_id = ? AND mutation_id = ?
-            AND operation_kind = 'conversation_interaction_response'
-            AND result_code IN ('prepared', 'uncertain')
-        `,
-      )
-      .run(scope.tenantId, scope.principalId, operationId);
+    this.#rejectControl(scope, operationId, "conversation_interaction_response");
   }
 
   listUncertainInteractionResponses(
@@ -1140,15 +1134,7 @@ export class ConversationOperationRepository {
           "A terminal interrupt cannot be rejected.",
         );
       }
-      prepareCached(this.database,
-          `
-            DELETE FROM mutation_receipts
-            WHERE tenant_id = ? AND principal_id = ? AND mutation_id = ?
-              AND operation_kind = 'conversation_interrupt'
-              AND result_code IN ('prepared', 'uncertain')
-          `,
-        )
-        .run(scope.tenantId, scope.principalId, operationId);
+      this.#rejectControl(scope, operationId, "conversation_interrupt");
     })();
   }
 
@@ -1357,20 +1343,7 @@ export class ConversationOperationRepository {
           "An accepted backend action cannot be rejected.",
         );
       }
-      prepareCached(this.database,
-          `
-            DELETE FROM mutation_receipts
-            WHERE tenant_id = ? AND principal_id = ? AND mutation_id = ?
-              AND operation_kind = ?
-              AND result_code IN ('prepared', 'uncertain')
-          `,
-        )
-        .run(
-          scope.tenantId,
-          scope.principalId,
-          mutationId,
-          current.operationKind,
-        );
+      this.#rejectControl(scope, mutationId, current.operationKind);
     })();
   }
 
@@ -2358,6 +2331,49 @@ export class ConversationOperationRepository {
         )
         .all(scope.tenantId, scope.principalId) as ReceiptRow[]
     ).map(parseBackendAction);
+  }
+
+  /** Release the public mutation ID for another explicit attempt. Keep the exact
+   * rejected request as evidence when its independent native ACK is lost. */
+  #rejectControl(scope: RequestScope, mutationId: string, kind: string): void {
+    this.database.transaction(() => {
+      const identity = [scope.tenantId, scope.principalId, mutationId, kind];
+      prepareCached(this.database, `
+        INSERT INTO rejected_conversation_operations
+          (tenant_id, principal_id, thread_id, mutation_id, operation_kind, result_code, result_json, created_at)
+        SELECT tenant_id, principal_id, thread_id, mutation_id, operation_kind, result_code, result_json, created_at
+        FROM mutation_receipts WHERE tenant_id = ? AND principal_id = ? AND mutation_id = ?
+          AND operation_kind = ? AND result_code IN ('prepared', 'uncertain')
+        ON CONFLICT (tenant_id, principal_id, thread_id, mutation_id) DO UPDATE SET
+          operation_kind = excluded.operation_kind, result_code = excluded.result_code,
+          result_json = excluded.result_json, created_at = excluded.created_at
+      `).run(...identity);
+      prepareCached(this.database, `DELETE FROM mutation_receipts WHERE tenant_id = ? AND principal_id = ?
+        AND mutation_id = ? AND operation_kind = ? AND result_code IN ('prepared', 'uncertain')`).run(...identity);
+    })();
+  }
+
+  #rejectedControl(scope: RequestScope, threadId: string, mutationId: string): ControlReceiptRow | undefined {
+    return prepareCached(this.database, `SELECT tenant_id AS tenantId, principal_id AS principalId,
+      thread_id AS threadId, mutation_id AS mutationId, operation_kind AS operationKind,
+      result_code AS resultCode, result_json AS resultJson, created_at AS createdAt
+      FROM rejected_conversation_operations WHERE tenant_id = ? AND principal_id = ? AND thread_id = ? AND mutation_id = ?
+    `).get(scope.tenantId, scope.principalId, threadId, mutationId) as ControlReceiptRow | undefined;
+  }
+
+  findRejectedInterrupt(scope: RequestScope, threadId: string, operationId: string): InterruptOperationRecord | undefined {
+    const row = this.#rejectedControl(scope, threadId, operationId);
+    return row?.operationKind === "conversation_interrupt" ? parseInterrupt(row) : undefined;
+  }
+
+  findRejectedInteractionResponse(scope: RequestScope, threadId: string, operationId: string): InteractionResponseOperationRecord | undefined {
+    const row = this.#rejectedControl(scope, threadId, operationId);
+    return row?.operationKind === "conversation_interaction_response" ? parseInteractionResponse(row) : undefined;
+  }
+
+  findRejectedBackendAction(scope: RequestScope, threadId: string, mutationId: string): BackendActionOperationRecord | undefined {
+    const row = this.#rejectedControl(scope, threadId, mutationId);
+    return row && backendActionOperationKinds.has(row.operationKind) ? parseBackendAction(row) : undefined;
   }
 
   #findReceipt(

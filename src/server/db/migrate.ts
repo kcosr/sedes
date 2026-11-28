@@ -1,3 +1,4 @@
+import { rejectedConversationOperationsMigration } from "./migrations/179-rejected-conversation-operations.js";
 import { firstSendRenameMigration } from "./migrations/178-first-send-rename.js";
 import { threadArchiveObligationsMigration } from "./migrations/177-thread-archive-obligations.js";
 import { blockingRequestObservationsMigration } from "./migrations/176-blocking-request-observations.js";
@@ -370,6 +371,7 @@ export const backendNormalizedMigrations = [
   blockingRequestObservationsMigration,
   threadArchiveObligationsMigration,
   firstSendRenameMigration,
+  rejectedConversationOperationsMigration,
 ] as const;
 
 export type DatabaseMigration = {

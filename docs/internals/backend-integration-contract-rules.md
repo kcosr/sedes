@@ -734,6 +734,10 @@ turn and item identities as normal observation. Recovery can make a completion
 callback eligible for ordinary delivery. It must not dispatch a prompt, start
 a new provider session, or wake the thread. Never acknowledge a message after
 its consumer closes without proving that the application committed it.
+A definite rejection releases the ordinary operation ID for retry. Sedes
+retains the original rejected action, interrupt, or interaction response
+under its thread and principal so a later host acknowledgement can be
+matched to the command that actually failed.
 Recheck the authorized scope, inventory revisions, questions, stashes and task
 snapshot before the atomic inventory write. A failed family request can leave
 durable recovered output on an earlier member.

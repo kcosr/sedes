@@ -1,6 +1,8 @@
+import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { BackendConversationSnapshot } from "../../src/shared/protocol/backend.js";
 import { settleArchiveSnapshot } from "../../src/server/conversations/archive-snapshot-settlement.js";
+import { ConversationOperationRepository } from "../../src/server/db/repositories/conversation-operation-repository.js";
 import { QuestionRequestRepository } from "../../src/server/db/repositories/question-request-repository.js";
 import { ThreadArchiveObligationRepository } from "../../src/server/db/repositories/thread-archive-obligation-repository.js";
 import { applicationSummaryFixture } from "../support/application-summary-fixture.js";
@@ -45,6 +47,38 @@ describe("archive settlement", () => {
       expect(completion.get(scope, threadId, "op")).toEqual(first);
       expect(questions.list(scope, threadId)).toEqual(pending);
 
+    } finally { database.close(); }
+  });
+
+  it("records the exact rejected control separately from retryable operation IDs", () => {
+    const { database, ids, scope } = applicationSummaryFixture(2);
+    try {
+      const operations = new ConversationOperationRepository(database);
+      const thread = ids[0]!;
+      const id = randomUUID();
+      const input = { operationId: id, interactionId: "question", now: 320,
+        response: { kind: "cancel" } as const,
+        backendResponse: { applicationOperationId: id, interactionId: "native-question", kind: "cancel" as const } };
+      operations.prepareRecoverableInteractionResponse(scope, thread, input);
+      const sent = operations.markInteractionResponseStarted(scope, id);
+      operations.rejectInteractionResponseProvenNotApplied(scope, id);
+      const reopened = new ConversationOperationRepository(database);
+      expect(reopened.findInteractionResponse(scope, id)).toBeUndefined();
+      expect(reopened.findRejectedInteractionResponse(scope, thread, id)).toEqual(sent);
+      expect(reopened.findRejectedInteractionResponse(scope, ids[1]!, id)).toBeUndefined();
+      expect(reopened.findRejectedInteractionResponse({ ...scope, principalId: "other" }, thread, id)).toBeUndefined();
+      expect(reopened.findRejectedInterrupt(scope, thread, id)).toBeUndefined();
+      expect(reopened.prepareRecoverableInteractionResponse(scope, thread, input).state).toBe("prepared");
+      const stop = randomUUID();
+      operations.prepareInterrupt(scope, thread, { operationId: stop, now: 321 });
+      const interrupt = operations.markInterruptStarted(scope, stop);
+      operations.rejectInterruptProvenNotApplied(scope, stop);
+      expect(reopened.findRejectedInterrupt(scope, thread, stop)).toEqual(interrupt);
+      const mutationId = randomUUID();
+      const setting = operations.prepareBackendAction(scope, thread, { mutationId, expectedThreadRevision: 0,
+        operation: { action: "rename", title: "new title" }, now: 322 });
+      operations.rejectBackendActionProvenNotApplied(scope, mutationId);
+      expect(reopened.findRejectedBackendAction(scope, thread, mutationId)).toEqual(setting);
     } finally { database.close(); }
   });
 
