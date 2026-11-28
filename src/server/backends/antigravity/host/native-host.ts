@@ -635,6 +635,7 @@ export class AntigravityHost implements AntigravityPort {
     if (!operation) { if (session.tombstones.has(input.operationId)) return; throw new AntigravityError("antigravity_operation_unknown"); }
     if (operation.outcome.status === "pending") throw new AntigravityError("antigravity_operation_pending");
     operation.archiveProof = this.#archiveOperation(session, input.operationId, operation);
+    session.archiveOperationIds?.add(input.operationId);
     session.operations.delete(input.operationId); session.tombstones.set(input.operationId, operation);
     this.#revision++;
   }

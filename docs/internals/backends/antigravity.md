@@ -336,8 +336,10 @@ unproved operation results leave the inventory active.
 The host preserves each command's kind, fingerprint and configuration origin.
 Completed prompt and Steer receipts require signed terminal history and the
 durable completion row. Controls require their native and scoped application
-dispositions. Submission configuration requires proof of the selected native
-value. Archive claims release even after a failed read or acknowledgement. All
+dispositions. A known unsent queued prompt retains its ordinary retry policy.
+A creation receipt can outlive its ACP peer. Sedes verifies the scoped bound
+creation before acknowledging it. Submission configuration requires proof of
+the selected native value. Archive claims release even after a failed read or acknowledgement. All
 archive calls use existing-only transport and perform no provider commands.
 
 A clean retirement leaves bounded generation-specific metadata for lost
