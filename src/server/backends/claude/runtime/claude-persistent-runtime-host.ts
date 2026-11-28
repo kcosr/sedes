@@ -82,6 +82,7 @@ export class ClaudePersistentRuntimeHost {
   /** Running one-shot fork launches by child session; they share the session cap. */
   readonly #forkLaunches = new Map<string, Promise<ClaudeRuntimeForkResult>>();
   /** Admission journals of retired queries, by session, most recent last. */
+  readonly #archiveProofs = new Map<string, string>();
   readonly #endedJournals = new Map<string, { readonly archiveSettled: boolean; readonly startupProbeUuid?: string; readonly applicationThreadId?: string; readonly cwd: string; readonly authorityFingerprint: string; readonly compactions: ReadonlyMap<string, CompactRecord>; readonly sends: ReadonlySet<string>; readonly withdrawn: ReadonlySet<string>; readonly admissionJournalComplete: boolean }>();
   #residencyTimer: ReturnType<typeof setInterval> | undefined;
   readonly #stoppedHistoryPager = new ClaudeHistoryPager();
@@ -301,7 +302,7 @@ export class ClaudePersistentRuntimeHost {
     if (command.action === "fork") return await this.#forkLaunch(command, assertPolicy);
     if (command.runtimeId !== this.runtimeId) throw new Error("claude_persistent_runtime_unknown");
     this.input.services.assertController(command.controllerEpoch);
-    const archive = command.action === "archive_prepare" || command.action === "archive_history" || command.action === "archive_delivery_proof";
+    const archive = command.action === "archive_prepare" || command.action === "archive_history";
     const existingOpen = command.action === "open" && this.#sessions.has(command.request.sessionId);
     const retainedProbe = this.#runtimeStopped && command.action === "probe";
     const history = command.action === "info" || command.action === "messages" || command.action === "transcript";
@@ -352,13 +353,6 @@ export class ClaudePersistentRuntimeHost {
   async #execute(command: ClaudePersistentCommand, listener: (event: ClaudePersistentEvent) => void, assertPolicy?: () => void, signal?: AbortSignal): Promise<unknown> {
     // Archive uses only the exact resident query or its captured shutdown
     // baseline. An existing-only recovery carrier has no launch authority.
-    if (command.action === "archive_delivery_proof") {
-      const { sessionId, cwd, applicationThreadId, startupProbeUuid, throughSequence } = command.request;
-      const session = this.#sessions.get(sessionId);
-      return { settled: !!session && !this.#closing && !session.failureCode && session.cwd === cwd &&
-        session.applicationThreadId === applicationThreadId && session.runtime.startupProbeUuid === startupProbeUuid &&
-        session.sequence === throughSequence && !session.events.size && !this.#hasLiveWork(session) && !this.#hasUnsettledOutcomes(session) };
-    }
     if (command.action === "archive_prepare" || command.action === "archive_history") {
       if (this.#closed || this.#closing || this.#cleanupUnproven) throw new Error("claude_persistent_runtime_unavailable");
       signal?.throwIfAborted();
@@ -895,14 +889,24 @@ export class ClaudePersistentRuntimeHost {
   }
 
   async #prepareArchive(command: Extract<ClaudePersistentCommand, { action: "archive_prepare" }>, signal?: AbortSignal) {
-    const { sessionId, cwd, applicationThreadId, expectedStartupProbeUuid, applied } = command.request;
+    const { sessionId, cwd, applicationThreadId, expectedStartupProbeUuid, expectedGeneration, applied } = command.request;
     const session = this.#sessions.get(sessionId);
+    const startupProbeUuid = expectedGeneration?.startupProbeUuid ?? expectedStartupProbeUuid;
+    const proofKey = JSON.stringify([sessionId, cwd, applicationThreadId]);
+    const proof = JSON.stringify([startupProbeUuid, expectedGeneration?.throughSequence]);
+    // The driver rechecks current residency after persisting settled owner
+    // state. Admission and provider/history lookup do not consume this receipt.
+    if (startupProbeUuid === undefined) {
+      if (applied) throw new Error("claude_archive_owner_changed");
+      this.#archiveProofs.delete(proofKey);
+    }
+    if (expectedGeneration && this.#archiveProofs.get(proofKey) === proof) return { outcome: "settled" };
     if (!session) {
-      if (expectedStartupProbeUuid || applied) {
+      if (expectedStartupProbeUuid || expectedGeneration) {
         // A lost final response can outlive the retired query. Its bounded,
         // cleanup-confirmed admission journal proves release of this exact cut.
         const ended = this.#endedJournals.get(sessionId);
-        if (ended?.archiveSettled && ended.startupProbeUuid === (expectedStartupProbeUuid ?? applied?.startupProbeUuid) &&
+        if (!expectedGeneration && ended?.archiveSettled && ended.startupProbeUuid === expectedStartupProbeUuid &&
             ended.applicationThreadId === applicationThreadId && ended.cwd === cwd && !this.#forkLaunches.has(sessionId)) {
           return { outcome: "released" };
         }
@@ -916,29 +920,47 @@ export class ClaudePersistentRuntimeHost {
       if (this.#closed || this.#closing || this.#cleanupUnproven ||
           this.#sessions.get(sessionId) !== session || session.cwd !== cwd ||
           session.applicationThreadId !== applicationThreadId ||
-          (expectedStartupProbeUuid && session.runtime.startupProbeUuid !== expectedStartupProbeUuid) ||
+          (startupProbeUuid && session.runtime.startupProbeUuid !== startupProbeUuid) ||
           (applied && session.runtime.startupProbeUuid !== applied.startupProbeUuid)) throw new Error("claude_archive_owner_changed");
     };
     recheck();
+    if (!session.runtime.startupProbeUuid) return { outcome: "busy" };
+    if (session.listener || this.#hasLiveWork(session)) return { outcome: "busy" };
+    if (!expectedGeneration) {
+      // Record the exact obligation on main before sending a possibly large cut
+      // or entering any operation that may fail after finding the native owner.
+      if (session.events.size || session.failureCode === "claude_persistent_event_capacity_exceeded") return this.#offerArchive(session);
+    }
     await session.starting;
     recheck();
-    if (!session.runtime.startupProbeUuid) throw new Error("claude_archive_owner_unproven");
-    if (session.failureCode === "claude_persistent_event_capacity_exceeded" && !session.events.size) throw new Error("claude_archive_output_incomplete");
     if (session.listener || this.#hasLiveWork(session)) return { outcome: "busy" };
-    if (applied) {
-      // The main applied this exact cut. A later event stays retained for
-      // another pass, and a changed query cannot consume its predecessor's ACK.
-      const exact = new Set(applied.sequences);
-      if (exact.size !== applied.sequences.length || applied.throughSequence > session.offeredThrough ||
-          applied.sequences.some(sequence => sequence > applied.throughSequence) ||
-          [...session.events.keys()].some(sequence => sequence <= applied.throughSequence && !exact.has(sequence))) {
-        throw new Error("claude_archive_cut_changed");
+    if (session.failureCode === "claude_persistent_event_capacity_exceeded") throw new Error("claude_archive_output_incomplete");
+    if (expectedGeneration) {
+      const through = expectedGeneration.throughSequence;
+      if (through > session.sequence || through > session.offeredThrough) throw new Error("claude_archive_cut_changed");
+      if (applied) {
+        const sequences = new Set(applied.sequences);
+        if (applied.startupProbeUuid !== expectedGeneration.startupProbeUuid || applied.throughSequence !== through ||
+            sequences.size !== applied.sequences.length || applied.sequences.some(sequence => sequence > through) ||
+            [...session.events.keys()].some(sequence => sequence <= through && !sequences.has(sequence))) {
+          throw new Error("claude_archive_cut_changed");
+        }
+
+        // Settlement of these exact observations survives a lost response and
+        // later generations. The archive still checks the current owner before
+        // retirement; the receipt alone cannot release a running replacement.
+        if (!this.#archiveProofs.has(proofKey) && this.#archiveProofs.size >= MAXIMUM_ENDED_JOURNALS) {
+          throw new Error("claude_archive_receipt_capacity");
+        }
+        for (const sequence of applied.sequences) this.#acknowledgeEvent(session, sequence);
+        this.#archiveProofs.set(proofKey, proof);
+        return { outcome: "settled" };
       }
-      for (const sequence of applied.sequences) this.#acknowledgeEvent(session, sequence);
+      return this.#archiveCut(session, through);
     }
-    if (session.events.size) return this.#archiveCut(session);
+    if (session.events.size) return this.#offerArchive(session);
     if (this.#hasUnsettledOutcomes(session)) return { outcome: "busy" };
-    if (!expectedStartupProbeUuid && !applied) return { outcome: "idle", startupProbeUuid: session.runtime.startupProbeUuid };
+    if (!expectedStartupProbeUuid) return { outcome: "idle", startupProbeUuid: session.runtime.startupProbeUuid };
     if (this.#runtimeStopped) {
       if (!session.runtime.closed) throw new Error("claude_archive_cleanup_unproven");
       this.#rememberEndedJournal(session);
@@ -954,19 +976,25 @@ export class ClaudePersistentRuntimeHost {
     if (!this.#sessions.has(sessionId)) return { outcome: "released" };
     recheck();
     if (session.listener || this.#hasLiveWork(session)) return { outcome: "busy" };
-    if (session.events.size) return this.#archiveCut(session);
+    if (session.events.size) return this.#offerArchive(session);
     throw new Error("claude_archive_cleanup_unproven");
   }
 
-  #archiveCut(session: Session) {
-    // Freeze the offered sequence boundary against detached-delta coalescing.
+  #offerArchive(session: Session) {
+    session.offeredThrough = session.sequence;
+    return { outcome: "found", startupProbeUuid: session.runtime.startupProbeUuid!, throughSequence: session.sequence };
+  }
+
+  #archiveCut(session: Session, through: number) {
     // Rebuild previously applied context too, preserving exact outstanding
     // originals when the live projection had only partially acknowledged it.
     session.offeredThrough = session.sequence;
     const cut = this.#attachmentSnapshot(session, true, "full");
+    cut.throughSequence = through;
     cut.events = [...new Map([...cut.events.map(event => [event.sequence, event] as const), ...session.events]).values()]
       .sort((a, b) => a.sequence - b.sequence);
-    return { outcome: "retained", cut };
+    cut.events = cut.events.filter(event => event.sequence <= through);
+    return { outcome: "retained", cut, outstandingSequences: [...session.events.keys()].filter(sequence => sequence <= through) };
   }
 
   #acknowledgeEvent(session: Session, sequence: number): void {

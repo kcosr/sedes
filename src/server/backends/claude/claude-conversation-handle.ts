@@ -284,6 +284,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
   readonly #session: ClaudeRuntimeSession;
   readonly #archiveMaintenance: boolean;
   readonly #archiveResultTurns = new Set<string>();
+  #settlingArchiveEvent = false;
   readonly #interactions: ClaudeInteractionBridge;
   readonly #operationalNotices: ClaudeOperationalNoticeProjector;
   /** This attachment's published and failed read images, by publication key. */
@@ -574,9 +575,6 @@ export class ClaudeConversationHandle implements ConversationHandle {
       ...(input.onVersionAssessmentFailed
         ? { onVersionAssessmentFailed: input.onVersionAssessmentFailed }
         : {}),
-      settleArchiveProjection: settle => {
-        for (const { snapshot, completed } of this.archiveSettlement()) settle(snapshot, completed);
-      },
       onMessage: async (message, evidence) => {
         // Retained remote output must follow native history hydration. Keep
         // delivery pending so the runtime only acknowledges applied output.
@@ -584,7 +582,8 @@ export class ClaudeConversationHandle implements ConversationHandle {
         // Close unblocks the history gate so receivers can unwind. It never
         // proves a provider message was applied, before or during consumption.
         if (this.#closed || this.#projectionInvalidated) return false;
-        this.#recoveryBaseline = evidence?.completionProvenance === "recovered" ? this.#captureTurnStatuses() : undefined;
+        this.#settlingArchiveEvent = evidence?.archiveOwnerEvent === true;
+        this.#recoveryBaseline = evidence?.completionProvenance === "recovered" && (!this.#archiveMaintenance || this.#settlingArchiveEvent) ? this.#captureTurnStatuses() : undefined;
         try {
           if (evidence?.consumedTurnRootUuid && message.type === "user" && message.uuid) {
             // The persistent owner places a steer where Claude started it.
@@ -605,6 +604,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
           this.#rememberRecoveredSnapshotCompletions();
         } finally {
           this.#recoveryBaseline = undefined;
+          this.#settlingArchiveEvent = false;
         }
         // A message can move the window over a read whose image is not yet
         // published, for example a retraction or a relinked compaction.
@@ -779,13 +779,9 @@ export class ClaudeConversationHandle implements ConversationHandle {
   *archiveSettlement(): Generator<{ snapshot: BackendConversationSnapshot; completed: readonly string[] }> {
     this.#assertOpen();
     if (!this.#initialHistoryLoaded) throw new Error("claude_archive_history_unavailable");
-    const visible = this.#snapshot(this.#projection.snapshot);
     const completed = new Set([...this.#archiveResultTurns, ...this.#recoveredCompletionTurnIds.keys()]);
-    for (const turn of Object.values(visible.turnsById)) {
-      if (turn.status !== "in_progress" && turn.completionCorrelations?.length) completed.add(turn.backendTurnId);
-    }
     if (completed.size === 0) {
-      yield { snapshot: visible, completed: [] };
+      yield { snapshot: this.#projection.snapshot, completed: [] };
       return;
     }
     for (const snapshot of projectClaudeArchiveCompletions(this.#messages, completed,
@@ -2367,7 +2363,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
       .map(([id]) => id);
     // The turn holding a result's native input identity is the one it settles,
     // wherever that turn is: a mid-turn compaction adds rows after its prompt.
-    const archiveRecovery = this.#archiveMaintenance || this.#session.archiveRecoveryPending;
+    const archiveRecovery = this.#settlingArchiveEvent;
     const consumingTurnId = this.#turnConsuming(correlatedIds) ?? (archiveRecovery && correlatedIds.length
       ? this.#projectLatest(this.#messages).usageTurns.find(turn => turn.completionCorrelations?.some(id => correlatedIds.includes(id)))?.backendTurnId
       : undefined);

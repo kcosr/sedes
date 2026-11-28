@@ -43,11 +43,12 @@ export const claudePersistentCommandSchema = z.discriminatedUnion("action", [
   // Retire an unattended query for a thread main has no runtime for (archive).
   command("retire", session.extend({ cwd: worker.claudeRuntimeProbeRequestSchema.shape.cwd })),
   // Maintenance observes an existing query without installing a live listener.
-  command("archive_prepare", archiveBinding.extend({ expectedStartupProbeUuid: z.string().uuid().optional(), applied: z.strictObject({
+  command("archive_prepare", archiveBinding.extend({
+    expectedGeneration: archiveGeneration.pick({ startupProbeUuid: true }).extend({ throughSequence: z.number().int().nonnegative() }).optional(),
+    expectedStartupProbeUuid: z.string().uuid().optional(), applied: z.strictObject({
     startupProbeUuid: z.string().uuid(), throughSequence: z.number().int().nonnegative(),
     sequences: z.array(z.number().int().positive()).max(8192),
   }).optional() })),
-  command("archive_delivery_proof", archiveGeneration.extend({ throughSequence: z.number().int().nonnegative() })),
   command("archive_history", archiveGeneration.extend({ page: worker.claudeRuntimeSessionMessagesRequestSchema.omit({ sessionId: true, dir: true }) })),
   command("submission_disposition", session.extend({ operationId: z.string().uuid(), cwd: worker.claudeRuntimeProbeRequestSchema.shape.cwd })),
   command("acknowledge", queryGeneration.extend({ sequence: z.number().int().nonnegative() })),
@@ -107,5 +108,7 @@ export const claudeArchivePreparationSchema = z.discriminatedUnion("outcome", [
   z.strictObject({ outcome: z.literal("absent") }),
   z.strictObject({ outcome: z.literal("released") }),
   z.strictObject({ outcome: z.literal("busy") }),
-  z.strictObject({ outcome: z.literal("retained"), cut: claudePersistentAttachmentSchema }),
+  z.strictObject({ outcome: z.literal("found"), startupProbeUuid: z.string().uuid(), throughSequence: z.number().int().nonnegative() }),
+  z.strictObject({ outcome: z.literal("settled") }),
+  z.strictObject({ outcome: z.literal("retained"), cut: claudePersistentAttachmentSchema, outstandingSequences: z.array(z.number().int().positive()) }),
 ]);

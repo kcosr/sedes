@@ -85,10 +85,11 @@ The owner verifies application thread, workspace, controller, and startup genera
 query with retained output supplies a bounded, ordered cut without taking a live subscription.
 Sedes hydrates the matching history, records task bookends, usage, and application settlement,
 then acknowledges those exact sequences and rechecks for new work. A lost final response can
-be confirmed from the scoped retired-query journal. A changed owner or failed application
-keeps the archive pending. If the user opens the original query after a failed archive,
-the live observer applies the same durable effects before each ACK. Sedes clears the
-generation pin after the host confirms that exact sequence is fully applied and idle.
+be confirmed from the scoped cut receipt independently of the current query or admission journal. A changed owner or failed application
+keeps the archive pending. If the user opens the thread after a failed archive,
+Sedes can apply the scoped result from the original query and acknowledge its retained
+sequences before ordinary prompts are admitted. An unresolved owner leaves its earlier
+unapplied events retained; later ordinary turns keep their normal completion semantics.
 Late terminal results retain their complete correlated turn even outside the display window.
 The host holds at most 32 sessions and fork launches together. An open beyond that is a
 retryable overload whose message names the limit.

@@ -2193,6 +2193,22 @@ describe("archive of an unattended Claude query", () => {
     expect(f.input.markSettled).not.toHaveBeenCalled();
   });
 
+  it("pins the owning generation and cut before retained data or a history error can be observed", async () => {
+    const f = await archiveFixture();
+    await f.addNotices();
+    const run = ClaudeSidecarRuntimeConnection.prototype.execute;
+    vi.spyOn(ClaudeSidecarRuntimeConnection.prototype, "execute").mockImplementation(function(this: ClaudeSidecarRuntimeConnection, command, options) {
+      if (command.action === "archive_prepare" && command.request.expectedGeneration) {
+        expect(f.input.markRetained).toHaveBeenCalledOnce();
+        throw new Error("owner_lost_after_observation");
+      }
+      return run.call(this, command, options);
+    });
+    await expect(f.driver.prepareArchive(f.input)).rejects.toThrow("owner_lost_after_observation");
+    expect(f.input.markSettled).not.toHaveBeenCalled();
+    expect(f.host.abandonmentEvidence().sessions[0]?.retainedEventCount).toBe(2);
+  });
+
   it("settles a pinned failed archive during ordinary open before releasing its generation", async () => {
     let retained: string | undefined;
     const settle = vi.fn();
@@ -2226,7 +2242,21 @@ describe("archive of an unattended Claude query", () => {
     await expect(f.driver.prepareArchive({ ...f.input, markRetained: owner => { retained = owner; },
       settle: async () => { throw new Error("database_unavailable"); } })).rejects.toThrow();
     const live = await f.driver.attach(f.input);
-    await expect(live.establishProjection({ signal: f.input.signal })).rejects.toThrow();
+    await expect(live.establishProjection({ signal: f.input.signal })).resolves.toBeDefined();
+    const beforeNewWork = settle.mock.calls.length;
+    const operationId = randomUUID();
+    const messages: unknown[] = [];
+    const active = await live.establishProjection({ signal: new AbortController().signal });
+    active.subscribeFromNext(({ event }) => { messages.push(event); });
+    await f.sessions[0]!.emit({ type: "user", uuid: operationId, session_id: f.sessionId, parent_tool_use_id: null,
+      message: { role: "user", content: "A new live prompt" } } as SDKMessage);
+    await f.sessions[0]!.emit({ type: "result", subtype: "success", duration_ms: 0, duration_api_ms: 0,
+      is_error: false, num_turns: 1, result: "New answer", total_cost_usd: 0, terminal_reason: "completed",
+      usage: {}, modelUsage: {}, permission_denials: [], uuid: randomUUID(), session_id: f.sessionId,
+      user_message_uuid: operationId, user_message_uuids: [operationId] } as unknown as SDKMessage);
+    await vi.waitFor(() => expect(messages).toContainEqual(expect.objectContaining({ type: "turn_completed" })));
+    await vi.waitFor(() => expect(f.host.abandonmentEvidence().sessions[0]?.retainedEventCount).toBe(2));
+    expect(settle.mock.calls.length).toBe(beforeNewWork);
     expect(f.host.abandonmentEvidence().sessions[0]?.retainedEventCount).toBe(2);
     expect(release).not.toHaveBeenCalled();
     expect(retained).toBeTruthy();
@@ -2277,7 +2307,10 @@ describe("archive of an unattended Claude query", () => {
     expect(f.host.abandonmentEvidence().sessionCount).toBe(0);
     expect(f.sessions).toHaveLength(1);
     expect(ensure).not.toHaveBeenCalled();
-    expect(calls.mock.calls.map(([cmd]) => cmd.action)).toEqual(["archive_prepare", "archive_history", "archive_prepare"]);
+    const actions = calls.mock.calls.map(([cmd]) => cmd.action);
+    expect(actions.filter(action => action !== "archive_prepare")).toEqual(["archive_history"]);
+    expect(actions.indexOf("archive_history")).toBeGreaterThan(0);
+    expect(actions.at(-1)).toBe("archive_prepare");
   });
 
   it.each(["settlement", "acknowledgement"] as const)("retains an unacknowledged cut after a failed %s and applies its receipts idempotently", async stage => {
@@ -2298,7 +2331,7 @@ describe("archive of an unattended Claude query", () => {
     expect(f.host.abandonmentEvidence().sessionCount).toBe(0);
   });
 
-  it("can prove a lost final receipt only for the retired query it originally settled", async () => {
+  it("finishes previously settled cuts after native retirement and rechecks even a replaced or missing owner", async () => {
     const f = await archiveFixture();
     await f.addNotices();
     const execute = ClaudeSidecarRuntimeConnection.prototype.execute;
@@ -2308,17 +2341,38 @@ describe("archive of an unattended Claude query", () => {
       return reply;
     });
     await expect(f.driver.prepareArchive(f.input)).rejects.toThrow("lost_retirement_reply");
-    expect(f.host.abandonmentEvidence().sessionCount).toBe(0);
-    const owner = vi.mocked(f.input.markRetained).mock.calls[0]![0];
+    const firstOwner = vi.mocked(f.input.markRetained).mock.calls[0]![0];
     expect(f.input.markSettled).not.toHaveBeenCalled();
+    expect(f.host.abandonmentEvidence().sessions[0]?.retainedEventCount).toBe(0);
     call.mockRestore();
-    await expect(f.driver.prepareArchive({ ...f.input, retainedOwner: owner })).resolves.toEqual({ outcome: "released" });
-    expect(f.input.markSettled).toHaveBeenCalledWith(owner);
-    // A fresh query can reuse the native session ID but cannot release or ACK
-    // outstanding evidence that main remembers from the old generation.
+    const runtime = { sessionId: f.sessionId, cwd: "/workspace" };
+    await expect(f.client.retireSession(runtime)).resolves.toBe("retired");
+    for (let i = 0; i < 2; i++) {
+      const handle = await f.driver.attach(f.input);
+      await handle.close();
+      await expect(f.client.retireSession(runtime)).resolves.toBe("retired");
+    }
+    expect(f.host.abandonmentEvidence().sessionCount).toBe(0);
     await f.addNotices();
-    await expect(f.driver.prepareArchive({ ...f.input, retainedOwner: owner })).rejects.toThrow();
-    expect(f.host.abandonmentEvidence().sessions[0]?.retainedEventCount).toBe(2);
+    await expect(f.driver.prepareArchive({ ...f.input, retainedOwner: firstOwner })).resolves.toEqual({ outcome: "released" });
+    expect(f.input.markSettled).toHaveBeenCalledWith(firstOwner);
+    expect(vi.mocked(f.input.markSettled).mock.calls.length).toBe(2);
+    expect(f.host.abandonmentEvidence().sessionCount).toBe(0);
+  });
+
+  it("does not archive historical completions outside the bound provider cut", async () => {
+    const f = await archiveFixture();
+    await f.addNotices();
+    f.runtime.getSessionMessages.mockResolvedValue([
+      { session_id: f.sessionId, uuid: randomUUID(), type: "user", parent_tool_use_id: null, parent_agent_id: null,
+        message: { role: "user", content: "This turn was visible before the archive." } },
+      { session_id: f.sessionId, uuid: randomUUID(), type: "assistant", parent_tool_use_id: null, parent_agent_id: null,
+        message: { role: "assistant", id: randomUUID(), content: [{ type: "text", text: "Already complete." }], stop_reason: "end_turn" } },
+    ]);
+    const settle = vi.fn<PrepareConversationArchiveInput["settle"]>(async () => {});
+    await expect(f.driver.prepareArchive({ ...f.input, settle })).resolves.toEqual({ outcome: "released" });
+    expect(settle).toHaveBeenCalledOnce();
+    expect(settle.mock.calls[0]?.[1]).toEqual([]);
   });
 
   it("drains terminal output produced by a stopped upgrade worker without creating a successor", async () => {

@@ -517,7 +517,14 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
     };
   }
 
-  attach(input: AttachConversationInput): Promise<ConversationHandle> {
+  async attach(input: AttachConversationInput): Promise<ConversationHandle> {
+    this.#assertAttach(input);
+    await this.#runtimeClient.recoverArchiveBeforeOpen?.({
+      sessionId: input.binding.backendConversationId,
+      applicationThreadId: input.binding.applicationThreadId,
+      cwd: input.workspace.canonicalPath,
+      apply: (cut, settle) => this.#applyArchiveCut(input, cut, settle, AbortSignal.timeout(15_000)),
+    });
     return this.#attach(input);
   }
 
@@ -1234,18 +1241,21 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
       sessionId, cwd: input.workspace.canonicalPath, applicationThreadId: input.binding.applicationThreadId,
       signal: input.signal, retainedOwner: input.retainedOwner, markObserved: () => input.markObserved(),
       markRetained: owner => input.markRetained(owner), markSettled: owner => input.markSettled(owner),
-      apply: async recovery => {
-        const handle = await this.#attach(input, recovery);
-        try {
-          await handle.establishProjection({ signal: input.signal });
-          for (const { snapshot, completed } of handle.archiveSettlement()) {
-            input.signal.throwIfAborted();
-            await input.settle(snapshot, completed);
-          }
-        } finally { await handle.close(); }
-      },
+      apply: recovery => this.#applyArchiveCut(input, recovery, input.settle, input.signal),
+
     });
     return { outcome };
+  }
+
+  async #applyArchiveCut(input: AttachConversationInput, recovery: ClaudeArchiveRecoveryCut,
+    settle: (snapshot: Parameters<PrepareConversationArchiveInput["settle"]>[0], turns: readonly string[]) => void | Promise<void>,
+    signal: AbortSignal): Promise<void> {
+    const handle = await this.#attach(input, recovery);
+    try {
+      await handle.establishProjection({ signal });
+      signal.throwIfAborted();
+      for (const { snapshot, completed } of handle.archiveSettlement()) await settle(snapshot, completed);
+    } finally { await handle.close(); }
   }
 
   async releaseConversationResidency(

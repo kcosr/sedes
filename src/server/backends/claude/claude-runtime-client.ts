@@ -69,8 +69,6 @@ export type ClaudeArchiveSnapshotSink = (
 ) => void;
 
 export interface ClaudeRuntimeSessionOptions {
-  /** Normal recovery of the pinned owner can also settle an outstanding archive. */
-  readonly settleArchiveProjection?: (settle: ClaudeArchiveSnapshotSink) => void;
   /** Host authority checked after worker initialization, before opening the native query. */
   readonly assertLaunchAdmission?: () => void;
   /** The durable Sedes binding for an application-owned query. Native callers
@@ -105,6 +103,7 @@ export interface ClaudeRuntimeSessionOptions {
   ) => void;
   readonly onVersionAssessmentFailed?: () => void;
   readonly onMessage: (message: SDKMessage, evidence?: {
+    readonly archiveOwnerEvent?: boolean;
     readonly consumedTurnRootUuid?: string;
     /** Retained delivery captured before this main-side attachment was live. */
     readonly completionProvenance?: "recovered";
@@ -124,7 +123,6 @@ export type ClaudeSubmissionDisposition =
 
 /** Provider-private live query contract implemented identically over local and SSH workers. */
 export interface ClaudeRuntimeSession {
-  readonly archiveRecoveryPending?: boolean;
   readonly closed: boolean;
   /**
    * In-process sessions only: false while no Claude Code query exists, so a
@@ -206,6 +204,13 @@ export interface ClaudeArchiveRecoveryCut {
  * not cross this interface.
  */
 export interface ClaudeRuntimeClient {
+  /** Apply only the pinned, unloaded owner’s exact retained cut before ordinary delivery. */
+  recoverArchiveBeforeOpen?(input: {
+    readonly sessionId: string;
+    readonly cwd: string;
+    readonly applicationThreadId: string;
+    apply(cut: ClaudeArchiveRecoveryCut, settle: ClaudeArchiveSnapshotSink): Promise<void>;
+  }): Promise<void>;
   /** Observe and apply only an existing application-bound query on its original host. */
   prepareArchive?(input: {
     readonly sessionId: string;

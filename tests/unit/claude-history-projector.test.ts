@@ -10,6 +10,7 @@ import {
   locateClaudeHistoryTurn,
   nextClaudeUserMessageOrdinal,
   projectClaudeHistory,
+  projectClaudeArchiveCompletions,
   projectClaudeHistoryPage,
   projectClaudeHistoryPageAtIndex,
   projectClaudeLatestSnapshot,
@@ -2091,6 +2092,21 @@ describe("Claude history projection", () => {
       retainedUserMessageOrdinal: 3,
     });
     expect(advanced.snapshot.orderedBackendTurnIds).toHaveLength(10);
+  });
+
+  it("settles only the requested native outcome even when an old correlated turn needs a compact display", () => {
+    const messages = [
+      user(uuid(1), "Large earlier turn"),
+      assistant(uuid(2), Array.from({ length: 320 }, (_, i) => ({ type: "text", text: String(i).padEnd(65_536, "x") }))),
+      user(uuid(3), "New input"),
+      assistant(uuid(4), [{ type: "text", text: "Complete response to the new input." }]),
+    ];
+    const last = projectClaudeHistory(messages).snapshot.orderedBackendTurnIds.at(-1)!;
+    const receipts = [{ backendTurnId: last, status: "completed" as const, providerTerminalReason: "success", providerResultUuid: uuid(6), terminalAt: 7 }];
+    const [cut] = [...projectClaudeArchiveCompletions(messages, new Set([last]), receipts, {})];
+    expect(cut!.orderedBackendTurnIds).toEqual([last]);
+    expect(Object.values(cut!.itemsById).map(item => item.semanticKind === "assistant_message" && item.markdown.text))
+      .toEqual(["Complete response to the new input."]);
   });
 
   it("keeps an oversized latest turn attachable with a deterministic omission notice", () => {
