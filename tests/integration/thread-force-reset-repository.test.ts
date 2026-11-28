@@ -1,3 +1,4 @@
+import { ThreadArchiveObligationRepository } from "../../src/server/db/repositories/thread-archive-obligation-repository.js";
 import { describe, expect, it, vi } from "vitest";
 import { AutomationForkTargetResolver } from "../../src/server/runtime/automation-fork-target.js";
 import { AutomationDispatcher } from "../../src/server/runtime/automation-dispatcher.js";
@@ -1864,6 +1865,47 @@ describe("thread force-reset repository", () => {
     } finally {
       current.database.close();
     }
+  });
+
+  it.each(["observed", "retained"] as const)("confirms only the reviewed %s archive recovery evidence and replays without discarding newer work", kind => {
+    const current = fixture();
+    try {
+      const { scope, rootId, childId, database } = current;
+      const reset = new ThreadForceResetRepository(database);
+      const obligations = new ThreadArchiveObligationRepository(database);
+      const mark = () => kind === "observed" ? obligations.remember(scope, rootId)
+        : obligations.markRetained(scope, rootId, "same-provider-owner");
+      mark();
+      obligations.remember(scope, childId);
+      const initial = reset.impact(scope, rootId);
+      expect(initial).toMatchObject({
+        resettable: true, blockers: [{ kind: "archive_recovery", count: 1 }],
+        affectedThreads: [{ threadId: rootId, archiveRecovery: kind === "retained" ? "retained_output" : "observed_work" }],
+        warnings: expect.arrayContaining([expect.objectContaining({
+          code: "unapplied_archive_output_may_be_lost", message: expect.stringContaining("permanently lost"),
+        })]),
+      });
+      const request = { mutationId: "reset-archive-recovery", expectedBlockerFingerprint: initial.blockerFingerprint, now: 710 };
+      for (const foreign of [{ ...scope, principalId: "other" }, { ...scope, tenantId: "other" }]) {
+        expect(() => reset.forceReset(foreign, rootId, request)).toThrow();
+      }
+      mark();
+      expect(() => reset.forceReset(scope, rootId, request)).toThrow(/resettable state changed/);
+      if (kind === "retained") {
+        const priorGeneration = { ...request, expectedBlockerFingerprint: reset.impact(scope, rootId).blockerFingerprint };
+        obligations.markSettled(scope, rootId, "same-provider-owner");
+        obligations.markRetained(scope, rootId, "replacement-owner");
+        expect(() => reset.forceReset(scope, rootId, priorGeneration)).toThrow(/resettable state changed/);
+      }
+      const refreshed = { ...request, expectedBlockerFingerprint: reset.impact(scope, rootId).blockerFingerprint };
+      expect(reset.forceReset(scope, rootId, refreshed)).toMatchObject({ replayed: false, resetBlockers: [{ kind: "archive_recovery", count: 1 }] });
+      expect(obligations.read(scope, rootId)).toBeUndefined();
+      expect(obligations.read(scope, childId)).toBeDefined();
+      mark();
+      expect(reset.forceReset(scope, rootId, refreshed)).toMatchObject({ replayed: true });
+      expect(obligations.read(scope, rootId)).toBeDefined();
+      expect(reset.impact(scope, rootId).blockerFingerprint).not.toBe(refreshed.expectedBlockerFingerprint);
+    } finally { current.database.close(); }
   });
 
   it("reports a clean thread without inventing a resettable runtime blocker", () => {

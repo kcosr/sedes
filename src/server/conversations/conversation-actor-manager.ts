@@ -1214,7 +1214,7 @@ export class ConversationActorManager {
       }
       if (disposition.kind === "archive") {
         if (disposition.signal?.aborted) throw new ConversationActorRetirementStaleError();
-        if (entry.actor?.hasArchiveOwnerProbe && !entry.actor.readOnly) disposition.observeOwner?.();
+        if (entry.actor?.hasObservedArchiveWork) disposition.observeOwner?.();
         if (entry.actor?.archiveStateUncertain && disposition.signal) {
           try { await entry.actor.waitForArchiveReadiness(disposition.signal); }
           catch (error) {

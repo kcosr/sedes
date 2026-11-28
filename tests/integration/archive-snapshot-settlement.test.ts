@@ -94,16 +94,18 @@ describe("archive settlement", () => {
       expect(reopened.read(scope, threadId)?.retainedOwner).toBe("generation-1");
       expect(() => reopened.markRetained(scope, threadId, "replacement")).toThrow();
       expect(() => reopened.markSettled(scope, threadId, "replacement")).toThrow();
-      reopened.clear(scope, threadId);
+      const retainedToken = reopened.read(scope, threadId)!.evidenceToken;
+      expect(reopened.clear(scope, threadId, retainedToken)).toBe(false);
       expect(reopened.read(scope, threadId)?.retainedOwner).toBe("generation-1");
       expect(reopened.read(scope, ids[1]!)).toBeUndefined();
       const other = { ...scope, principalId: "different-principal" };
       expect(reopened.read(other, threadId)).toBeUndefined();
-      reopened.clear(other, threadId);
+      expect(reopened.clear(other, threadId, retainedToken)).toBe(false);
       expect(() => reopened.remember(other, threadId)).toThrow();
       expect(obligations.read(scope, threadId)).toBeDefined();
-      reopened.markSettled(scope, threadId, "generation-1");
-      reopened.clear(scope, threadId);
+      const settledToken = reopened.markSettled(scope, threadId, "generation-1");
+      expect(reopened.clear(scope, threadId, retainedToken)).toBe(false);
+      expect(reopened.clear(scope, threadId, settledToken)).toBe(true);
       expect(obligations.read(scope, threadId)).toBeUndefined();
     } finally { database.close(); }
   });

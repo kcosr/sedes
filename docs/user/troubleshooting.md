@@ -295,6 +295,14 @@ cancelled at the provider, which usually reads as a denial. Where the provider
 ties cancellation to the turn, as some Codex approvals do, that turn is
 cancelled too. Force reset waits up to 10 seconds for these answers.
 
+If Archive reports that the original agent still has work or output to verify,
+reconnect that agent and retry Archive. If the original agent is permanently
+unavailable, the Force reset preview identifies the affected thread and lists
+whether its record concerns retained output or unverified agent work. Confirming
+discards the record and may permanently lose agent output or operation results
+that Sedes has yet to save. Review the preview again if its evidence changes.
+After the reset, retry Archive. Sedes still checks for any new work.
+
 When the preview warns that running work will stop, force reset replaces those
 loaded runtimes, which stops their running turns and background work.
 Otherwise force reset does not:
@@ -302,8 +310,9 @@ Otherwise force reset does not:
 - stop provider work;
 - delete provider history;
 - prove the provider is idle;
-- undo external side effects; or
-- erase the evidence that an outcome was uncertain.
+- undo external side effects.
+
+Sedes keeps a reset receipt recording the blockers you chose to abandon.
 
 A fresh provider projection may still reveal active work or an orphaned native
 conversation after reset. Use it only when reconciliation cannot progress and

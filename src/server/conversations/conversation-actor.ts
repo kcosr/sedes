@@ -495,6 +495,15 @@ export class ConversationActor {
     return this.#pendingInteractions.size > 0 || background?.state === "known" && hasOutstandingBackgroundActivity(background);
   }
 
+  /** Positive work that could still belong to this provider after a lost connection. */
+  get hasObservedArchiveWork(): boolean {
+    if (!this.hasArchiveOwnerProbe || this.readOnly) return false;
+    if (this.archiveHasLiveWork || this.#awaitingAuthoritativeIdle || this.#handle.retirementBlocked) return true;
+    if (!this.#snapshotState) return false;
+    const timeline = this.#projector.timeline();
+    return timeline.activeTurnId !== undefined || ["starting", "running", "waiting_for_approval", "waiting_for_input", "stopping"].includes(timeline.runState);
+  }
+
   /** A lost projection alone cannot establish provider work or quiescence. */
   get archiveStateUncertain(): boolean {
     if (this.readOnly || this.archiveHasLiveWork) return false;

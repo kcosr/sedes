@@ -2315,6 +2315,7 @@ export class InventoryRepository {
           next: this.#nextInventory(current, { action: "archive" }, input.now),
         };
       });
+      this.#assertArchiveRecoverySettled(scope, archivableThreadIds);
       this.#assertArchiveThreadsDurablyInactive(scope, archivableThreadIds);
       let changed = false;
       for (const { current, next } of transitions) {
@@ -2505,6 +2506,7 @@ export class InventoryRepository {
       }
       if (input.action === "park" || input.action === "archive") {
         this.#assertBulkThreadsDurablyInactive(scope, affectedThreadIds);
+        if (input.action === "archive") this.#assertArchiveRecoverySettled(scope, affectedThreadIds);
       }
       this.#assertPendingQuestionCount(scope, affectedThreadIds, input.expectedPendingQuestionCount);
       this.#assertStashedPromptCount(
@@ -3468,6 +3470,18 @@ export class InventoryRepository {
         "conflict",
         "Stashed prompts changed while this action was being confirmed. Review the updated impact and try again.",
       );
+    }
+  }
+
+  // A recovery record is eligible for preparation at preview time. After
+  // preparation, a remaining or freshly observed obligation blocks the commit.
+  #assertArchiveRecoverySettled(scope: RequestScope, threadIds: readonly string[]): void {
+    for (let offset = 0; offset < threadIds.length; offset += 500) {
+      const page = threadIds.slice(offset, offset + 500);
+      const row = prepareCached(this.database, `SELECT 1 FROM thread_archive_obligations
+        WHERE tenant_id = ? AND principal_id = ? AND thread_id IN (${page.map(() => "?").join(", ")}) LIMIT 1`)
+        .get(scope.tenantId, scope.principalId, ...page);
+      if (row) throw new DomainError("invalid_transition", "Sedes still needs to verify agent work or output before archiving. Try archiving again.", true);
     }
   }
 

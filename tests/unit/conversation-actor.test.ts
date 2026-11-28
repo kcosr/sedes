@@ -1088,6 +1088,29 @@ describe("turn throughput capability admission", () => {
 });
 
 describe("ConversationActorManager", () => {
+  it.each(["idle", "running"] as const)("records only positive provider work from a loaded %s archive target", async state => {
+    const { manager, handle, driver } = fixture(undefined, undefined, 60_000);
+    Object.assign(driver, { prepareArchive: async () => ({ outcome: "released" }) });
+    handle.establishmentSnapshots[0] = snapshot(state);
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    try {
+      expect(acquired.actor.hasObservedArchiveWork).toBe(state === "running");
+      acquired.release();
+      const observeOwner = vi.fn();
+      const retirement = manager.runWithRuntimeRetired({
+        scope, applicationThreadId: binding.applicationThreadId, disposition: { kind: "archive", observeOwner },
+        detachCoordinatorRuntime: async () => {}, operation: async () => undefined,
+      });
+      if (state === "idle") {
+        await expect(retirement).resolves.toBeUndefined();
+        expect(observeOwner).not.toHaveBeenCalled();
+      } else {
+        await expect(retirement).rejects.toThrow();
+        expect(observeOwner).toHaveBeenCalled();
+      }
+    } finally { acquired.release(); await manager.close(); }
+  });
+
   it("retires incomplete history for archive only when the backend proves current quiescence", async () => {
     const { manager, handle, driver } = fixture(undefined, undefined, 60_000);
     handle.establishmentSnapshots[0] = snapshot("disconnected");

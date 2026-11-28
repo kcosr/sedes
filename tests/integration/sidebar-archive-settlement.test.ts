@@ -1,3 +1,4 @@
+import { ThreadForceResetRepository } from "../../src/server/db/repositories/thread-force-reset-repository.js";
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { BackendConversationSnapshot } from "../../src/shared/protocol/backend.js";
@@ -81,7 +82,7 @@ async function fixture() {
     expectedStashedPromptCount: 0, executionWorkspaceDisposition: { kind: "keep" },
   });
   return {
-    scope, aId, bId, attach, prepare, completion, inventory, obligations, archive,
+    scope, aId, bId, attach, prepare, completion, inventory, obligations, archive, reset: new ThreadForceResetRepository(database),
     coordinator: () => coordinator,
     restart: async () => { await coordinator.close(); coordinator = newCoordinator(); },
     close: async () => { await coordinator.close(); await h.close(); },
@@ -120,6 +121,40 @@ describe("sidebar archive through runtime retirement and durable inventory", () 
     } finally { await f.close(); }
   });
 
+  it("keeps newer observations when a reset discards evidence during the original archive probe", async () => {
+    const f = await fixture();
+    try {
+      f.prepare.mockImplementationOnce(async input => {
+        input.markObserved();
+        const impact = f.reset.impact(f.scope, f.bId);
+        f.reset.forceReset(f.scope, f.bId, { mutationId: randomUUID(), expectedBlockerFingerprint: impact.blockerFingerprint, now: Date.now() });
+        f.obligations.remember(f.scope, f.bId);
+        return { outcome: "released" };
+      });
+      await expect(f.archive()).rejects.toMatchObject({ code: "invalid_transition", retryable: true });
+      expect(f.inventory.getInventory(f.scope, f.bId).inventoryState).toBe("active");
+      expect(f.obligations.read(f.scope, f.bId)).toBeDefined();
+    } finally { await f.close(); }
+  });
+
+  it("archives dormant offline history after the user discards the lost owner's recovery record", async () => {
+    const f = await fixture();
+    try {
+      f.prepare.mockImplementationOnce(async input => {
+        input.markRetained("lost-owner");
+        return { outcome: "inconclusive" };
+      });
+      await expect(f.archive()).rejects.toMatchObject({ retryable: true });
+      f.prepare.mockResolvedValue({ outcome: "offline" });
+      await expect(f.archive()).rejects.toMatchObject({ message: expect.stringContaining("Force reset") });
+      const impact = f.reset.impact(f.scope, f.bId);
+      expect(impact.blockers).toContainEqual({ kind: "archive_recovery", count: 1 });
+      f.reset.forceReset(f.scope, f.bId, { mutationId: randomUUID(), expectedBlockerFingerprint: impact.blockerFingerprint, now: Date.now() });
+      await expect(f.archive()).resolves.toEqual([f.bId]);
+      expect(f.inventory.getInventory(f.scope, f.bId).inventoryState).toBe("archived");
+    } finally { await f.close(); }
+  });
+
   it("retains failed output across a coordinator restart and an offline retry, scoped to B's owner", async () => {
     const f = await fixture();
     try {
@@ -130,7 +165,7 @@ describe("sidebar archive through runtime retirement and durable inventory", () 
         throw new Error("unconfirmed output must never be acknowledged");
       });
       await expect(f.archive(f.scope, id)).rejects.toMatchObject({ retryable: true });
-      expect(f.obligations.read(f.scope, f.bId)).toEqual({ retainedOwner: "original-owner" });
+      expect(f.obligations.read(f.scope, f.bId)).toMatchObject({ retainedOwner: "original-owner" });
       expect(f.inventory.getInventory(f.scope, f.bId)).toMatchObject({ inventoryState: "active", inventoryRevision: 0 });
       expect(f.completion.get(f.scope, f.bId, "b-operation").completionObservedAt).toBeNull();
 

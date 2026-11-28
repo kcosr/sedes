@@ -8,6 +8,7 @@ CREATE TABLE thread_archive_obligations (
   tenant_id TEXT NOT NULL,
   principal_id TEXT NOT NULL,
   thread_id TEXT NOT NULL,
+  evidence_token TEXT NOT NULL DEFAULT (lower(hex(randomblob(16)))),
   retained_owner TEXT CHECK (retained_owner IS NULL OR length(retained_owner) BETWEEN 1 AND 4096),
   PRIMARY KEY (tenant_id, principal_id, thread_id),
   FOREIGN KEY (tenant_id, principal_id, thread_id)

@@ -1,3 +1,4 @@
+import type { ThreadArchiveObligationRepository } from "../db/repositories/thread-archive-obligation-repository.js";
 import { randomUUID } from "node:crypto";
 import {
   ConversationActorRetirementBusyError,
@@ -255,13 +256,7 @@ function canAutomaticallyRelease(runtime: EstablishedRuntime): boolean {
 
 interface ThreadArchiveMaintenance {
   readonly hasDurableArchiveWork?: (scope: RequestScope, threadId: string) => boolean;
-  readonly archiveObligations?: {
-    read(scope: RequestScope, threadId: string): { retainedOwner: string | null } | undefined;
-    markRetained(scope: RequestScope, threadId: string, owner: string): void;
-    markSettled(scope: RequestScope, threadId: string, owner: string): void;
-    remember(scope: RequestScope, threadId: string): void;
-    clear(scope: RequestScope, threadId: string): void;
-  };
+  readonly archiveObligations?: Pick<ThreadArchiveObligationRepository, "read" | "markRetained" | "markSettled" | "remember" | "clear">;
   readonly settleArchiveSnapshot?: (
     scope: RequestScope, threadId: string, snapshot: BackendConversationSnapshot,
     recoveredCompletionTurnIds: readonly string[],
@@ -599,14 +594,16 @@ export class ThreadRuntimeCoordinator {
     const hasDurableWork = () => this.#archive.hasDurableArchiveWork?.(scope, threadId) === true;
     const previous = obligations?.read(scope, threadId);
     let observed = previous !== undefined;
+    let evidenceToken = previous?.evidenceToken;
     let retainedOwner = previous?.retainedOwner ?? undefined;
     const markObserved = () => {
-      if (!observed) obligations?.remember(scope, threadId);
+      evidenceToken = obligations?.remember(scope, threadId);
       observed = true;
     };
     const inconclusive = (reason?: string, cause?: unknown) => new DomainError(
       "invalid_transition",
-      reason ?? "Sedes could not verify that the thread's agent work and retained output have settled. Try archiving again.",
+      (reason ?? "Sedes could not verify that the thread's agent work and retained output have settled. Try archiving again.") +
+        (observed ? " If the original agent is permanently unavailable, review Force reset to discard its recovery record." : ""),
       true, { cause });
     signal.throwIfAborted();
     let target: Awaited<ReturnType<ThreadApplicationActorTargetResolver["resolve"]>>;
@@ -616,14 +613,14 @@ export class ThreadRuntimeCoordinator {
       // Drafts, retired registrations and unavailable history are archivable
       // while dormant. A remembered obligation or stale authority is evidence
       // that requires its original provider to establish release.
-      if (!observed && !hasDurableWork() && error instanceof DomainError &&
+      if (!observed && !obligations?.read(scope, threadId) && !hasDurableWork() && error instanceof DomainError &&
           ["not_found", "runtime_unavailable", "workspace_missing", "invalid_transition"].includes(error.code)) return;
       throw inconclusive(undefined, error);
     }
     signal.throwIfAborted();
     const prepare = target.driver.prepareArchive;
     if (!prepare) {
-      if (observed || hasDurableWork()) throw inconclusive();
+      if (observed || obligations?.read(scope, threadId) || hasDurableWork()) throw inconclusive();
       return;
     }
     const settle: PrepareConversationArchiveInput["settle"] = async (snapshot, turns) => {
@@ -641,13 +638,13 @@ export class ThreadRuntimeCoordinator {
         get retainedOwner() { return retainedOwner; },
         markRetained(owner) {
           if (!owner || (retainedOwner !== undefined && retainedOwner !== owner)) throw inconclusive();
-          obligations?.markRetained(scope, threadId, owner);
+          evidenceToken = obligations?.markRetained(scope, threadId, owner);
           observed = true;
           retainedOwner = owner;
         },
         markSettled(owner) {
           if (owner !== retainedOwner) throw inconclusive();
-          obligations?.markSettled(scope, threadId, owner);
+          evidenceToken = obligations?.markSettled(scope, threadId, owner);
           retainedOwner = undefined;
         },
       });
@@ -660,10 +657,12 @@ export class ThreadRuntimeCoordinator {
       case "released":
         if (hasDurableWork()) throw inconclusive();
         if (retainedOwner !== undefined) throw inconclusive("Sedes still needs confirmation from the original session that its retained output was saved.");
-        if (observed) obligations?.clear(scope, threadId);
+        if (obligations?.read(scope, threadId) && (!evidenceToken || !obligations.clear(scope, threadId, evidenceToken))) {
+          throw inconclusive("New evidence of work appeared while Sedes was preparing this archive. Try archiving again.");
+        }
         return;
       case "offline":
-        if (observed || hasDurableWork()) throw inconclusive("The agent is offline and Sedes still needs to verify previously observed work. Reconnect it and try again.");
+        if (observed || obligations?.read(scope, threadId) || hasDurableWork()) throw inconclusive("The agent is offline and Sedes still needs to verify previously observed work. Reconnect it and try again.");
         return;
       case "busy":
         markObserved();
@@ -814,7 +813,7 @@ export class ThreadRuntimeCoordinator {
                   if (archiveSignal?.aborted) throw new ConversationActorRetirementStaleError();
                   if (disposition.kind === "archive") {
                     const actor = this.#entries.get(key)?.runtime?.actor;
-                    if (actor?.hasArchiveOwnerProbe && !actor.readOnly) observeOwner();
+                    if (actor?.hasObservedArchiveWork) observeOwner();
                     if (actor?.archiveStateUncertain && archiveSignal) {
                       try { await actor.waitForArchiveReadiness(archiveSignal); }
                       catch (error) {

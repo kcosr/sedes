@@ -1,3 +1,4 @@
+import { ThreadArchiveObligationRepository } from "../../src/server/db/repositories/thread-archive-obligation-repository.js";
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -1200,6 +1201,23 @@ describe("thread family archive service", () => {
       expect(current.inventory.findArchiveThreadsReplay(current.scope, current.rootId, request)).toBeUndefined();
       expect(current.publishCommitted).not.toHaveBeenCalled();
     } finally { clock.mockRestore(); current.database.close(); }
+  });
+
+  it("refuses new archive recovery evidence discovered after a family member was prepared", async () => {
+    const current = fixture();
+    try {
+      const obligations = new ThreadArchiveObligationRepository(current.database);
+      const ids = [current.rootId, current.childId, current.grandchildId].sort();
+      current.releaseProviderResidency.mockImplementation(async (_scope, id) => {
+        if (id === ids.at(-1)) obligations.markRetained(current.scope, ids[0]!, "newly-observed-owner");
+      });
+      await expect(current.service.archive(current.scope, current.rootId, {
+        mutationId: "late-archive-evidence", expectedRevision: 0, includeDescendants: true,
+        executionWorkspaceDisposition: { kind: "keep" },
+      })).rejects.toMatchObject({ code: "invalid_transition", retryable: true });
+      for (const id of ids) expect(current.inventory.getInventory(current.scope, id).inventoryState).toBe("active");
+      expect(obligations.read(current.scope, ids[0]!)?.retainedOwner).toBe("newly-observed-owner");
+    } finally { current.database.close(); }
   });
 
   it("rechecks a concurrent receipt under the fence before retiring a restored target", async () => {

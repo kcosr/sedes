@@ -727,6 +727,14 @@ unarchived. An active turn, permission or managed terminal reports busy.
 Preparation has a 15-second per-target and 45-second aggregate budget. Fenced
 cleanup can finish after a timeout, but that request cannot commit later.
 
+An idle, fully loaded application actor carries no archive obligation by itself.
+Each positive observation or retained owner record receives a new evidence token.
+Archive checks that token when applying a release proof and checks for remaining
+records in the inventory transaction. For a permanently lost owner, an explicit
+Force reset can discard the previewed recovery record with a warning about
+unsaved output. A new observation invalidates the preview. Replaying the reset
+receipt leaves later observations intact.
+
 For persistent Claude, Antigravity and native Pi, process retained output on
 the exact existing owner. Apply scoped submissions, terminal facts and backend
 operation receipts before acknowledging them. Use the same stable operation,

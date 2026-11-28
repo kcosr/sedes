@@ -32,6 +32,7 @@ const BLOCKER_KIND_ORDER: readonly ThreadForceResetBlockerKind[] = [
   "fork_origin",
   "automation_run",
   "conversation_runtime",
+  "archive_recovery",
 ];
 
 type Blocker = {
@@ -170,6 +171,12 @@ export class ThreadForceResetRepository {
           "A provider-native fork may remain outside Sedes and will not be deleted or adopted.",
       });
     }
+    if (capture.blockers.some(blocker => blocker.kind === "archive_recovery")) {
+      warnings.push({
+        code: "unapplied_archive_output_may_be_lost",
+        message: "Force reset discards the listed archive recovery records. Agent output and operation results that Sedes has yet to save may be permanently lost. Reconnect the original agent and retry Archive to recover them first.",
+      });
+    }
     warnings.push({
       code: "provider_activity_may_reappear",
       message:
@@ -299,6 +306,20 @@ export class ThreadForceResetRepository {
       const threadIds = capture.affectedThreadIds;
       const placeholders = threadIds.map(() => "?").join(", ");
       const scoped = [scope.tenantId, scope.principalId, ...threadIds] as const;
+
+      // Only evidence present in this confirmation may be abandoned. New
+      // evidence or a re-created row for the same owner has a different token.
+      const discardArchiveRecovery = this.database.prepare(`
+        DELETE FROM thread_archive_obligations
+        WHERE tenant_id = ? AND principal_id = ? AND thread_id = ? AND evidence_token = ?
+      `);
+      for (const blocker of capture.blockers) {
+        if (blocker.kind === "archive_recovery") {
+          const result = discardArchiveRecovery.run(scope.tenantId, scope.principalId, blocker.threadId, blocker.id);
+          if (result.changes !== 1) throw new DomainError("conflict", "Archive recovery changed. Review the current force-reset impact.");
+        }
+      }
+
 
       this.database
         .prepare(
@@ -653,6 +674,14 @@ export class ThreadForceResetRepository {
       );
     };
 
+    collect(
+      `SELECT evidence_token AS id, thread_id AS threadId, coalesce(retained_owner, '') AS state
+       FROM thread_archive_obligations
+       WHERE tenant_id = ? AND principal_id = ? AND thread_id IN (${placeholders})`,
+      "archive_recovery",
+      () => false,
+    );
+
     const callbackRows = this.database
       .prepare(
         `SELECT id,
@@ -926,11 +955,15 @@ export class ThreadForceResetRepository {
     const runtimeByThread = new Map(
       normalizedConversationRuntimes.map((runtime) => [runtime.threadId, runtime]),
     );
+    const archiveByThread = new Map(blockers.filter(blocker => blocker.kind === "archive_recovery")
+      .map(blocker => [blocker.threadId, blocker.state ? "retained_output" as const : "observed_work" as const]));
     const affectedThreads = threadIds.map((affectedThreadId) => {
       const runtime = runtimeByThread.get(affectedThreadId);
+      const archiveRecovery = archiveByThread.get(affectedThreadId);
       return {
         threadId: affectedThreadId,
         title: (titles.get(affectedThreadId) ?? "").slice(0, 240) || "Untitled thread",
+        ...(archiveRecovery ? { archiveRecovery } : {}),
         ...(runtime
           ? {
               runtime: {

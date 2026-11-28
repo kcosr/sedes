@@ -871,6 +871,7 @@ export const threadForceResetBlockerKindSchema = z.enum([
   "fork_origin",
   "automation_run",
   "conversation_runtime",
+  "archive_recovery",
 ]);
 export type ThreadForceResetBlockerKind = z.infer<
   typeof threadForceResetBlockerKindSchema
@@ -899,6 +900,7 @@ export const threadForceResetWarningSchema = z.strictObject({
     "provider_side_effects_may_remain",
     "native_fork_orphan_may_remain",
     "provider_activity_may_reappear",
+    "unapplied_archive_output_may_be_lost",
   ]),
   message: z.string().min(1).max(500),
 });
@@ -915,6 +917,7 @@ const forceResetFingerprintSchema = z
 export const threadForceResetAffectedThreadSchema = z.strictObject({
   threadId: threadIdSchema,
   title: z.string().min(1).max(240),
+  archiveRecovery: z.enum(["observed_work", "retained_output"]).optional(),
   /** The loaded runtime the reset would replace, if any. */
   runtime: z
     .strictObject({
@@ -929,7 +932,7 @@ export const threadForceResetImpactSchema = z.strictObject({
   resettable: z.boolean(),
   blockers: threadForceResetBlockerSummariesSchema,
   affectedThreads: z.array(threadForceResetAffectedThreadSchema).min(1).max(10_000),
-  warnings: z.array(threadForceResetWarningSchema).max(4),
+  warnings: z.array(threadForceResetWarningSchema).max(5),
 });
 export type ThreadForceResetImpact = z.infer<
   typeof threadForceResetImpactSchema

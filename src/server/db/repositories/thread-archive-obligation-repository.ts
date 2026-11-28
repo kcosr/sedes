@@ -6,46 +6,53 @@ import { prepareCached } from "../prepared-statements.js";
 export class ThreadArchiveObligationRepository {
   constructor(readonly database: Database.Database) {}
 
-  read(scope: RequestScope, threadId: string): { retainedOwner: string | null } | undefined {
+  read(scope: RequestScope, threadId: string): { retainedOwner: string | null; evidenceToken: string } | undefined {
     return prepareCached(this.database, `
-      SELECT retained_owner AS retainedOwner FROM thread_archive_obligations
+      SELECT retained_owner AS retainedOwner, evidence_token AS evidenceToken FROM thread_archive_obligations
       WHERE tenant_id = ? AND principal_id = ? AND thread_id = ?
-    `).get(scope.tenantId, scope.principalId, threadId) as { retainedOwner: string | null } | undefined;
+    `).get(scope.tenantId, scope.principalId, threadId) as { retainedOwner: string | null; evidenceToken: string } | undefined;
   }
 
-  remember(scope: RequestScope, threadId: string): void {
-    prepareCached(this.database, `
+  remember(scope: RequestScope, threadId: string): string {
+    const row = prepareCached(this.database, `
       INSERT INTO thread_archive_obligations (tenant_id, principal_id, thread_id) VALUES (?, ?, ?)
-      ON CONFLICT (tenant_id, principal_id, thread_id) DO NOTHING
-    `).run(scope.tenantId, scope.principalId, threadId);
+      ON CONFLICT (tenant_id, principal_id, thread_id) DO UPDATE SET evidence_token = excluded.evidence_token
+      RETURNING evidence_token AS token
+    `).get(scope.tenantId, scope.principalId, threadId) as { token: string };
+    return row.token;
   }
 
-  markRetained(scope: RequestScope, threadId: string, owner: string): void {
-    const result = prepareCached(this.database, `
-      INSERT INTO thread_archive_obligations (tenant_id, principal_id, thread_id, retained_owner)
-      VALUES (?, ?, ?, ?)
-      ON CONFLICT (tenant_id, principal_id, thread_id) DO UPDATE SET retained_owner = excluded.retained_owner
+  markRetained(scope: RequestScope, threadId: string, owner: string): string {
+    const row = prepareCached(this.database, `
+      INSERT INTO thread_archive_obligations (tenant_id, principal_id, thread_id, retained_owner) VALUES (?, ?, ?, ?)
+      ON CONFLICT (tenant_id, principal_id, thread_id) DO UPDATE SET retained_owner = excluded.retained_owner, evidence_token = excluded.evidence_token
       WHERE retained_owner IS NULL OR retained_owner = excluded.retained_owner
-    `).run(scope.tenantId, scope.principalId, threadId, owner);
-    if (!result.changes) throw new Error("archive_retained_owner_changed");
+      RETURNING evidence_token AS token
+    `).get(scope.tenantId, scope.principalId, threadId, owner) as { token: string } | undefined;
+    if (!row) throw new Error("archive_retained_owner_changed");
+    return row.token;
   }
 
-  markSettled(scope: RequestScope, threadId: string, owner: string): void {
-    if (!this.settleIfRetained(scope, threadId, owner)) throw new Error("archive_retained_owner_changed");
+  markSettled(scope: RequestScope, threadId: string, owner: string): string {
+    const token = this.settleIfRetained(scope, threadId, owner);
+    if (!token) throw new Error("archive_retained_owner_changed");
+    return token;
   }
 
   /** A normal observer may prove settlement of the same owner between archive attempts. */
-  settleIfRetained(scope: RequestScope, threadId: string, owner: string): boolean {
-    const result = prepareCached(this.database, `
-      UPDATE thread_archive_obligations SET retained_owner = NULL
+  settleIfRetained(scope: RequestScope, threadId: string, owner: string): string | undefined {
+    const row = prepareCached(this.database, `
+      UPDATE thread_archive_obligations SET retained_owner = NULL, evidence_token = lower(hex(randomblob(16)))
       WHERE tenant_id = ? AND principal_id = ? AND thread_id = ? AND retained_owner = ?
-    `).run(scope.tenantId, scope.principalId, threadId, owner);
-    return result.changes === 1;
+      RETURNING evidence_token AS token
+    `).get(scope.tenantId, scope.principalId, threadId, owner) as { token: string } | undefined;
+    return row?.token;
   }
 
-  clear(scope: RequestScope, threadId: string): void {
-    prepareCached(this.database, `
-      DELETE FROM thread_archive_obligations WHERE tenant_id = ? AND principal_id = ? AND thread_id = ? AND retained_owner IS NULL
-    `).run(scope.tenantId, scope.principalId, threadId);
+  clear(scope: RequestScope, threadId: string, token: string): boolean {
+    return prepareCached(this.database, `
+      DELETE FROM thread_archive_obligations
+      WHERE tenant_id = ? AND principal_id = ? AND thread_id = ? AND evidence_token = ? AND retained_owner IS NULL
+    `).run(scope.tenantId, scope.principalId, threadId, token).changes === 1;
   }
 }
