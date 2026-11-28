@@ -5,7 +5,7 @@
  */
 import { createHash } from "node:crypto";
 import type { CodexThread } from "./codex-c1-protocol.js";
-import { codexError } from "./codex-conversation-errors.js";
+import { codexError } from "./codex-read-errors.js";
 
 const MAXIMUM_RETRY_ANCHOR_BYTES = 4_096;
 const RETRY_ANCHOR_PREFIX = "codex-retry-anchor:";

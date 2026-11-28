@@ -3334,7 +3334,8 @@ describe("ConversationLifecycleService", () => {
       current.backendPersistence.initializationPlan = [action];
       current.driver.reconcileAction.mockResolvedValueOnce({ outcome: "unknown" }).mockResolvedValueOnce({ outcome: "accepted" });
       const recover = () => current.service.recoverFirstSend(current.scope, thread.applicationThreadId, attemptId);
-      await expect(recover()).resolves.toMatchObject({ status: "recovery_required" });
+      await expect(recover()).resolves.toMatchObject({ status: "recovery_required", retryable: false,
+        attempt: { diagnostic: expect.stringContaining("Use Force reset") } });
       await expect(recover()).resolves.toMatchObject({ status: "bound" });
       expect(current.driver.reconcileAction).toHaveBeenCalledWith(action);
       expect(current.driver.perform).not.toHaveBeenCalled();

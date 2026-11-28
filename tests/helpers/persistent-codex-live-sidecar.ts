@@ -110,7 +110,7 @@ export async function createPersistentCodexLiveSidecar(fixtureScope?: {
         const session = await SidecarClientSession.start({ readDesiredPolicy: () => policy, policyAttachment: mode, connectionCompression: true, transportKind: "ssh_stdio", stream: response.stream, sessionNonce, carrierGeneration: 1, artifact,
           installation: { accountHome: home, stateRoot: paths.stateRoot, nodeExecutable: process.execPath,
             environment: { HOME: home }, executableDirectory: home, executablePath: executable },
-          authorizedCapabilities: [], authorizedRuntimeCapabilities: [{ capabilityId: "codex_runtime", majorVersion: 1, operations: ["runtime.ensure", "runtime.lookup", "runtime.execute"] }],
+          authorizedCapabilities: [], authorizedRuntimeCapabilities: [{ capabilityId: "codex_runtime", majorVersion: 1, operations: ["runtime.ensure", "runtime.lookup", "runtime.execute", "runtime.prepare_thread_archive"] }],
           sedesOperations: new SidecarOperationRegistry(), signal });
         if (mode === "normal") await session.applyPolicy(policy, signal);
         return { session, status: response.value.status };

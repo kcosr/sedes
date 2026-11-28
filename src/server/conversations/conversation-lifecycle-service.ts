@@ -2335,8 +2335,8 @@ export class ConversationLifecycleService {
       }
       if (reconciliation.outcome !== "not_applied") {
         throw new BackendError({
-          category: "submission_unknown", retryable: true, crossedSubmissionBoundary: true,
-          safeMessage: "The backend has not confirmed the original first-send rename.",
+          category: "submission_unknown", retryable: false, crossedSubmissionBoundary: true,
+          safeMessage: "The backend cannot confirm the original title change. The first message is still unsent. Use Force reset to abandon this creation, then start a new thread.",
         });
       }
       transition("uncertain", "not_sent");

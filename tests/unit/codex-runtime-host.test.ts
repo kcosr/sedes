@@ -46,6 +46,49 @@ function fixture(runtimeId = authority.runtimeId) {
   const events: CodexRuntimeEvent[] = [];
   return { host, client, dispatch, events, settle, connect: () => host.attach({ ...authority, runtimeId }, event => events.push(event)) };
 }
+it.each(["active turn", "active goal", "idle", "parked"] as const)(
+  "prepares a cold archive against the existing native target with %s", async state => {
+    const f = fixture();
+    const beforeRelease = vi.fn();
+    const metadata = resumed().thread;
+    if (state === "parked") f.client.updateLifecycle({ state: "idle", generation: 1 });
+    const values = [
+      { thread: { ...metadata, status: state === "active turn" ? { type: "active", activeFlags: [] } : metadata.status } },
+      { thread: metadata }, { goal: state === "active goal" ? { threadId: metadata.id, status: "active" } : null }, { status: "unsubscribed" },
+    ];
+    for (const [sequence, result] of values.entries()) {
+      f.dispatch.mockResolvedValueOnce({ generation: 1, inboundSequence: sequence + 1, result });
+    }
+    try {
+      await expect(f.host.prepareThreadArchive(metadata.id, metadata.cwd, AbortSignal.timeout(3000), beforeRelease))
+        .resolves.toBe(state === "idle" ? "released" : state === "parked" ? "inconclusive" : "busy");
+      const methods = (f.dispatch.mock.calls as unknown as [{ method: string }][]).map(([spec]) => spec.method);
+      expect(methods).toEqual(state === "parked" ? [] : state === "active turn" ? ["thread/read"] :
+        ["thread/read", "thread/read", "thread/goal/get", ...(state === "idle" ? ["thread/unsubscribe"] : [])]);
+      expect(beforeRelease).toHaveBeenCalledTimes(state === "idle" ? 1 : 0);
+    } finally { f.host.dispose(); }
+  },
+);
+
+it("limits remote archive to B while a native mutation on A is awaiting its reply", async () => {
+  const f = fixture();
+  const metadata = resumed().thread;
+  try {
+    await f.connect();
+    await f.host.submit(authority, { ...request, params: { threadId: "thread-A", name: "Editing A" } });
+    await vi.waitFor(() => expect(f.dispatch).toHaveBeenCalledOnce());
+    for (const [sequence, result] of [{ thread: metadata }, { thread: metadata }, { goal: null }, { status: "unsubscribed" }].entries()) {
+      f.dispatch.mockResolvedValueOnce({ generation: 1, inboundSequence: sequence + 2, result });
+    }
+    await expect(f.host.prepareThreadArchive(metadata.id, metadata.cwd, AbortSignal.timeout(2000), () => {})).resolves.toBe("released");
+    expect(f.dispatch).toHaveBeenLastCalledWith(expect.objectContaining({ method: "thread/unsubscribe" }),
+      { threadId: metadata.id }, expect.anything());
+  } finally {
+    f.settle({ generation: 1, inboundSequence: 1, result: {} });
+    f.host.dispose();
+  }
+});
+
 const sink: CodexRuntimeReceiptSink = { reserve: () => { throw new Error("not used"); }, recordOutcome: () => "untracked", pending: () => [], reconcileRecordedApplicationState: () => 0, releaseRejected: () => false, compactRetiredRuntime: () => 0 };
 
 describe("persistent Codex runtime ownership", () => {

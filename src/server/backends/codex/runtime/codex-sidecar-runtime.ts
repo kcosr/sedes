@@ -13,7 +13,7 @@ import { codexNativeStoreRefusal } from "../codex-native-store-ownership.js";
 import { CODEX_APP_SERVER_RELEASE } from "../codex-release-guard.js";
 import type { CodexRpcRequestReceipt } from "../rpc/codex-rpc-client.js";
 import { CodexRpcDeliveryError, CodexRpcProtocolError, CodexRpcRemoteError } from "../rpc/errors.js";
-import { codexRuntimeCommandSchema, codexRuntimeEventSchema, codexRuntimeOutcomeSchema, codexRuntimeOutcomeReferencesSchema, codexRuntimeSnapshotSchema, type CodexRuntimeCommand } from "./codex-runtime-wire.js";
+import { codexRuntimeAuthoritySchema, codexRuntimeCommandSchema, codexRuntimeEventSchema, codexRuntimeOutcomeSchema, codexRuntimeOutcomeReferencesSchema, codexRuntimeSnapshotSchema, type CodexRuntimeCommand } from "./codex-runtime-wire.js";
 import type { CodexRuntimeAuthority, CodexRuntimeConnection, CodexRuntimeEvent, CodexRuntimeOutcome } from "./codex-runtime-protocol.js";
 import type { CodexRuntimeConfiguration, CodexRuntimeHostRegistry } from "./codex-runtime-host-registry.js";
 import { CodexRuntimeEventOrder } from "./codex-runtime-event-order.js";
@@ -46,6 +46,13 @@ export const codexRuntimeLookupOperation: SidecarOperationDefinition<{ configura
   ...capability, operation: "runtime.lookup", requestSchema: z.strictObject({ configuration: configurationSchema }),
   responseSchema: z.strictObject({ runtimeId: id.nullable() }), lane: "control", maximumDeadlineMilliseconds: 120_000,
 };
+const archiveInputSchema = z.strictObject({ authority: codexRuntimeAuthoritySchema, applicationThreadId: id, threadId: id,
+  targetId: id, workspace: z.string().min(1).max(16384) });
+const archiveResultSchema = z.enum(["busy", "inconclusive", "released"]);
+export const codexRuntimePrepareArchiveOperation = {
+  ...capability, operation: "runtime.prepare_thread_archive", requestSchema: archiveInputSchema,
+  responseSchema: archiveResultSchema, lane: "operation", maximumDeadlineMilliseconds: 120_000,
+} satisfies SidecarOperationDefinition<z.infer<typeof archiveInputSchema>, z.infer<typeof archiveResultSchema>>;
 export const codexRuntimeExecuteOperation = {
   ...capability, operation: "runtime.execute", requestSchema: sidecarRuntimeBodySchema,
   responseSchema: sidecarRuntimeBodySchema, lane: "operation", maximumDeadlineMilliseconds: 600_000,
@@ -142,6 +149,37 @@ export function registerCodexRuntimeHost(input: ProviderPolicyAttachment & {
     const host = await input.hosts.lookup(configuration, input.controllerEpoch);
     if (host) claimed.add(host);
     return { runtimeId: host?.runtimeId ?? null };
+  });
+  input.registry.register(codexRuntimePrepareArchiveOperation, async (request, { signal }) => {
+    const { authority, applicationThreadId, threadId, targetId, workspace } = request;
+    const { runtimeId } = authority;
+    const host = input.hosts.get(runtimeId);
+    if (!claimed.has(host)) throw new SidecarOperationError("codex_runtime_not_attached");
+    host.assertScope(authority);
+    let targetGeneration: number | undefined;
+    const assertCurrent = () => {
+      signal.throwIfAborted();
+      if (detached || authority.controllerId !== String(input.controllerEpoch) || input.hosts.get(runtimeId) !== host) {
+        throw new Error("codex_runtime_controller_stale");
+      }
+      input.services.assertAdmission(input.controllerEpoch);
+      const grant = currentBackendGrant(input, host).targets.find(target => target.id === targetId);
+      if (!grant || (targetGeneration !== undefined && grant.generation !== targetGeneration)) throw new SidecarOperationError("backend_policy_denied");
+      targetGeneration = grant.generation;
+    };
+    assertCurrent();
+    const runtime = input.hosts.getRuntime(runtimeId);
+    const blocked = () => input.hosts.managedTui.threadBlocksArchive(runtimeId, applicationThreadId, threadId);
+    const assertCanRelease = () => {
+      assertCurrent();
+      if (blocked() || runtime.supervisor.snapshot().cleanupUncertainty) throw new Error("codex_runtime_archive_evidence_changed");
+    };
+    if (blocked()) return "busy";
+    if (runtime.supervisor.snapshot().cleanupUncertainty) return "inconclusive";
+    const outcome = input.hosts.canReplaceParkedLaunch(runtime) ? "released" :
+      await host.prepareThreadArchive(threadId, workspace, signal, assertCanRelease);
+    assertCanRelease();
+    return outcome;
   });
   input.registry.register(codexRuntimeExecuteOperation, async body => {
     if (detached) throw new Error("codex_runtime_attachment_detached");
@@ -282,8 +320,8 @@ export class CodexSidecarRuntimeConnection implements CodexRuntimeConnection {
   async ensure(configuration: CodexRuntimeConfiguration): Promise<string> {
     return (await this.channel.call(codexRuntimeEnsureOperation, { configuration })).runtimeId;
   }
-  async lookup(configuration: CodexRuntimeConfiguration): Promise<string | undefined> {
-    return (await this.channel.call(codexRuntimeLookupOperation, { configuration })).runtimeId ?? undefined;
+  async lookup(configuration: CodexRuntimeConfiguration, signal?: AbortSignal): Promise<string | undefined> {
+    return (await this.channel.call(codexRuntimeLookupOperation, { configuration }, { signal })).runtimeId ?? undefined;
   }
   async attach(authority: CodexRuntimeAuthority, listener: (event: CodexRuntimeEvent) => void) {
     let chain = Promise.resolve();
@@ -354,6 +392,9 @@ export class CodexSidecarRuntimeConnection implements CodexRuntimeConnection {
   }
   async appliedOwnedPath(authority: CodexRuntimeAuthority): Promise<string> {
     return z.strictObject({ path: z.string().max(16384).refine(value => !value.includes("\0")) }).parse(await this.#execute({ action: "shell_path", authority })).path;
+  }
+  async prepareThreadArchive(authority: CodexRuntimeAuthority, input: { applicationThreadId: string; threadId: string; workspace: string; targetId: string }, signal: AbortSignal) {
+    return this.channel.call(codexRuntimePrepareArchiveOperation, { authority, ...input }, { signal });
   }
   async inspect(authority: CodexRuntimeAuthority) {
     return z.strictObject({ state: z.enum(["idle", "active", "unknown"]), startupEnvironmentFingerprint: z.string().regex(/^[a-f0-9]{64}$/), incarnation: id, revision: z.string().min(1).max(160), blockers: z.array(sidecarUpgradeBlockerSchema).max(7) }).parse(await this.#execute({ action: "inspect", authority }));

@@ -8,7 +8,7 @@ import { CodexRuntimeReceiptStore } from "../../src/server/backends/codex/runtim
 import { CodexRuntimeClient } from "../../src/server/backends/codex/runtime/codex-runtime-client.js";
 import { CodexSidecarRuntimeConnection } from "../../src/server/backends/codex/runtime/codex-sidecar-runtime.js";
 import { codexModelListMethod, codexThreadStartMethod, codexThreadSettingsUpdateMethod, codexTurnStartMethod } from "../../src/server/backends/codex/codex-c2-protocol.js";
-import { codexThreadItemsListMethod, codexThreadTurnsListMethod, codexThreadUnsubscribeMethod, type CodexThreadTurnsListResponse } from "../../src/server/backends/codex/codex-c1-protocol.js";
+import { codexThreadItemsListMethod, codexThreadTurnsListMethod, type CodexThreadTurnsListResponse } from "../../src/server/backends/codex/codex-c1-protocol.js";
 import type { CodexRuntimeEvent } from "../../src/server/backends/codex/runtime/codex-runtime-protocol.js";
 import { createPersistentCodexLiveSidecar } from "../helpers/persistent-codex-live-sidecar.js";
 
@@ -57,6 +57,8 @@ it.skipIf(!enabled)("retains a real Luna turn, receipt and native history across
       { ...options, runtimeCorrelation: { kind: "create", applicationOperationId: randomUUID(), applicationThreadId: "canary-thread" } });
     nativeThreadId = started.thread.id;
     expect(started.thread.historyMode).toBe("paginated");
+    const archiveTarget = { applicationThreadId: "canary-thread", targetId: configuration.connections[0]!.templateId,
+      threadId: nativeThreadId, workspace };
     await expect(client.client.persistentSessions!.reattachThread(nativeThreadId, options)).rejects.toMatchObject({
       name: "CodexRpcRemoteError", generation: originalGeneration,
       method: "thread/turns/list", message: expect.stringContaining("not materialized yet"),
@@ -76,6 +78,8 @@ it.skipIf(!enabled)("retains a real Luna turn, receipt and native history across
     await client.client.request(codexThreadSettingsUpdateMethod, { threadId: nativeThreadId, model: model!, effort: "low",
       approvalPolicy: "never", sandboxPolicy: { type: "readOnly", networkAccess: false } }, options);
     await effective;
+    await client.drainAcknowledgements();
+    await expect(connection.prepareThreadArchive(authority, archiveTarget, AbortSignal.timeout(15_000))).resolves.toBe("released");
     await client.close();
 
     const operationId = randomUUID();
@@ -113,6 +117,8 @@ it.skipIf(!enabled)("retains a real Luna turn, receipt and native history across
     expect(second.status.controllerEpoch).toBeGreaterThan(first.status.controllerEpoch);
     const reconnected = new CodexSidecarRuntimeConnection(second.session.runtimeChannel);
     expect(await reconnected.lookup(configuration)).toBe(runtimeId);
+    const restoredAuthority = { ...authority, controllerId: String(second.status.controllerEpoch) };
+    await expect(reconnected.prepareThreadArchive(restoredAuthority, archiveTarget, AbortSignal.timeout(15_000))).resolves.toBe("busy");
     const restored = new CodexRuntimeClient({ connection: reconnected, authority: { ...authority, controllerId: String(second.status.controllerEpoch) }, receipts }); clients.push(restored);
     await restored.start();
     expect(restored.client.lifecycleSnapshot()).toEqual({ state: "ready", generation: originalGeneration });
@@ -134,7 +140,6 @@ it.skipIf(!enabled)("retains a real Luna turn, receipt and native history across
     expect(items.data.every(entry => ["userMessage", "agentMessage", "reasoning"].includes(entry.item.type))).toBe(true);
     expect(items.data.map(entry => entry.item).filter(item => item.type === "agentMessage").map(item => item.text).join("\n")).toContain(`${marker}_DONE`);
     await restored.drainAcknowledgements();
-    const restoredAuthority = { ...authority, controllerId: String(second.status.controllerEpoch) };
     await reconnected.evictThread(restoredAuthority, nativeThreadId, originalGeneration);
     expect(await reconnected.idle(restoredAuthority, originalGeneration)).toBe(true);
     expect(restored.client.lifecycleSnapshot().state).toBe("idle");
@@ -145,7 +150,7 @@ it.skipIf(!enabled)("retains a real Luna turn, receipt and native history across
     // native history remain accessible through the fresh connection.
     const retainedHistory = await restored.client.request(codexThreadTurnsListMethod, { threadId: nativeThreadId, limit: 10, sortDirection: "desc", itemsView: "notLoaded" }, options);
     expect(retainedHistory.data[0]?.id).toBe(turn.id);
-    await restored.client.request(codexThreadUnsubscribeMethod, { threadId: nativeThreadId }, options);
+    await expect(reconnected.prepareThreadArchive(restoredAuthority, archiveTarget, AbortSignal.timeout(15_000))).resolves.toBe("released");
     await restored.close();
   } finally {
     for (const client of clients.reverse()) await client.close().catch(() => undefined);

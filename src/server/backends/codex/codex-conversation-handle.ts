@@ -204,17 +204,15 @@ import {
   type CodexSettingsObservationReceipt,
 } from "./codex-observed-execution-settings.js";
 import { serializeCodexSubmissionRetryAnchor } from "./codex-submission-retry-anchor.js";
+import { bindingMismatch, codexError, mapCodexReadError } from "./codex-read-errors.js";
 import {
   assertCodexHistoryMode,
-  bindingMismatch,
   codexContextExcerptMutationFingerprint,
-  codexError,
   codexSteerTargetUnavailable,
   codexTaskContextMutationFingerprint,
   conversationClosed,
   mapCodexInteractionError,
   mapCodexMutationError,
-  mapCodexReadError,
   mutationOutcomeUnknown,
   projectionCancelled,
 } from "./codex-conversation-errors.js";

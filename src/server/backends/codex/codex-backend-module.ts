@@ -1385,7 +1385,7 @@ export class CodexBackendModule implements BackendModule {
     new CodexRuntimeReceiptStore(database).hasPendingForThread(scope, threadId);
   readonly creationProvenanceRepair = codexCreationProvenanceRepair;
   readonly startupPolicy = "composition_only" as const;
-  readonly remoteRuntimeCapabilities = Object.freeze([{ capabilityId: "codex_runtime", majorVersion: 1, operations: ["runtime.ensure", "runtime.lookup", "runtime.execute"] }, codexManagedTuiCapability]);
+  readonly remoteRuntimeCapabilities = Object.freeze([{ capabilityId: "codex_runtime", majorVersion: 1, operations: ["runtime.ensure", "runtime.lookup", "runtime.execute", "runtime.prepare_thread_archive"] }, codexManagedTuiCapability]);
   readonly backendKind = "codex_app_server" as const;
   readonly connectionKinds = ["codex_app_server"] as const;
   readonly protocolRelease = CODEX_APP_SERVER_RELEASE;

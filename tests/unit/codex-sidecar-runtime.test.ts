@@ -782,6 +782,35 @@ it("separates slow response-body decoding from the command RPC wait", async () =
   } finally { vi.restoreAllMocks(); vi.unstubAllEnvs(); await f.close(); f.host.dispose(); }
 });
 
+it("inspects only a retained target over the sidecar wire and requires its current target grant", async () => {
+  const host = new CodexRuntimeHost({ scope, runtimeId: "archive-runtime" });
+  const inspect = vi.spyOn(host, "prepareThreadArchive").mockResolvedValue("released");
+  const attach = vi.spyOn(host, "attach"), ensure = vi.fn();
+  const services = new PersistentSidecarServiceRegistry({ scope: { tenantId: scope.tenantId, principalId: scope.principalId, executionEnvironmentId: scope.executionEnvironmentId, installationId: "installation" },
+    buildId: "test", artifactSha256: "a".repeat(64), runtimeWireVersion: 1, configuration });
+  const blocked = vi.fn(() => false), parked = vi.fn(() => false);
+  const overrides = {
+    ensure, getRuntime: () => ({ supervisor: { snapshot: () => ({ cleanupUncertainty: false }) } }),
+    managedTui: { threadBlocksArchive: blocked }, canReplaceParkedLaunch: parked,
+  } as unknown as Partial<CodexRuntimeHostRegistry>;
+  const f = await attachment(host, services, overrides);
+  const authority = { scope, runtimeId: host.runtimeId, controllerId: String(f.epoch) };
+  const request = { applicationThreadId: "app", targetId: "template", threadId: "native", workspace: "/workspace" };
+  const signal = AbortSignal.timeout(5000);
+  try {
+    await expect(f.connection.prepareThreadArchive(authority, { ...request, targetId: "unauthorized" }, signal))
+      .rejects.toMatchObject({ code: "backend_policy_denied" });
+    expect(inspect).not.toHaveBeenCalled();
+    await expect(f.connection.prepareThreadArchive(authority, request, signal)).resolves.toBe("released");
+    expect(inspect).toHaveBeenCalledWith("native", "/workspace", expect.any(AbortSignal), expect.any(Function));
+    blocked.mockReturnValue(true);
+    await expect(f.connection.prepareThreadArchive(authority, request, signal)).resolves.toBe("busy");
+    expect(inspect).toHaveBeenCalledOnce();
+    expect(attach).not.toHaveBeenCalled();
+    expect(ensure).not.toHaveBeenCalled();
+  } finally { await f.close(); host.dispose(); }
+});
+
 async function diagnosticAttachment() {
   const native = new CodexSharedClientFacade({ current: () => undefined, latestGeneration: () => 1, retireGeneration: async () => {} });
   native.updateLifecycle({ state: "ready", generation: 1 });

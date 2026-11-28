@@ -1,3 +1,4 @@
+import { bindingMismatch } from "./codex-read-errors.js";
 import type { CodexThread } from "./codex-c1-protocol.js";
 
 export const CODEX_DISCOVERY_SOURCE_KINDS = [
@@ -21,4 +22,17 @@ export function isCodexDiscoverableThread(
       thread.source as (typeof CODEX_DISCOVERY_SOURCE_KINDS)[number],
     )
   );
+}
+
+export function assertThreadBinding(
+  thread: CodexThread,
+  threadId: string,
+  canonicalWorkspacePath: string,
+): void {
+  if (
+    thread.id !== threadId ||
+    !isCodexDiscoverableThread(thread, canonicalWorkspacePath)
+  ) {
+    throw bindingMismatch();
+  }
 }

@@ -27,6 +27,48 @@ import { CodexRuntimeClient } from "../../src/server/backends/codex/runtime/code
 import { CODEX_RUNTIME_PROTOCOL_VERSION } from "../../src/server/backends/codex/runtime/codex-runtime-protocol.js";
 import type { SidecarRuntimeChannel } from "../../src/server/sidecar/runtime-channel.js";
 
+it.each(["offline", "missing", "ready", "policy denied", "carrier lost after lookup"] as const)(
+  "checks a cold target using existing-only host evidence: %s", async condition => {
+    const acquire = vi.fn();
+    const release = vi.fn();
+    const acquireExisting = vi.fn(async () => {
+      if (condition === "offline") throw new Error("outbound_connector_offline");
+      if (condition === "policy denied") throw new Error("backend_policy_denied");
+      return { channel: {} as SidecarRuntimeChannel, controllerEpoch: 1, serviceIncarnation: "service",
+        closed: new Promise(() => {}), release };
+    });
+    const lookup = vi.spyOn(CodexSidecarRuntimeConnection.prototype, "lookup").mockResolvedValue(condition === "missing" ? undefined : "retained");
+    const inspect = vi.spyOn(CodexSidecarRuntimeConnection.prototype, "prepareThreadArchive").mockImplementation(async () => {
+      if (condition === "carrier lost after lookup") throw new Error("outbound_disconnected");
+      return "busy";
+    });
+    const ensure = vi.spyOn(CodexSidecarRuntimeConnection.prototype, "ensure"), wake = vi.spyOn(CodexSidecarRuntimeConnection.prototype, "wake");
+    const supervisor = new CodexRemoteRuntimeSupervisor({
+      scope: { tenantId: "tenant", principalId: "principal", executionEnvironmentId: "remote", backendInstanceId: "backend" },
+      provider: { acquire, acquireExisting }, configuration: { ...configuration, connections: [
+        { id: "cp", enabled: true, templateId: "target" } as CodexRuntimeConfiguration["connections"][number],
+      ] }, serverRequests: new CodexServerRequestRouter(), receipts: {
+        reserve: () => { throw new Error("unused"); }, recordOutcome: () => "untracked", pending: () => [],
+        reconcileRecordedApplicationState: () => 0, compactRetiredRuntime: () => 0, releaseRejected: () => false,
+      },
+    });
+    const markObserved = vi.fn(), signal = AbortSignal.timeout(1000);
+    try {
+      const result = supervisor.client.inspectExistingArchive!({ applicationThreadId: "app", connectionProfileId: "cp",
+        threadId: "native", workspace: "/workspace", signal, markObserved });
+      if (condition === "carrier lost after lookup" || condition === "policy denied") await expect(result).rejects.toThrow();
+      else await expect(result).resolves.toEqual({ outcome: condition === "ready" ? "busy" : "offline" });
+      expect(markObserved).toHaveBeenCalledTimes(condition === "ready" || condition === "carrier lost after lookup" ? 1 : 0);
+      expect(lookup).toHaveBeenCalledTimes(condition === "offline" || condition === "policy denied" ? 0 : 1);
+      if (condition === "ready") expect(inspect).toHaveBeenCalledWith(expect.objectContaining({ runtimeId: "retained" }),
+        { applicationThreadId: "app", threadId: "native", targetId: "target", workspace: "/workspace" }, signal);
+      expect(acquire).not.toHaveBeenCalled();
+      expect(ensure).not.toHaveBeenCalled();
+      expect(wake).not.toHaveBeenCalled();
+    } finally { await supervisor.close(); }
+  },
+);
+
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
 it("exposes only the in-flight initialization until the ready lifecycle is published", async () => {

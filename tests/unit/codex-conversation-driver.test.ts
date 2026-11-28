@@ -21587,6 +21587,19 @@ describe("Codex archive preparation", () => {
     expect(input.markObserved).toHaveBeenCalledOnce();
   });
 
+  it.each(["active", "absent"] as const)("preserves an archive refusal and fences uncertain lease cleanup for %s", async status => {
+    const harness = new RpcHarness(), input = archive(), selected = driver(harness);
+    const release = vi.fn(async () => { throw new Error("idle cleanup unconfirmed"); });
+    Object.defineProperty(harness.facade, "residency", { value: { retain: () => ({ release }) } });
+    harness.enqueue("thread/read", status === "active" ? { thread: nativeThread({ status: { type: "active", activeFlags: [] } }) } :
+      new CodexRpcRemoteError({ method: "thread/read", generation: 1, code: -32600, message: "thread not found: thread-1" }));
+    const result = selected.prepareArchive(input);
+    if (status === "active") await expect(result).resolves.toEqual({ outcome: "busy" });
+    else await expect(result).rejects.toThrow("idle cleanup unconfirmed");
+    expect(input.markObserved).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it("blocks active work and treats loss after observing the session as inconclusive", async () => {
     const harness = new RpcHarness(), input = archive(), selected = driver(harness);
     harness.enqueue("thread/read", { thread: nativeThread({ status: { type: "active", activeFlags: [] } }) },

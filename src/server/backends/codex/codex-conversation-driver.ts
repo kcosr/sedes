@@ -1,3 +1,4 @@
+import { releaseCodexThreadResidency } from "./codex-thread-residency.js";
 import { withAbort } from "../../runtime/with-abort.js";
 import { CODEX_STEP_MODEL_SWITCHING_CONFIG } from "./codex-active-speed-protocol.js";
 import type { ConversationBinding } from "../contracts.js";
@@ -53,7 +54,6 @@ import {
   codexThreadArchiveMethod,
   codexThreadUnarchiveMethod,
   codexThreadTurnsListMethod,
-  codexThreadUnsubscribeMethod,
   CODEX_C1_MAX_LIST_THREADS,
   type CodexThread,
   type CodexTurn,
@@ -131,6 +131,7 @@ import {
 } from "./codex-service-tier.js";
 import { CodexAppServerBindingError } from "../../provider-protocol/bindings/codex-app-server/codex-app-server-binding.js";
 import {
+  assertThreadBinding,
   CODEX_DISCOVERY_SOURCE_KINDS,
   isCodexDiscoverableThread,
 } from "./codex-thread-binding.js";
@@ -1279,16 +1280,23 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
       input.markObserved();
       return { outcome: "busy" };
     }
+    if (this.#client.inspectExistingArchive) {
+      return this.#client.inspectExistingArchive({ applicationThreadId: binding.applicationThreadId, connectionProfileId: binding.connectionProfileId,
+        threadId: binding.backendConversationId, workspace: input.workspace.canonicalPath, signal: input.signal,
+        markObserved: input.markObserved });
+    }
     const client = this.#client.currentReadyGeneration();
     if (!client) return { outcome: "offline" };
     const lease = this.#client.residency?.retain();
     let observed = false;
+    let knownBusy = false;
     try {
       const outcome = await this.#releaseResidency(input, client, {
         signal: input.signal,
         markObserved: () => { observed = true; input.markObserved(); },
       });
-      if (outcome === "busy" && !observed) input.markObserved();
+      knownBusy = outcome === "busy";
+      if (knownBusy && !observed) input.markObserved();
       return { outcome };
     } catch (error) {
       input.signal.throwIfAborted();
@@ -1296,7 +1304,14 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
         return { outcome: "offline" };
       }
       throw error;
-    } finally { await lease?.release(); }
+    } finally {
+      try { await lease?.release(); }
+      catch (error) {
+        // Active work is already decisive. Otherwise cleanup uncertainty must
+        // keep the thread visible, including on a later offline attempt.
+        if (!knownBusy) { input.markObserved(); throw error; }
+      }
+    }
   }
 
   async releaseConversationResidency(input: ReleaseConversationResidencyInput): Promise<"released" | "busy"> {
@@ -1317,7 +1332,6 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
     client: Pick<CodexSharedClientFacade, "requestWithReceipt">,
     archive?: Pick<PrepareConversationArchiveInput, "markObserved" | "signal">,
   ): Promise<"released" | "busy"> {
-    const options = { timeoutMilliseconds: CODEX_HISTORY_TIMEOUT_MILLISECONDS, signal: archive?.signal };
     const threadId = input.binding.backendConversationId;
     // The caller retires its actor under the thread maintenance fence first.
     // Do not detach a provider subscription still owned by another actor.
@@ -1338,91 +1352,7 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
       }
       if (this.#managedTerminalActive(input)) return "busy";
     }
-    try {
-      const inspected = await client.requestWithReceipt(
-        codexThreadReadMethod,
-        { threadId, includeTurns: false },
-        options,
-      ).catch(error => {
-        if (archive && isCodexNativeArchiveThreadMissing(error, threadId) &&
-            this.#client.lifecycleSnapshot().state === "ready" &&
-            codexRpcErrorGeneration(error) === this.#client.lifecycleSnapshot().generation) return undefined;
-        throw error;
-      });
-      if (!inspected) return "released";
-      assertThreadBinding(inspected.result.thread, threadId, input.workspace.canonicalPath);
-      archive?.markObserved();
-      const generation = inspected.generation;
-      const assertGeneration = (received: number) => {
-        const current = this.#client.lifecycleSnapshot();
-        if (received !== generation || current.generation !== generation || current.state !== "ready") {
-          throw codexError("unavailable", "Codex changed connection while releasing the thread's tool configuration.",
-            "codex_residency_release_generation_changed", true);
-        }
-      };
-      assertGeneration(generation);
-      const status = inspected.result.thread.status.type;
-      if (status === "active") return "busy";
-      // A newly created native thread may still exist only in memory. Prove
-      // that its history is materialized before dropping the subscription;
-      // otherwise the next resume can fail with "no rollout found".
-      let materialized = true;
-      try {
-        if (inspected.result.thread.historyMode === "paginated") {
-          const history = await client.requestWithReceipt(
-            codexThreadTurnsListMethod,
-            { threadId, limit: 1, sortDirection: "desc", itemsView: "notLoaded" },
-            options,
-          );
-          assertGeneration(history.generation);
-        } else {
-          const history = await client.requestWithReceipt(
-            codexThreadReadMethod,
-            { threadId, includeTurns: true },
-            options,
-          );
-          assertGeneration(history.generation);
-          assertThreadBinding(history.result.thread, threadId, input.workspace.canonicalPath);
-          if (history.result.thread.status.type === "active") return "busy";
-        }
-      } catch (error) {
-        if (error instanceof CodexRpcRemoteError && /(?:not materialized yet|no rollout found)/iu.test(error.message)) {
-          if (!archive) throw codexError("invalid_state", "Send the first message before changing tools on this Codex conversation.",
-            "codex_residency_history_unmaterialized", false, error);
-          const historyMethod = inspected.result.thread.historyMode === "paginated" ? "thread/turns/list" : "thread/read";
-          if (error.method !== historyMethod || ![-32600, -32603].includes(error.code) || ![
-            "thread not materialized yet",
-            `no rollout found for thread id ${threadId}`,
-            `thread ${threadId} is not materialized yet; ${historyMethod} is unavailable before first user message`,
-          ].includes(error.message)) throw error;
-          assertGeneration(error.generation);
-          materialized = false;
-        } else throw error;
-      }
-      const goal = await client.requestWithReceipt(
-        codexThreadGoalGetMethod,
-        { threadId },
-        options,
-      );
-      assertGeneration(goal.generation);
-      if (goal.result.goal && goal.result.goal.threadId !== threadId) throw bindingMismatch();
-      if (goal.result.goal?.status === "active") return "busy";
-      if (!materialized) return "released";
-      archive?.signal.throwIfAborted();
-      const unsubscribed = await client.requestWithReceipt(
-        codexThreadUnsubscribeMethod,
-        { threadId },
-        options,
-      );
-      assertGeneration(unsubscribed.generation);
-      // This releases Sedes's subscription only. Codex can retain an idle
-      // thread after unsubscribe; the next native resume rebuilds its config
-      // unless a separate native client is still subscribed to the same thread.
-      // Persistent hosts invalidate their cached configuration on this receipt.
-      return "released";
-    } catch (error) {
-      throw mapCodexReadError(error);
-    }
+    return releaseCodexThreadResidency(client, () => this.#client.lifecycleSnapshot(), threadId, input.workspace.canonicalPath, archive);
   }
 
   async attach(input: AttachConversationInput): Promise<ConversationHandle> {
@@ -3063,18 +2993,7 @@ function epochSecondsToIso(value: number): string {
   return date.toISOString();
 }
 
-function assertThreadBinding(
-  thread: CodexThread,
-  threadId: string,
-  canonicalWorkspacePath: string,
-): void {
-  if (
-    thread.id !== threadId ||
-    !isCodexDiscoverableThread(thread, canonicalWorkspacePath)
-  ) {
-    throw bindingMismatch();
-  }
-}
+
 
 type DiscoveryCursor = {
   readonly fingerprint: string;

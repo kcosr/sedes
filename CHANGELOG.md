@@ -53,8 +53,9 @@ User-facing changes are collected here before release. See the
   ([#121](https://github.com/kcosr/sedes/pull/121))
 
 - Upgrade the server and browser/packaged clients together for client protocol
-  **188**. Upgrade Claude and Antigravity sidecars with the server for
-  `claude_persistent_runtime@8` and `antigravity_runtime@7`. Rebuild Android and Electron clients for native voice snapshot **17**
+  **188**. Upgrade Claude, Antigravity, and Codex sidecars with the server
+  for `claude_persistent_runtime@8`, `antigravity_runtime@7`, and the Codex
+  check for an unopened thread’s activity. Rebuild Android and Electron clients for native voice snapshot **17**
   and the early reply subscription for progress updates and final answers. See
   [early reply playback](docs/operator/clients/voice.md#early-reply-playback).
   ([#165](https://github.com/kcosr/sedes/pull/165), [#169](https://github.com/kcosr/sedes/pull/169))
