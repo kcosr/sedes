@@ -1,3 +1,6 @@
+import { applicationSummaryFixture } from "../support/application-summary-fixture.js";
+import { settleArchiveSnapshot } from "../../src/server/conversations/archive-snapshot-settlement.js";
+import { QuestionRequestRepository } from "../../src/server/db/repositories/question-request-repository.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { PiNativeConversationDriver, serializePiNativeBindingDetail, type PiNativeDriverOptions, type PiNativeOperations } from "../../src/server/backends/pi/native/driver/driver.js";
@@ -1759,6 +1762,64 @@ describe("native Pi driver", () => {
     await handle.close();
     fixture.port.inspectExisting = async () => null;
     await expect(driver.prepareArchive(request)).resolves.toEqual({ outcome: "released" });
+  });
+
+  it("publishes ordinary completion once when a busy archived target finishes before its next open", async () => {
+    const { database, bindings, inventory, completion, scope, ids } = applicationSummaryFixture(1);
+    const threadId = ids[0]!;
+    const input = { ...conversation, binding: { ...conversation.binding, applicationThreadId: threadId } };
+    const operationId = "operation";
+    let retainedOwner: string | null = null;
+    const publish = vi.fn(() => { expect(database.inTransaction).toBe(false); });
+    const settleAutomation = vi.fn();
+    const deps = { bindings, completion, questions: new QuestionRequestRepository(database, inventory),
+      usage: { registerVisibleTurns: vi.fn() }, recordSubmission: vi.fn(), settleAutomation, publishCompletion: publish };
+    const order: string[] = [];
+    const { driver, fixture } = setup({ archiveRecovery: {
+      retainedOwner: () => retainedOwner,
+      settle(id, owner, snapshot, terminals) {
+        expect(owner).toBe(retainedOwner);
+        expect(terminals).toEqual(["running"]);
+        settleArchiveSnapshot(deps, scope, id, snapshot, terminals, "ordinary");
+        // Redelivery after an ambiguous write/ACK boundary is idempotent.
+        settleArchiveSnapshot(deps, scope, id, snapshot, terminals, "ordinary");
+        order.push("settle");
+      },
+      acknowledge(_id, owner) { expect(owner).toBe(retainedOwner); retainedOwner = null; order.push("clear"); },
+    } });
+    try {
+      bindings.bindDiscoveredConversation(scope, threadId, { backendConversationId: native.sessionId, now: 400 });
+      completion.recordAccepted(scope, threadId, { operationId, backendCorrelation: operationId, acceptedAt: 410 });
+      const initialRevision = inventory.getThread(scope, threadId).thread.revision;
+      const retained = { ...attachment, throughSequence: 1 };
+      fixture.state = { ...fixture.state, isIdle: false, entries: [user("running", null)], leafId: "running",
+        operations: [{ input: { operationId, mutationId: "mutation", reconciliationToken: "token", fingerprint: "a".repeat(64),
+          mode: "submit", text: "Hello" }, phase: "accepted", userEntryId: "running" }] };
+      fixture.port.inspectExisting = async () => ({ ...await fixture.port.inspect(), retainedSessions: [retained] });
+      fixture.port.retireSession = vi.fn(async () => "busy" as const);
+      const archived = vi.fn();
+      await expect(driver.prepareArchive({ ...input, signal: AbortSignal.timeout(5_000), retainedOwner: undefined,
+        markObserved: vi.fn(), markRetained: owner => { retainedOwner = owner; }, markSettled: vi.fn(),
+        settle: archived })).resolves.toMatchObject({ outcome: "busy" });
+      expect(archived).not.toHaveBeenCalled();
+      expect(retainedOwner).toBeTypeOf("string");
+      expect(completion.get(scope, threadId, operationId).attentionCreatedAt).toBeNull();
+      fixture.state = { ...fixture.state, isIdle: true, entries: [...fixture.state.entries, answer("reply", "running")], leafId: "reply" };
+      fixture.push({ kind: "companion", payload: { type: "state_changed" } });
+      fixture.port.attach = async () => retained;
+      fixture.port.acknowledge = vi.fn(async () => {
+        expect(completion.get(scope, threadId, operationId).attentionCreatedAt).toEqual(expect.any(Number));
+        expect(publish).toHaveBeenCalledTimes(1);
+        order.push("ack");
+      });
+      const handle = await driver.attach(input);
+      await vi.waitFor(() => expect(retainedOwner).toBeNull());
+      expect(order).toEqual(["settle", "ack", "clear"]);
+      expect(inventory.getThread(scope, threadId).thread.revision).toBe(initialRevision + 1);
+      expect(publish).toHaveBeenCalledWith(expect.objectContaining({ provenance: "recovered", backendTurnId: "running" }),
+        expect.objectContaining({ changed: true }));
+      await handle.close();
+    } finally { database.close(); }
   });
 
   it("drains every retained page from a closed process before retirement", async () => {

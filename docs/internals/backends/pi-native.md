@@ -413,9 +413,10 @@ on whether new input is supported; an idle session without an active turn does
 not advertise Stop merely because retained obligations remain.
 
 When a normal open recovers an interrupted archive, it applies the initial
-snapshot and clears the exact retained-owner marker after acknowledging the
-event prefix and native operations present at attachment. Later completions
-take the normal notification and automation paths. A missing or replaced
+snapshot with ordinary completion semantics. A turn that finished while
+detached produces its usual activity, attention, and completion notification.
+The open clears the exact retained-owner marker after acknowledging the event
+prefix and native operations present at attachment. A missing or replaced
 owner cannot discharge a marker whose original output remains unconfirmed.
 
 Attached drivers acknowledge durable event prefixes during a run after applying

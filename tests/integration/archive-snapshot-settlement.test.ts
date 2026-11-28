@@ -16,7 +16,7 @@ describe("archive settlement", () => {
       const questions = new QuestionRequestRepository(database, inventory);
       const deps = {
         bindings, completion, questions, usage: { registerVisibleTurns: vi.fn() },
-        recordSubmission: vi.fn(), settleAutomation: vi.fn(),
+        recordSubmission: vi.fn(), settleAutomation: vi.fn(), publishCompletion: vi.fn(),
       };
       completion.recordAccepted(scope, threadId, { operationId: "op", backendCorrelation: "op", acceptedAt: 410 });
       const snapshot: BackendConversationSnapshot = {
@@ -36,6 +36,15 @@ describe("archive settlement", () => {
       expect(() => settle("turn", "missing")).toThrow("archive_terminal_turn_unconfirmed");
       expect(completion.get(scope, threadId, "op").completionObservedAt).toBeNull();
       expect(questions.list(scope, threadId).requests).toHaveLength(0);
+      const publishRun = vi.fn();
+      const ordinaryDeps = { ...deps, settleAutomation: (
+        _record: unknown, _turn: unknown, afterCommit: (publish: () => void) => void,
+      ) => afterCommit(publishRun) };
+      expect(() => settleArchiveSnapshot(ordinaryDeps, scope, threadId, snapshot, ["turn", "missing"], "ordinary"))
+        .toThrow("archive_terminal_turn_unconfirmed");
+      expect(completion.get(scope, threadId, "op").attentionCreatedAt).toBeNull();
+      expect(deps.publishCompletion).not.toHaveBeenCalled();
+      expect(publishRun).not.toHaveBeenCalled();
 
       settle("turn");
       const first = completion.get(scope, threadId, "op");
@@ -46,6 +55,7 @@ describe("archive settlement", () => {
       settle("turn");
       expect(completion.get(scope, threadId, "op")).toEqual(first);
       expect(questions.list(scope, threadId)).toEqual(pending);
+      expect(deps.publishCompletion).not.toHaveBeenCalled();
 
     } finally { database.close(); }
   });

@@ -762,8 +762,8 @@ class PiNativeConversationHandle implements ConversationHandle {
   get archiveOutputApplied(): boolean {
     return this.#archiveSnapshotApplied && this.#eventCheckpoint.acknowledged >= Math.max(this.#afterSequence, this.attachment.throughSequence) && this.#retainedOperationIds.size === 0;
   }
-  /** Only the output already present when this handle took ownership belongs to the
-   * interrupted archive. Later live work keeps its normal completion effects. */
+  /** The exact inherited output must be durable and acknowledged before discharging the pin.
+   * Its originating operation may have finished after Archive found the owner busy. */
   confirmInheritedArchiveCut(): void {
     if (this.#archive || !this.#retainedArchiveOwner || !this.#archiveSnapshotApplied ||
         this.#eventCheckpoint.acknowledged < this.attachment.throughSequence ||

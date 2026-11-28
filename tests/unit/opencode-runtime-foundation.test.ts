@@ -383,7 +383,7 @@ describe.skipIf(process.platform !== "linux")("OpenCode native store and externa
       http.removeAllListeners("request");
       http.on("request", (request, response) => {
         if (request.method === "HEAD") expect(request.headers.authorization).toBeUndefined();
-        response.writeHead(503).end();
+        response.writeHead(503, { connection: "close" }).end();
       });
       await expect(runtime.assertCurrent()).rejects.toThrow("opencode_runtime_identity_changed");
       expect(runtime.snapshot().state).toBe("disconnected");

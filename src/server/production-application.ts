@@ -153,7 +153,7 @@ import { WorkspaceFileLinkedWorktreeRepository } from "./db/repositories/workspa
 import { WorkspaceDiffReviewRepository } from "./db/repositories/workspace-diff-review-repository.js";
 import { TaskRepository } from "./db/repositories/task-repository.js";
 import { DEFAULT_QUEUE_RETRY_POLICY, QueuedInputRepository } from "./db/repositories/queued-input-repository.js";
-import { SubmissionCompletionRepository, type UnresolvedSubmissionThread } from "./db/repositories/submission-completion-repository.js";
+import { SubmissionCompletionRepository, type SubmissionCompletionObservationResult, type UnresolvedSubmissionThread } from "./db/repositories/submission-completion-repository.js";
 import { ThreadLineageRepository } from "./db/repositories/thread-lineage-repository.js";
 import { ThreadCompletionCallbackRepository } from "./db/repositories/thread-completion-callback-repository.js";
 import { ThreadAgentToolPolicyRepository } from "./db/repositories/thread-agent-tool-policy-repository.js";
@@ -1113,7 +1113,7 @@ export async function startProductionApplication(
               if (bindings.getBinding(scope, threadId)?.backendInstanceId !== backendId) {
                 throw new Error("archive_settlement_unavailable");
               }
-              applyArchiveSnapshot(scope, threadId, snapshot, turns);
+              applyArchiveSnapshot(scope, threadId, snapshot, turns, "ordinary");
             },
             assertNativeOwner: ownerId => configurationRepository.assertNativeOwner(scope, environmentId, "antigravity", ownerId),
             confirmNativeOwner: (ownerId, expectedOwner) => configurationRepository.confirmNativeOwner(scope, environmentId, "antigravity", ownerId, expectedOwner),
@@ -1480,6 +1480,7 @@ export async function startProductionApplication(
       threadId: string,
       snapshot: BackendConversationSnapshot,
       recoveredCompletionTurnIds: readonly string[],
+      purpose: "archive" | "ordinary" = "archive",
     ): void {
       const queue = queueDispatcher;
       const gateway = mutations;
@@ -1492,8 +1493,14 @@ export async function startProductionApplication(
             gateway.recordObservedDraftSteer(scope, threadId, correlation);
           }
         },
-        settleAutomation: (record, turn) => automation.observe(scope, threadId, record, turn, "archive"),
-      }, scope, threadId, snapshot, recoveredCompletionTurnIds);
+        settleAutomation: (record, turn, afterCommit) => automation.observe(scope, threadId, record, turn,
+          purpose === "archive" ? "archive" : undefined, afterCommit),
+        publishCompletion: (input, observation) => {
+          const resolveVoice = terminalVoice.observe(scope, threadId, input);
+          publishAuthoritativeCompletion(scope, threadId, input, observation, resolveVoice);
+          queue.schedulePendingDispatch(scope, threadId);
+        },
+      }, scope, threadId, snapshot, recoveredCompletionTurnIds, purpose);
     }
     runtimes = new ThreadRuntimeCoordinator({
       archiveObligations,
@@ -2016,6 +2023,19 @@ export async function startProductionApplication(
         resolveVoice();
         throw error;
       }
+      publishAuthoritativeCompletion(eventScope, applicationThreadId, input, observation, resolveVoice);
+      if (observation) {
+        try {
+          observeAutomationTurns?.observe(eventScope, applicationThreadId, observation.record, input);
+        } catch (error) {
+          reportAutomationTurnError(error);
+        }
+      }
+    };
+    function publishAuthoritativeCompletion(
+      eventScope: RequestScope, applicationThreadId: string, input: Parameters<AuthoritativeCompletionObserver>[2],
+      observation: SubmissionCompletionObservationResult | undefined, resolveVoice: ReturnType<TurnVoiceCompletion["observe"]>,
+    ): void {
       const observed = observation?.record;
       resolveVoice(observed ? () => notificationLifecycle.completion(eventScope, observed, input.provenance,
         input.voiceSubscriberWatermark, input.responseVoice) : undefined);
@@ -2023,17 +2043,6 @@ export async function startProductionApplication(
         automaticModelRetries?.onCompletion(eventScope, applicationThreadId, input);
       }
       if (!observation || !observed) return;
-      try {
-        observeAutomationTurns?.observe(
-          eventScope,
-          applicationThreadId,
-          observed,
-          input,
-        );
-      } catch (error) {
-        // Run history is an observer; it must never break completion.
-        reportAutomationTurnError(error);
-      }
       threadRuntimeFollowUp.defer(() => performCompletionFollowUp({
         deliverCallbacks: () => completionCallbackDispatcher.deliverReady(eventScope),
         publishCompletion: () => activeThreadSnapshots.publishChanged(eventScope, applicationThreadId, observation.changed),
@@ -2049,7 +2058,7 @@ export async function startProductionApplication(
           },
         ),
       }));
-    };
+    }
     const attention = new ThreadAttentionService({
       acknowledgeAutomationRun: (scope, threadId, runId, outcome) => {
         automations.acknowledgeThreadRun(scope, threadId, runId, outcome);

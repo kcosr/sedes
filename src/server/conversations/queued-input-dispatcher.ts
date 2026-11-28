@@ -1099,7 +1099,7 @@ export class QueuedInputDispatcher {
           // Defer runtime acquisition until after the actor's authoritative
           // observer chain has drained, otherwise idle eviction can wait on an
           // observer that is itself waiting for that eviction.
-          this.#schedulePendingDispatch(scope, applicationThreadId);
+          this.schedulePendingDispatch(scope, applicationThreadId);
         }
         return observed;
       });
@@ -1383,7 +1383,7 @@ export class QueuedInputDispatcher {
           conversationAcquired = true;
           debugDispatch?.("withConversation acquire", dispatchStart);
           if (!conversation.authoritativelySettled) {
-            this.#schedulePendingDispatch(scope, applicationThreadId);
+            this.schedulePendingDispatch(scope, applicationThreadId);
             return;
           }
           const anchorStart = Date.now();
@@ -1561,7 +1561,7 @@ export class QueuedInputDispatcher {
       if (!(error instanceof QueuedInputConversationAcquisitionError)) {
         throw error;
       }
-      this.#schedulePendingDispatch(scope, applicationThreadId);
+      this.schedulePendingDispatch(scope, applicationThreadId);
     }
     this.#scheduleRequestedSteerHead(scope, applicationThreadId);
   }
@@ -1791,7 +1791,7 @@ export class QueuedInputDispatcher {
       return;
     }
     if (this.#isDispatchBlocked(scope, item.applicationThreadId, "steer")) {
-      this.#schedulePendingDispatch(scope, item.applicationThreadId);
+      this.schedulePendingDispatch(scope, item.applicationThreadId);
       return;
     }
     const key = threadKey(scope, item.applicationThreadId);
@@ -1814,7 +1814,7 @@ export class QueuedInputDispatcher {
       .catch((error: unknown) => {
         if (error instanceof QueuedInputConversationAcquisitionError) {
           deferredRetryScheduled = true;
-          this.#schedulePendingDispatch(scope, item.applicationThreadId);
+          this.schedulePendingDispatch(scope, item.applicationThreadId);
           return;
         }
         if (
@@ -1822,7 +1822,7 @@ export class QueuedInputDispatcher {
           error.code === "operation_outcome_uncertain"
         ) {
           deferredRetryScheduled = true;
-          this.#schedulePendingDispatch(scope, item.applicationThreadId);
+          this.schedulePendingDispatch(scope, item.applicationThreadId);
           return;
         }
         if (isSteerTargetUnavailable(error)) {
@@ -1852,7 +1852,7 @@ export class QueuedInputDispatcher {
           // Yield through the retry scheduler instead of recursively filling
           // the microtask queue and starving every HTTP request.
           if (next?.id === item.id) {
-            this.#schedulePendingDispatch(scope, item.applicationThreadId);
+            this.schedulePendingDispatch(scope, item.applicationThreadId);
           } else {
             this.#scheduleRequestedSteerHead(scope, item.applicationThreadId);
           }
@@ -1920,7 +1920,8 @@ export class QueuedInputDispatcher {
     }
   }
 
-  #schedulePendingDispatch(
+  /** A committed completion may release the next input without blocking its current observer. */
+  schedulePendingDispatch(
     scope: RequestScope,
     applicationThreadId: string,
   ): void {
@@ -1946,7 +1947,7 @@ export class QueuedInputDispatcher {
         void this.onAuthoritativeSettled(scope, applicationThreadId).catch(
           (error) => {
             if (error instanceof QueuedInputConversationAcquisitionError) {
-              this.#schedulePendingDispatch(scope, applicationThreadId);
+              this.schedulePendingDispatch(scope, applicationThreadId);
             }
           },
         );
@@ -1966,7 +1967,7 @@ export class QueuedInputDispatcher {
       void this.#track(() => this.#serialize(scope, applicationThreadId, async () => {
         await this.#emitQueueChanged(scope, applicationThreadId);
         this.#scheduleCurrentHead(scope, applicationThreadId);
-        this.#schedulePendingDispatch(scope, applicationThreadId);
+        this.schedulePendingDispatch(scope, applicationThreadId);
       })).catch(() => undefined);
     });
     this.#observationPublicationTimers.set(key, timer);

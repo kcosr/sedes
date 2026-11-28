@@ -459,6 +459,7 @@ export class AutomationTurnSettlementObserver {
     >,
     turn: { readonly startedAt?: string; readonly completedAt?: string } = {},
     purpose?: "archive",
+    afterCommit?: (publish: () => void) => void,
   ): void {
     if (
       observation.applicationTurnId === null ||
@@ -479,7 +480,11 @@ export class AutomationTurnSettlementObserver {
       },
       purpose,
     );
-    if (run && purpose !== "archive") this.#publisher.publishRunSettlement(scope, run);
+    if (run && purpose !== "archive") {
+      const publish = () => this.#publisher.publishRunSettlement(scope, run);
+      if (afterCommit) afterCommit(publish);
+      else publish();
+    }
   }
 }
 
